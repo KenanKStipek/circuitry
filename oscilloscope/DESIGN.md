@@ -348,24 +348,55 @@ osp behaviour:
 
 ### 4.2 electricity
 
-**Today:**
+**M0-H's run wiring (issue #441) landed electricity's own side of
+this; issue #431's lane E2 wires osp to it.** electricity is still a
+preview: it runs `tool`/`dynamic`/a CEL `if`/`finally:` documents only,
+with `json` as its one tool provider, and refuses everything else
+(`prompt`/`loop`/`use`/`reflector`/`yield`, a model-mode `if`,
+persistence/runtime plugins, `--profile`) up front, before any state is
+written, with a message naming the preview marker
+(`is a preview and cannot run orchestrations yet`). osp shows that
+refusal the same way it shows an invalid document: a pre-execution
+failure, `■ run failed: ...`, exit 1 -- though only the refusal writes
+nothing at all under the run directory; an invalid document still gets
+its own `--out` (electricity's `fail!` macro saves state before
+returning the error).
 
-- `electricity <config.json> <orchestration.yml> [-e k=v]... [--out f] [--profile p]` exits **1** with "is a preview and cannot run orchestrations yet". A usage error exits 2.
-- `--dump-ir` works and prints unstable IR JSON, but `check_for_run` is still a stub in this checkout.
-- v1 is specified to add `--state`, `--resume`, `--force`, `--pretty` and `--live-state`. Its exit codes are those of `cof` (0, 1, 2, 129, 130, 143).
-- The config positional is required, and there is no config discovery.
+- `electricity <config.json> <orchestration.yml> -e k=v... --out
+  <dir>/state.json [--events <dir>/events.jsonl] [--live-state
+  <dir>/state.live.json]` -- the same argv shape `ElectricityEngine::
+  command` builds (`oscilloscope-core/src/engine.rs`), in that order.
+- `ElectricityEngine::detect` probes `electricity --help` for both
+  `--events` and `--live-state`, the same way `CofEngine::detect`
+  probes `cof run --help` for `--events` alone (`cof`'s own
+  `--live-state` predates capability detection, so `CofEngine`'s own
+  caps hardcode it `true`). An older electricity built before M0-H has
+  neither flag, and osp falls back to the no-events path with the same
+  notice `cof` gets ("this electricity has no --events: running from
+  state only"), worded for whichever engine is actually missing it.
+- Exit codes are exactly `cof`'s own: 0, 1, 2, 130 (SIGINT), 143
+  (SIGTERM), 129 (SIGHUP). A config error has nothing on stdout and
+  `Error: <text>` on stderr; an invalid document or a refusal prints
+  `cof`'s own `{"ok":false, "error":...,"warnings":[...],
+  "state_out":...}` shape on stdout instead, which osp's existing
+  `read_stdout_json_error`/`failure_reason_fallback`/`run_status`
+  (DESIGN.md §2.1 rule 7) already read engine-agnostically -- nothing
+  engine-specific was needed there. (A missing orchestration file is
+  the one exception, on both engines: a plain `Error: Orchestration
+  not found: ...` on stdout, not the JSON shape -- `read_stdout_json_
+  error` doesn't parse that line either, so the summary falls back to
+  "aborted (no final state)" there, same as `cof`; this predates this
+  PR.)
+- `--events`/`--live-state` are electricity's own, in `cof`'s exact
+  format (events format v1, a final live-state write equal to
+  `--out`), so osp's plan join, status inference and `--log` output
+  work unchanged.
 
 **Argument order.** The owner's form is `osp <orchestration> [config]`; osp maps it to `electricity <config> <orchestration>`. Neither file can be recognised by its extension (an orchestration may be `.json`). osp therefore keeps the order strict. It gives a hint only when the first argument has no `effects` key and the second has one.
 
 **Missing config.** With no config, osp tells the user that electricity needs one. It does not invent a `{}` config, because that would silently drop the user's global settings, which `cof` would have applied.
 
-**What M0-H (or the first runnable milestone) must add for osp:**
-
-- a real run path;
-- `--events` (§3);
-- SIGINT/SIGTERM semantics as specified (DESIGN.md §6.5): exit 130/143, `finally`, and a second signal ending the run at once;
-- a stdout contract matching `cof --quiet`: nothing on success with `--out`, one JSON summary on failure;
-- `--live-state` as soon as possible. Until it lands, osp has no values on electricity, only statuses from events.
+**End-to-end tests** (`oscilloscope/crates/oscilloscope/tests/e2e_electricity.rs`, mirroring `e2e_cof.rs`) run behind `OSP_E2E_ELECTRICITY=1`, against an `electricity` built with `--features test-tools` (its `sleep`/`fail` providers stand in for `cof`'s `shell`, which M0-H doesn't run) on `PATH`. `oscilloscope.yml`'s own `e2e-electricity` job builds that binary and runs them on Linux and macOS.
 
 ---
 
@@ -552,7 +583,8 @@ elapsed time still visibly ticks while the run is otherwise quiet.
   - the pty tests additionally assert the alternate-screen entry/exit escape sequences, and that nothing osp or cof started survives, with no `osp-*` directory left in the real system temp directory (every pty test uses its own `--out-dir`); since the TUI now stays open on its own final state, every pty test that lets a run finish on its own sends `q` to leave, and three further pty tests assert SIGTERM (143), SIGHUP (129) and a raw Ctrl-C byte, `0x03` (130, since raw mode disables the kernel's own `ISIG`) in the TUI specifically.
 
   Live tests are never run.
-- **End-to-end with electricity:** same tests, enabled once M0-H runs documents.
+- **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSP_E2E_ELECTRICITY=1`.
+- **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents built only from electricity's M0-H scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:`), recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 
 ---
 

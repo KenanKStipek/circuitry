@@ -15,8 +15,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
-    wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
+    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
+    wait_for_step_start, wait_with_timeout, wait_with_timeout_capturing_stdout_and_stderr,
+    write_doc,
 };
 
 #[test]
@@ -41,7 +42,8 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -50,6 +52,51 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn events_are_detected_even_with_rich_styled_help_output() {
+    // Typer forces Rich's terminal styling whenever `GITHUB_ACTIONS`
+    // (set on every CI runner), `FORCE_COLOR` or `PY_COLORS` is set,
+    // which splits `--events` in `cof run --help`'s own output into
+    // separately-styled ANSI runs that a plain `.contains("--events")`
+    // never matches -- `CofEngine::detect` used to silently read every
+    // such run as "this cof has no --events" and fall back to running
+    // it with the live-state file only.
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .env("FORCE_COLOR", "1")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(
+        status.success(),
+        "osp should exit 0, got {status:?}; stdout:\n{stdout}"
+    );
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    assert!(run_dir.join("events.jsonl").is_file());
 }
 
 #[test]
@@ -74,7 +121,8 @@ fn on_error_continue_still_exits_ok() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -82,6 +130,54 @@ fn on_error_continue_still_exits_ok() {
     );
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass() {
+    // LOOP REGRESSION (issue #444's rework): an unnamed loop's body
+    // writes its named `if` straight into the parent's node, so the
+    // exact same path is reused every pass (no `iter_<n>` disambiguator
+    // the way a *named* loop gets one) -- here a strict CEL condition
+    // that always errors fails that `if` on its own, with `on_error:
+    // continue` so nothing ever stops the loop. cof emits one `end`
+    // event with `ok: false` per pass for it (the same shape as
+    // tests/conformance/cases/on-error-if's `gate_continue`), so osp
+    // must print one ✗ per pass too, not collapse every pass but the
+    // first into nothing.
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    each:\n      in: prime.items.value\n      as: item\n    body:\n      - type: if\n        name: gate\n        on_error: continue\n        if:\n          mode: cel\n          expr: \"state.input.missing > 1\"\n          strict: true\n        then:\n          - type: tool\n            name: branch\n            provider: json\n            params: {mode: stringify, input: {branch: \"then\"}}\n        else:\n          - type: tool\n            name: branch\n            provider: json\n            params: {mode: stringify, input: {branch: \"else\"}}\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert_eq!(
+        stdout.matches("✗ prime.gate ").count(),
+        2,
+        "stdout:\n{stdout}"
+    );
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
 #[test]
@@ -99,25 +195,39 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    // A signal sent after only a fixed delay can still land before
+    // cof has produced any state at all under load (CI's own repro of
+    // this), making the `✗ prime` count below a coin flip -- wait for
+    // real proof the long-running step has started first.
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -144,16 +254,23 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -162,7 +279,8 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         libc::kill(pid, libc::SIGINT);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     // The second SIGINT, landing while the `finally:` sleep is still
     // running, makes `cof` call `os._exit` at once (`cli/interrupts
@@ -175,6 +293,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -194,25 +313,35 @@ fn sigterm_forwards_and_osp_exits_143() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(143), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 
     assert_no_leftover_process(work.path());
 }
@@ -262,9 +391,11 @@ fn watch_mirrors_a_run_osp_did_not_start() {
     let mut watch = osp_command(&home);
     watch.arg("watch").arg(run_dir.path());
     let child = watch.spawn().expect("spawn osp watch");
-    let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
+    let (watch_status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(10));
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }

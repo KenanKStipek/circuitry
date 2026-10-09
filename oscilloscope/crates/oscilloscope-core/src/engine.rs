@@ -42,10 +42,20 @@ impl RunSpec {
 
 /// What this engine binary can do, detected once at startup (the
 /// orchestrator decision behind issue #424: detect `--events` support
-/// from `cof run --help` rather than assuming a version).
+/// from `cof run --help` rather than assuming a version; issue #431's
+/// lane E2 detects `--live-state` the same way from `electricity
+/// --help`, since an older electricity built before M0-H has neither
+/// flag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EngineCaps {
     pub events: bool,
+    /// `cof run` has had `--live-state` unconditionally since before
+    /// capability detection existed at all (`CofEngine::command` below
+    /// always passes it), so `CofEngine`'s own caps hardcode this
+    /// `true` rather than detecting it; electricity detects it for
+    /// real, since M0-H added both flags together and an older build
+    /// has neither.
+    pub live_state: bool,
     /// Set when the `--help` probe itself couldn't find the binary at
     /// all (M4): lets a caller skip the "this cof has no --events"
     /// notice in that case, which otherwise printed -- wrongly --
@@ -72,6 +82,45 @@ impl fmt::Display for EngineError {
 
 impl std::error::Error for EngineError {}
 
+/// Strips ANSI/CSI escape sequences (`\x1b\[[0-9;?]*[ -/]*[@-~]`) from
+/// a `--help` probe's own output before matching a flag's name in it.
+/// Typer forces Rich's terminal styling whenever `GITHUB_ACTIONS`,
+/// `FORCE_COLOR` or `PY_COLORS` is set in the probe's own environment
+/// (true of every CI runner, which sets `GITHUB_ACTIONS` itself), and
+/// Rich then splits a flag's own text into separately-styled runs --
+/// `--events` becomes `\x1b[1;36m-\x1b[0m\x1b[1;36m-events\x1b[0m` --
+/// which a plain `.contains("--events")` never matches, so detection
+/// silently read every such run as "this binary has no --events" and
+/// fell back to running it with the live-state file only.
+fn strip_ansi_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
+                chars.next();
+            }
+            while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
+                chars.next();
+            }
+            if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Shared by [`CofEngine::detect`] and [`ElectricityEngine::detect`]:
+/// does a `--help` probe's stdout or stderr mention `flag`'s own name
+/// at all, once ANSI/CSI escape sequences are stripped from both?
+fn help_mentions(stdout: &str, stderr: &str, flag: &str) -> bool {
+    strip_ansi_escapes(stdout).contains(flag) || strip_ansi_escapes(stderr).contains(flag)
+}
+
 pub trait Engine {
     fn name(&self) -> &'static str;
     fn caps(&self) -> EngineCaps;
@@ -97,6 +146,13 @@ impl CofEngine {
         let binary = binary.into();
         let mut cmd = std::process::Command::new(&binary);
         cmd.args(["run", "--help"]);
+        // Typer/Rich otherwise style the help text (see
+        // `strip_ansi_escapes`) whenever `GITHUB_ACTIONS`, `FORCE_COLOR`
+        // or `PY_COLORS` is set in this probe's own environment --
+        // `NO_COLOR` on the probe alone (never the real run) keeps the
+        // detection itself simple without changing cof's own output
+        // formatting for the user.
+        cmd.env("NO_COLOR", "1");
         // P2-10: its own process group, same as the real engine spawn
         // (supervise.rs), so a terminal Ctrl-C landing while this
         // probe is still running doesn't kill it directly — that used
@@ -111,12 +167,16 @@ impl CofEngine {
             .map(|out| {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let err_text = String::from_utf8_lossy(&out.stderr);
-                text.contains("--events") || err_text.contains("--events")
+                help_mentions(&text, &err_text, "--events")
             })
             .unwrap_or(false);
         CofEngine {
             binary,
-            caps: EngineCaps { events, missing },
+            caps: EngineCaps {
+                events,
+                live_state: true,
+                missing,
+            },
         }
     }
 
@@ -156,18 +216,74 @@ impl Engine for CofEngine {
     }
 }
 
-/// `electricity <config.json> <orchestration.yml> [-e k=v]... [--out f]`
-/// (DESIGN.md §4.2). electricity has no `--live-state`/`--events` yet;
-/// until it does, osp supervises it with no observation at all —
-/// electricity's own stdout/stderr and exit code are still shown.
+/// `electricity <config.json> <orchestration.yml> -e k=v... --out
+/// <dir>/state.json [--events <dir>/events.jsonl] [--live-state
+/// <dir>/state.live.json]` (DESIGN.md §4.2, issue #431's lane E2):
+/// M0-H gave electricity both flags together, so an older build on
+/// `PATH` from before that lane has neither — osp falls back to
+/// supervising it with no observation at all in that case, the same
+/// no-events path `CofEngine` already falls back to, rather than
+/// passing a flag the binary doesn't understand.
 pub struct ElectricityEngine {
     binary: String,
+    caps: EngineCaps,
 }
 
 impl ElectricityEngine {
+    /// No capability detection: every caller that cares which flags
+    /// this binary supports uses [`ElectricityEngine::detect`]
+    /// instead. Kept for a caller that only needs `command`'s own
+    /// argument shape (e.g. `looks_swapped`'s own tests), with every
+    /// flag left off, same as the pre-M0-H behaviour this replaces.
     pub fn new(binary: impl Into<String>) -> Self {
         ElectricityEngine {
             binary: binary.into(),
+            caps: EngineCaps::default(),
+        }
+    }
+
+    /// Detects `--events`/`--live-state` support by running
+    /// `<binary> --help` once and looking for each flag's own name in
+    /// its output — the same probe shape as [`CofEngine::detect`],
+    /// including its own process group (so a terminal Ctrl-C landing
+    /// mid-probe doesn't kill it directly and get misread as "no
+    /// support").
+    pub fn detect(binary: impl Into<String>) -> Self {
+        use std::os::unix::process::CommandExt;
+
+        let binary = binary.into();
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.arg("--help");
+        // See `CofEngine::detect`'s own comment: `NO_COLOR` on the
+        // probe only, never the real run.
+        cmd.env("NO_COLOR", "1");
+        cmd.process_group(0);
+        let output = cmd.output();
+        let missing = matches!(&output, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        let (events, live_state) = output
+            .map(|out| {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let err_text = String::from_utf8_lossy(&out.stderr);
+                (
+                    help_mentions(&text, &err_text, "--events"),
+                    help_mentions(&text, &err_text, "--live-state"),
+                )
+            })
+            .unwrap_or((false, false));
+        ElectricityEngine {
+            binary,
+            caps: EngineCaps {
+                events,
+                live_state,
+                missing,
+            },
+        }
+    }
+
+    pub fn with_caps(binary: impl Into<String>, caps: EngineCaps) -> Self {
+        ElectricityEngine {
+            binary: binary.into(),
+            caps,
         }
     }
 }
@@ -178,10 +294,7 @@ impl Engine for ElectricityEngine {
     }
 
     fn caps(&self) -> EngineCaps {
-        EngineCaps {
-            events: false,
-            missing: false,
-        }
+        self.caps
     }
 
     fn command(&self, spec: &RunSpec) -> Result<Command, EngineError> {
@@ -197,6 +310,12 @@ impl Engine for ElectricityEngine {
             cmd.arg("-e").arg(kv);
         }
         cmd.arg("--out").arg(spec.out_path());
+        if self.caps.events {
+            cmd.arg("--events").arg(spec.events_path());
+        }
+        if self.caps.live_state {
+            cmd.arg("--live-state").arg(spec.live_state_path());
+        }
         Ok(cmd)
     }
 }
@@ -228,11 +347,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn looks_swapped_is_false_for_the_documented_order() {
+        // `osp <orchestration> [config.json]` (DESIGN.md §4.2): the
+        // orchestrator's own regression -- `do_run` used to call this
+        // with the two arguments flipped, warning on every correctly
+        // ordered invocation and staying silent on a really swapped
+        // one.
+        let dir = tempfile::tempdir().unwrap();
+        let orchestration = dir.path().join("do.yml");
+        let config = dir.path().join("config.json");
+        std::fs::write(&orchestration, "effects:\n  - name: hello\n").unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        assert!(!looks_swapped(&orchestration, &config));
+    }
+
+    #[test]
+    fn looks_swapped_is_true_for_a_really_swapped_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let orchestration = dir.path().join("do.yml");
+        let config = dir.path().join("config.json");
+        std::fs::write(&orchestration, "effects:\n  - name: hello\n").unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        // The caller passed `config` first, `orchestration` second --
+        // exactly the swapped-argument case this hint exists for.
+        assert!(looks_swapped(&config, &orchestration));
+    }
+
+    #[test]
     fn cof_command_includes_live_state_out_and_events_when_supported() {
         let engine = CofEngine::with_caps(
             "cof",
             EngineCaps {
                 events: true,
+                live_state: true,
                 missing: false,
             },
         );
@@ -260,6 +407,7 @@ mod tests {
             "cof",
             EngineCaps {
                 events: false,
+                live_state: true,
                 missing: false,
             },
         );
@@ -308,5 +456,100 @@ mod tests {
             .collect();
         assert_eq!(args[0], "config.json");
         assert_eq!(args[1], "do.yml");
+    }
+
+    #[test]
+    fn electricity_command_adds_events_and_live_state_when_supported() {
+        let engine = ElectricityEngine::with_caps(
+            "electricity",
+            EngineCaps {
+                events: true,
+                live_state: true,
+                missing: false,
+            },
+        );
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec!["k=v".to_string()],
+            run_dir: PathBuf::from("/tmp/run"),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        // DESIGN.md §4.2's own argv shape: `<config> <doc> -e k=v...
+        // --out <dir>/state.json [--events ...] [--live-state ...]`.
+        assert_eq!(
+            args,
+            vec![
+                "config.json",
+                "do.yml",
+                "-e",
+                "k=v",
+                "--out",
+                "/tmp/run/state.json",
+                "--events",
+                "/tmp/run/events.jsonl",
+                "--live-state",
+                "/tmp/run/state.live.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn electricity_command_omits_events_and_live_state_when_unsupported() {
+        let engine = ElectricityEngine::with_caps(
+            "electricity",
+            EngineCaps {
+                events: false,
+                live_state: false,
+                missing: false,
+            },
+        );
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--events".to_string()));
+        assert!(!args.contains(&"--live-state".to_string()));
+    }
+
+    #[test]
+    fn help_mentions_finds_a_plain_flag() {
+        assert!(help_mentions(
+            "usage: cof run --help\n  --events PATH\n",
+            "",
+            "--events"
+        ));
+    }
+
+    #[test]
+    fn help_mentions_finds_a_rich_styled_flag_split_across_two_runs() {
+        // The exact bytes `cof run --help` prints under Typer/Rich
+        // once `GITHUB_ACTIONS`, `FORCE_COLOR` or `PY_COLORS` forces
+        // color (every CI runner sets `GITHUB_ACTIONS` itself): Rich
+        // styles the leading `-` and the rest of the flag's name as
+        // two separate runs, so the literal substring `--events`
+        // never appears unstyled anywhere in the output.
+        let styled = "\x1b[1;36m-\x1b[0m\x1b[1;36m-events\x1b[0m PATH";
+        assert!(help_mentions(styled, "", "--events"));
+        assert!(!help_mentions(styled, "", "--live-state"));
+    }
+
+    #[test]
+    fn electricity_detect_reports_missing_for_an_absent_binary() {
+        let engine = ElectricityEngine::detect("osp-test-nonexistent-electricity-binary");
+        assert!(engine.caps().missing);
+        assert!(!engine.caps().events);
+        assert!(!engine.caps().live_state);
     }
 }

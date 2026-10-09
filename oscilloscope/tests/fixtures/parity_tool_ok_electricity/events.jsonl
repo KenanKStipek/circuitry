@@ -1,0 +1,6 @@
+{"v": 1, "seq": 0, "ts": "2026-10-09T13:31:37.203Z", "ev": "run_start", "run_id": "b02b8bc0-7310-4398-8289-17bcbf1b3649", "orchestration": "do.yml", "engine": "electricity 0.1.0", "pid": 81915}
+{"v": 1, "seq": 1, "ts": "2026-10-09T13:31:37.203Z", "ev": "start", "id": 0, "path": "prime"}
+{"v": 1, "seq": 2, "ts": "2026-10-09T13:31:37.203Z", "ev": "start", "id": 1, "path": "prime.hello"}
+{"v": 1, "seq": 3, "ts": "2026-10-09T13:31:37.203Z", "ev": "end", "id": 1, "path": "prime.hello", "ok": true, "ms": 0}
+{"v": 1, "seq": 4, "ts": "2026-10-09T13:31:37.203Z", "ev": "end", "id": 0, "path": "prime", "ok": true, "ms": 0}
+{"v": 1, "seq": 5, "ts": "2026-10-09T13:31:37.209Z", "ev": "run_end", "ok": true}

@@ -1,0 +1,16 @@
+effects:
+  - type: dynamic
+    name: group
+    effects:
+      - name: a
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"a\""
+      - name: b
+        type: tool
+        provider: json
+        params:
+          mode: parse
+          input: "\"b\""

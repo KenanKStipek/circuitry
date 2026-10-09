@@ -11,10 +11,17 @@ CYBERDINER_TOKEN=... osp do-thing.yml config.json
 ```
 
 **This is a preview.** Milestone O-1 (issue #424) filled in the core: `osp
-<orchestration>` launches and supervises `cof` (or, once it runs documents,
-electricity) and exits with the engine's own exit code; `osp watch <dir>`
-attaches to a run `osp` didn't start. Milestone O-2 (issue #434) adds the
-terminal UI below. See [`DESIGN.md`](DESIGN.md).
+<orchestration>` launches and supervises `cof` or `electricity` and exits
+with the engine's own exit code; `osp watch <dir>` attaches to a run `osp`
+didn't start. Milestone O-2 (issue #434) adds the terminal UI below.
+electricity's own M0-H milestone (issue #431) gave it a real run path,
+`--events` and `--live-state`, so `--engine electricity` now shows the
+same live view `cof` does, for the documents it runs so far: `tool`
+effects (the `json` provider), `dynamic`, a CEL `if`, and `finally:`.
+Everything else (`prompt`/`loop`/`use`/`reflector`/`yield`, a model-mode
+`if`, other tool providers) is refused up front, with a message naming the
+preview marker, before any state is written. See [`DESIGN.md`](DESIGN.md)
+§4.2.
 
 ```
 osp do-thing.yml config.json
@@ -36,15 +43,17 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   same reason, independent of whatever the watched run itself was started
   with.
 - `--engine electricity` needs a config (electricity has no config
-  discovery yet) and, until electricity runs documents, just shows
-  electricity's own "preview" message and exit code.
+  discovery yet). For a document outside electricity's current scope, it
+  shows electricity's own preview-marker refusal and exit code, the same
+  way osp shows any other pre-execution failure.
 - Run files (`state.live.json`, `state.json`, `events.jsonl`, `stdout.txt`,
   `stderr.txt`) go to a fresh temporary directory by default, printed when
   the run ends; `--out-dir DIR` keeps them in a chosen directory instead —
   the same layout `osp watch` reads.
-- `cof run --events` (issue #419) is detected from `cof run --help`; without
-  it `osp` falls back to `--live-state`/`--out` alone, state-only (DESIGN.md
-  §2's "From state alone" rules).
+- `cof run --events` (issue #419) is detected from `cof run --help`, and
+  electricity's own `--events`/`--live-state` (issue #431) the same way from
+  `electricity --help`; without them `osp` falls back to `--live-state`/
+  `--out` alone, state-only (DESIGN.md §2's "From state alone" rules).
 - `osp watch <dir>` on a run with no `--events` stream has no engine pid to
   check and no way to tell a genuinely aborted run (a second signal,
   `SIGKILL`, a crash) from one that's simply still going quietly: neither

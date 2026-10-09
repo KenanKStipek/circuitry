@@ -630,6 +630,7 @@ impl Differ {
                         && !node.is_running()
                         && node.error.is_some()
                         && !any_descendant_failed(path, &flat, &self.event_failed)
+                        && !event_sourced
                     {
                         lines.push(LogLine {
                             ts: node.completed_at.clone(),
@@ -961,6 +962,324 @@ mod tests {
             !lines.iter().any(|l| l.text.starts_with("✗ prime.guarded ")
                 || l.text.starts_with("✗ prime.guarded  ")),
             "the container itself should get no extra cross mark: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn container_failure_seen_as_a_snapshot_before_its_end_event_prints_once() {
+        // F1: once `prime`'s own `start` has fired, it's event-sourced
+        // for the rest of the run, so `diff`'s own container-failure
+        // branch (P2-6) must defer to the matching `end` event even
+        // though the state snapshot sees the failure first -- real
+        // streams always start a path with its own `start` (DESIGN.md
+        // §1.4) before anything else can observe it.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
+        );
+
+        let running =
+            json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"}}});
+        differ.diff(&running, &plan);
+
+        let failed = json!({"prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)", "flow": "chain"}}});
+        let snapshot_lines = differ.diff(&failed, &plan);
+        assert!(
+            snapshot_lines.is_empty(),
+            "an event-sourced container must leave its own ✗ to the event: {snapshot_lines:?}"
+        );
+
+        let event_lines = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(
+            event_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime "))
+                .count(),
+            1,
+            "{event_lines:?}"
+        );
+    }
+
+    #[test]
+    fn container_failure_seen_as_a_snapshot_after_its_end_event_prints_once() {
+        // The reverse order of the previous test: the `end` event is
+        // tailed before the next state poll lands. The later
+        // snapshot, even though it would be the first time `diff`
+        // itself sees the failure, must still defer to the event
+        // because `prime` is already event-sourced.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let running =
+            json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"}}});
+        differ.diff(&running, &plan);
+
+        let event_lines = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(
+            event_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime "))
+                .count(),
+            1,
+            "{event_lines:?}"
+        );
+
+        let failed = json!({"prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)", "flow": "chain"}}});
+        let snapshot_lines = differ.diff(&failed, &plan);
+        assert!(
+            snapshot_lines.is_empty(),
+            "an event-sourced container must leave its own ✗ to the event: {snapshot_lines:?}"
+        );
+    }
+
+    #[test]
+    fn container_failure_start_and_end_before_the_first_snapshot_in_the_same_tick_prints_once() {
+        // Mirrors `main.rs`'s own `drain_observations`: a tick feeds
+        // every newly tailed event to `diff_event` first, then runs
+        // `diff` once against that same poll's state snapshot. Here
+        // the path's very first state observation is already the
+        // failed one -- `diff`'s container branch never even reaches
+        // its `Some(prev)` arm for it, so the ✗ can only ever come
+        // from the `end` event.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        let mut tick_lines = differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        tick_lines.extend(differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+            },
+            &plan,
+            &model,
+        ));
+        let failed = json!({"prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)", "flow": "chain"}}});
+        tick_lines.extend(differ.diff(&failed, &plan));
+
+        assert_eq!(
+            tick_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime "))
+                .count(),
+            1,
+            "{tick_lines:?}"
+        );
+    }
+
+    #[test]
+    fn container_failure_in_a_reused_loop_path_prints_once_per_pass() {
+        // LOOP REGRESSION: a chain loop's body reuses the same
+        // container path every pass (DESIGN.md §2.3, the container
+        // analogue of `unnamed_pass_counts` for leaves). cof emits one
+        // `end` event with `ok: false` per pass for a body that fails
+        // on its own each time (tests/conformance/cases/on-error-if/
+        // expected.events.jsonl), so osp must print one ✗ per pass
+        // too -- a path-keyed "already reported" set would wrongly
+        // collapse the second pass's ✗ into nothing.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let path = "prime.loop.gate";
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: path.to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let running1 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "mode": "cel"}}
+            }
+        }});
+        differ.diff(&running1, &plan);
+
+        let pass1 = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(0),
+                path: path.to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("condition error".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        let failed1 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "mode": "cel", "error": "condition error"}}
+            }
+        }});
+        differ.diff(&failed1, &plan);
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t2".to_string(),
+                id: Some(1),
+                path: path.to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let running2 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t2", "completed_at": null, "mode": "cel"}}
+            }
+        }});
+        differ.diff(&running2, &plan);
+
+        let pass2 = differ.diff_event(
+            &Event::End {
+                ts: "t3".to_string(),
+                id: Some(1),
+                path: path.to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("condition error".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        let failed2 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t2", "completed_at": "t3", "mode": "cel", "error": "condition error"}}
+            }
+        }});
+        let tail_lines = differ.diff(&failed2, &plan);
+
+        assert_eq!(
+            pass1
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.loop.gate "))
+                .count(),
+            1,
+            "{pass1:?}"
+        );
+        assert_eq!(
+            pass2
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.loop.gate "))
+                .count(),
+            1,
+            "{pass2:?}"
+        );
+        assert!(
+            tail_lines.is_empty(),
+            "the event-sourced container's second failed snapshot must print nothing new: {tail_lines:?}"
+        );
+    }
+
+    #[test]
+    fn container_failure_in_a_reused_loop_path_without_events_prints_once_per_pass() {
+        // The state-only counterpart of the previous test (an engine
+        // with no `--events`, or a state-only `osp watch`): `diff`'s
+        // own branch must still print one ✗ per pass, exactly as main
+        // always has, with no event ever marking the path as
+        // event-sourced.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+
+        let running1 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "mode": "cel"}}
+            }
+        }});
+        differ.diff(&running1, &plan);
+
+        let failed1 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "mode": "cel", "error": "condition error"}}
+            }
+        }});
+        let pass1 = differ.diff(&failed1, &plan);
+
+        let running2 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t2", "completed_at": null, "mode": "cel"}}
+            }
+        }});
+        differ.diff(&running2, &plan);
+
+        let failed2 = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "loop": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "gate": {"value": null, "meta": {"created_at": "t2", "completed_at": "t3", "mode": "cel", "error": "condition error"}}
+            }
+        }});
+        let pass2 = differ.diff(&failed2, &plan);
+
+        assert_eq!(
+            pass1
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.loop.gate "))
+                .count(),
+            1,
+            "{pass1:?}"
+        );
+        assert_eq!(
+            pass2
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.loop.gate "))
+                .count(),
+            1,
+            "{pass2:?}"
         );
     }
 

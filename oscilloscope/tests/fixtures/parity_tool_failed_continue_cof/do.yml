@@ -1,0 +1,14 @@
+effects:
+  - name: flaky
+    type: tool
+    provider: json
+    on_error: continue
+    params:
+      mode: parse
+      input: "not valid json"
+  - name: cleanup
+    type: tool
+    provider: json
+    params:
+      mode: parse
+      input: "\"done\""

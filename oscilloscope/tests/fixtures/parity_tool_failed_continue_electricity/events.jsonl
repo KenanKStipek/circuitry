@@ -1,0 +1,8 @@
+{"v": 1, "seq": 0, "ts": "2026-10-09T13:31:37.799Z", "ev": "run_start", "run_id": "f4b73f57-18fb-4722-97bb-6dfbfa7e96de", "orchestration": "do.yml", "engine": "electricity 0.1.0", "pid": 81922}
+{"v": 1, "seq": 1, "ts": "2026-10-09T13:31:37.799Z", "ev": "start", "id": 0, "path": "prime"}
+{"v": 1, "seq": 2, "ts": "2026-10-09T13:31:37.799Z", "ev": "start", "id": 1, "path": "prime.flaky"}
+{"v": 1, "seq": 3, "ts": "2026-10-09T13:31:37.799Z", "ev": "end", "id": 1, "path": "prime.flaky", "ok": false, "ms": 0, "error": "json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v": 1, "seq": 4, "ts": "2026-10-09T13:31:37.800Z", "ev": "start", "id": 2, "path": "prime.cleanup"}
+{"v": 1, "seq": 5, "ts": "2026-10-09T13:31:37.800Z", "ev": "end", "id": 2, "path": "prime.cleanup", "ok": true, "ms": 0}
+{"v": 1, "seq": 6, "ts": "2026-10-09T13:31:37.800Z", "ev": "end", "id": 0, "path": "prime", "ok": true, "ms": 0}
+{"v": 1, "seq": 7, "ts": "2026-10-09T13:31:37.809Z", "ev": "run_end", "ok": true}
