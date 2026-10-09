@@ -180,6 +180,18 @@ fn wait_until_running(home: &TempHome) {
     }
 }
 
+/// *out*'s own `prime.cleanup` node (the `finally:` step [`LONG_SLEEP_DOC`]
+/// declares) is present with a real value -- `finally:` actually ran,
+/// not merely that the run exited with the right code (PR #441 review
+/// finding 9: no signal test checked this before).
+fn assert_finally_ran(out: &Path) {
+    let state: serde_json::Value = serde_json::from_str(&fs::read_to_string(out).unwrap()).unwrap();
+    assert!(
+        !state["prime"]["cleanup"].is_null(),
+        "finally: never ran: {state}"
+    );
+}
+
 #[test]
 fn sigint_exits_130_runs_finally_and_writes_out() {
     let home = TempHome::new("sigint");
@@ -205,6 +217,7 @@ fn sigint_exits_130_runs_finally_and_writes_out() {
         .expect("electricity exited after SIGINT");
     assert_eq!(status.code(), Some(130));
     assert!(out.exists());
+    assert_finally_ran(&out);
     let events_text = fs::read_to_string(&events).unwrap();
     let run_end = events_text.lines().last().unwrap();
     assert!(run_end.contains("\"run_end\""));
@@ -217,7 +230,18 @@ fn sigterm_exits_143() {
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", LONG_SLEEP_DOC);
     let out = home.path.join("out.json");
-    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
+    let events = home.path.join("events.jsonl");
+    let mut child = spawn(
+        &home,
+        &config,
+        &doc,
+        &[
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ],
+    );
     wait_until_running(&home);
     child.send(libc::SIGTERM);
     let status = child
@@ -225,6 +249,13 @@ fn sigterm_exits_143() {
         .expect("electricity exited after SIGTERM");
     assert_eq!(status.code(), Some(143));
     assert!(out.exists());
+    assert_finally_ran(&out);
+    // PR #441 review finding 9: SIGTERM/SIGHUP's own run_end.signal was
+    // untested (neither test passed --events before).
+    let events_text = fs::read_to_string(&events).unwrap();
+    let run_end = events_text.lines().last().unwrap();
+    assert!(run_end.contains("\"run_end\""));
+    assert!(run_end.contains("\"SIGTERM\""));
 }
 
 #[test]
@@ -233,13 +264,80 @@ fn sighup_exits_129() {
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", LONG_SLEEP_DOC);
     let out = home.path.join("out.json");
-    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
+    let events = home.path.join("events.jsonl");
+    let mut child = spawn(
+        &home,
+        &config,
+        &doc,
+        &[
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ],
+    );
     wait_until_running(&home);
     child.send(libc::SIGHUP);
     let status = child
         .wait_timeout(Duration::from_secs(10))
         .expect("electricity exited after SIGHUP");
     assert_eq!(status.code(), Some(129));
+    assert!(out.exists());
+    assert_finally_ran(&out);
+    let events_text = fs::read_to_string(&events).unwrap();
+    let run_end = events_text.lines().last().unwrap();
+    assert!(run_end.contains("\"run_end\""));
+    assert!(run_end.contains("\"SIGHUP\""));
+}
+
+/// PR #441 review finding 9: `nohup electricity ...` (SIGHUP already
+/// `SIG_IGN` on entry) must stay ignored -- a SIGHUP sent to the child
+/// does nothing at all, not even cancel the run; a *different* signal
+/// (SIGINT) still cancels it normally afterwards.
+#[test]
+fn a_sighup_ignored_on_entry_nohup_never_cancels_the_run() {
+    let home = TempHome::new("nohup");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let mut cmd = Command::new(bin());
+    cmd.env_clear();
+    cmd.env("HOME", &home.path);
+    cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
+    cmd.args([config.to_str().unwrap(), doc.to_str().unwrap()]);
+    cmd.args(["--live-state", live_state_path(&home).to_str().unwrap()]);
+    cmd.args(["--out", out.to_str().unwrap()]);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.process_group(0);
+    // SIG_IGN on SIGHUP before exec -- exactly what `nohup` itself does,
+    // and what `sighup_is_already_ignored` (`main.rs`) checks for; a
+    // child's own disposition set this way survives `exec` unchanged.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::signal(libc::SIGHUP, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = TestChild {
+        child: cmd
+            .spawn()
+            .expect("spawn electricity under a SIG_IGN SIGHUP"),
+    };
+    wait_until_running(&home);
+    child.send(libc::SIGHUP);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        child.child.try_wait().unwrap().is_none(),
+        "a SIGHUP ignored on entry must never cancel the run"
+    );
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGINT");
+    assert_eq!(status.code(), Some(130));
     assert!(out.exists());
 }
 
@@ -270,7 +368,18 @@ fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", LONG_SLEEP_DOC);
     let out = home.path.join("out.json");
-    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
+    let events = home.path.join("events.jsonl");
+    let mut child = spawn(
+        &home,
+        &config,
+        &doc,
+        &[
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ],
+    );
     wait_until_running(&home);
     // The first SIGINT cancels the root `sleep` and starts `finally:`
     // (its own 5-second sleep) -- a second SIGINT shortly after, while
@@ -288,6 +397,18 @@ fn a_second_sigint_during_a_blocking_finally_exits_immediately_with_no_out() {
     // No `--out` at all for a second-signal exit (issue #431's Signals
     // section: "no `--out`, no `run_end`").
     assert!(!out.exists());
+    // PR #441 review finding 9: the events file got at least one write
+    // (run_start, and likely a start for the root `sleep`) before the
+    // second signal cut the process off -- but never a run_end line,
+    // which only `EventLog::run_end` (called after `execute_root`
+    // returns) would ever add.
+    if events.exists() {
+        let events_text = fs::read_to_string(&events).unwrap();
+        assert!(
+            !events_text.contains("\"run_end\""),
+            "a second-signal exit must never write run_end: {events_text}"
+        );
+    }
 }
 
 #[test]

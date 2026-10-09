@@ -496,6 +496,39 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
     let run_end = events_text.lines().last().unwrap();
     assert!(run_end.contains("\"run_end\""));
     assert!(run_end.contains("\"SIGINT\""));
+
+    // PR #441 review finding 9: a cancelled run's own totals are
+    // untested -- `effects_run` is 1 (not 0, even though the token was
+    // already cancelled before the document's one declared tool effect
+    // ever dispatched): `RunObserver::effect_complete` fires once for
+    // the implicit root chain container itself (`Totals::observe_
+    // complete`'s own doc comment: "every completed node, root and
+    // containers included"), even an interrupted one -- `core/dynamic.
+    // py`'s own interrupted-chain path fires its container's `on_
+    // complete` the same way (~:603-606), so the two engines' counts
+    // agree here, confirmed directly.
+    use electricity_value::Value;
+    let dict = result.state.unwrap();
+    let dict = dict.as_dict().unwrap();
+    let runtime = dict
+        .get(&Value::Str("runtime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let last_run = runtime
+        .get(&Value::Str("last_run".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let totals = last_run
+        .get(&Value::Str("totals".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        totals.get(&Value::Str("effects_run".to_string())),
+        Some(&Value::from(1i64))
+    );
 }
 
 #[tokio::test]
