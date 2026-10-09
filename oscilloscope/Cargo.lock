@@ -388,6 +388,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity"
+version = "0.1.0"
+dependencies = [
+ "electricity-compiler",
+ "electricity-json",
+ "electricity-value",
+ "indexmap",
+ "serde_json",
+]
+
+[[package]]
 name = "electricity-bytecode"
 version = "0.1.0"
 dependencies = [
@@ -988,9 +999,11 @@ name = "oscilloscope-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "electricity",
  "electricity-bytecode",
  "electricity-compiler",
  "electricity-value",
+ "indexmap",
  "insta",
  "libc",
  "serde",

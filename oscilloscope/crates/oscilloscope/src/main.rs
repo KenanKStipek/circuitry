@@ -64,6 +64,17 @@ struct WatchArgs {
     target: String,
     #[arg(long, value_name = "doc.yml")]
     plan: Option<PathBuf>,
+    /// The config `--plan`'s own document should be checked against
+    /// (K4) — the same `config.json` the watched run itself used, if
+    /// any. Needed for a document whose plan depends on a config-
+    /// defined `concurrency_groups`/`runtime:` block; without it,
+    /// `--plan` still compiles, just without that merge.
+    #[arg(long, value_name = "config.json")]
+    config: Option<PathBuf>,
+    /// `-e key=value` inputs `--plan`'s own document needs to compile
+    /// (K4) — the same ones the watched run itself was given, if any.
+    #[arg(short = 'e', value_name = "key=value")]
+    set: Vec<String>,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,8 +280,32 @@ fn do_run(args: RunArgs) -> ExitCode {
         }
     };
 
-    let plan = match oscilloscope_core::plan::compile(&orchestration) {
-        Ok(program) => PlanTree::from_program(&program),
+    // K4: the exact options a real `electricity <config> <doc> -e
+    // k=v...` run would check this document against (DESIGN.md §5
+    // via `electricity::check_options`), so the plan can't drift from
+    // what the engine itself would check. osp does not reproduce
+    // `cof`'s own config discovery (the global/project
+    // `circuitry.config.json` layers a bare `cof run` resolves with
+    // no `--config`), so a `group:` defined only in one of those
+    // layers still falls back to no plan here, on either engine. A
+    // malformed `-e` is never osp's own error (the engine reports
+    // that itself once it actually runs) — just the same no-plan
+    // fallback as a compile failure.
+    let plan = match oscilloscope_core::plan::parse_inputs(&args.set) {
+        Ok(inputs) => {
+            match oscilloscope_core::plan::compile(&orchestration, spec.config.as_deref(), &inputs)
+            {
+                Ok(program) => {
+                    PlanTree::from_program_with_options(&program, spec.config.as_deref(), &inputs)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "osp: couldn't compile a plan ({err}); running from observations only"
+                    );
+                    PlanTree::empty()
+                }
+            }
+        }
         Err(err) => {
             eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
             PlanTree::empty()
@@ -592,9 +627,26 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         eprintln!("osp: waiting for {}", live_state_path.display());
     }
 
+    // K4: the same options check -- `--config`/`-e`, when given --
+    // `osp <doc>` itself uses, so `osp watch --plan doc.yml` compiles
+    // the same plan a live `osp run` of that document would.
     let plan = match &args.plan {
-        Some(doc) => match oscilloscope_core::plan::compile(doc) {
-            Ok(program) => PlanTree::from_program(&program),
+        Some(doc) => match oscilloscope_core::plan::parse_inputs(&args.set) {
+            Ok(inputs) => {
+                match oscilloscope_core::plan::compile(doc, args.config.as_deref(), &inputs) {
+                    Ok(program) => PlanTree::from_program_with_options(
+                        &program,
+                        args.config.as_deref(),
+                        &inputs,
+                    ),
+                    Err(err) => {
+                        eprintln!(
+                            "osp: couldn't compile a plan ({err}); running from observations only"
+                        );
+                        PlanTree::empty()
+                    }
+                }
+            }
             Err(err) => {
                 eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
                 PlanTree::empty()

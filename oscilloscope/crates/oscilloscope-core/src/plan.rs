@@ -11,20 +11,49 @@ use electricity_bytecode::{
 };
 use electricity_compiler::{CheckOptions, RunCheckError, check_for_run};
 
-/// Compiles `path` with the same options `cof`'s `runtime_shim.run`
-/// passes (DESIGN.md §5): calling code has already decided to run the
-/// document, so preflight and trust checks are skipped here, not
-/// reimplemented.
+/// `-e key=value` parsing (K4), re-exported so a caller of `compile`
+/// never needs its own direct dependency on the `electricity` crate
+/// just to build the `inputs` map this module's own functions take.
+pub use electricity::parse_inputs;
+
+/// Compiles `path` with the same options a real `electricity <config>
+/// <path> -e k=v...` run would check it against (K4): calling code has
+/// already decided to run the document, so preflight and trust checks
+/// are skipped here, not reimplemented.
 ///
-/// `CheckOptions` is built from `Default` plus field assignment, not a
-/// struct literal: its field list is still growing as electricity's
-/// compiler lanes land, and a literal would need an update — silently
-/// defaulting the rest is correct here — every time one does.
+/// With a config, this is exactly `electricity::check_options` — the
+/// one place that options a real `electricity` run uses are built, so
+/// osp's own plan can't drift from what the engine itself checks a
+/// document against (its `config_runtime` merge included, e.g. a
+/// config-defined `concurrency_groups`). **osp does not reproduce
+/// `cof`'s own config discovery** (the global or project
+/// `circuitry.config.json` layers `cof run` resolves with no
+/// `--config`): a `group:` defined only in one of those layers, not in
+/// `osp`'s own `--config`/positional config argument, still falls back
+/// to no plan here, on `cof` as much as on electricity, even though
+/// `cof run` itself would see it. Without a config, there is nothing
+/// for `check_options` to read a `runtime:` block from, so this builds
+/// `CheckOptions` the same way directly — `Default` plus field
+/// assignment, not a struct literal: its field list is still growing
+/// as electricity's compiler lanes land, and a literal would need an
+/// update, silently defaulting the rest being correct here, every time
+/// one does.
 #[allow(clippy::field_reassign_with_default)]
-pub fn compile(path: &Path) -> Result<Program, RunCheckError> {
-    let mut options = CheckOptions::default();
-    options.skip_preflight = true;
-    options.trust_document = true;
+pub fn compile(
+    path: &Path,
+    config: Option<&Path>,
+    inputs: &indexmap::IndexMap<String, String>,
+) -> Result<Program, RunCheckError> {
+    let options = match config {
+        Some(config_path) => electricity::check_options(config_path, inputs),
+        None => {
+            let mut options = CheckOptions::default();
+            options.skip_preflight = true;
+            options.trust_document = true;
+            options.inputs = inputs.clone();
+            options
+        }
+    };
     check_for_run(path, &options)
 }
 
@@ -138,7 +167,24 @@ impl PlanTree {
     }
 
     pub fn from_program(program: &Program) -> Self {
-        Self::from_program_with_loader(program, &compile)
+        Self::from_program_with_options(program, None, &indexmap::IndexMap::new())
+    }
+
+    /// `from_program`, compiling any `use: path:` child the same way
+    /// the top-level document itself was (K4): the same config and
+    /// `-e` inputs, so a `use` child with its own required inputs, or
+    /// one that relies on the same config-defined `concurrency_groups`
+    /// its parent does, grafts the same way a real run of it would
+    /// check out.
+    pub fn from_program_with_options(
+        program: &Program,
+        config: Option<&Path>,
+        inputs: &indexmap::IndexMap<String, String>,
+    ) -> Self {
+        let config = config.map(Path::to_path_buf);
+        let inputs = inputs.clone();
+        let loader = move |p: &Path| compile(p, config.as_deref(), &inputs);
+        Self::from_program_with_loader(program, &loader)
     }
 
     /// `from_program`, with the `use: path:` child-document loader
@@ -613,7 +659,11 @@ mod tests {
 
     #[test]
     fn compile_a_missing_file_is_an_error() {
-        let err = compile(Path::new("/nonexistent-osp-path/does-not-exist.yml"));
+        let err = compile(
+            Path::new("/nonexistent-osp-path/does-not-exist.yml"),
+            None,
+            &indexmap::IndexMap::new(),
+        );
         assert!(err.is_err());
     }
 
@@ -633,8 +683,8 @@ mod tests {
         )
         .unwrap();
 
-        let program =
-            compile(&doc).expect("a real document should compile now lanes B/C have landed");
+        let program = compile(&doc, None, &indexmap::IndexMap::new())
+            .expect("a real document should compile now lanes B/C have landed");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
         assert!(plan.match_path("prime.first").is_some());
@@ -642,6 +692,54 @@ mod tests {
             .match_path("prime.gate.chosen")
             .expect("then/else merge");
         assert_eq!(gate.entries.len(), 2);
+    }
+
+    #[test]
+    fn a_document_with_a_required_input_only_compiles_with_the_matching_dash_e() {
+        // K4: a document with a required `interface.inputs` entry
+        // fails check_for_run with no plan at all until the matching
+        // `-e` is given -- the exact osp-side plumbing this issue asks
+        // for (`electricity::check_options`/`parse_inputs`), not just
+        // electricity-compiler's own already-tested behavior.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+
+        let no_inputs = compile(&doc, None, &indexmap::IndexMap::new());
+        assert!(no_inputs.is_err(), "{no_inputs:?}");
+
+        let inputs = parse_inputs(&["name=World".to_string()]).unwrap();
+        let program = compile(&doc, None, &inputs).expect("the input was provided");
+        let plan = PlanTree::from_program_with_options(&program, None, &inputs);
+        assert!(plan.has_plan());
+        assert!(plan.match_path("prime.hello").is_some());
+    }
+
+    #[test]
+    fn compile_merges_a_configs_own_runtime_block() {
+        // K4: with a config argument, `compile` must go through
+        // `electricity::check_options`, which merges the config file's
+        // own `runtime:` block under the document's -- not just
+        // skip_preflight/trust_document built by hand, which never
+        // reads a config file at all.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
+
+        let program = compile(&doc, Some(&config), &indexmap::IndexMap::new())
+            .expect("a config with a runtime block should still compile");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
     }
 
     fn document_info(dir: &Path) -> electricity_bytecode::DocumentInfo {

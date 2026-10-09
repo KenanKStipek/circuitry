@@ -22,10 +22,21 @@ prints the same plain-text stream today, `--log` notwithstanding. See
 osp do-thing.yml config.json
 osp do-thing.yml -e key=value --engine cof --out-dir ./run
 osp watch ./run
+osp watch ./run --plan do-thing.yml --config config.json -e key=value
 ```
 
 - With no `config.json`, `cof` resolves its own config layers (global,
-  project, environment) exactly as `cof run` would.
+  project, environment) exactly as `cof run` would. The plan osp compiles
+  from the document uses the same `config.json`/`-e` pair passed on the
+  command line (`electricity::check_options`, the exact options a real
+  `electricity <config> <doc> -e k=v...` run would check it against) —
+  **osp does not reproduce `cof`'s own config discovery**, so a document
+  that relies on a `group:`/`concurrency_groups` defined only in the
+  global or project `circuitry.config.json` layer, not in an explicit
+  `config.json` given here, still falls back to no plan, on either engine.
+  `osp watch --plan do-thing.yml` takes its own `--config`/`-e` for the
+  same reason, independent of whatever the watched run itself was started
+  with.
 - `--engine electricity` needs a config (electricity has no config
   discovery yet) and, until electricity runs documents, just shows
   electricity's own "preview" message and exit code.

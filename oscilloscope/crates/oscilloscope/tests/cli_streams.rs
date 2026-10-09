@@ -60,6 +60,64 @@ fn version_prints_to_stdout_not_stderr() {
 }
 
 #[test]
+fn a_dash_e_input_reaches_the_plan_compile() {
+    // K4: a document with a required `interface.inputs` entry only
+    // compiles into a real plan once the matching `-e` reaches
+    // `electricity::check_options` via osp's own CLI, not just
+    // electricity-compiler's own already-tested behavior one layer
+    // down. Observable here only indirectly, through the "couldn't
+    // compile a plan" fallback notice on stderr (O-1 has no plan-
+    // rendering UI yet) -- `--engine electricity` with a config but
+    // with the binary itself not on PATH still reaches the plan
+    // compile before the later launch failure, so this needs no real
+    // engine at all.
+    let work = tempfile::tempdir().unwrap();
+    let doc = work.path().join("do.yml");
+    std::fs::write(
+        &doc,
+        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    )
+    .unwrap();
+    let config = work.path().join("config.json");
+    std::fs::write(&config, "{}").unwrap();
+    let out_dir = work.path().join("out");
+
+    let without_input = Command::new(env!("CARGO_BIN_EXE_osp"))
+        .arg(&doc)
+        .arg(&config)
+        .arg("--engine")
+        .arg("electricity")
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn osp");
+    let stderr = String::from_utf8_lossy(&without_input.stderr);
+    assert!(
+        stderr.contains("couldn't compile a plan"),
+        "stderr:\n{stderr}"
+    );
+
+    let with_input = Command::new(env!("CARGO_BIN_EXE_osp"))
+        .arg(&doc)
+        .arg(&config)
+        .arg("-e")
+        .arg("name=World")
+        .arg("--engine")
+        .arg("electricity")
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn osp");
+    let stderr = String::from_utf8_lossy(&with_input.stderr);
+    assert!(
+        !stderr.contains("couldn't compile a plan"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     // K7: osp must never force a pre-existing --out-dir to 0700 (it
     // didn't create it, and chmod'ing a directory outside its own run
