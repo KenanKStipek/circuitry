@@ -2,8 +2,10 @@
 //! `exec::{mod,dynamic,conditional}` and `limiter` (lane B); `exec::
 //! tool::execute_tool` and `electricity-tools`'s `json` (lane C, params
 //! rendering/retries/redaction); `exec::tool::run_tool` and `cancel`
-//! (lane A, real, final). [`execute_root`] is lane A's one remaining
-//! stub: the actual tree-walking interpreter loop lane B builds.
+//! (lane A, real, final). [`execute_root`] is lane B2's tree-walking
+//! interpreter loop: a document root is always a `dynamic`-shaped
+//! container, so running it is exactly `exec::dynamic::execute_dynamic`
+//! against the store's own root node.
 //!
 //! `execute_root` takes every argument by reference, so lane B's own
 //! tree branches can't each be a `tokio::task::spawn_local` (which
@@ -26,7 +28,7 @@ pub mod store;
 pub use cancel::CancellationToken;
 pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
-pub use store::{NodeRef, Store, StoreError};
+pub use store::{NodeRef, Slot, Store, StoreError};
 
 use electricity_bytecode::Program;
 use electricity_tools::ToolRegistry;
@@ -67,8 +69,8 @@ pub struct RunContext<'a> {
     pub dry_run: bool,
 }
 
-/// Any error [`execute_root`] (or one of its own sub-executors, once
-/// lane B builds them) can return.
+/// Any error [`execute_root`] (or one of its own sub-executors) can
+/// return.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmError {
     /// A `tool` effect's `provider:` has no registered
@@ -90,8 +92,17 @@ pub enum VmError {
     /// variant only ever signals *that* cancellation happened here, not with
     /// what signal.
     Cancelled,
-    /// Lane B's own execution loop isn't implemented yet.
+    /// Lane B's own execution loop isn't implemented yet (a `loop`/
+    /// `mode: model` `if` -- refused before the run starts by lane A's
+    /// `first_unsupported` in a real document, but the interpreter still
+    /// reports this rather than panicking if one ever reaches it).
     NotImplemented(String),
+    /// A plain error message -- a chain/tree child's own failure already
+    /// wrapped with its effect path (`"<path>: <message>"`,
+    /// `core/dynamic.py`'s own `RuntimeError(f"{effect_path}: {e}")`), a
+    /// `TreeExecutionError`-shaped multi-branch summary, a conditional
+    /// branch's own bare-name wrap, or a failed CEL evaluation's text.
+    Message(String),
 }
 
 impl fmt::Display for VmError {
@@ -101,6 +112,7 @@ impl fmt::Display for VmError {
             VmError::Tool(message) => write!(f, "{message}"),
             VmError::Cancelled => write!(f, "cancelled"),
             VmError::NotImplemented(message) => write!(f, "{message}"),
+            VmError::Message(message) => write!(f, "{message}"),
         }
     }
 }
@@ -117,8 +129,21 @@ impl std::error::Error for VmError {}
 /// write to *observer*, and checking *token* before each chain effect /
 /// before starting each queued tree branch (DESIGN §6.5/§6.9).
 ///
-/// Lane A stub: always `Err(VmError::NotImplemented(..))` -- lane B's own
-/// `exec::dynamic`/`exec::conditional` tree-walking interpreter.
+/// *program*'s root is always a `dynamic`-shaped container (named
+/// `prime`, DESIGN.md's own "document root as a non-overlay `dynamic`"
+/// convention, issue #431's Scope section) -- so running it is exactly
+/// [`exec::dynamic::execute_dynamic`] against *store*'s own root node,
+/// with no `ctx` override of its own (*ctx* is Quirk Q1's `ctx_override`
+/// parameter here, not a pre-resolved rendering context -- see that
+/// function's own doc comment). [`exec::dynamic::execute_dynamic`] itself
+/// takes that override as an [`exec::CtxChain`], not yet materialized
+/// (so a reference several `dynamic` levels deep can still re-snapshot
+/// every ancestor fresh instead of reading a frozen `Value`) -- *ctx*
+/// here is always [`Value::None`] (the document root has no enclosing
+/// scope of its own), which becomes the empty chain; a caller that ever
+/// passed an already-resolved override `Value` gets it wrapped as the
+/// chain's one frozen entry instead, so this function's own signature
+/// can stay exactly what lane A fixed it as.
 pub async fn execute_root(
     program: &Program,
     store: &Store,
@@ -127,10 +152,20 @@ pub async fn execute_root(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
-    let _ = (program, store, ctx, run_ctx, observer, token);
-    Err(VmError::NotImplemented(
-        "electricity_vm::execute_root is not implemented yet (lane B, issue #431)".to_string(),
-    ))
+    let chain: exec::CtxChain = match ctx {
+        Value::None => Vec::new(),
+        other => vec![exec::CtxSource::Frozen(other.clone())],
+    };
+    exec::dynamic::execute_dynamic(
+        &program.root,
+        store,
+        &store.root,
+        &chain,
+        run_ctx,
+        observer,
+        token,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -169,7 +204,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_root_is_a_lane_b_stub() {
+    async fn execute_root_runs_an_empty_document_to_completion() {
+        // No children at all (an empty chain `prime`) -- no `tool`/`if`
+        // for lane C's still-stubbed `execute_tool` to ever reach, so
+        // this exercises `execute_root`'s own wiring into
+        // `exec::dynamic::execute_dynamic` without depending on lane C.
         let program = empty_program();
         let store = Store::new();
         let token = CancellationToken::new();
@@ -184,7 +223,7 @@ mod tests {
             runtime_config: &runtime_config,
             dry_run: false,
         };
-        let err = execute_root(
+        execute_root(
             &program,
             &store,
             &Value::None,
@@ -193,7 +232,17 @@ mod tests {
             &token,
         )
         .await
-        .unwrap_err();
-        assert!(matches!(err, VmError::NotImplemented(_)));
+        .unwrap();
+        let snapshot = store.snapshot(&store.root);
+        let Value::Dict(root) = &snapshot else {
+            panic!("expected a dict");
+        };
+        let Some(Value::Dict(prime)) = root.get(&Value::Str("prime".to_string())) else {
+            panic!("expected a prime node");
+        };
+        assert_eq!(
+            prime.get(&Value::Str("value".to_string())),
+            Some(&Value::Bool(true))
+        );
     }
 }
