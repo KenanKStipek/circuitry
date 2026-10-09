@@ -138,18 +138,39 @@ fn unique_run_dir() -> PathBuf {
 /// under a shared `/tmp`, so it is created non-recursively and must
 /// not already exist — a pre-existing entry there (a collision, or
 /// something planted ahead of time) is refused rather than reused.
-/// `--out-dir` may be a path the caller wants created in full
-/// (missing parents and all) and may legitimately already exist from
-/// an earlier run (F3 clears its stale observation files, not the
+/// `--out-dir` may be a path the caller wants created in full (missing
+/// parents and all) and may legitimately already exist from an
+/// earlier run (F3 clears its stale observation files, not the
 /// directory itself), so it uses `create_dir_all`'s own semantics
-/// instead, then fixes the leaf directory's own mode regardless of
-/// whether this call just created it or found it already there.
+/// instead — but only ever chmods the leaf directory when *this call*
+/// is the one that created it (K7): forcing `0700` onto a directory
+/// the caller already had, for whatever reason of their own, is a
+/// real, unrequested change to something outside osp's own run
+/// directory, and silently chmod'ing *someone else's* directory (one
+/// this process doesn't own) can even fail outright with `EPERM`. A
+/// pre-existing directory that already was group- or world-accessible
+/// instead gets a warning on stderr — loud enough that a caller who
+/// reuses one on purpose notices, without osp quietly changing it out
+/// from under them.
 fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     if is_default {
-        std::fs::DirBuilder::new().mode(0o700).create(path)
+        return std::fs::DirBuilder::new().mode(0o700).create(path);
+    }
+    let already_existed = path.exists();
+    std::fs::create_dir_all(path)?;
+    if already_existed {
+        let mode = std::fs::metadata(path)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            eprintln!(
+                "osp: run directory {} is group- or world-accessible (mode {:o}); \
+                 it can hold prompt and tool output",
+                path.display(),
+                mode & 0o777
+            );
+        }
+        Ok(())
     } else {
-        std::fs::create_dir_all(path)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
     }
 }
@@ -843,7 +864,11 @@ mod tests {
     }
 
     #[test]
-    fn create_run_dir_accepts_an_existing_out_dir_and_still_locks_it_down() {
+    fn create_run_dir_never_chmods_an_out_dir_it_did_not_create() {
+        // K7: forcing 0700 onto a directory the caller already had is
+        // an unrequested change to something outside osp's own run
+        // directory -- it must be left exactly as the caller made it,
+        // not quietly locked down.
         let parent = tempfile::tempdir().unwrap();
         let path = parent.path().join("reused");
         {
@@ -855,7 +880,11 @@ mod tests {
         }
         create_run_dir(&path, false).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700);
+        assert_eq!(
+            mode & 0o777,
+            0o755,
+            "a pre-existing out-dir's mode must be left untouched"
+        );
     }
 
     #[test]

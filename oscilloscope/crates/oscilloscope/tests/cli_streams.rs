@@ -4,6 +4,7 @@
 //! to stdout, like any other successful output. Needs no `cof`.
 
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -56,6 +57,45 @@ fn version_prints_to_stdout_not_stderr() {
     assert_eq!(out.status.code(), Some(0));
     assert!(!out.stdout.is_empty());
     assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
+    // K7: osp must never force a pre-existing --out-dir to 0700 (it
+    // didn't create it, and chmod'ing a directory outside its own run
+    // directory is an unrequested, possibly even EPERM-failing,
+    // change) -- it only warns on stderr. `--engine electricity` with
+    // no config is a convenient way to reach the exit-2 usage error
+    // right after `create_run_dir` has already run, with no `cof`
+    // needed at all.
+    let work = tempfile::tempdir().unwrap();
+    let doc = work.path().join("do.yml");
+    std::fs::write(&doc, "effects: []\n").unwrap();
+    let out_dir = work.path().join("out");
+    std::fs::create_dir(&out_dir).unwrap();
+    std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_osp"))
+        .arg(&doc)
+        .arg("--engine")
+        .arg("electricity")
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn osp");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("group- or world-accessible"),
+        "stderr:\n{stderr}"
+    );
+    let mode = std::fs::metadata(&out_dir).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o777,
+        "a pre-existing out-dir's mode must be left untouched"
+    );
 }
 
 #[test]
