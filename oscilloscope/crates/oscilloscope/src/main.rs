@@ -497,7 +497,7 @@ fn do_run(args: RunArgs) -> ExitCode {
 /// has always used to build its `ExitCode` from.
 #[allow(clippy::too_many_arguments)]
 fn finish_run(
-    out: &mut std::io::StdoutLock<'_>,
+    out: &mut impl Write,
     clock: &mut Clock,
     child: &mut SupervisedChild,
     stderr_rx: &std::sync::mpsc::Receiver<String>,
@@ -1052,7 +1052,7 @@ fn observe_tick(
 }
 
 fn drain_observations(
-    out: &mut std::io::StdoutLock<'_>,
+    out: &mut impl Write,
     clock: &mut Clock,
     live_poller: &mut LiveStatePoller,
     events_tailer: &mut EventsTailer,
@@ -1242,6 +1242,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &run_dir,
         &mut last_state,
         local_signal,
+        false,
     );
     let _ = writeln!(out, "exit {code}");
     ExitCode::from(code as u8)
@@ -1276,6 +1277,9 @@ fn run_tui_watch(
     let events_path = run_dir.join("events.jsonl");
     let mut signals = SignalWatcher::new().ok();
     let mut local_signal: Option<ForwardSignal> = None;
+    // Finding 15: `q` on a still-live run is a voluntary detach, not
+    // an abort.
+    let mut detached_while_live = false;
     let start = Instant::now();
 
     let mut app = App::new(true);
@@ -1299,6 +1303,7 @@ fn run_tui_watch(
                 &run_dir,
                 &mut last_state,
                 None,
+                false,
             );
             let _ = writeln!(out, "exit {code}");
             return ExitCode::from(code as u8);
@@ -1453,7 +1458,16 @@ fn run_tui_watch(
                             .is_some()
                         });
                         match app.handle_key(key, &visible, false, has_prompt_sent) {
-                            keys::Action::Quit => break 'tui,
+                            keys::Action::Quit => {
+                                // Finding 15: `q` while the watched
+                                // run is still going is a voluntary
+                                // detach, not an abort — the run
+                                // already having ended (K1's own
+                                // finished screen) still gets the
+                                // normal ok/failed/aborted summary.
+                                detached_while_live = !ended;
+                                break 'tui;
+                            }
                             // K3: Ctrl-C in `osp watch` always just
                             // detaches too, same as `q` — but reports
                             // the same 130 a real forwarded SIGINT
@@ -1508,6 +1522,7 @@ fn run_tui_watch(
         &run_dir,
         &mut last_state,
         local_signal,
+        detached_while_live,
     );
     let _ = writeln!(out, "exit {code}");
     ExitCode::from(code as u8)
@@ -1525,7 +1540,7 @@ fn run_tui_watch(
 /// leaves to its own callers.
 #[allow(clippy::too_many_arguments)]
 fn finish_watch(
-    out: &mut std::io::StdoutLock<'_>,
+    out: &mut impl Write,
     clock: &mut Clock,
     live_poller: &mut LiveStatePoller,
     events_tailer: &mut EventsTailer,
@@ -1535,11 +1550,22 @@ fn finish_watch(
     run_dir: &Path,
     last_state: &mut Option<serde_json::Value>,
     local_signal: Option<ForwardSignal>,
+    detached_while_live: bool,
 ) -> u8 {
     if let Some(state) =
         drain_observations(out, clock, live_poller, events_tailer, differ, model, plan)
     {
         *last_state = Some(state);
+    }
+
+    // Finding 15: a voluntary `q` detach from a run that was still
+    // going is not an abort — reported distinctly, and exits 0,
+    // rather than falling into the generic "no final state" ending
+    // below (which this would otherwise always hit: the run, by
+    // definition, hasn't written one yet).
+    if detached_while_live {
+        print_line(out, clock, None, "■ detached (the run is still going)");
+        return 0;
     }
 
     let final_state = std::fs::read(run_dir.join("state.json"))
@@ -1826,6 +1852,43 @@ mod tests {
         // Finding 7: `--log`, same reason as the first watch test above.
         let code = run(args(&["watch", dir.path().to_str().unwrap(), "--log"]));
         assert_eq!(code, ExitCode::from(130));
+    }
+
+    #[test]
+    fn finish_watch_reports_a_distinct_detached_ending_for_a_voluntary_q_on_a_live_run() {
+        // Finding 15: `q` on a run that's still going is a voluntary
+        // detach, not an abort — reported distinctly, and exits 0,
+        // rather than the generic "no final state" abort every other
+        // ending without one falls into.
+        let dir = tempfile::tempdir().unwrap();
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+        let plan = PlanTree::empty();
+        let mut last_state: Option<serde_json::Value> = None;
+        let mut clock = Clock::new();
+        let mut buf: Vec<u8> = Vec::new();
+
+        let code = finish_watch(
+            &mut buf,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+            dir.path(),
+            &mut last_state,
+            None,
+            true,
+        );
+        assert_eq!(code, 0);
+        let text = String::from_utf8(buf).unwrap();
+        assert!(
+            text.contains("■ detached (the run is still going)"),
+            "{text:?}"
+        );
     }
 
     #[test]
