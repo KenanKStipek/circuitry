@@ -74,7 +74,11 @@ pub fn seed_state(store: &Store, inputs: &indexmap::IndexMap<String, String>) {
 /// (step 10).
 pub fn replace_input_namespace(store: &Store, namespace: indexmap::IndexMap<Value, Value>) {
     let dict: Dict = namespace.into_iter().collect();
-    store.set_leaf(&store.root, Value::Str("input".to_string()), Value::Dict(dict));
+    store.set_leaf(
+        &store.root,
+        Value::Str("input".to_string()),
+        Value::Dict(dict),
+    );
 }
 
 #[cfg(test)]
@@ -181,7 +185,10 @@ mod tests {
         seed_state(&store, &inputs);
         let snapshot = store.snapshot(&store.root);
         let dict = snapshot.as_dict().unwrap();
-        assert_eq!(dict.get(&Value::Str("prime".to_string())), Some(&Value::Int(5.into())));
+        assert_eq!(
+            dict.get(&Value::Str("prime".to_string())),
+            Some(&Value::Int(5.into()))
+        );
     }
 
     #[test]
@@ -193,13 +200,19 @@ mod tests {
         seed_state(&store, &inputs);
         let snapshot = store.snapshot(&store.root);
         let dict = snapshot.as_dict().unwrap();
-        assert_eq!(dict.get(&Value::Str("extra".to_string())), Some(&Value::Int(2.into())));
+        assert_eq!(
+            dict.get(&Value::Str("extra".to_string())),
+            Some(&Value::Int(2.into()))
+        );
         let input = dict
             .get(&Value::Str("input".to_string()))
             .unwrap()
             .as_dict()
             .unwrap();
-        assert_eq!(input.get(&Value::Str("a".to_string())), Some(&Value::Int(1.into())));
+        assert_eq!(
+            input.get(&Value::Str("a".to_string())),
+            Some(&Value::Int(1.into()))
+        );
     }
 
     #[test]
@@ -222,6 +235,9 @@ mod tests {
             .as_dict()
             .unwrap();
         assert_eq!(input.get(&Value::Str("x".to_string())), None);
-        assert_eq!(input.get(&Value::Str("y".to_string())), Some(&Value::Int(1.into())));
+        assert_eq!(
+            input.get(&Value::Str("y".to_string())),
+            Some(&Value::Int(1.into()))
+        );
     }
 }

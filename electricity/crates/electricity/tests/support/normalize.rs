@@ -177,34 +177,6 @@ pub fn normalize_event(event: &Value, root: &str) -> Value {
     Value::Object(out)
 }
 
-/// Truncates a third-party JSON-decode error's own detail text (e.g.
-/// `json: parse failed: Expecting value: line 1 column 1 (char 0)`
-/// from Python's own `json` module vs. this crate's `electricity-
-/// json`'s own `Expecting value: char 0`) to a shared sentinel after
-/// the `parse failed: ` marker both sides share -- DESIGN.md §1/§12:
-/// third-party parser text only has to fail at the same place, never
-/// match word for word, so a comparison test must not demand that
-/// anyway. Applied recursively to every string in a `state`-shaped
-/// [`Value`], on both sides of a comparison.
-pub fn strip_third_party_parse_detail(value: &Value) -> Value {
-    const MARKER: &str = "parse failed: ";
-    match value {
-        Value::String(s) => match s.find(MARKER) {
-            Some(at) => Value::String(format!("{}{MARKER}<DETAIL>", &s[..at])),
-            None => value.clone(),
-        },
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (k.clone(), strip_third_party_parse_detail(v)))
-                .collect(),
-        ),
-        Value::Array(items) => {
-            Value::Array(items.iter().map(strip_third_party_parse_detail).collect())
-        }
-        other => other.clone(),
-    }
-}
-
 /// `core/cel_eval.py`'s own `f"CEL evaluation failed for {expr!r}: {exc}"`
 /// prefix, kept verbatim -- only `{exc}` itself (everything after the
 /// closing quote's own `": "`) is third-party text (`cel-python`'s own

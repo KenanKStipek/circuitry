@@ -19,10 +19,7 @@ use std::path::PathBuf;
 use support::normalize::{normalize, strip_invocation_shape_fields};
 use support::run_corpus::{CorpusCase, load_corpus_at};
 
-const GOLDEN: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/golden/run_seeding.json"
-);
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/run_seeding.json");
 
 static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

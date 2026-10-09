@@ -705,9 +705,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     // what the step-5 reseed above just left it as -- never the
     // partial, best-effort coercion pass that's only ever correct for
     // a step-10 failure itself.
-    if let Err(err) =
-        electricity_compiler::pre_input_checks(&loaded, effective.runtime.as_ref())
-    {
+    if let Err(err) = electricity_compiler::pre_input_checks(&loaded, effective.runtime.as_ref()) {
         fail!(err.to_string());
     }
 

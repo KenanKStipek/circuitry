@@ -22,10 +22,7 @@ use indexmap::IndexMap;
 use serde_json::Value as Json;
 use std::fs;
 use std::path::PathBuf;
-use support::normalize::{
-    normalize, strip_expect_error_detail, strip_invocation_shape_fields,
-    strip_third_party_parse_detail,
-};
+use support::normalize::{normalize, strip_expect_error_detail, strip_invocation_shape_fields};
 
 use support::run_corpus::load_corpus_at;
 
@@ -301,7 +298,6 @@ async fn run_case(name: &str, orchestration: &str, config: &str) -> Json {
     let state_json: Json = serde_json::from_str(&state_text).unwrap();
     let state_json = normalize(None, &state_json, root);
     let state_json = strip_invocation_shape_fields(&state_json);
-    let state_json = strip_third_party_parse_detail(&state_json);
     strip_expect_error_detail(&state_json)
 }
 
@@ -338,7 +334,6 @@ async fn electricity_run_orchestration_matches_the_corpus_state() {
             .clone()
             .unwrap_or_else(|| panic!("{name}: corpus case has no state"));
         let expected = strip_invocation_shape_fields(&expected);
-        let expected = strip_third_party_parse_detail(&expected);
         let expected = strip_expect_error_detail(&expected);
         let actual = run_case(name, doc, config).await;
         assert_eq!(
