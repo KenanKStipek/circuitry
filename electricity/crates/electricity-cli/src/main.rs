@@ -4,12 +4,26 @@
 //! `cof run` -- only a check failure prints that failure's own exact text
 //! instead. `--version`/`--help` succeed; `--dump-ir` runs the same check
 //! and prints the result as JSON.
+//!
+//! Every flag issue #431's own usage line lists parses, in any position,
+//! before or after the two positionals (`<config.json> <orchestration.yml>`)
+//! -- `--out`/`--pretty`/`--live-state`/`--events` included. An unknown
+//! flag is a usage error (exit 2): issue #431's gate lane tightens this
+//! from the pre-#431 preview CLI, which let a trailing unknown flag fall
+//! through to the (always-refusing) run path instead. None of the four
+//! new flags changes this release's own behavior yet -- each still routes
+//! to the same preview refusal / check-failure text `Action::Run` always
+//! produced, so the conformance runner's existing "refusal keeps the
+//! preview marker" skip rule keeps working; lane D wires their real
+//! output contract in together with that runner's own update.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json] [--profile <path>]
+Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json]
+                    [--pretty] [--live-state state.json] [--events events.jsonl]
+                    [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
 
 electricity is a preview: this release cannot run orchestrations yet. Use
@@ -17,78 +31,165 @@ electricity is a preview: this release cannot run orchestrations yet. Use
 commands.
 
 Options:
-  -V, --version   Print the version and exit
-  -h, --help      Print this message and exit
-  -e key=value    Pass an orchestration input, checked against its
-                  declared interface.inputs the same way `cof run -e`
-                  does. Repeatable; a later -e for the same key wins.
-  --dump-ir       Print the compiled IR as JSON and exit. Unstable: this
-                  format is a debugging aid and can change in any release.";
+  -V, --version       Print the version and exit
+  -h, --help          Print this message and exit
+  -e key=value        Pass an orchestration input, checked against its
+                      declared interface.inputs the same way `cof run -e`
+                      does. Repeatable; a later -e for the same key wins.
+  --out <path>        Write the final state to <path> instead of stdout.
+  --pretty            Sort state keys and indent by 2 spaces (only with
+                      --out).
+  --live-state <path> Mirror the running state to <path> as it changes.
+  --events <path>     Write a JSONL event stream to <path>.
+  --profile <path>    Not supported in this preview (profiles land in a
+                      later milestone).
+  --dump-ir           Print the compiled IR as JSON and exit. Unstable: this
+                      format is a debugging aid and can change in any release.";
+
+/// A successfully parsed `electricity <config.json> <doc> ...` run
+/// request -- every flag [`USAGE`] lists that isn't `--dump-ir`/
+/// `--version`/`--help`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct RunArgs {
+    config: String,
+    orchestration: String,
+    inputs: Vec<String>,
+    out: Option<String>,
+    pretty: bool,
+    live_state: Option<String>,
+    events: Option<String>,
+    /// Parsed (and its own value consumed) but never acted on in this
+    /// preview -- profiles refuse the same way every other `Run` does.
+    profile: Option<String>,
+}
 
 enum Action {
     Version,
     Help,
-    Run(String, String, Vec<String>),
+    Run(RunArgs),
     DumpIr(String, String, Vec<String>),
     UsageError(String),
 }
 
-/// Every positional argument in *args*, skipping `--dump-ir` and each
-/// known run flag's own value -- the one list both `Action::Run` and
-/// `Action::DumpIr` (each its own first two: `<config.json>
-/// <orchestration.yml>`) are built from.
-fn positionals(args: &[String]) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if arg == "--dump-ir" {
-            i += 1;
-        } else if KNOWN_RUN_FLAGS.contains(&arg) {
-            i += 2; // the flag and its value
-        } else {
-            result.push(arg);
-            i += 1;
-        }
-    }
-    result
+/// One recognized flag's own arity -- whether [`parse_flags`] consumes a
+/// following value for it. `KNOWN_FLAGS` is this parser's single source
+/// of truth for "is this token a flag at all", so a new flag only has to
+/// be added here (and to the consuming match in [`parse_flags`]) to be
+/// recognized in every position.
+enum Arity {
+    Boolean,
+    Value,
 }
 
-/// Every `-e` value in *args*, in order, duplicates included --
-/// `electricity::parse_inputs`'s own input, built the same way
-/// [`positionals`] walks the same argument list. `Err` is a trailing
-/// `-e` with no value (this preview's own usage error; cof's own
-/// Click-layer "Option '-e' requires an argument." is third-party CLI
-/// framework text, not Circuitry's own, so not matched word for word).
-fn e_entries(args: &[String]) -> Result<Vec<String>, String> {
-    let mut result = Vec::new();
+const KNOWN_FLAGS: &[(&str, Arity)] = &[
+    ("-V", Arity::Boolean),
+    ("--version", Arity::Boolean),
+    ("-h", Arity::Boolean),
+    ("--help", Arity::Boolean),
+    ("--dump-ir", Arity::Boolean),
+    ("--pretty", Arity::Boolean),
+    ("-e", Arity::Value),
+    ("--out", Arity::Value),
+    ("--live-state", Arity::Value),
+    ("--events", Arity::Value),
+    ("--profile", Arity::Value),
+];
+
+fn flag_arity(flag: &str) -> Option<&'static Arity> {
+    KNOWN_FLAGS
+        .iter()
+        .find(|(name, _)| *name == flag)
+        .map(|(_, arity)| arity)
+}
+
+/// Every flag and positional in *args*, in one pass -- a token starting
+/// with `-` that isn't exactly `-` (tolerated as a plain positional, the
+/// conventional stdin/stdout placeholder, never a flag) and isn't in
+/// [`KNOWN_FLAGS`] is an `Err` naming it (issue #431's CLI section:
+/// "An unknown flag is a usage error (exit 2)"). A value-taking flag
+/// with no following argument is also an `Err` (this preview's own
+/// usage error; cof's own Click-layer "Option '...' requires an
+/// argument." is third-party CLI framework text, not Circuitry's own, so
+/// not matched word for word).
+struct ParsedFlags {
+    version: bool,
+    help: bool,
+    dump_ir: bool,
+    pretty: bool,
+    inputs: Vec<String>,
+    out: Option<String>,
+    live_state: Option<String>,
+    events: Option<String>,
+    profile: Option<String>,
+    positionals: Vec<String>,
+}
+
+fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
+    let mut parsed = ParsedFlags {
+        version: false,
+        help: false,
+        dump_ir: false,
+        pretty: false,
+        inputs: Vec::new(),
+        out: None,
+        live_state: None,
+        events: None,
+        profile: None,
+        positionals: Vec::new(),
+    };
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
-        if arg == "-e" {
-            match args.get(i + 1) {
-                Some(value) => {
-                    result.push(value.clone());
-                    i += 2;
-                }
-                None => return Err("-e requires an argument".to_string()),
+        if arg == "-" {
+            parsed.positionals.push(arg.to_string());
+            i += 1;
+            continue;
+        }
+        let Some(arity) = flag_arity(arg) else {
+            if arg.starts_with('-') {
+                return Err(format!("unrecognized option '{arg}'"));
             }
-        } else if arg == "--dump-ir" {
+            parsed.positionals.push(arg.to_string());
             i += 1;
-        } else if KNOWN_RUN_FLAGS.contains(&arg) {
-            i += 2;
-        } else {
-            i += 1;
+            continue;
+        };
+        match arity {
+            Arity::Boolean => {
+                match arg {
+                    "-V" | "--version" => parsed.version = true,
+                    "-h" | "--help" => parsed.help = true,
+                    "--dump-ir" => parsed.dump_ir = true,
+                    "--pretty" => parsed.pretty = true,
+                    _ => unreachable!("every Arity::Boolean flag is handled above"),
+                }
+                i += 1;
+            }
+            Arity::Value => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| format!("{arg} requires an argument"))?
+                    .clone();
+                match arg {
+                    "-e" => parsed.inputs.push(value),
+                    "--out" => parsed.out = Some(value),
+                    "--live-state" => parsed.live_state = Some(value),
+                    "--events" => parsed.events = Some(value),
+                    "--profile" => parsed.profile = Some(value),
+                    _ => unreachable!("every Arity::Value flag is handled above"),
+                }
+                i += 2;
+            }
         }
     }
-    Ok(result)
+    Ok(parsed)
 }
-
-/// Run flags the usage text advertises (`-e key=value`, `--out`, `--profile`):
-/// recognized in any position, each followed by its own value.
-const KNOWN_RUN_FLAGS: &[&str] = &["-e", "--out", "--profile"];
 
 fn classify(args: &[String]) -> Action {
+    // `-V`/`--version` and `-h`/`--help` win over everything, including a
+    // usage error elsewhere in the same command line -- checked directly
+    // against the raw tokens, before flag validation, so `electricity
+    // --bogus --version` still prints the version (pre-#431 behavior,
+    // preserved).
     if args.iter().any(|a| a == "--version" || a == "-V") {
         return Action::Version;
     }
@@ -96,57 +197,43 @@ fn classify(args: &[String]) -> Action {
         return Action::Help;
     }
 
-    // A trailing `-e` with no value is this preview's own
-    // structural-parsing error (cof's own Click layer reports it before
-    // any positional validation too, confirmed directly: `cof run -e`
-    // alone reports the missing `-e` value, not "Missing orchestration")
-    // -- checked before the positional/unrecognized-option classification
-    // below, same priority.
-    let inputs = match e_entries(args) {
-        Ok(inputs) => inputs,
+    let parsed = match parse_flags(args) {
+        Ok(parsed) => parsed,
         Err(message) => return Action::UsageError(message),
     };
-
-    // Preserves the pre-#408 classification exactly ("Additive only"):
-    // only the first argument decides Run vs. a usage error, so a
-    // trailing unknown flag that used to fall through to the preview's
-    // Run path -- e.g. `electricity c.json d.yml --pretty` -- still
-    // does, and a bare `-` not in first position is still tolerated
-    // the same way. `--dump-ir` is excluded here (handled below) so it
-    // keeps working in first position too.
-    match args.first() {
-        None => return Action::UsageError("no config file or orchestration given".to_string()),
-        Some(first)
-            if first.starts_with('-')
-                && first != "--dump-ir"
-                && !KNOWN_RUN_FLAGS.contains(&first.as_str()) =>
-        {
-            return Action::UsageError(format!("unrecognized option '{first}'"));
-        }
-        _ => {}
+    // `parse_flags` only ever sets `parsed.version`/`.help` via the exact
+    // same tokens already handled above, so this is unreachable in
+    // practice; kept for defense-in-depth if a future flag reuses them.
+    if parsed.version {
+        return Action::Version;
+    }
+    if parsed.help {
+        return Action::Help;
     }
 
-    if !args.iter().any(|a| a == "--dump-ir") {
-        let found = positionals(args);
-        return match (found.first(), found.get(1)) {
+    if parsed.dump_ir {
+        return match (parsed.positionals.first(), parsed.positionals.get(1)) {
             (Some(config), Some(orchestration)) => {
-                Action::Run(config.to_string(), orchestration.to_string(), inputs)
+                Action::DumpIr(config.clone(), orchestration.clone(), parsed.inputs)
             }
-            _ => Action::UsageError("no config file or orchestration given".to_string()),
+            _ => Action::UsageError(
+                "--dump-ir requires <config.json> <orchestration.yml>".to_string(),
+            ),
         };
     }
 
-    // The first two positionals, never a trailing one -- `electricity
-    // <config.json> <orchestration.yml> --dump-ir` takes exactly two,
-    // so a third stray positional must not silently become the
-    // orchestration path.
-    let found = positionals(args);
-
-    match (found.first(), found.get(1)) {
-        (Some(config), Some(orchestration)) => {
-            Action::DumpIr(config.to_string(), orchestration.to_string(), inputs)
-        }
-        _ => Action::UsageError("--dump-ir requires <config.json> <orchestration.yml>".to_string()),
+    match (parsed.positionals.first(), parsed.positionals.get(1)) {
+        (Some(config), Some(orchestration)) => Action::Run(RunArgs {
+            config: config.clone(),
+            orchestration: orchestration.clone(),
+            inputs: parsed.inputs,
+            out: parsed.out,
+            pretty: parsed.pretty,
+            live_state: parsed.live_state,
+            events: parsed.events,
+            profile: parsed.profile,
+        }),
+        _ => Action::UsageError("no config file or orchestration given".to_string()),
     }
 }
 
@@ -166,14 +253,15 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Action::Run(config_path, orchestration_path, raw_inputs) => {
+        Action::Run(run_args) => {
             // `electricity::parse_inputs`'s own malformed-`-e` text,
             // Circuitry's own `BadParameter` message word for word
-            // (issue #429): `e_entries` only checks that `-e` has *some*
-            // value, saying nothing about whether that value itself
-            // contains `=` -- a value with no `=` (`-e badtext`) reaches
-            // this, `cli/app.py::_parse_env_vars`'s own check proper.
-            let inputs = match electricity::parse_inputs(&raw_inputs) {
+            // (issue #429): `parse_flags` only checks that `-e` has
+            // *some* value, saying nothing about whether that value
+            // itself contains `=` -- a value with no `=` (`-e badtext`)
+            // reaches this, `cli/app.py::_parse_env_vars`'s own check
+            // proper.
+            let inputs = match electricity::parse_inputs(&run_args.inputs) {
                 Ok(inputs) => inputs,
                 Err(message) => {
                     eprintln!("electricity: {message}");
@@ -181,14 +269,30 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
+            // `--out`/`--pretty`/`--live-state`/`--events`/`--profile`
+            // are fully parsed above (consuming their own value, and
+            // never themselves a usage error) but not yet acted on --
+            // lane D wires the real `--out`/`--live-state`/`--events`
+            // writers and `--profile`'s own preview refusal in together
+            // with `run_orchestration`'s own replacement (issue #431's
+            // CLI section). Until then every `Run` ends the same way it
+            // always has: the check failure's own text, or this
+            // preview's one unconditional refusal.
+            let _ = (
+                run_args.out,
+                run_args.pretty,
+                run_args.live_state,
+                run_args.events,
+                run_args.profile,
+            );
             // On failure: exactly the error text on stderr, exit 1
             // (issue #408's CLI section). On success: still exit 1
             // with the preview refusal -- there is no VM yet.
             eprintln!(
                 "{}",
                 electricity::run_orchestration(
-                    Path::new(&config_path),
-                    Path::new(&orchestration_path),
+                    Path::new(&run_args.config),
+                    Path::new(&run_args.orchestration),
                     &inputs,
                 )
             );
@@ -239,6 +343,14 @@ mod unit_tests {
     }
 
     #[test]
+    fn version_flag_wins_even_over_an_unknown_flag() {
+        assert!(matches!(
+            classify(&["--bogus".to_string(), "--version".to_string()]),
+            Action::Version
+        ));
+    }
+
+    #[test]
     fn help_flag_is_recognized() {
         assert!(matches!(classify(&["--help".to_string()]), Action::Help));
         assert!(matches!(classify(&["-h".to_string()]), Action::Help));
@@ -258,10 +370,25 @@ mod unit_tests {
     }
 
     #[test]
+    fn unknown_flag_after_the_positionals_is_also_a_usage_error() {
+        // Issue #431's gate lane tightens this from the pre-#431 preview
+        // CLI, which let a trailing unknown flag fall through to the
+        // (always-refusing) run path instead.
+        assert!(matches!(
+            classify(&[
+                "config.json".to_string(),
+                "orchestration.yml".to_string(),
+                "--bogus".to_string(),
+            ]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
     fn positional_args_are_a_run_request() {
         assert!(matches!(
             classify(&["config.json".to_string(), "orchestration.yml".to_string()]),
-            Action::Run(_, _, _)
+            Action::Run(_)
         ));
     }
 
@@ -274,7 +401,7 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run(_, _, _)
+            Action::Run(_)
         ));
         assert!(matches!(
             classify(&[
@@ -283,8 +410,50 @@ mod unit_tests {
                 "config.json".to_string(),
                 "orchestration.yml".to_string()
             ]),
-            Action::Run(_, _, _)
+            Action::Run(_)
         ));
+    }
+
+    #[test]
+    fn every_new_run_flag_parses_in_any_position() {
+        match classify(&[
+            "--out".to_string(),
+            "state.json".to_string(),
+            "config.json".to_string(),
+            "orchestration.yml".to_string(),
+            "--pretty".to_string(),
+            "--live-state".to_string(),
+            "live.json".to_string(),
+            "--events".to_string(),
+            "events.jsonl".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.config, "config.json");
+                assert_eq!(run_args.orchestration, "orchestration.yml");
+                assert_eq!(run_args.out.as_deref(), Some("state.json"));
+                assert!(run_args.pretty);
+                assert_eq!(run_args.live_state.as_deref(), Some("live.json"));
+                assert_eq!(run_args.events.as_deref(), Some("events.jsonl"));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn a_value_flag_with_no_following_argument_is_a_usage_error() {
+        for flag in ["--out", "--live-state", "--events", "--profile"] {
+            assert!(
+                matches!(
+                    classify(&[
+                        "config.json".to_string(),
+                        "orchestration.yml".to_string(),
+                        flag.to_string(),
+                    ]),
+                    Action::UsageError(_)
+                ),
+                "{flag} with no value should be a usage error"
+            );
+        }
     }
 
     #[test]
@@ -339,21 +508,6 @@ mod unit_tests {
     }
 
     #[test]
-    fn trailing_unknown_flag_is_still_a_run_request_not_a_usage_error() {
-        // Pre-#408 behaviour, preserved: only the first argument is
-        // classified; a trailing unknown flag used to fall through to
-        // the preview's Run path (exit 1), not a usage error (exit 2).
-        assert!(matches!(
-            classify(&[
-                "config.json".to_string(),
-                "orchestration.yml".to_string(),
-                "--pretty".to_string(),
-            ]),
-            Action::Run(_, _, _)
-        ));
-    }
-
-    #[test]
     fn bare_dash_not_in_first_position_is_still_a_run_request() {
         assert!(matches!(
             classify(&[
@@ -361,7 +515,7 @@ mod unit_tests {
                 "orchestration.yml".to_string(),
                 "-".to_string(),
             ]),
-            Action::Run(_, _, _)
+            Action::Run(_)
         ));
     }
 
@@ -373,7 +527,7 @@ mod unit_tests {
             "-e".to_string(),
             "name=World".to_string(),
         ]) {
-            Action::Run(_, _, inputs) => assert_eq!(inputs, vec!["name=World".to_string()]),
+            Action::Run(run_args) => assert_eq!(run_args.inputs, vec!["name=World".to_string()]),
             _ => panic!("expected Run"),
         }
     }
@@ -402,5 +556,27 @@ mod unit_tests {
             ]),
             Action::UsageError(_)
         ));
+    }
+
+    #[test]
+    fn osps_own_invocation_shape_still_parses() {
+        // oscilloscope's `ElectricityEngine` (`oscilloscope/crates/
+        // oscilloscope-core/src/engine.rs`) passes `<config> <doc> -e
+        // k=v... --out <dir>/state.json` -- issue #431's CLI section:
+        // "That must keep working."
+        match classify(&[
+            "config.json".to_string(),
+            "doc.yml".to_string(),
+            "-e".to_string(),
+            "name=World".to_string(),
+            "--out".to_string(),
+            "run-dir/state.json".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.out.as_deref(), Some("run-dir/state.json"));
+                assert_eq!(run_args.inputs, vec!["name=World".to_string()]);
+            }
+            _ => panic!("expected Run"),
+        }
     }
 }
