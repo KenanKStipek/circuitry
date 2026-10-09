@@ -1,10 +1,12 @@
 """Runs the `electricity` binary (built from `electricity/` with cargo when
 available) on each conformance case applicable to it and compares the same
-way the Python runner does (electricity/DESIGN.md §12). Skipped per case
-with a clear reason while electricity's preview build cannot run
-orchestration documents yet (today it exits 1 on any run request,
-`electricity/crates/electricity-cli/src/main.rs`) — once it can, these
-stop auto-skipping and start actually diffing state.
+way the Python runner does (electricity/DESIGN.md §12). A case that
+expects *failure* still skips when electricity refuses it with the
+preview marker for content M0-H's own VM genuinely doesn't support yet
+(`prompt`/`loop`/`use`/... -- there is nothing to usefully compare for
+those); a case that expects *success* never does -- a success case
+electricity wrongly refuses is a real regression, and must fail the
+test, not silently skip it.
 """
 
 from __future__ import annotations
@@ -26,14 +28,14 @@ from .normalize import (
 
 CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
+#: Every M0-H lane (issue #408/#431) is on main now, so nothing under
+#: `electricity/` emits this text any more -- a case that expects
+#: *failure* and lists `electricity` in its own engines may still
+#: legitimately get refused this way (content M0-H's own preview truly
+#: doesn't support yet, e.g. `prompt`/`loop`/`use`); a case that expects
+#: *success* must not (PR #441 review finding 6: a success case wrongly
+#: refused is a real regression, and must fail loudly, not skip).
 PREVIEW_MESSAGE_MARKER = "is a preview and cannot run orchestrations yet"
-#: `electricity_vm::execute_root`'s (and friends') own stub text --
-#: lanes land one at a time (issue #408), so a case whose real document
-#: needs a lane that hasn't merged yet still fails, just with this
-#: marker instead of either a real error or `PREVIEW_MESSAGE_MARKER`.
-#: Skipped the same way: there is nothing this test can usefully
-#: compare yet.
-STUB_MESSAGE_MARKER = "is not implemented yet (lane"
 
 #: electricity's CLI has no notion yet of "no config file" the way `cof
 #: run` does (an explicit --config, CIRCUITRY_CONFIG, a discovered
@@ -132,16 +134,14 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     )
 
     combined_output = result.stdout + result.stderr
-    if result.returncode == 1 and PREVIEW_MESSAGE_MARKER in combined_output:
+    if (
+        metadata["expect"] != "success"
+        and result.returncode == 1
+        and PREVIEW_MESSAGE_MARKER in combined_output
+    ):
         pytest.skip(
-            "electricity's preview build cannot run orchestration documents yet "
-            "(exits 1 on any run request) — electricity/crates/electricity-cli"
-        )
-    if result.returncode == 1 and STUB_MESSAGE_MARKER in combined_output:
-        pytest.skip(
-            "this case's real document needs a lane of issue #408's "
-            "electricity-compiler that hasn't landed yet — "
-            f"{combined_output.strip()}"
+            "this case's real document is content M0-H's own preview "
+            "doesn't support yet — electricity/crates/electricity-cli"
         )
 
     if metadata["expect"] == "success":
