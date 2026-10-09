@@ -864,7 +864,7 @@
     }
   },
   {
-    "name": "interface_input_e_string_value_kept_as_text",
+    "name": "interface_input_e_string_value_int_shaped_text_is_recovered",
     "files": {
       "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
     },
@@ -873,7 +873,7 @@
       "skip_preflight": true,
       "trust_document": true,
       "inputs": {
-        "x": "06"
+        "x": "5"
       }
     },
     "validate": {
@@ -901,6 +901,525 @@
     "comparison": {
       "validate_errors": [],
       "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_boolean_shaped_text_is_recovered",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "true"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_exponent_shaped_text_is_recovered",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1e3"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_null_text_stays_present_via_restore",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "null"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_array_shaped_text_passes_only_via_restore",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1]"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_required_non_string_input_given_null_is_still_missing",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "null"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'x' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_word_that_json_sniffs_to_an_int",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'boolean' but got int.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_number_word_that_json_sniffs_to_a_bool",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "true"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'number' but got bool.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_array_value_that_json_sniffs_to_an_object",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "{\"a\": 1}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'array' but got dict.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_underscore_prefixed_key_is_never_lifted",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    _token: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input '_token' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "4a93ac98def6fbba14e959351fac1089d6c28e16d430974da430a42b1d3f11da",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_input_namespace_key_satisfies_required_input",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "{\"name\": \"W\"}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'name' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_input_key_present_other_e_keys_are_not_lifted",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "{}",
+        "name": "W"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'name' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_declared_input_named_prime_cannot_be_satisfied",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    prime: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "prime": "5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'prime' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "a1ff70e8eac9f9ea3d6545637ac9bf46f2c8412c9f2992822c909e6fced8af2e",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
     }
   },
   {

@@ -244,8 +244,73 @@ fn missing_required_interface_input_is_a_run_only_error() {
 }
 
 #[test]
-fn interface_input_e_string_value_kept_as_text() {
-    run_case("interface_input_e_string_value_kept_as_text");
+fn interface_input_e_string_value_int_shaped_text_is_recovered() {
+    run_case("interface_input_e_string_value_int_shaped_text_is_recovered");
+}
+
+#[test]
+fn interface_input_e_string_value_boolean_shaped_text_is_recovered() {
+    run_case("interface_input_e_string_value_boolean_shaped_text_is_recovered");
+}
+
+#[test]
+fn interface_input_e_string_value_exponent_shaped_text_is_recovered() {
+    run_case("interface_input_e_string_value_exponent_shaped_text_is_recovered");
+}
+
+#[test]
+fn interface_input_e_string_value_null_text_stays_present_via_restore() {
+    run_case("interface_input_e_string_value_null_text_stays_present_via_restore");
+}
+
+#[test]
+fn interface_input_e_string_value_array_shaped_text_passes_only_via_restore() {
+    run_case("interface_input_e_string_value_array_shaped_text_passes_only_via_restore");
+}
+
+#[test]
+fn interface_input_e_required_non_string_input_given_null_is_still_missing() {
+    run_case("interface_input_e_required_non_string_input_given_null_is_still_missing");
+}
+
+#[test]
+fn interface_input_e_boolean_word_that_json_sniffs_to_an_int() {
+    run_case("interface_input_e_boolean_word_that_json_sniffs_to_an_int");
+}
+
+#[test]
+fn interface_input_e_number_word_that_json_sniffs_to_a_bool() {
+    run_case("interface_input_e_number_word_that_json_sniffs_to_a_bool");
+}
+
+#[test]
+fn interface_input_e_array_value_that_json_sniffs_to_an_object() {
+    run_case("interface_input_e_array_value_that_json_sniffs_to_an_object");
+}
+
+#[test]
+fn interface_input_e_underscore_prefixed_key_is_never_lifted() {
+    run_case("interface_input_e_underscore_prefixed_key_is_never_lifted");
+}
+
+#[test]
+fn interface_input_e_input_namespace_key_satisfies_required_input() {
+    run_case("interface_input_e_input_namespace_key_satisfies_required_input");
+}
+
+#[test]
+fn interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace() {
+    run_case("interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace");
+}
+
+#[test]
+fn interface_input_e_input_key_present_other_e_keys_are_not_lifted() {
+    run_case("interface_input_e_input_key_present_other_e_keys_are_not_lifted");
+}
+
+#[test]
+fn interface_input_e_declared_input_named_prime_cannot_be_satisfied() {
+    run_case("interface_input_e_declared_input_named_prime_cannot_be_satisfied");
 }
 
 #[test]
@@ -354,7 +419,20 @@ fn every_case_in_the_corpus_has_a_test() {
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",
         "missing_required_interface_input_is_a_run_only_error",
-        "interface_input_e_string_value_kept_as_text",
+        "interface_input_e_string_value_int_shaped_text_is_recovered",
+        "interface_input_e_string_value_boolean_shaped_text_is_recovered",
+        "interface_input_e_string_value_exponent_shaped_text_is_recovered",
+        "interface_input_e_string_value_null_text_stays_present_via_restore",
+        "interface_input_e_string_value_array_shaped_text_passes_only_via_restore",
+        "interface_input_e_required_non_string_input_given_null_is_still_missing",
+        "interface_input_e_boolean_word_that_json_sniffs_to_an_int",
+        "interface_input_e_number_word_that_json_sniffs_to_a_bool",
+        "interface_input_e_array_value_that_json_sniffs_to_an_object",
+        "interface_input_e_underscore_prefixed_key_is_never_lifted",
+        "interface_input_e_input_namespace_key_satisfies_required_input",
+        "interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace",
+        "interface_input_e_input_key_present_other_e_keys_are_not_lifted",
+        "interface_input_e_declared_input_named_prime_cannot_be_satisfied",
         "interface_input_e_number_valid",
         "interface_input_e_number_invalid",
         "interface_input_e_integer_with_underscores",

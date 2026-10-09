@@ -271,12 +271,18 @@ CASES: list[dict[str, Any]] = [
         # these cases pass `CheckOptions.inputs`/`RunRequest.initial_
         # state["input"]` the same text a `-e` flag would carry.
         # `string` is the one declared type a CLI-shaped text value can
-        # never fail against (`_restore_raw_text_for_string_inputs`
-        # keeps it literal, and `isinstance(str)` always matches), so
-        # there is no companion "invalid" case for it -- only this one,
-        # proving the exact text survives rather than being JSON-sniffed
-        # away (`06` would otherwise become the int `6`).
-        "name": "interface_input_e_string_value_kept_as_text",
+        # never fail against (`isinstance(str)` always matches once
+        # `_coerce`/the int-float-bool-to-string branch run) -- these
+        # four cases are JSON-sniffable shapes `_parse_env_vars` would
+        # turn into a non-string value first; `5`/`true` recover back
+        # to the same text either way (the int/float/bool-to-string
+        # branch in `check_interface_inputs` already handles that, with
+        # or without `_restore_raw_text_for_string_inputs`), so they
+        # exercise the sniff-then-recover path without the restore
+        # itself mattering; `1e3` recovers to a *different* text
+        # (`"1000.0"`) either way, unobservable here since this corpus
+        # only compares `run_error`, not the resulting state.
+        "name": "interface_input_e_string_value_int_shaped_text_is_recovered",
         "files": {
             "doc.yml": (
                 "interface:\n"
@@ -286,7 +292,214 @@ CASES: list[dict[str, Any]] = [
             )
         },
         "entry": "doc.yml",
-        "inputs": {"x": "06"},
+        "inputs": {"x": "5"},
+    },
+    {
+        "name": "interface_input_e_string_value_boolean_shaped_text_is_recovered",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "true"},
+    },
+    {
+        "name": "interface_input_e_string_value_exponent_shaped_text_is_recovered",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1e3"},
+    },
+    {
+        # Without `_restore_raw_text_for_string_inputs`, `-e x=null`
+        # JSON-sniffs to `None` before `check_interface_inputs` ever
+        # sees it, which counts as absent -- same as not passing `-e x`
+        # at all -- and a required, undefaulted input would report
+        # missing. The restore puts the literal text `"null"` back for
+        # a declared `string` input, so it stays present instead: this
+        # case's pass/fail verdict genuinely depends on the restore.
+        "name": "interface_input_e_string_value_null_text_stays_present_via_restore",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "null"},
+    },
+    {
+        # Without the restore, `-e x=[1]` JSON-sniffs to the list `[1]`;
+        # a declared `string` input rejects a list outright (the
+        # int/float/bool-to-string branch doesn't cover it, and a list
+        # is never a `str`). The restore puts the literal text `"[1]"`
+        # back, which satisfies `type: string` directly -- another case
+        # whose verdict genuinely depends on the restore.
+        "name": "interface_input_e_string_value_array_shaped_text_passes_only_via_restore",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1]"},
+    },
+    {
+        # A JSON `null` given to a *non-string* required input counts
+        # as absent, same as the key never being passed at all -- the
+        # restore above only ever applies to a declared `type: string`.
+        "name": "interface_input_e_required_non_string_input_given_null_is_still_missing",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "null"},
+    },
+    {
+        # `-e x=1` JSON-sniffs to the int `1` before `check_interface_
+        # inputs` ever sees it -- `1` is one of `_TRUE_WORDS`, but that
+        # word list is only consulted for text `_coerce` actually
+        # receives, and an int never reaches `_coerce` at all.
+        "name": "interface_input_e_boolean_word_that_json_sniffs_to_an_int",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1"},
+    },
+    {
+        "name": "interface_input_e_number_word_that_json_sniffs_to_a_bool",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "true"},
+    },
+    {
+        "name": "interface_input_e_array_value_that_json_sniffs_to_an_object",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": '{"a": 1}'},
+    },
+    {
+        # `core/state_ns.py::migrate_legacy_state` never lifts a
+        # `_`-prefixed root key under `input` -- a document that
+        # declares `_token` as a required input can't be satisfied by
+        # `-e _token=...` at all.
+        "name": "interface_input_e_underscore_prefixed_key_is_never_lifted",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    _token: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"_token": "x"},
+    },
+    {
+        # `-e input={"name": "W"}` JSON-sniffs to a dict under the
+        # literal key `input` -- `migrate_legacy_state` treats that key
+        # as already namespaced and uses its value directly.
+        "name": "interface_input_e_input_namespace_key_satisfies_required_input",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": '{"name": "W"}'},
+    },
+    {
+        # `-e input=5` JSON-sniffs to a non-dict value; `migrate_legacy_
+        # state` trusts the `input` key as already namespaced and
+        # leaves it alone, so `cli/runtime_shim.py::run`'s own
+        # `if not isinstance(input_ns, dict): input_ns = {}` resets it
+        # to an empty namespace right before `check_interface_inputs`.
+        "name": "interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": "5"},
+    },
+    {
+        # Once an `input` key is present among the `-e` entries, no
+        # other key is lifted under it at all -- `name` here stays a
+        # bare, unused root key, not `state["input"]["name"]`.
+        "name": "interface_input_e_input_key_present_other_e_keys_are_not_lifted",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": "{}", "name": "W"},
+    },
+    {
+        # `prime` is a namespace name, so `migrate_legacy_state` never
+        # lifts it under `input` either -- same as an underscore-prefixed
+        # key.
+        "name": "interface_input_e_declared_input_named_prime_cannot_be_satisfied",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    prime: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"prime": "5"},
     },
     {
         "name": "interface_input_e_number_valid",

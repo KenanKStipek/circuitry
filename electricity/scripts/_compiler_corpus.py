@@ -20,9 +20,12 @@ Each case is a dict:
         "entry": relpath,          # which file is the orchestration itself
         "options": {"skip_preflight": bool, "trust_document": bool},  # optional
         "inputs": {key: text, ...},  # optional -- the CLI's own -e key=value
-                                      # text pairs (issue #429), seeded as
-                                      # state["input"] for the run_error check
-                                      # only (validate() never consults them).
+                                      # text pairs (issue #429), routed through
+                                      # _parse_env_vars/_restore_raw_text_for_
+                                      # string_inputs exactly as run_cmd does
+                                      # before reaching RunRequest.initial_state,
+                                      # for the run_error check only (validate()
+                                      # never consults them).
         "error_modes": {                                              # optional
             "validate_errors": ["exact" | "location", ...],
             "run_error": "exact" | "location" | None,
@@ -89,6 +92,11 @@ from pathlib import Path
 from typing import Any
 
 from circuitry.cli import config as _config_module
+from circuitry.cli.app import (
+    _parse_env_vars,
+    _raw_env_var_text,
+    _restore_raw_text_for_string_inputs,
+)
 from circuitry.cli.orchestration_loader import load_orchestration_file
 from circuitry.cli.runtime_shim import RunRequest, run, validate
 from circuitry.core.compiler import compile_orchestration
@@ -206,20 +214,18 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
     options = case.get("options") or {}
     skip_preflight = options.get("skip_preflight", True)
     trust_document = options.get("trust_document", True)
-    # The CLI's own `-e key=value` text pairs (issue #429), seeded as
-    # `state["input"]` straight into `RunRequest.initial_state` --
-    # `run()`'s own `check_interface_inputs` coerces a present text
-    # value to its declared type exactly as a CLI `-e` value does
-    # (`core/interface_inputs.py::_coerce`), the same contract
-    # `CheckOptions.inputs` ports on the Rust side. Deliberately not
-    # routed through `cli/app.py::_parse_env_vars`'s own JSON-sniffing
-    # pre-pass: every case here uses a raw-text value that fails a JSON
-    # parse on its own (`abc`, `1_000`, `yes`, a malformed `[1,2,`), so
-    # the two paths agree -- the one input shape where they could
-    # diverge (a value that JSON-sniffs to a technically-still-wrong
-    # type, e.g. `-e count=5.0` against a declared `integer`) is out of
-    # scope for this corpus; see electricity-compiler's own
-    # `cli_input_value` doc comment for that distinction.
+    # The CLI's own `-e key=value` text pairs (issue #429). Routed
+    # through exactly the same steps `cli/app.py::run_cmd` runs an `-e`
+    # entry through before it ever reaches `RunRequest.initial_state`:
+    # `_parse_env_vars` JSON-sniffs each value, then
+    # `_restore_raw_text_for_string_inputs` substitutes the original
+    # text back for any key `interface.inputs` declares `type: string`.
+    # `migrate_legacy_state` (the choke point that would lift the
+    # result's bare root keys under `input`) is deliberately *not*
+    # applied here -- `run()` itself calls it, via `_load_state`, on
+    # whatever `initial_state` carries, so passing the un-lifted dict
+    # straight through exercises that real code path rather than
+    # pre-empting it.
     inputs: dict[str, str] = case.get("inputs") or {}
 
     with tempfile.TemporaryDirectory(prefix="electricity-compiler-corpus-") as tmp:
@@ -249,11 +255,17 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                     "errors": [f"{type(exc).__name__}: {exc}"],
                     "warnings": [],
                 }
+            entries = [f"{key}={value}" for key, value in inputs.items()]
+            inline = _parse_env_vars(entries) if entries else {}
+            if inline:
+                _restore_raw_text_for_string_inputs(
+                    inline, _raw_env_var_text(entries), entry_path
+                )
             run_result = run(
                 RunRequest(
                     orchestration_path=entry_path,
                     state_path=None,
-                    initial_state={"input": dict(inputs)} if inputs else None,
+                    initial_state=inline or None,
                     out_path=None,
                     dry_run=False,
                     validate_only=True,
