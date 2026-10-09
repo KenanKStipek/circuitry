@@ -1,0 +1,1729 @@
+[
+  {
+    "name": "defaults_only",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "llama3.1:8b",
+        "default_adapter": "ollama",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": null,
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "user_file_deep_merges_over_defaults",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\"default_model\": \"gpt-4\", \"runtime\": {\"adapters\": {\"openai\": {\"base_url\": \"https://api.openai.com\"}}}}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "gpt-4",
+        "default_adapter": "ollama",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": null,
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            },
+            "openai": {
+              "base_url": "https://api.openai.com"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "env_overlays_win_over_the_file",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\"default_model\": \"gpt-4\"}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {
+        "CIRCUITRY_MODEL": "llama3.3",
+        "CIRCUITRY_ENABLED_TOOLS": "json, shell"
+      }
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "llama3.3",
+        "default_adapter": "ollama",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": [
+          "json",
+          "shell"
+        ],
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "circuitry_adapter_url_targets_the_resolved_default_adapter",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\"default_adapter\": \"openai\"}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {
+        "CIRCUITRY_ADAPTER_URL": "https://example.test"
+      }
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "llama3.1:8b",
+        "default_adapter": "openai",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": null,
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            },
+            "openai": {
+              "base_url": "https://example.test"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "an_unknown_environment_falls_back_to_dev",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\"environment\": \"staging\"}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "llama3.1:8b",
+        "default_adapter": "ollama",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": null,
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "missing_file",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file not found: <root>/missing_file/config.json"
+    }
+  },
+  {
+    "name": "config_path_is_a_directory",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": true,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config path is a directory, not a file: <root>/config_path_is_a_directory/config.json"
+    }
+  },
+  {
+    "name": "config_path_is_not_a_directory_nor_not_found",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": false,
+      "path_through_file": true,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file could not be read: <root>/config_path_is_not_a_directory_nor_not_found/not_a_directory/config.json (Not a directory)"
+    }
+  },
+  {
+    "name": "invalid_json_syntax",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\n  \"a\": ,\n}\n",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/invalid_json_syntax/config.json is not valid JSON: Expecting value (line 2, column 8)"
+    }
+  },
+  {
+    "name": "config_file_is_not_valid_utf8",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": true,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file is not valid UTF-8 text: <root>/config_file_is_not_valid_utf8/config.json"
+    }
+  },
+  {
+    "name": "non_object_root_array",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "[1, 2, 3]",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/non_object_root_array/config.json must contain a JSON object at the root; found an array."
+    }
+  },
+  {
+    "name": "non_object_root_string",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "\"hello\"",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/non_object_root_string/config.json must contain a JSON object at the root; found a string."
+    }
+  },
+  {
+    "name": "non_object_root_bool",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "true",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/non_object_root_bool/config.json must contain a JSON object at the root; found a boolean."
+    }
+  },
+  {
+    "name": "non_object_root_number",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "5",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/non_object_root_number/config.json must contain a JSON object at the root; found a number."
+    }
+  },
+  {
+    "name": "non_object_root_null",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "null",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file <root>/non_object_root_null/config.json must contain a JSON object at the root; found null."
+    }
+  },
+  {
+    "name": "shell_allowlist_ceiling_narrows_but_never_widens",
+    "kind": "effective_settings",
+    "input": {
+      "config": {
+        "runtime": {
+          "plugins": {
+            "shell": {
+              "allowed_commands": [
+                "ls",
+                "cat"
+              ]
+            }
+          }
+        }
+      },
+      "orch": {
+        "runtime": {
+          "plugins": {
+            "shell": {
+              "allowed_commands": [
+                "cat",
+                "rm",
+                "curl"
+              ]
+            }
+          }
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "plugins": {
+          "shell": {
+            "allowed_commands": [
+              "cat"
+            ]
+          }
+        }
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from the orchestration: runtime.plugins.shell.allowed_commands (intersected with host pin)"
+      ]
+    }
+  },
+  {
+    "name": "shell_allowlist_ceiling_survives_a_document_with_no_shell_block_at_all",
+    "kind": "effective_settings",
+    "input": {
+      "config": {
+        "runtime": {
+          "plugins": {
+            "shell": {
+              "allowed_commands": [
+                "ls"
+              ]
+            }
+          }
+        }
+      },
+      "orch": {
+        "runtime": {
+          "adapters": {}
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "plugins": {
+          "shell": {
+            "allowed_commands": [
+              "ls"
+            ]
+          }
+        },
+        "adapters": {}
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from the orchestration: runtime.adapters"
+      ]
+    }
+  },
+  {
+    "name": "sources_in_insertion_order_with_no_persistence_entry",
+    "kind": "effective_settings",
+    "input": {
+      "config": {
+        "default_model": "llama3.1:8b",
+        "default_adapter": "ollama"
+      },
+      "orch": {},
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": "llama3.1:8b",
+      "adapter": "ollama",
+      "plugins": [],
+      "runtime": {},
+      "sources": [
+        [
+          "model",
+          "config"
+        ],
+        [
+          "adapter",
+          "config"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "default"
+        ],
+        [
+          "adapters.ollama.timeout_seconds",
+          "default"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "name": "a_document_model_outranks_the_config_default",
+    "kind": "effective_settings",
+    "input": {
+      "config": {
+        "default_model": "llama3.1:8b"
+      },
+      "orch": {
+        "model": "gpt-4"
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": "gpt-4",
+      "adapter": null,
+      "plugins": [],
+      "runtime": {},
+      "sources": [
+        [
+          "model",
+          "orchestration"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "default"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "name": "applied_host_settings_notice_names_dotted_runtime_paths",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "max_concurrency": 2
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "max_concurrency": 2
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from the orchestration: runtime.max_concurrency"
+      ]
+    }
+  },
+  {
+    "name": "applied_host_settings_notice_names_the_document_when_given_one",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "max_concurrency": 2
+        }
+      },
+      "document_name": "doc.yml"
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "max_concurrency": 2
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.max_concurrency"
+      ]
+    }
+  },
+  {
+    "name": "persistence_source_is_orchestration_when_the_document_configures_it",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "persistence": {
+            "enabled": true,
+            "backend": "sqlite",
+            "db_path": "a.db"
+          }
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "sqlite",
+          "db_path": "a.db"
+        }
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "persistence",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from the orchestration: runtime.persistence.enabled, runtime.persistence.backend, runtime.persistence.db_path"
+      ]
+    }
+  },
+  {
+    "name": "non_string_plugin_entry_is_rejected",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "plugins": [
+          1
+        ]
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": false,
+      "error": "Plugins must be strings."
+    }
+  },
+  {
+    "name": "a_malformed_complexity_block_surfaces_the_complexity_config_error",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "complexity": {
+            "routing": {
+              "enabled": true
+            }
+          }
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.enabled is true but no bands are defined. Add runtime.complexity.routing.bands with at least a catch-all band (one with no 'max')."
+    }
+  },
+  {
+    "name": "a_catch_all_band_wins_the_model_when_routing_is_enabled_and_none_is_pinned",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "complexity": {
+            "scoring": {
+              "enabled": true
+            },
+            "routing": {
+              "enabled": true,
+              "bands": [
+                {
+                  "model": "router-model"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": "router-model",
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "router-model"
+              }
+            ]
+          }
+        }
+      },
+      "sources": [
+        [
+          "model",
+          "router"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "orchestration"
+        ],
+        [
+          "complexity.scoring",
+          "orchestration"
+        ],
+        [
+          "complexity.routing",
+          "orchestration"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "orchestration"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "name": "adapter_timeout_seconds_source_is_orchestration",
+    "kind": "effective_settings",
+    "input": {
+      "config": {
+        "default_adapter": "ollama"
+      },
+      "orch": {
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "timeout_seconds": 30
+            }
+          }
+        }
+      },
+      "document_name": null
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": "ollama",
+      "plugins": [],
+      "runtime": {
+        "adapters": {
+          "ollama": {
+            "timeout_seconds": 30
+          }
+        }
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "config"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "adapters.ollama.timeout_seconds",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from the orchestration: runtime.adapters.ollama.timeout_seconds"
+      ]
+    }
+  },
+  {
+    "name": "complexity_absent_resolves_to_defaults",
+    "kind": "complexity",
+    "input": {
+      "runtime": {}
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "complexity_routing_enabled_without_bands_is_an_error",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "routing": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.enabled is true but no bands are defined. Add runtime.complexity.routing.bands with at least a catch-all band (one with no 'max')."
+    }
+  },
+  {
+    "name": "complexity_routing_without_scoring_is_a_prerequisite_error",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "gpt-4"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.enabled is true but runtime.complexity.scoring.enabled is false. Routing consumes complexity scores, so it requires the scorer — set runtime.complexity.scoring.enabled to true or turn routing off."
+    }
+  },
+  {
+    "name": "complexity_non_catch_all_last_band_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "gpt-4",
+                "max": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must end with a catch-all band — an entry with no 'max' — so every score resolves to a model. Drop 'max' from runtime.complexity.routing.bands[0] or append a new entry."
+    }
+  },
+  {
+    "name": "complexity_score_out_of_range_names_the_bound",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "threshold": 150
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.threshold must be between 0 and 100 (the complexity score range); found 150."
+    }
+  },
+  {
+    "name": "complexity_unknown_key_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "bogus": true
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring."
+    }
+  },
+  {
+    "name": "complexity_unknown_scoring_weight_signal_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "weights": {
+              "bogus_signal": 1.0
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.scoring.weights: unknown signal 'bogus_signal'. Valid signals: keywords, output_schema, output_size, prompt_size, prompt_type, state_references, structural_position."
+    }
+  },
+  {
+    "name": "complexity_block_must_be_an_object",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": "not-an-object"
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity must be an object; found a string."
+    }
+  },
+  {
+    "name": "complexity_enabled_explicit_null_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": null
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.scoring.enabled must be true or false; found null."
+    }
+  },
+  {
+    "name": "complexity_weight_value_must_be_a_number",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "weights": {
+              "prompt_size": "heavy"
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.scoring.weights.prompt_size must be a number; found a string."
+    }
+  },
+  {
+    "name": "complexity_max_depth_must_be_a_whole_number",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "max_depth": 2.5
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.max_depth must be a whole number; found a number."
+    }
+  },
+  {
+    "name": "complexity_max_chunks_must_be_n_or_greater",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "max_chunks": 0
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.max_chunks must be 1 or greater; found 0."
+    }
+  },
+  {
+    "name": "complexity_band_model_must_be_a_non_empty_string",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "   "
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands[0].model must be a non-empty string; found a string."
+    }
+  },
+  {
+    "name": "complexity_band_missing_model_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "max": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands[0] is missing required field 'model'."
+    }
+  },
+  {
+    "name": "complexity_bands_must_be_an_array",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": {
+              "model": "gpt-4"
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must be an array of band objects; found an object."
+    }
+  },
+  {
+    "name": "complexity_bands_must_not_be_empty",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": []
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must not be empty — a band table needs at least a catch-all band (one with no 'max')."
+    }
+  },
+  {
+    "name": "complexity_bands_must_be_in_ascending_order",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "a",
+                "max": 10
+              },
+              {
+                "model": "b",
+                "max": 5
+              },
+              {
+                "model": "c"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must be ordered by ascending 'max' with no overlap: runtime.complexity.routing.bands[1] has max 5, which is not greater than the preceding band's max 10."
+    }
+  },
+  {
+    "name": "complexity_on_failure_must_be_a_valid_choice",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "on_failure": "bogus"
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.on_failure must be one of route_up, fail; found 'bogus'."
+    }
+  },
+  {
+    "name": "complexity_decomposition_without_scoring_is_a_prerequisite_error",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.enabled is true but runtime.complexity.scoring.enabled is false. Decomposition consumes complexity scores, so it requires the scorer — set runtime.complexity.scoring.enabled to true or turn decomposition off."
+    }
+  },
+  {
+    "name": "persistence_disabled_is_never_validated",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "backend": "nonsense"
+        }
+      }
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "persistence_unsupported_backend_name",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "dynamodb"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "Unsupported persistence backend: 'dynamodb'. Supported backends: jsonl-file, mongodb, postgres, sqlite."
+    }
+  },
+  {
+    "name": "persistence_postgres_requires_a_dsn",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "postgres"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "Persistence backend 'postgres' requires runtime.persistence.dsn"
+    }
+  },
+  {
+    "name": "persistence_postgres_rejects_an_insecure_sslmode_without_the_opt_out",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "postgres",
+          "dsn": "postgres://localhost/db",
+          "sslmode": "disable"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "Insecure postgres sslmode requested. Set runtime.persistence.sslmode to 'require'/'verify-ca'/'verify-full', or explicitly set runtime.persistence.allow_insecure=true for local development."
+    }
+  },
+  {
+    "name": "persistence_malformed_table_name_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "sqlite",
+          "db_path": "a.db",
+          "table": "bad table!"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.table must match [A-Za-z_][A-Za-z0-9_]{0,62}"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_table_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "sqlite",
+          "db_path": "a.db",
+          "table": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.table must be a non-empty string"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_database_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "mongodb",
+          "uri": "mongodb://localhost",
+          "database": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.database must be a non-empty string"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_collection_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "mongodb",
+          "uri": "mongodb://localhost",
+          "collection": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.collection must be a non-empty string"
+    }
+  },
+  {
+    "name": "persistence_valid_sqlite_block_passes",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "sqlite",
+          "db_path": "a.db"
+        }
+      }
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "persistence_jsonl_file_requires_a_path",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "jsonl-file"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "Persistence backend 'jsonl-file' requires runtime.persistence.path"
+    }
+  },
+  {
+    "name": "persistence_mongodb_requires_a_uri",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "mongodb"
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "Persistence backend 'mongodb' requires runtime.persistence.uri"
+    }
+  }
+]

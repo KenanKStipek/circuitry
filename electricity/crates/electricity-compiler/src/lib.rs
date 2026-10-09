@@ -69,22 +69,14 @@
 //!   here (`schema_instance`'s own doc comment has the full rationale);
 //!   the location instead falls back to a non-empty, best-effort quoted
 //!   rendering of the key's own `repr()` text.
-//! - [`pipeline::check_for_run`] omits two of `cli/runtime_shim.py::run`'s
-//!   own pre-structural checks, both ported nowhere in electricity today:
-//!   `resolve_complexity_settings`'s validation of a malformed
-//!   `runtime.complexity` block (`cli/complexity_config.py`, raising
-//!   `ComplexityConfigError` from inside `resolve_effective_settings`,
-//!   before the concurrency limiter this function does check), and
-//!   `build_persistence_backend`'s validation of a malformed
-//!   `runtime.persistence` block (`core/store/persistence.py`, raised
-//!   after the concurrency limiter but before `check_interface_inputs`).
-//!   A document with an otherwise-valid structure but a malformed
-//!   `runtime.complexity`/`runtime.persistence` block passes
-//!   `check_for_run` here where `cof run` would fail -- complexity
-//!   routing/decomposition and persistence backends are whole subsystems
-//!   with no IR representation in this crate at all (out of scope for
-//!   issue #408's lane B), so this is left a documented gap rather than
-//!   a partial port of either module.
+//! - [`pipeline::pre_state_checks`]'s `runtime.complexity`/
+//!   `runtime.persistence` validation (`resolve_complexity_settings`/
+//!   `build_persistence_backend`'s own pre-structural checks) is
+//!   [`electricity_config::validate_complexity`]/[`electricity_config::
+//!   validate_persistence`]'s own port (issue #431's lane D1) -- neither
+//!   backend subsystem itself (complexity routing/decomposition,
+//!   persistence backends) has an IR representation in this crate, so
+//!   only their *validation* is ported, not their behaviour.
 //! - [`structural::schema_errors`] sorts multiple simultaneous schema
 //!   violations by `(location, message)`, not Circuitry's own `str(err)`
 //!   order (third-party `jsonschema` text from a different

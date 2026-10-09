@@ -1,226 +1,86 @@
 //! electricity-config: `config.json` -> effective settings for an
-//! electricity run (issue #431's Scope section, lane D). This crate is a
-//! **lane A stub**: every type and function here is this crate's final
-//! public signature, but every body either returns the one honest value
-//! lane A can produce (an empty/unmerged shape) or an [`ConfigError`]
-//! naming the lane that still has to fill it in -- never `unimplemented!`
-//! (issue #431's gate lane, "Seams" section 5). Lane D replaces each
-//! body; no signature here should need to change for that.
+//! electricity run (issue #431's Scope section, lane D1). Ports:
 //!
-//! # What lane D ports here
+//! - [`resolve_config`]: `cli/config.py::resolve_config`'s explicit-path
+//!   branch -- `SANE_DEFAULTS` deep-merged with the named file, then the
+//!   `CIRCUITRY_*` environment overlays (`_apply_env_vars`). Electricity's
+//!   positional `<config.json>` is always that explicit path (DESIGN.md
+//!   §11): there is no global/project config discovery and no
+//!   `CIRCUITRY_CONFIG` env var of its own ([`config`] module docs).
+//! - [`merge_runtime`]: `cli/effective_settings.py::_merge_runtime` --
+//!   a document's `runtime:` block deep-merged over the config's
+//!   (`plugins`/`adapters` one level deeper than the rest), with the
+//!   shell `allowed_commands` ceiling re-intersected afterward
+//!   regardless of trust ([`merge`] module docs).
+//! - [`effective_settings`]: `resolve_effective_settings`, narrowed to
+//!   the tiers electricity's own CLI has ([`effective_settings`][mod]
+//!   module docs).
+//! - [`validate_complexity`]/[`validate_persistence`]: the two
+//!   pre-checks `electricity-compiler`'s own crate docs listed as a
+//!   known divergence until this lane landed --
+//!   [`complexity::resolve_complexity_settings`] and
+//!   [`persistence::validate_persistence_block`]'s own validation,
+//!   raising Circuitry's own text for a malformed `runtime.complexity`/
+//!   `runtime.persistence` block.
+//! - [`allowlist::check_allowlist`]/[`allowlist::allowlists`]/
+//!   [`allowlist::capability_allow`]: the `enabled_adapters`/
+//!   `enabled_tools`/`enabled_plugins` allowlist seam issue #431's lane
+//!   table left this lane to shape ([`allowlist`] module docs).
 //!
-//! - [`resolve_config`]: `cli/config.py::resolve_config` -- `SANE_DEFAULTS`
-//!   deep-merged with the named file, then the `CIRCUITRY_*` environment
-//!   overlays (`_apply_env_vars`).
-//! - [`merge_runtime`]: `cli/effective_settings.py`'s own `_merge_runtime`
-//!   -- a document's `runtime:` block deep-merged over the config's, with
-//!   ceiling re-intersection for a numeric concurrency bound.
-//! - [`effective_settings`]: `resolve_effective_settings` -- model/
-//!   adapter/out/plugins/runtime and `sources` (`_record_complexity_
-//!   sources` included).
-//! - [`validate_complexity`]/[`validate_persistence`]: `resolve_
-//!   complexity_settings` (`cli/complexity_config.py`) and `build_
-//!   persistence_backend` (`core/store/persistence.py`)'s own
-//!   validation, in their own Circuitry positions -- `electricity-
-//!   compiler`'s `pipeline::pre_state_checks` calls the first before its
-//!   own concurrency-configuration check and the second after it (run-
-//!   wiring steps 6 and 9, issue #431's Scope section); a lane A stub
-//!   always succeeds, which is exactly `electricity-compiler`'s own
-//!   already-documented "Known divergences" gap (a malformed `runtime.
-//!   complexity`/`runtime.persistence` block passes `check_for_run` here
-//!   where `cof run` would fail) -- unchanged by this crate's existence
-//!   until lane D fills both in.
+//! [mod]: crate::effective_settings
+
+mod allowlist;
+mod complexity;
+mod config;
+mod effective_settings;
+mod merge;
+mod persistence;
+mod util;
+
+pub use allowlist::{
+    Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist, tool_denial,
+    walk_orchestration_refs,
+};
+pub use complexity::{
+    ComplexityBand, ComplexitySettings, DecompositionSettings, RoutingSettings, SCORE_MAX,
+    SCORE_MIN, ScoringSettings,
+};
+pub use config::{CircuitryConfig, ConfigError, resolve_config};
+pub use effective_settings::{EffectiveSettings, effective_settings};
+pub use merge::merge_runtime;
 
 use electricity_value::Value;
-use indexmap::IndexMap;
-use std::collections::HashMap;
-use std::fmt;
-use std::path::Path;
 
-/// A loaded `config.json`, already deep-merged over `cli/config.py::
-/// SANE_DEFAULTS` and the `CIRCUITRY_*` environment overlays (issue
-/// #431's run-wiring step 1). Lane A reserves the shape; lane D fills in
-/// every field `resolve_effective_settings` actually reads off it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CircuitryConfig {
-    /// The config file's own `runtime:` block, after the deep merge --
-    /// the one piece of a `CircuitryConfig` `electricity-compiler`'s
-    /// `CheckOptions::config_runtime` already carries today (pre-#431),
-    /// so this field's shape can't change out from under that caller.
-    pub runtime: Option<Value>,
-}
-
-/// `resolve_config`'s own error text (`cli/config.py::ConfigError`) --
-/// a missing, unreadable, or unparseable config file. Also
-/// [`validate_complexity`]/[`validate_persistence`]'s own error shape (a
-/// malformed `runtime.complexity`/`runtime.persistence` block raises the
-/// same way a bad config file does: a run-ending, un-wrapped message).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigError(pub String);
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-/// `cli/config.py::resolve_config(explicit_path, env=os.environ)` --
-/// `SANE_DEFAULTS` deep-merged with *explicit_path*'s own JSON, then
-/// *env*'s `CIRCUITRY_*` overlays (`_apply_env_vars`). *env* is passed
-/// explicitly rather than read from the process environment, so a test
-/// (and the real CLI's own call site) controls it exactly -- the same
-/// reason [`electricity_compiler::CheckOptions::inputs`] is an explicit
-/// field rather than this crate reading `std::env::args` itself.
-///
-/// Lane A stub: always `Err`, naming this function, so a caller that
-/// reaches it before lane D lands fails loudly instead of silently
-/// running with an empty config (`electricity`'s own lib crate does not
-/// call this yet -- it still reads a config file's bare `runtime:` key
-/// itself, pre-#431 behaviour, until lane D switches it over).
-pub fn resolve_config(
-    explicit_path: &Path,
-    env: &HashMap<String, String>,
-) -> Result<CircuitryConfig, ConfigError> {
-    let _ = (explicit_path, env);
-    Err(ConfigError(
-        "electricity-config::resolve_config is not implemented yet (lane D, issue #431)"
-            .to_string(),
-    ))
-}
-
-/// `cli/effective_settings.py`'s own `_merge_runtime(config_runtime,
-/// document_runtime)`: the document's `runtime:` block deep-merged over
-/// the config's, then a numeric concurrency ceiling (`max_concurrency`,
-/// `concurrency_groups.*.max_concurrency`) re-intersected to the
-/// stricter of the two sides rather than simply overwritten.
-///
-/// Lane A stub: a plain top-level-key merge (the document's own key wins
-/// outright, config's key otherwise) -- `electricity_compiler::pipeline`'s
-/// own pre-#431 `merged_runtime_block` behaviour, not yet Circuitry's own
-/// deep merge or ceiling re-intersection. `electricity_compiler::pipeline`
-/// does not call this yet; lane D switches it over once this does the
-/// real merge.
-pub fn merge_runtime(
-    config_runtime: Option<&Value>,
-    document_runtime: Option<&Value>,
-) -> Option<Value> {
-    match (config_runtime, document_runtime) {
-        (None, None) => None,
-        (Some(config), None) => Some(config.clone()),
-        (None, Some(document)) => Some(document.clone()),
-        (Some(config), Some(document)) => {
-            let (Value::Dict(config_dict), Value::Dict(document_dict)) = (config, document) else {
-                return Some(document.clone());
-            };
-            let mut merged = config_dict.clone();
-            for (key, value) in document_dict {
-                merged.insert(key.clone(), value.clone());
-            }
-            Some(Value::Dict(merged))
-        }
-    }
-}
-
-/// `resolve_effective_settings`'s own result shape: the model/adapter/
-/// `--out`/plugins/runtime a run actually uses, plus `sources` (which
-/// config layer supplied each one -- `_record_complexity_sources`
-/// included).
-///
-/// Lane D also still has to add: `out` (`--out`'s own effective path),
-/// `plugins` and `warnings` (`orchestration_host_setting_warnings`'s
-/// own list) to this struct; `enabled_tools`/`enabled_adapters`/
-/// `enabled_plugins` to [`CircuitryConfig`]; and the `check_allowlist`
-/// seam (`runtime_shim.py`'s own call, between `resolve_config` and
-/// this function) as either a new function here or a field this
-/// function's own caller fills in first -- none of that is lane A's own
-/// final shape to fix, since nothing outside this crate reads
-/// `EffectiveSettings`/`CircuitryConfig` yet, but it's not done either;
-/// tracked here, not invented a signature for, until lane D is the one
-/// actually writing the body that needs it.
-///
-/// Lane A stub: a bare, empty shape -- every field lane D's real
-/// `resolve_effective_settings` port fills in.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EffectiveSettings {
-    pub model: Option<String>,
-    pub adapter: Option<String>,
-    pub runtime: Option<Value>,
-    /// `sources`: a dotted-settings-path -> provenance-label map
-    /// (`"config"`/`"document"`/`"env"`/`"default"`, `cli/
-    /// effective_settings.py`'s own `sources` dict) -- `IndexMap`, not
-    /// `HashMap`: `--out`'s own `runtime.effective_settings.sources`
-    /// writes this in insertion order (`json.dumps`'s own dict-order
-    /// rule), and a `HashMap` has no order of its own to preserve.
-    pub sources: IndexMap<String, String>,
-}
-
-/// `resolve_effective_settings(config, document)` -- merges
-/// [`CircuitryConfig`] and the document's own top-level settings the way
-/// `cli/effective_settings.py` does, recording each field's `sources`
-/// provenance. `Err` the same way Python's own `resolve_effective_
-/// settings` raises (a malformed `plugins:`/`runtime:` shape;
-/// `effective_settings_shape_error` in `electricity-compiler` already
-/// checks that *before* this function would ever be called, but this
-/// function's own signature has to be able to report it too, not only
-/// its caller) -- not infallible: an infallible stub here would have
-/// forced lane D to widen this signature out from under whatever lane B
-/// built against it in the meantime.
-///
-/// Lane A stub: always `Ok` of the all-`None`, empty-`sources` default
-/// -- nothing yet reads *config*/*document* at all.
-pub fn effective_settings(
-    config: &CircuitryConfig,
-    document: &Value,
-) -> Result<EffectiveSettings, ConfigError> {
-    let _ = (config, document);
-    Ok(EffectiveSettings::default())
-}
-
-/// Lane D's own hook (issue #431's run-wiring step 6): validates a
-/// document/config's `runtime.complexity` block
-/// (`cli/complexity_config.py::resolve_complexity_settings`), raising
-/// Circuitry's own text for a malformed one -- called from
-/// `electricity_compiler::pipeline::pre_state_checks` *before* the
-/// concurrency-configuration check, the same position `resolve_
-/// complexity_settings` runs in inside `resolve_effective_settings`,
-/// itself called before `RunConcurrencyLimiter.from_runtime_config`
-/// (`cli/runtime_shim.py::run`, ~:519 into ~:539).
-///
-/// Lane A stub: always `Ok(())` -- `electricity-compiler`'s own already-
-/// documented divergence (a malformed `runtime.complexity` block passes
-/// `check_for_run` where `cof run` would fail) stays exactly as it is
-/// today; this function only gives lane D a single place to remove that
-/// gap from, instead of a new check threaded into `electricity-compiler`
-/// itself.
+/// Issue #431's run-wiring step 6 (inside `resolve_effective_settings`,
+/// before the concurrency limiter): `resolve_complexity_settings`'s own
+/// validation of *effective_runtime*'s `complexity` block. `document`
+/// is accepted (electricity-compiler's own `pipeline::pre_state_checks`
+/// calls this with both), but unused -- Circuitry's own
+/// `resolve_complexity_settings` reads only the merged `runtime` mapping,
+/// never the raw document, and this crate's callers always have that
+/// mapping to hand directly.
 pub fn validate_complexity(
     document: &Value,
     effective_runtime: Option<&Value>,
 ) -> Result<(), ConfigError> {
-    let _ = (document, effective_runtime);
+    let _ = document;
+    complexity::resolve_complexity_settings(effective_runtime)?;
     Ok(())
 }
 
-/// Lane D's own hook (issue #431's run-wiring step 9): validates a
-/// document/config's `runtime.persistence` block
-/// (`core/store/persistence.py::build_persistence_backend`), raising
-/// Circuitry's own text for a malformed one -- called from
-/// `electricity_compiler::pipeline::pre_state_checks` *after* the
-/// concurrency-configuration check and before `check_interface_inputs`'s
-/// own namespace build, the same position `build_persistence_backend`
-/// runs in (`cli/runtime_shim.py::run`, ~:595, after the limiter at
-/// ~:539 and before ~:640).
-///
-/// Lane A stub: always `Ok(())`, for the same reason [`validate_
-/// complexity`] is -- `runtime.persistence` has no IR representation in
-/// this crate either.
+/// Issue #431's run-wiring step 9 (after the concurrency limiter, before
+/// `check_interface_inputs`): `build_persistence_backend`'s own
+/// validation of *effective_runtime*'s `persistence` block -- the
+/// backend-alias lookup and each backend's own required-field checks,
+/// never an actual connection (see [`persistence`] module docs).
+/// *document* is accepted for the same reason [`validate_complexity`]
+/// accepts it, and is equally unused.
 pub fn validate_persistence(
     document: &Value,
     effective_runtime: Option<&Value>,
 ) -> Result<(), ConfigError> {
-    let _ = (document, effective_runtime);
-    Ok(())
+    let _ = document;
+    persistence::validate_persistence_block(effective_runtime).map_err(ConfigError)
 }
 
 #[cfg(test)]
@@ -229,57 +89,43 @@ mod tests {
     use electricity_value::Dict;
 
     #[test]
-    fn resolve_config_is_a_lane_d_stub() {
-        let result = resolve_config(Path::new("config.json"), &HashMap::new());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn merge_runtime_prefers_the_document_key_over_the_configs() {
-        let mut config = Dict::new();
-        config.insert(Value::Str("model".to_string()), Value::Str("a".to_string()));
-        let mut document = Dict::new();
-        document.insert(Value::Str("model".to_string()), Value::Str("b".to_string()));
-        let merged = merge_runtime(Some(&Value::Dict(config)), Some(&Value::Dict(document)));
-        assert_eq!(
-            merged,
-            Some(Value::Dict({
-                let mut expected = Dict::new();
-                expected.insert(Value::Str("model".to_string()), Value::Str("b".to_string()));
-                expected
-            }))
+    fn validate_complexity_raises_the_same_text_resolve_complexity_settings_would() {
+        let mut routing = Dict::new();
+        routing.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        let mut complexity = Dict::new();
+        complexity.insert(Value::Str("routing".to_string()), Value::Dict(routing));
+        let mut runtime = Dict::new();
+        runtime.insert(
+            Value::Str("complexity".to_string()),
+            Value::Dict(complexity),
         );
+        let err = validate_complexity(&Value::Dict(Dict::new()), Some(&Value::Dict(runtime)))
+            .unwrap_err();
+        assert!(err.0.contains("no bands are defined"));
     }
 
     #[test]
-    fn merge_runtime_with_neither_side_is_none() {
-        assert_eq!(merge_runtime(None, None), None);
+    fn validate_complexity_is_ok_when_the_block_is_absent() {
+        assert!(validate_complexity(&Value::Dict(Dict::new()), None).is_ok());
     }
 
     #[test]
-    fn effective_settings_is_a_lane_d_stub() {
-        let settings =
-            effective_settings(&CircuitryConfig::default(), &Value::Dict(Dict::new())).unwrap();
-        assert_eq!(settings, EffectiveSettings::default());
-    }
-
-    #[test]
-    fn validate_complexity_is_a_no_op_for_now() {
-        let mut document = Dict::new();
-        document.insert(
-            Value::Str("runtime".to_string()),
-            Value::Str("not even an object".to_string()),
+    fn validate_persistence_raises_for_an_unsupported_backend() {
+        let mut persistence = Dict::new();
+        persistence.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        persistence.insert(Value::Str("backend".to_string()), Value::from("dynamodb"));
+        let mut runtime = Dict::new();
+        runtime.insert(
+            Value::Str("persistence".to_string()),
+            Value::Dict(persistence),
         );
-        assert!(validate_complexity(&Value::Dict(document), None).is_ok());
+        let err = validate_persistence(&Value::Dict(Dict::new()), Some(&Value::Dict(runtime)))
+            .unwrap_err();
+        assert!(err.0.starts_with("Unsupported persistence backend"));
     }
 
     #[test]
-    fn validate_persistence_is_a_no_op_for_now() {
-        let mut document = Dict::new();
-        document.insert(
-            Value::Str("runtime".to_string()),
-            Value::Str("not even an object".to_string()),
-        );
-        assert!(validate_persistence(&Value::Dict(document), None).is_ok());
+    fn validate_persistence_is_ok_when_the_block_is_absent() {
+        assert!(validate_persistence(&Value::Dict(Dict::new()), None).is_ok());
     }
 }
