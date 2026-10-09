@@ -6,11 +6,17 @@ Each case is a sequence of operations run against a real ``Store`` (or, for
 the tree-merge cases, several isolated branch stores) and the resulting
 state, so electricity-vm's own `Store` can be driven through the identical
 sequence and its materialized result compared byte-for-byte against
-Circuitry's own. Values are restricted to plain JSON-safe Python data
-(`None`/`bool`/`int`/`str`/dict/list) -- `Store` itself has no opinion on
-value *type*, so this corpus is only about key order, child/coercion
-semantics, and branch-merge collisions, not `Value`'s own type model
-(`generate_value_corpus.py` already covers that).
+Circuitry's own -- including dict key *order*, which is why every value is
+written through ``encode`` below (the same tagged scheme ``generate_value_
+corpus.py``'s own ``encode`` uses, restricted to what this corpus needs: no
+bytes/float/date) rather than a plain JSON object: a plain JSON object
+would round-trip through whatever `serde_json::Map` representation
+electricity-vm's own test happens to be built with, which isn't this
+corpus's concern to depend on (and must never be, by adding a `preserve_
+order`-style feature flag to a workspace-shared dependency like `serde_
+json` -- Cargo's feature unification would turn that on for *every* crate
+in the workspace that also depends on it, changing unrelated code's own
+compiled shape; see this PR's own notes).
 
 The tree-merge cases reproduce `core/dynamic.py`'s own merge-back loop
 exactly (`for idx in range(n): for key, value in isolated_stores[idx].
@@ -47,6 +53,24 @@ OUTPUT = (
 )
 
 
+def encode(value: object) -> dict:
+    """Same tagged scheme as ``generate_value_corpus.py``'s ``encode``,
+    restricted to what this corpus ever contains (no bytes/float/date)."""
+    if value is None:
+        return {"t": "none"}
+    if isinstance(value, bool):
+        return {"t": "bool", "v": value}
+    if isinstance(value, int):
+        return {"t": "int", "v": str(value)}
+    if isinstance(value, str):
+        return {"t": "str", "v": value}
+    if isinstance(value, list):
+        return {"t": "list", "v": [encode(item) for item in value]}
+    if isinstance(value, dict):
+        return {"t": "dict", "v": [[encode(k), encode(v)] for k, v in value.items()]}
+    raise TypeError(f"no tagged encoding for {type(value)!r}")
+
+
 def sequence_case(name: str, ops: list[dict]) -> dict:
     """Runs *ops* (`{"op": "set", "path": ..., "value": ...}` or
     `{"op": "ensure_dict", "path": ...}`) against one fresh `Store` in
@@ -59,7 +83,12 @@ def sequence_case(name: str, ops: list[dict]) -> dict:
             store.ensure_dict(op["path"])
         else:
             raise ValueError(f"unknown op {op['op']!r}")
-    return {"name": name, "kind": "sequence", "ops": ops, "expected_state": store.state}
+    return {
+        "name": name,
+        "kind": "sequence",
+        "ops": [encode_op(op) for op in ops],
+        "expected_state": encode(store.state),
+    }
 
 
 def merge_case(name: str, initial: dict, branch_ops: list[list[dict]]) -> dict:
@@ -81,10 +110,17 @@ def merge_case(name: str, initial: dict, branch_ops: list[list[dict]]) -> dict:
     return {
         "name": name,
         "kind": "merge",
-        "initial": initial,
-        "branch_ops": branch_ops,
-        "expected_state": store.state,
+        "initial": encode(initial),
+        "branch_ops": [[encode_op(op) for op in ops] for ops in branch_ops],
+        "expected_state": encode(store.state),
     }
+
+
+def encode_op(op: dict) -> dict:
+    encoded = {"op": op["op"], "path": op["path"]}
+    if "value" in op:
+        encoded["value"] = encode(op["value"])
+    return encoded
 
 
 def build_corpus() -> list[dict]:

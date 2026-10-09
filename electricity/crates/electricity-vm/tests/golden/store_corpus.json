@@ -6,27 +6,84 @@
       {
         "op": "set",
         "path": "a.b.c",
-        "value": 1
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
       },
       {
         "op": "set",
         "path": "a.b.d",
-        "value": 2
+        "value": {
+          "t": "int",
+          "v": "2"
+        }
       },
       {
         "op": "set",
         "path": "x",
-        "value": "hello"
+        "value": {
+          "t": "str",
+          "v": "hello"
+        }
       }
     ],
     "expected_state": {
-      "a": {
-        "b": {
-          "c": 1,
-          "d": 2
-        }
-      },
-      "x": "hello"
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "c"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ],
+                    [
+                      {
+                        "t": "str",
+                        "v": "d"
+                      },
+                      {
+                        "t": "int",
+                        "v": "2"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "x"
+          },
+          {
+            "t": "str",
+            "v": "hello"
+          }
+        ]
+      ]
     }
   },
   {
@@ -36,7 +93,10 @@
       {
         "op": "set",
         "path": "count",
-        "value": 5
+        "value": {
+          "t": "int",
+          "v": "5"
+        }
       },
       {
         "op": "ensure_dict",
@@ -45,13 +105,37 @@
       {
         "op": "set",
         "path": "count.y",
-        "value": 1
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
       }
     ],
     "expected_state": {
-      "count": {
-        "y": 1
-      }
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "count"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "y"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
     }
   },
   {
@@ -61,16 +145,34 @@
       {
         "op": "set",
         "path": "cfg.a",
-        "value": 1
+        "value": {
+          "t": "int",
+          "v": "1"
+        }
       },
       {
         "op": "set",
         "path": "cfg",
-        "value": "now a string"
+        "value": {
+          "t": "str",
+          "v": "now a string"
+        }
       }
     ],
     "expected_state": {
-      "cfg": "now a string"
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "cfg"
+          },
+          {
+            "t": "str",
+            "v": "now a string"
+          }
+        ]
+      ]
     }
   },
   {
@@ -80,38 +182,114 @@
       {
         "op": "set",
         "path": "flags.on",
-        "value": true
+        "value": {
+          "t": "bool",
+          "v": true
+        }
       },
       {
         "op": "set",
         "path": "flags.off",
-        "value": false
+        "value": {
+          "t": "bool",
+          "v": false
+        }
       },
       {
         "op": "set",
         "path": "nothing",
-        "value": null
+        "value": {
+          "t": "none"
+        }
       },
       {
         "op": "set",
         "path": "items",
-        "value": [
-          1,
-          2,
-          3
-        ]
+        "value": {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ]
+        }
       }
     ],
     "expected_state": {
-      "flags": {
-        "on": true,
-        "off": false
-      },
-      "nothing": null,
-      "items": [
-        1,
-        2,
-        3
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "flags"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "on"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "off"
+                },
+                {
+                  "t": "bool",
+                  "v": false
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "nothing"
+          },
+          {
+            "t": "none"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "items"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
       ]
     }
   },
@@ -119,77 +297,185 @@
     "name": "two_branches_collide_on_one_key_last_index_wins",
     "kind": "merge",
     "initial": {
-      "existing": 1
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "existing"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
     },
     "branch_ops": [
       [
         {
           "op": "set",
           "path": "x",
-          "value": "from branch 0"
+          "value": {
+            "t": "str",
+            "v": "from branch 0"
+          }
         },
         {
           "op": "set",
           "path": "existing",
-          "value": "overwritten by 0"
+          "value": {
+            "t": "str",
+            "v": "overwritten by 0"
+          }
         }
       ],
       [
         {
           "op": "set",
           "path": "y",
-          "value": "from branch 1"
+          "value": {
+            "t": "str",
+            "v": "from branch 1"
+          }
         }
       ],
       [
         {
           "op": "set",
           "path": "x",
-          "value": "from branch 2"
+          "value": {
+            "t": "str",
+            "v": "from branch 2"
+          }
         },
         {
           "op": "set",
           "path": "existing",
-          "value": "overwritten by 2"
+          "value": {
+            "t": "str",
+            "v": "overwritten by 2"
+          }
         }
       ]
     ],
     "expected_state": {
-      "existing": "overwritten by 2",
-      "x": "from branch 2",
-      "y": "from branch 1"
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "existing"
+          },
+          {
+            "t": "str",
+            "v": "overwritten by 2"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "x"
+          },
+          {
+            "t": "str",
+            "v": "from branch 2"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "y"
+          },
+          {
+            "t": "str",
+            "v": "from branch 1"
+          }
+        ]
+      ]
     }
   },
   {
     "name": "branch_writes_a_nested_container_of_its_own",
     "kind": "merge",
-    "initial": {},
+    "initial": {
+      "t": "dict",
+      "v": []
+    },
     "branch_ops": [
       [
         {
           "op": "set",
           "path": "sub.a",
-          "value": 1
+          "value": {
+            "t": "int",
+            "v": "1"
+          }
         },
         {
           "op": "set",
           "path": "sub.b",
-          "value": 2
+          "value": {
+            "t": "int",
+            "v": "2"
+          }
         }
       ]
     ],
     "expected_state": {
-      "sub": {
-        "a": 1,
-        "b": 2
-      }
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "sub"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
     }
   },
   {
     "name": "an_empty_branch_contributes_nothing",
     "kind": "merge",
     "initial": {
-      "already": "here"
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "already"
+          },
+          {
+            "t": "str",
+            "v": "here"
+          }
+        ]
+      ]
     },
     "branch_ops": [
       [],
@@ -197,13 +483,37 @@
         {
           "op": "set",
           "path": "new",
-          "value": "value"
+          "value": {
+            "t": "str",
+            "v": "value"
+          }
         }
       ]
     ],
     "expected_state": {
-      "already": "here",
-      "new": "value"
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "already"
+          },
+          {
+            "t": "str",
+            "v": "here"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "new"
+          },
+          {
+            "t": "str",
+            "v": "value"
+          }
+        ]
+      ]
     }
   }
 ]
