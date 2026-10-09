@@ -543,10 +543,36 @@ fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<S
 /// Python's own `inputs[key] = ...` writes a missing key's `default:`
 /// under that exact literal key -- a `String`-keyed namespace would
 /// have nowhere to put it, silently dropping the write Python makes.
-fn build_input_namespace(
+pub fn build_input_namespace(
     document: &Value,
     options: &CheckOptions,
 ) -> Result<IndexMap<Value, Value>, String> {
+    let (mut namespace, iface_inputs) = seeded_input_namespace(document, options);
+    let Some(iface_inputs) = iface_inputs else {
+        return Ok(namespace);
+    };
+    apply_declared_inputs(&mut namespace, iface_inputs)?;
+    Ok(namespace)
+}
+
+/// *options*'s own `-e`-seeded namespace ([`crate::state_ns::
+/// migrate_legacy_input_namespace`], re-keyed by [`Value`]), plus
+/// *document*'s own declared `interface.inputs` (`None` when it
+/// declares none) -- [`build_input_namespace`]'s own preamble, shared
+/// with [`build_input_namespace_best_effort`] so the two functions'
+/// starting point can never drift apart.
+/// Public (PR #441 review finding 1c): `electricity`'s own run wiring
+/// re-seeds `state["input"]` with this exact namespace -- never
+/// `apply_declared_inputs`'d, so still just the sniffed-and-string-
+/// restored `-e` values -- as soon as the real document is loaded, so
+/// every failure from that point on (allowlist, effective settings,
+/// ...) reports the same raw-text restoration a `check_interface_
+/// inputs` call later in the same run would've started from, not only
+/// the failures that happen to reach [`build_input_namespace`] itself.
+pub fn seeded_input_namespace<'a>(
+    document: &'a Value,
+    options: &CheckOptions,
+) -> (IndexMap<Value, Value>, Option<&'a Dict>) {
     let no_declared_inputs = Dict::new();
     let iface_inputs = document
         .as_dict()
@@ -555,19 +581,6 @@ fn build_input_namespace(
         .and_then(|i| i.get(&Value::Str("inputs".to_string())))
         .and_then(|i| i.as_dict());
 
-    let Some(iface_inputs) = iface_inputs else {
-        let namespace = crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(
-            options,
-            &no_declared_inputs,
-        ));
-        return Ok(namespace
-            .into_iter()
-            .map(|(key, value)| (Value::Str(key), value))
-            .collect());
-    };
-
-    let string_namespace =
-        crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(options, iface_inputs));
     // Every key `migrate_legacy_input_namespace` ever produces is a
     // `String` (it reads `-e`/inline JSON, and JSON object keys are
     // always strings); re-keyed by `Value` here so a declared
@@ -575,13 +588,30 @@ fn build_input_namespace(
     // land its own `default:` in the *same* namespace Python's own
     // `inputs[key] = ...` would, under that exact literal key, not a
     // stringified stand-in for it -- matching Python's own mixed-key
-    // dict exactly, and letting one loop below handle every key the
-    // same way, string or not.
-    let mut namespace: IndexMap<Value, Value> = string_namespace
+    // dict exactly, and letting one loop handle every key the same
+    // way, string or not.
+    let string_namespace = crate::state_ns::migrate_legacy_input_namespace(&cli_inline_entries(
+        options,
+        iface_inputs.unwrap_or(&no_declared_inputs),
+    ));
+    let namespace: IndexMap<Value, Value> = string_namespace
         .into_iter()
         .map(|(key, value)| (Value::Str(key), value))
         .collect();
+    (namespace, iface_inputs)
+}
 
+/// *namespace*'s own per-declared-input pass (fill `default:`/require/
+/// drop, then coerce), mutating in place exactly as `core/
+/// interface_inputs.py::check_interface_inputs` does, stopping at the
+/// first violation -- [`build_input_namespace`]'s own loop, factored
+/// out so [`build_input_namespace_best_effort`] can run the same
+/// mutations and simply stop where this would have raised, instead of
+/// losing every key it already touched.
+fn apply_declared_inputs(
+    namespace: &mut IndexMap<Value, Value>,
+    iface_inputs: &Dict,
+) -> Result<(), String> {
     for (key, spec) in iface_inputs {
         let Some(spec_dict) = spec.as_dict() else {
             continue;
@@ -617,7 +647,33 @@ fn build_input_namespace(
             namespace.insert(key.clone(), coerced);
         }
     }
-    Ok(namespace)
+    Ok(())
+}
+
+/// *document*'s own `-e`-seeded input namespace, coerced as far as
+/// [`build_input_namespace`] gets before its first violation, then left
+/// exactly as that violation leaves it -- never itself an error (issue
+/// #431 PR #441 review finding 3's own "mirror `check_interface_inputs`'
+/// in-place edit of `input` on failure"): a key [`apply_declared_inputs`]
+/// processed before the first one that fails keeps its own default or
+/// coercion; every key at or after it (including the one that failed)
+/// keeps its pre-coercion seeded value, exactly as `check_interface_
+/// inputs`'s own eager, mutate-as-you-go Python loop leaves `state[
+/// "input"]` when it raises partway through. Lane D2's own run wiring
+/// calls this only once [`pre_state_checks`] itself has already failed
+/// (whether at this same step or an earlier one) -- `pre_state_checks`'s
+/// `Err` discards the partial namespace outright, since every other
+/// caller (`check_for_run`, `--dump-ir`) only ever wants the verdict,
+/// so recovering it for `--out` is this function's one job.
+pub fn build_input_namespace_best_effort(
+    document: &Value,
+    options: &CheckOptions,
+) -> IndexMap<Value, Value> {
+    let (mut namespace, iface_inputs) = seeded_input_namespace(document, options);
+    if let Some(iface_inputs) = iface_inputs {
+        let _ = apply_declared_inputs(&mut namespace, iface_inputs);
+    }
+    namespace
 }
 
 /// Checks *value* (an existing namespace entry, or a just-applied
@@ -854,6 +910,26 @@ pub fn pre_state_checks(
     options: &CheckOptions,
     effective_runtime: Option<&Value>,
 ) -> Result<IndexMap<Value, Value>, RunCheckError> {
+    pre_input_checks(loaded, effective_runtime)?;
+    build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)
+}
+
+/// [`pre_state_checks`]'s own steps 6 (part 2)/7/9 -- everything it
+/// runs *before* [`build_input_namespace`] (step 10) -- split out on
+/// its own so a caller can tell the two kinds of failure apart (PR
+/// #441 review finding 1b): a failure here means `build_input_
+/// namespace`/[`build_input_namespace_best_effort`] never ran at all,
+/// so `state["input"]` must stay exactly whatever it already was
+/// (lane D2's run wiring), not get the partial, best-effort coercion
+/// pass that's only ever correct for a step-10 failure. [`pre_state_
+/// checks`] itself is still the right call for any caller that only
+/// wants the combined verdict (`check_for_run`, this crate's own
+/// tests) -- this function exists for the one caller that needs to
+/// know which half failed.
+pub fn pre_input_checks(
+    loaded: &Loaded,
+    effective_runtime: Option<&Value>,
+) -> Result<(), RunCheckError> {
     if let Some(message) = effective_settings_shape_error(&loaded.document) {
         return Err(RunCheckError::Compile(message));
     }
@@ -873,7 +949,7 @@ pub fn pre_state_checks(
     electricity_config::validate_persistence(&loaded.document, effective_runtime)
         .map_err(|err| RunCheckError::Compile(err.0))?;
 
-    build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)
+    Ok(())
 }
 
 /// Phase 3 of [`check_for_run`]'s own order: structural checks, compile,
@@ -1568,6 +1644,52 @@ mod tests {
         assert_eq!(
             namespace.get(&vkey("x")),
             Some(&Value::Str("hi".to_string()))
+        );
+    }
+
+    /// Two declared inputs, processed in order (issue #431 PR #441
+    /// review finding 3): the first one ever defaulted/coerced keeps
+    /// that mutation even though the second one -- absent, `required`,
+    /// no `default:` -- fails, exactly as `check_interface_inputs`'s
+    /// own eager, mutate-as-you-go Python loop leaves `state["input"]`
+    /// when it raises partway through. The strict function still
+    /// reports the same error it always has.
+    #[test]
+    fn build_input_namespace_best_effort_keeps_a_mutation_made_before_the_failing_key() {
+        let mut a_spec = Dict::new();
+        a_spec.insert(Value::Str("type".to_string()), Value::from("integer"));
+        a_spec.insert(Value::Str("default".to_string()), Value::from(3i64));
+        let mut b_spec = Dict::new();
+        b_spec.insert(Value::Str("type".to_string()), Value::from("string"));
+        b_spec.insert(Value::Str("required".to_string()), Value::Bool(true));
+        let mut inputs = Dict::new();
+        inputs.insert(Value::Str("a".to_string()), Value::Dict(a_spec));
+        inputs.insert(Value::Str("b".to_string()), Value::Dict(b_spec));
+        let mut interface = Dict::new();
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        let doc = Value::Dict(dict);
+        let options = no_inputs();
+
+        let err = build_input_namespace(&doc, &options).unwrap_err();
+        assert_eq!(
+            err,
+            "missing required input 'b' declared in orchestration interface."
+        );
+
+        let partial = build_input_namespace_best_effort(&doc, &options);
+        assert_eq!(partial.get(&vkey("a")), Some(&Value::Int(3.into())));
+        assert!(!partial.contains_key(&vkey("b")));
+    }
+
+    #[test]
+    fn build_input_namespace_best_effort_matches_the_strict_result_on_success() {
+        let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
+        let options = with_inputs(vec![("x", "5")]);
+        assert_eq!(
+            build_input_namespace_best_effort(&doc, &options),
+            build_input_namespace(&doc, &options).unwrap()
         );
     }
 

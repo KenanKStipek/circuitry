@@ -1,0 +1,671 @@
+[
+  {
+    "name": "e_null_optional_input_is_dropped_on_success",
+    "orchestration": "interface:\n  inputs:\n    x:\n      type: integer\neffects: []\n",
+    "config": null,
+    "inputs": {
+      "x": "null"
+    },
+    "result": {
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "state": {
+        "input": {},
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "60ba5b2882045cbaec4461b5f9ef21ed3d8a248369bb0eb64967459e2e35fefb",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      },
+      "events": [
+        {
+          "v": 1,
+          "seq": 0,
+          "ts": "<TS>",
+          "ev": "run_start",
+          "run_id": "<RUN_ID>",
+          "orchestration": "orchestration.yml",
+          "engine": "<ENGINE>",
+          "pid": "<PID>"
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "ts": "<TS>",
+          "ev": "start",
+          "id": 0,
+          "path": "prime"
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 3,
+          "ts": "<TS>",
+          "ev": "run_end",
+          "ok": true
+        }
+      ],
+      "live_state": {
+        "input": {},
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "60ba5b2882045cbaec4461b5f9ef21ed3d8a248369bb0eb64967459e2e35fefb",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "e_underscore_prefixed_key_stays_at_the_root",
+    "orchestration": "effects: []\n",
+    "config": null,
+    "inputs": {
+      "_tag": "x"
+    },
+    "result": {
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "state": {
+        "_tag": "x",
+        "input": {},
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      },
+      "events": [
+        {
+          "v": 1,
+          "seq": 0,
+          "ts": "<TS>",
+          "ev": "run_start",
+          "run_id": "<RUN_ID>",
+          "orchestration": "orchestration.yml",
+          "engine": "<ENGINE>",
+          "pid": "<PID>"
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "ts": "<TS>",
+          "ev": "start",
+          "id": 0,
+          "path": "prime"
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 3,
+          "ts": "<TS>",
+          "ev": "run_end",
+          "ok": true
+        }
+      ],
+      "live_state": {
+        "_tag": "x",
+        "input": {},
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "e_input_key_wins_outright_extra_key_stays_at_root",
+    "orchestration": "effects: []\n",
+    "config": null,
+    "inputs": {
+      "input": "{\"a\": 1}",
+      "extra": "2"
+    },
+    "result": {
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "state": {
+        "input": {
+          "a": 1
+        },
+        "extra": 2,
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      },
+      "events": [
+        {
+          "v": 1,
+          "seq": 0,
+          "ts": "<TS>",
+          "ev": "run_start",
+          "run_id": "<RUN_ID>",
+          "orchestration": "orchestration.yml",
+          "engine": "<ENGINE>",
+          "pid": "<PID>"
+        },
+        {
+          "v": 1,
+          "seq": 1,
+          "ts": "<TS>",
+          "ev": "start",
+          "id": 0,
+          "path": "prime"
+        },
+        {
+          "v": 1,
+          "seq": 2,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 3,
+          "ts": "<TS>",
+          "ev": "run_end",
+          "ok": true
+        }
+      ],
+      "live_state": {
+        "input": {
+          "a": 1
+        },
+        "extra": 2,
+        "runtime": {
+          "last_run": {
+            "run_id": "<RUN_ID>",
+            "orchestration_path": "orchestration.yml",
+            "document_hash": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+            "dry_run": false,
+            "validate_only": false,
+            "verbose": false,
+            "started_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 1,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "effective_settings": {
+            "model": "llama3.1:8b",
+            "adapter": "ollama",
+            "out": "<root>/expected.out.json",
+            "plugins": [],
+            "runtime": {
+              "adapters": {
+                "ollama": {
+                  "base_url": "http://localhost:11434"
+                }
+              },
+              "plugins": {
+                "comfyui": {
+                  "base_url": "http://localhost:8188"
+                }
+              },
+              "_orchestration_dir": "<root>",
+              "_allowlists": {
+                "adapters": null,
+                "tools": null
+              },
+              "_capability_allow": []
+            },
+            "sources": {
+              "model": "config",
+              "adapter": "config",
+              "out": "cli",
+              "plugins": "default",
+              "runtime": "config",
+              "adapters.ollama.timeout_seconds": "default",
+              "complexity": "default",
+              "complexity.scoring": "default",
+              "complexity.routing": "default",
+              "complexity.decomposition": "default",
+              "complexity.routing.bands": "default",
+              "complexity.decomposition.threshold": "default",
+              "complexity.decomposition.max_depth": "default",
+              "complexity.decomposition.on_failure": "default"
+            }
+          },
+          "plugins": {
+            "contract_version": "1",
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        },
+        "_run_id": "<RUN_ID>",
+        "_timestamp": "<TIMESTAMP>",
+        "prime": {
+          "value": true,
+          "meta": {
+            "created_at": "<TIMESTAMP>",
+            "completed_at": "<TIMESTAMP>",
+            "adapter": "_noop",
+            "model": "llama3.1:8b",
+            "tokens_sent": null,
+            "tokens_received": null,
+            "error": null,
+            "flow": "chain",
+            "dry_run": false,
+            "labels": null
+          }
+        }
+      }
+    }
+  }
+]

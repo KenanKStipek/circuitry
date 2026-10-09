@@ -170,22 +170,41 @@ fn canonical_backend(requested: &str) -> Option<&'static str> {
     }
 }
 
-/// `build_persistence_backend(runtime)`'s own validation half: *runtime*
-/// is the already-merged, effective `runtime:` mapping. `Ok(())` when
-/// there is nothing to validate (`runtime.persistence` absent, not an
-/// object, or `enabled` is not `true`) -- Circuitry's own function
-/// returns `None` for exactly these, never raising.
-pub fn validate_persistence_block(runtime: Option<&Value>) -> Result<(), String> {
+/// `bool(runtime.persistence.enabled)` -- Python truthiness on the
+/// already-merged, effective `runtime:` mapping's own `persistence.
+/// enabled` leaf (`build_persistence_backend`'s own one gate: `if not
+/// config.get("enabled")`, which `1`/`"yes"`/any other truthy value
+/// satisfies exactly as `True` does -- not just a literal `true`). The
+/// one place this crate's own callers ask whether persistence is
+/// actually turned on, so [`validate_persistence_block`]'s own skip
+/// condition and a caller deciding whether to refuse a run for
+/// configuring persistence (PR #441 review finding 2) can never
+/// disagree about what counts as "enabled".
+pub fn persistence_enabled(runtime: Option<&Value>) -> bool {
     let Some(persistence_cfg) = runtime
         .and_then(Value::as_dict)
         .and_then(|r| get(r, "persistence"))
         .and_then(Value::as_dict)
     else {
-        return Ok(());
+        return false;
     };
-    if !is_truthy(get(persistence_cfg, "enabled")) {
+    is_truthy(get(persistence_cfg, "enabled"))
+}
+
+/// `build_persistence_backend(runtime)`'s own validation half: *runtime*
+/// is the already-merged, effective `runtime:` mapping. `Ok(())` when
+/// there is nothing to validate (`runtime.persistence` absent, not an
+/// object, or `enabled` is not truthy) -- Circuitry's own function
+/// returns `None` for exactly these, never raising.
+pub fn validate_persistence_block(runtime: Option<&Value>) -> Result<(), String> {
+    if !persistence_enabled(runtime) {
         return Ok(());
     }
+    let persistence_cfg = runtime
+        .and_then(Value::as_dict)
+        .and_then(|r| get(r, "persistence"))
+        .and_then(Value::as_dict)
+        .expect("persistence_enabled already confirmed this is a dict");
 
     let requested = {
         let raw = str_or_empty(persistence_cfg, "backend");
@@ -230,6 +249,44 @@ mod tests {
         persistence.insert(Value::Str("backend".to_string()), Value::from("nonsense"));
         let runtime = runtime_with_persistence(persistence);
         assert!(validate_persistence_block(Some(&runtime)).is_ok());
+    }
+
+    // PR #441 review finding 2: `enabled` is Python-truthy, not a
+    // literal `true` -- `1`/`"yes"` both turn persistence on, exactly
+    // as `if not config.get("enabled")` does, so both must validate
+    // (and so later refuse) a backend just as `enabled: true` would.
+    #[test]
+    fn enabled_as_the_int_one_is_truthy() {
+        let mut persistence = Dict::new();
+        persistence.insert(Value::Str("enabled".to_string()), Value::from(1i64));
+        let runtime = runtime_with_persistence(persistence);
+        assert!(persistence_enabled(Some(&runtime)));
+        let err = validate_persistence_block(Some(&runtime)).unwrap_err();
+        assert_eq!(
+            err,
+            "Persistence backend 'postgres' requires runtime.persistence.dsn"
+        );
+    }
+
+    #[test]
+    fn enabled_as_the_string_yes_is_truthy() {
+        let mut persistence = Dict::new();
+        persistence.insert(Value::Str("enabled".to_string()), Value::from("yes"));
+        let runtime = runtime_with_persistence(persistence);
+        assert!(persistence_enabled(Some(&runtime)));
+    }
+
+    #[test]
+    fn enabled_as_zero_or_empty_string_is_falsy() {
+        let mut persistence = Dict::new();
+        persistence.insert(Value::Str("enabled".to_string()), Value::from(0i64));
+        let runtime = runtime_with_persistence(persistence);
+        assert!(!persistence_enabled(Some(&runtime)));
+
+        let mut persistence = Dict::new();
+        persistence.insert(Value::Str("enabled".to_string()), Value::from(""));
+        let runtime = runtime_with_persistence(persistence);
+        assert!(!persistence_enabled(Some(&runtime)));
     }
 
     #[test]
