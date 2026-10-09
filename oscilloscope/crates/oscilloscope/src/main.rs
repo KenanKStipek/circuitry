@@ -238,7 +238,7 @@ fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
 fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
     match choice {
         EngineChoice::Cof => Box::new(CofEngine::detect("cof")),
-        EngineChoice::Electricity => Box::new(ElectricityEngine::new("electricity")),
+        EngineChoice::Electricity => Box::new(ElectricityEngine::detect("electricity")),
     }
 }
 
@@ -342,10 +342,14 @@ fn do_run(args: RunArgs) -> ExitCode {
     let engine = build_engine(args.engine);
     // M4: a missing engine binary gets its own, more specific error
     // once the later spawn fails -- this notice is only useful (and
-    // only true) when `cof` was actually found and simply predates
-    // `--events`.
-    if engine.name() == "cof" && !engine.caps().events && !engine.caps().missing {
-        eprintln!("osp: this cof has no --events: running from state only");
+    // only true) when the binary was actually found and simply
+    // predates `--events` (cof's own age, or an electricity built
+    // before #431's lane E2).
+    if !engine.caps().events && !engine.caps().missing {
+        eprintln!(
+            "osp: this {} has no --events: running from state only",
+            engine.name()
+        );
     }
 
     let cmd = match engine.command(&spec) {
