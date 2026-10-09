@@ -18,16 +18,20 @@ use std::collections::HashSet;
 
 /// Runs *op* (a compiled `if`) against *store*. *parent* is the node a
 /// *named* `if` creates its own child under, or the node an *unnamed*
-/// `if`'s branch effects write directly into. *ctx* is the caller's own
-/// already-resolved rendering context -- used as-is, never treated as an
-/// override the way a nested `dynamic` would (`core/conditional.py::
-/// ConditionalRuntime.execute` takes `ctx` directly, with no
-/// `ctx_override` parameter of its own).
+/// `if`'s branch effects write directly into. *ctx_chain* is the
+/// caller's own not-yet-materialized rendering context (see
+/// [`super::CtxSource`]) -- used as-is, never extended with an entry of
+/// this `if`'s own (`core/conditional.py::ConditionalRuntime.execute`
+/// takes `ctx` directly, with no `ctx_override` parameter of its own:
+/// an `if`, unlike a `dynamic`, never introduces a scope of its own for
+/// anything *outside* its own branch loop). [`decide_and_run`] resolves
+/// this chain itself, fresh, every time it is actually needed -- never
+/// once, up front -- see that function's own doc comment for why.
 pub(crate) fn execute_conditional<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
-    ctx: &'a Value,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -59,7 +63,7 @@ pub(crate) fn execute_conditional<'a>(
                     store,
                     &node,
                     Some((&node, &meta)),
-                    ctx,
+                    ctx_chain,
                     run_ctx,
                     observer,
                     token,
@@ -78,7 +82,8 @@ pub(crate) fn execute_conditional<'a>(
             }
             None => {
                 decide_and_run(
-                    op, cond, then_, else_, store, parent, None, ctx, run_ctx, observer, token,
+                    op, cond, then_, else_, store, parent, None, ctx_chain, run_ctx, observer,
+                    token,
                 )
                 .await
             }
@@ -127,6 +132,35 @@ fn write_conditional_meta_start(
 /// unnamed (transparent) one -- every `meta`/`value` write below is a
 /// no-op when it is `None`, exactly mirroring Python's own `if node:`/
 /// `if meta:` guards.
+///
+/// *ctx_chain* is resolved into a `Value` fresh, separately, for the
+/// condition and for every branch step -- never once, cached, for the
+/// whole call. Python's own `ctx` parameter (what this chain stands
+/// in for) is a live reference: `base_ctx = ctx` binds no new object,
+/// so `base_ctx.get("prime")` -- read again by every `scope_ctx` call
+/// below -- always sees whatever that live object currently holds,
+/// including a write an *earlier* branch step just made through an
+/// already-existing ancestor path (`state.prime.<dynamic>.<name>`, any
+/// number of `dynamic` levels deep). A single `ctx.clone()` taken once,
+/// up front, cannot reproduce that: `Value` is owned data, not a
+/// reference, so it would freeze every nested value exactly as it
+/// stood at that one moment -- the P0 "a nested container freezes its
+/// own ancestors' state" finding on PR #440. Re-resolving *ctx_chain*
+/// instead -- via [`super::live_ctx`], which walks the still-live
+/// [`crate::NodeRef`]s behind every [`super::CtxSource::Live`] entry
+/// fresh each time -- reproduces that liveness exactly, including its
+/// own wrinkle: once a branch step completes, the overlay this
+/// function builds for the *next* one collapses *ctx_chain*'s current
+/// snapshot into a single [`super::CtxSource::Frozen`] entry (Python's
+/// own `scope_ctx`, whose `merged["prime"] = {**parent, **local}` is a
+/// fresh *shallow copy* of `parent`, not `parent` itself) -- so a
+/// *sibling* container created *after* that snapshot (a `dynamic` two
+/// steps into the same branch, say) is invisible to a bare `state.
+/// prime.<that sibling>` read from a step at or after the one that
+/// collapsed it, in Rust exactly as in Python. The branch's own first
+/// step is the one case nothing has collapsed yet, so it always runs
+/// against *ctx_chain* exactly as received -- still fully live, all
+/// the way up.
 #[allow(clippy::too_many_arguments)]
 async fn decide_and_run<'a>(
     op: &'a Op,
@@ -136,7 +170,7 @@ async fn decide_and_run<'a>(
     store: &'a Store,
     branch_parent: &'a NodeRef,
     named: Option<(&'a NodeRef, &'a NodeRef)>,
-    ctx: &'a Value,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -148,7 +182,8 @@ async fn decide_and_run<'a>(
         )));
     };
 
-    let result = match electricity_cel::evaluate_condition(expr, ctx, *strict) {
+    let ctx = super::live_ctx(ctx_chain, store);
+    let result = match electricity_cel::evaluate_condition(expr, &ctx, *strict) {
         Ok(b) => b,
         Err(e) => {
             let text = e.to_string();
@@ -187,25 +222,22 @@ async fn decide_and_run<'a>(
         .filter_map(|o| o.name.clone().map(Value::Str))
         .collect();
     let baseline: HashSet<Value> = branch_parent.borrow().keys().cloned().collect();
-    let base_ctx = ctx.clone();
-    let mut live_ctx = ctx.clone();
+    // The branch's own first step runs against *ctx_chain* exactly as
+    // received -- still live. From the second step on, `step_chain`
+    // holds the previous step's own `scope_ctx` overlay, collapsed into
+    // one `Frozen` entry, rebuilt *from ctx_chain again* (never from
+    // the previous overlay) every time -- see `decide_and_run`'s own
+    // doc comment above.
+    let mut step_chain: CtxChain = ctx_chain.clone();
     let mut executed: Vec<Value> = Vec::new();
     let mut failure: Option<VmError> = None;
 
     for (index, child_op) in branch_ops.iter().enumerate() {
-        // `execute_op` wants an as-yet-unmaterialized [`CtxChain`], not
-        // a `Value` -- *live_ctx* is already fully resolved (this
-        // branch's own `scope_ctx` overlay, rebuilt fresh after every
-        // sibling), so it becomes the chain's one frozen entry. A
-        // further-nested `dynamic` child extends this exact chain with
-        // its own live enclosing-scope entry on top (Quirk Q1's
-        // `{**ctx_override, **store.state}` re-merge, DESIGN.md §6.3).
-        let child_chain: CtxChain = vec![CtxSource::Frozen(live_ctx.clone())];
         match execute_op(
             child_op,
             store,
             branch_parent,
-            &child_chain,
+            &step_chain,
             run_ctx,
             observer,
             token,
@@ -215,7 +247,8 @@ async fn decide_and_run<'a>(
             Ok(()) => {
                 executed.push(effect_record(child_op, index));
                 let local = local_writes(store, branch_parent, &baseline, &own_names);
-                live_ctx = scope_ctx(&base_ctx, &local);
+                let fresh_base = super::live_ctx(ctx_chain, store);
+                step_chain = vec![CtxSource::Frozen(scope_ctx(&fresh_base, &local))];
             }
             Err(e) => {
                 failure = Some(match e {

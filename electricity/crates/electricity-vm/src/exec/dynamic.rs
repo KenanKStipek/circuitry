@@ -16,12 +16,19 @@
 //! frozen overlay) down through [`execute_op`] instead, and
 //! [`super::live_ctx`] only ever collapses it into a `Value` at the
 //! actual point of use (CEL eval, tool rendering), always re-snapshotting
-//! every live entry fresh right there. A tree's branches are the one
-//! exception: Python takes exactly one shallow `dict(ctx)` snapshot
-//! before dispatch and every branch shares it (runtime-semantics.md
-//! §5.5), so [`execute_tree`] collapses the inherited chain into one
-//! [`super::CtxSource::Frozen`] entry before dispatch, matching that
-//! one-time snapshot exactly.
+//! every live entry fresh right there. A tree's branches are one place
+//! [`super::CtxSource::Frozen`] is still correct: Python takes exactly
+//! one shallow `dict(ctx)` snapshot before dispatch and every branch
+//! shares it (runtime-semantics.md §5.5), so [`execute_tree`] collapses
+//! the inherited chain into one `Frozen` entry before dispatch, matching
+//! that one-time snapshot exactly. `exec::conditional`'s own `if`
+//! branch overlay is the other: once a branch step completes, Python's
+//! `scope_ctx` rebuild *replaces* its ctx's `prime` entry with a fresh
+//! shallow copy (no longer the live object), so from that point on a
+//! `Frozen` entry, rebuilt from the branch's own unmodified starting
+//! chain on every single step (never from the previous step's own
+//! overlay), is exactly as live as Python's own repeated `scope_ctx`
+//! call -- see that module's own doc comment.
 
 use super::{
     BoxExecFuture, CtxChain, CtxSource, effect_label, execute_op, interrupted_text, key,

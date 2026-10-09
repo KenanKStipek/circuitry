@@ -100,8 +100,18 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// visible -- or [`CtxSource::Frozen`], a `Value` already materialized
 /// once and never refreshed (a tree's own one-time `dict(ctx)` snapshot,
 /// DESIGN.md ::5.5; an `if` branch's own per-step `scope_ctx` overlay,
-/// Quirk Q1, which is safe to freeze because nothing else ever mutates
-/// its own ancestors while that branch's sequential loop runs). Python's
+/// Quirk Q1, rebuilt fresh from the branch's own *unmodified* starting
+/// chain on every single step -- never from the previous step's own
+/// overlay, exactly as Python's `scope_ctx(base_ctx, local)` always
+/// re-reads `base_ctx`, never the previous iteration's own rebuilt
+/// `ctx` -- see `exec::conditional`'s own module doc comment. A branch's
+/// *first* step is never wrapped in a `Frozen` entry at all: it runs
+/// against the branch's own starting chain exactly as received, still
+/// live, because freezing it before the branch has written anything of
+/// its own would lose every nested write a step inside it goes on to
+/// make through an already-existing ancestor path -- the P0 "a nested
+/// container freezes its own ancestors' state" finding on PR #440,
+/// which named exactly this). Python's
 /// own `ctx = store.state if ctx_override is None else {**ctx_override,
 /// **store.state}` never actually copies a nested dict -- the dict
 /// literal/spread only ever touches the *top* level, so every nested
@@ -182,13 +192,18 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// op.name)` for a named effect; passed straight through for a
 /// transparent, unnamed `if`). *ctx_chain* is the caller's own
 /// not-yet-materialized rendering context (see [`CtxSource`]) -- a
-/// `tool`/`if` child collapses it into a `Value` with [`live_ctx`] right
-/// here, at the moment it is actually needed; a nested `dynamic` child
-/// gets the chain itself, unresolved, which [`dynamic::execute_dynamic`]
-/// then extends with its own enclosing scope (Quirk Q1's re-merge) --
-/// exactly mirroring `core/dynamic.py::_execute_effect`'s own
-/// per-effect-type dispatch, where only a `dynamic` child ever receives
-/// `ctx` as an `ctx_override` rather than a resolved value.
+/// `tool` leaf collapses it into a `Value` with [`live_ctx`] right
+/// here, at the moment it is actually needed; a nested `dynamic` or
+/// `if` child gets the chain itself, unresolved -- [`dynamic::
+/// execute_dynamic`] extends it with its own enclosing scope (Quirk
+/// Q1's re-merge), and [`conditional::execute_conditional`] resolves it
+/// itself, fresh, for the condition and for every branch step (that
+/// module's own doc comment: freezing it once here, before the branch
+/// even starts, is the P0 "a nested container freezes its own
+/// ancestors' state" finding on PR #440) -- exactly mirroring
+/// `core/dynamic.py::_execute_effect`'s own per-effect-type dispatch,
+/// where only a `dynamic`/`if` child ever receives `ctx` as an
+/// `ctx_override`/live reference rather than a resolved value.
 ///
 /// `prompt`/`use`/`yield`/`reflector`/`loop`/a `mode: model` `if` are all
 /// refused before a real run ever starts (lane A's `first_unsupported`),
@@ -218,9 +233,8 @@ pub(crate) fn execute_op<'a>(
             },
             NodeKind::Control(region) => match region {
                 Region::If { .. } => {
-                    let ctx = live_ctx(ctx_chain, store);
                     conditional::execute_conditional(
-                        op, store, parent, &ctx, run_ctx, observer, token,
+                        op, store, parent, ctx_chain, run_ctx, observer, token,
                     )
                     .await
                 }
