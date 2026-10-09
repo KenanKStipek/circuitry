@@ -158,6 +158,56 @@ pub fn wait_with_timeout_capturing_stdout(
     (status, stdout)
 }
 
+/// [`wait_with_timeout_capturing_stdout`], with `child`'s stderr
+/// captured the same way alongside it -- the electricity e2e tests
+/// (issue #431's lane E2, scope item 1) need stderr to assert the
+/// "this electricity has no --events" notice did *not* print, which
+/// `wait_with_timeout_capturing_stdout` alone can't see (it leaves
+/// stderr piped but never read).
+pub fn wait_with_timeout_capturing_stdout_and_stderr(
+    mut child: Child,
+    timeout: Duration,
+) -> (std::process::ExitStatus, String, String) {
+    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stdout_pipe.read_to_string(&mut buf);
+        let _ = stdout_tx.send(buf);
+    });
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stderr_pipe.read_to_string(&mut buf);
+        let _ = stderr_tx.send(buf);
+    });
+    let status = wait_with_timeout(child, timeout);
+    let stdout = stdout_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| String::from("<stdout reader thread did not finish>"));
+    let stderr = stderr_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap_or_else(|_| String::from("<stderr reader thread did not finish>"));
+    (status, stdout, stderr)
+}
+
+/// The last non-empty line of *path* (an `events.jsonl`), parsed as
+/// JSON -- every electricity signal e2e test uses this to check the
+/// stream's own final `run_end` line carries the signal that actually
+/// ended the run, not just that osp's own summary line did.
+pub fn last_event(path: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("couldn't read {}: {e}", path.display()));
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| panic!("{} has no event lines", path.display()));
+    serde_json::from_str(line)
+        .unwrap_or_else(|e| panic!("{} last line is not JSON: {e}", path.display()))
+}
+
 pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, contents).unwrap();

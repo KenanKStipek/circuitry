@@ -24,8 +24,8 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_electricity_enabled, osp_electricity_command, wait_with_timeout,
-    wait_with_timeout_capturing_stdout, write_doc,
+    e2e_electricity_enabled, last_event, osp_electricity_command, wait_with_timeout,
+    wait_with_timeout_capturing_stdout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
@@ -56,7 +56,8 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -65,6 +66,12 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    // Proves `ElectricityEngine::detect` actually found, and passed,
+    // both flags (the no-events fallback would still produce the
+    // three assertions above from `state.json` alone at exit).
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    assert!(run_dir.join("events.jsonl").is_file());
+    assert!(run_dir.join("state.live.json").is_file());
 }
 
 #[test]
@@ -76,11 +83,17 @@ fn on_error_continue_still_exits_ok() {
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     // `fail` (the `test-tools` feature's deterministic failure, never
-    // `shell`, which M0-H doesn't run) with `on_error: continue`.
+    // `shell`, which M0-H doesn't run) with `on_error: continue`. A
+    // declared, required `interface.inputs` entry, set with `-e`,
+    // exercises the plan side of scope item 3: `oscilloscope_core::
+    // plan::compile` must accept the same `-e` electricity itself
+    // would check (`electricity::check_options`), and the plan must
+    // still join against electricity's own live state/events for the
+    // `(on_error: continue)` annotation below to appear at all.
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: flaky\n    type: tool\n    provider: fail\n    on_error: continue\n    params: {}\n",
+        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects:\n  - name: flaky\n    type: tool\n    provider: fail\n    on_error: continue\n    params: {}\n",
     );
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
@@ -88,13 +101,16 @@ fn on_error_continue_still_exits_ok() {
     let child = osp_electricity_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("-e")
+        .arg("name=World")
         .arg("--out-dir")
         .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
@@ -102,10 +118,21 @@ fn on_error_continue_still_exits_ok() {
     );
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
+    // The `(on_error: continue)` suffix (`diff.rs::on_error_suffix`)
+    // only appears once `plan.match_path` finds this effect in a
+    // compiled plan -- proof the `-e name=World` run really did
+    // compile a plan and join it to electricity's own live path, not
+    // just fall back to the no-plan "observations only" path, which
+    // would still print `✗ prime.flaky`/`exit 0` without it.
+    assert!(stdout.contains("(on_error: continue)"), "stdout:\n{stdout}");
+    assert!(
+        !stderr.contains("couldn't compile a plan"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]
-fn an_invalid_document_fails_with_no_state_written() {
+fn an_invalid_document_fails_and_still_writes_state() {
     if !e2e_electricity_enabled() {
         eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
@@ -113,8 +140,12 @@ fn an_invalid_document_fails_with_no_state_written() {
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     // Schema-invalid (a `tool` effect needs a `provider` and
-    // `params`): electricity writes no state at all for this, its
-    // own `{"ok":false,...}` JSON on stdout instead (DESIGN.md §4.1).
+    // `params`): this fails in electricity's `fail!` macro (load
+    // step), which still saves state before returning (`lib.rs`'s own
+    // `state: Some(store.saved(...))`), so `--out` still gets written
+    // -- unlike the preview-marker refusal below, which writes
+    // nothing. electricity's own `{"ok":false,...}` JSON still
+    // carries the error on stdout either way (DESIGN.md §4.1).
     let doc = write_doc(
         work.path(),
         "do.yml",
@@ -137,6 +168,7 @@ fn an_invalid_document_fails_with_no_state_written() {
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
+    assert!(run_dir.join("state.json").is_file());
 }
 
 #[test]
@@ -149,9 +181,12 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     let work = tempfile::tempdir().unwrap();
     // A `prompt` effect is schema-valid but refused with the preview
     // marker (issue #431's Goal: "prompt/loop/use/reflector/yield ...
-    // refused before the run starts"), exactly like an invalid
-    // document: exit 1, no state ever written, osp's own summary
-    // reads it the same way.
+    // refused before the run starts"): osp's own summary reads it the
+    // same way as the invalid document above (`■ run failed`, exit
+    // 1), but the refusal itself is the case that writes *nothing* at
+    // all under the run directory -- electricity never even reaches
+    // the `fail!` macro that saves state for the invalid-document
+    // case, since the refusal check runs earlier still.
     let doc = write_doc(
         work.path(),
         "do.yml",
@@ -178,6 +213,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
         "stdout:\n{stdout}"
     );
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
+    assert!(!run_dir.join("state.json").is_file());
 }
 
 /// A document whose root blocks on the `test-tools` feature's own
@@ -220,6 +256,15 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+
+    // A single SIGINT still writes a final snapshot (DESIGN.md §4.1's
+    // own signal table): `events.jsonl`'s own last line is this run's
+    // `run_end`, naming the signal that actually ended it.
+    assert!(run_dir.join("events.jsonl").is_file());
+    assert!(run_dir.join("state.live.json").is_file());
+    let event = last_event(&run_dir.join("events.jsonl"));
+    assert_eq!(event["ev"], "run_end", "{event:?}");
+    assert_eq!(event["signal"], "SIGINT", "{event:?}");
 
     assert_no_leftover_process(work.path());
 }
@@ -307,6 +352,12 @@ fn sigterm_forwards_and_osp_exits_143() {
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
 
+    assert!(run_dir.join("events.jsonl").is_file());
+    assert!(run_dir.join("state.live.json").is_file());
+    let event = last_event(&run_dir.join("events.jsonl"));
+    assert_eq!(event["ev"], "run_end", "{event:?}");
+    assert_eq!(event["signal"], "SIGTERM", "{event:?}");
+
     assert_no_leftover_process(work.path());
 }
 
@@ -343,6 +394,12 @@ fn sighup_forwards_and_osp_exits_129() {
     assert_eq!(status.code(), Some(129), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 129"), "stdout:\n{stdout}");
+
+    assert!(run_dir.join("events.jsonl").is_file());
+    assert!(run_dir.join("state.live.json").is_file());
+    let event = last_event(&run_dir.join("events.jsonl"));
+    assert_eq!(event["ev"], "run_end", "{event:?}");
+    assert_eq!(event["signal"], "SIGHUP", "{event:?}");
 
     assert_no_leftover_process(work.path());
 }
