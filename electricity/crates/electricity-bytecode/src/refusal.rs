@@ -3,9 +3,13 @@
 //! refuse it up front, before any state is written, with the preview
 //! marker (#431's "Refused before the run starts" list) instead of
 //! discovering mid-run that nothing implements a `prompt`/`loop`/`use`/
-//! `reflector`/`yield` effect, a model-mode condition or `expect`, or an
-//! unexpanded `{{> name}}` partial reference (the run-time half of #406,
-//! out of scope for M0-H).
+//! `reflector`/`yield` effect, a model-mode condition or `expect`, a
+//! `tool` effect naming an unsupported `provider:` (M0-H's own Scope
+//! section: "`json` is the only provider in M0-H" -- orchestrator
+//! ruling on PR #432's review, issue #431 lists the rest of this
+//! walker's refusals explicitly but is silent on this one), or an
+//! unexpanded `{{> name}}` partial reference (the run-time half of
+//! #406, out of scope for M0-H).
 //!
 //! Walks the whole compiled tree in document order and stops at the
 //! first node [`RefusalReason`] names -- not a list of every offending
@@ -21,7 +25,7 @@ use crate::region::{Condition, ExpectCondition, Region};
 use crate::template::TemplateText;
 
 /// Why [`first_unsupported`] refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefusalReason {
     /// A `prompt` effect (M1-E).
     Prompt,
@@ -41,6 +45,15 @@ pub enum RefusalReason {
     ModelExpect,
     /// The document declares a top-level `prompts:` map.
     DeclaredPrompts,
+    /// A `tool` effect's own `provider:` (normalized the same way
+    /// `plugins/factory.py::build_plugin` does, `.strip().lower()`)
+    /// isn't `json` and isn't in [`first_unsupported`]'s own
+    /// *extra_allowed_providers* either -- `json` is the only M0-H tool
+    /// provider (#431's Scope section); the normalized name is carried
+    /// here (not the raw, as-written text) so a caller that reports it
+    /// in the refusal message shows the same spelling the lookup itself
+    /// judged.
+    UnsupportedToolProvider(String),
     /// An unexpanded `{{> name}}` partial reference in a field the M0-H
     /// VM would otherwise render (a supported tool's `prompt`/`params`/
     /// `params_json`) -- the run-time half of #406 never ran to splice
@@ -59,20 +72,30 @@ pub struct Refusal {
 /// Walks *program* in document order, returning the first [`Refusal`],
 /// or `None` once every effect path is one the M0-H VM actually runs
 /// (`tool`/`dynamic`/a CEL `if`/`finally:` only -- #431's Goal).
-pub fn first_unsupported(program: &Program) -> Option<Refusal> {
+///
+/// *extra_allowed_providers* is this crate's own seam for the
+/// `test-tools` cargo feature: `electricity-bytecode` has no dependency
+/// on `electricity-tools` and so no way to know whether that feature is
+/// compiled into the binary calling this function. The caller (lane D's
+/// CLI) passes `&["sleep", "fail"]` when `test-tools` is enabled (their
+/// own lower-case, already-normalized names) and `&[]` otherwise --
+/// every name is compared against the already-`.strip().lower()`-
+/// normalized provider, so the caller's own list should already be
+/// lower-case too.
+pub fn first_unsupported(program: &Program, extra_allowed_providers: &[&str]) -> Option<Refusal> {
     if !program.prompts.is_empty() {
         return Some(Refusal {
             path: EffectPath::root(),
             reason: RefusalReason::DeclaredPrompts,
         });
     }
-    walk_op(&program.root)
+    walk_op(&program.root, extra_allowed_providers)
 }
 
-fn walk_op(op: &Op) -> Option<Refusal> {
+fn walk_op(op: &Op, extra_allowed_providers: &[&str]) -> Option<Refusal> {
     match &op.kind {
-        NodeKind::Leaf(leaf) => walk_leaf(&op.path, leaf),
-        NodeKind::Control(region) => walk_region(&op.path, region),
+        NodeKind::Leaf(leaf) => walk_leaf(&op.path, leaf, extra_allowed_providers),
+        NodeKind::Control(region) => walk_region(&op.path, region, extra_allowed_providers),
     }
 }
 
@@ -83,7 +106,11 @@ fn refusal(path: &EffectPath, reason: RefusalReason) -> Option<Refusal> {
     })
 }
 
-fn walk_leaf(path: &EffectPath, leaf: &LeafKind) -> Option<Refusal> {
+fn walk_leaf(
+    path: &EffectPath,
+    leaf: &LeafKind,
+    extra_allowed_providers: &[&str],
+) -> Option<Refusal> {
     match leaf {
         LeafKind::Prompt(_) => refusal(path, RefusalReason::Prompt),
         LeafKind::Use(_) => refusal(path, RefusalReason::Use),
@@ -92,6 +119,20 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind) -> Option<Refusal> {
         LeafKind::Tool(tool) => {
             if matches!(&tool.expect, Some(ExpectCondition::Model { .. })) {
                 return refusal(path, RefusalReason::ModelExpect);
+            }
+            // `plugins/factory.py::build_plugin`'s own normalization,
+            // applied here too so a provider written ` JSON ` is
+            // accepted the same way `cof run` would accept it, and so
+            // the refusal carries the same name a caller's own registry
+            // lookup would miss on.
+            let normalized_provider = tool.provider.trim().to_lowercase();
+            if normalized_provider != "json"
+                && !extra_allowed_providers.contains(&normalized_provider.as_str())
+            {
+                return refusal(
+                    path,
+                    RefusalReason::UnsupportedToolProvider(normalized_provider),
+                );
             }
             if tool.prompt.as_ref().is_some_and(has_partial)
                 || tool.params_json.as_ref().is_some_and(has_partial)
@@ -104,21 +145,31 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind) -> Option<Refusal> {
     }
 }
 
-fn walk_region(path: &EffectPath, region: &Region) -> Option<Refusal> {
+fn walk_region(
+    path: &EffectPath,
+    region: &Region,
+    extra_allowed_providers: &[&str],
+) -> Option<Refusal> {
     match region {
-        Region::Block { ops, .. } => ops.iter().find_map(walk_op),
-        Region::Parallel { branches, .. } => branches.iter().find_map(walk_op),
-        Region::TryFinally { body, finally } => {
-            walk_region(path, body).or_else(|| walk_region(path, finally))
-        }
+        Region::Block { ops, .. } => ops
+            .iter()
+            .find_map(|op| walk_op(op, extra_allowed_providers)),
+        Region::Parallel { branches, .. } => branches
+            .iter()
+            .find_map(|op| walk_op(op, extra_allowed_providers)),
+        Region::TryFinally { body, finally } => walk_region(path, body, extra_allowed_providers)
+            .or_else(|| walk_region(path, finally, extra_allowed_providers)),
         Region::If {
             cond, then_, else_, ..
         } => {
             if matches!(cond, Condition::Model { .. }) {
                 return refusal(path, RefusalReason::ModelCondition);
             }
-            walk_region(path, then_)
-                .or_else(|| else_.as_ref().and_then(|region| walk_region(path, region)))
+            walk_region(path, then_, extra_allowed_providers).or_else(|| {
+                else_
+                    .as_ref()
+                    .and_then(|region| walk_region(path, region, extra_allowed_providers))
+            })
         }
         // A `loop` is refused outright regardless of its own body or
         // `while:` condition's mode -- M1-H's own milestone, not a
@@ -211,7 +262,62 @@ mod tests {
             LeafKind::Tool(tool_op(ParamNode::Map(IndexMap::new()))),
         );
         let program = program_with_root(root_block(vec![tool]));
-        assert_eq!(first_unsupported(&program), None);
+        assert_eq!(first_unsupported(&program, &[]), None);
+    }
+
+    fn tool_op_with_provider(provider: &str, params: ParamNode) -> ToolOp {
+        ToolOp {
+            provider: provider.to_string(),
+            ..tool_op(params)
+        }
+    }
+
+    #[test]
+    fn a_shell_provider_is_refused() {
+        let tool_path = EffectPath::root().push_name("run");
+        let tool = leaf_op(
+            tool_path.clone(),
+            LeafKind::Tool(tool_op_with_provider(
+                "shell",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("shell".to_string())
+        );
+        assert_eq!(refusal.path, tool_path);
+    }
+
+    #[test]
+    fn a_provider_written_with_whitespace_and_mixed_case_is_still_accepted() {
+        let tool_path = EffectPath::root().push_name("fetch");
+        let tool = leaf_op(
+            tool_path,
+            LeafKind::Tool(tool_op_with_provider(
+                " JSON ",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        assert_eq!(first_unsupported(&program, &[]), None);
+    }
+
+    #[test]
+    fn an_extra_allowed_provider_is_accepted_only_when_listed() {
+        let tool_path = EffectPath::root().push_name("wait");
+        let tool = leaf_op(
+            tool_path.clone(),
+            LeafKind::Tool(tool_op_with_provider(
+                "sleep",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        assert_eq!(first_unsupported(&program, &[]).unwrap().path, tool_path);
+        assert_eq!(first_unsupported(&program, &["sleep"]), None);
     }
 
     #[test]
@@ -220,7 +326,7 @@ mod tests {
         program
             .prompts
             .insert("greeting".to_string(), "hi".to_string());
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::DeclaredPrompts);
     }
 
@@ -240,7 +346,7 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![use_op]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -266,7 +372,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelCondition);
     }
 
@@ -305,7 +411,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
     }
@@ -336,7 +442,7 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![loop_op]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Loop);
     }
 
@@ -348,7 +454,7 @@ mod tests {
         });
         let tool = leaf_op(EffectPath::root().push_name("fetch"), LeafKind::Tool(op));
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::ModelExpect);
     }
 
@@ -364,7 +470,7 @@ mod tests {
             LeafKind::Tool(tool_op(ParamNode::Map(params))),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::PartialReference);
     }
 
@@ -403,7 +509,7 @@ mod tests {
             }),
         );
         let program = program_with_root(root_block(vec![prompt, use_op]));
-        let refusal = first_unsupported(&program).unwrap();
+        let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Prompt);
     }
 }
