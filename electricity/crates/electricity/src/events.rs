@@ -94,7 +94,7 @@ impl EventLog {
         if self.disabled.get() {
             return;
         }
-        let text = match electricity_json::dumps(&payload, electricity_json::WriteMode::COMPACT) {
+        let text = match electricity_json::dumps(&payload, electricity_json::WriteMode::EVENTS) {
             Ok(text) => text,
             Err(_) => {
                 self.disable();
@@ -367,6 +367,32 @@ mod tests {
         let log = EventLog::open(Path::new("/this/path/does/not/exist/events.jsonl"));
         log.run_start("run-1", "doc.yml");
         assert!(log.close());
+    }
+
+    /// Pins the wire format against `cof`'s own `_write_line`
+    /// (`json.dumps(payload, separators=(",", ":"))`, `cli/events.py`):
+    /// no space after either `,` or `:`, for a known payload.
+    #[test]
+    fn write_line_matches_cof_s_compact_separators_for_a_known_payload() {
+        let path = temp_path("separators");
+        let log = EventLog::open(&path);
+        log.run_end(true, None, None);
+        log.close();
+        let line = fs::read_to_string(&path).unwrap();
+        let line = line.trim_end_matches('\n');
+        let parsed = electricity_json::loads(line).unwrap();
+        let ts = parsed
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("ts".to_string()))
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let expected =
+            format!("{{\"v\":1,\"seq\":0,\"ts\":\"{ts}\",\"ev\":\"run_end\",\"ok\":true}}");
+        assert_eq!(line, expected);
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]

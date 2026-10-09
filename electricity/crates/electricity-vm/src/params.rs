@@ -18,7 +18,7 @@
 //! same as `core/tool.py`.
 
 use electricity_bytecode::ParamNode;
-use electricity_json::WriteMode;
+use electricity_json::{Separators, WriteMode};
 use electricity_template::{JsonAwareCtx, PlainCtx, render_template};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -207,6 +207,7 @@ fn json_aware_splice(value: &Value) -> Result<String, String> {
             indent: None,
             sort_keys: false,
             ensure_ascii: false,
+            separators: Separators::Default,
         },
     )
     .map_err(|err| err.to_string())

@@ -292,6 +292,7 @@ fn capped_raw(raw: Value) -> Value {
             indent: None,
             sort_keys: false,
             ensure_ascii: false,
+            separators: electricity_json::Separators::Default,
         },
     ) {
         Ok(text) => text,
