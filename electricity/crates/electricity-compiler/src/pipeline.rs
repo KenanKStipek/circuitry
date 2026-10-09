@@ -941,16 +941,16 @@ pub fn post_state_checks(
 /// config::validate_persistence`] (step 9, `build_persistence_backend`,
 /// *after* the limiter); [`build_input_namespace`] (step 10,
 /// `check_interface_inputs` -- its own *effective_runtime* is
-/// [`merged_runtime_block`]'s result, this function's pre-#431
-/// computation, unchanged), then [`post_state_checks`] (step 14's
-/// structural checks, compile, groups, cycles, plus the digest
-/// [`check_for_run`] has always attached to `Program.document`, never
-/// part of `run()`'s own structural-check step itself). `check_for_run`
-/// stays exactly this composition so every existing golden, `--dump-ir`,
-/// and osp's own use of this crate keep seeing `check_for_run`'s
-/// pre-#431 behavior unchanged -- the three phases above exist so lane
-/// D's run wiring can call each on its own, not to change what this
-/// function itself does.
+/// [`merged_runtime_block`]'s result, now the real [`electricity_
+/// config::merge_runtime`] deep merge (see that function's own doc
+/// comment), then [`post_state_checks`] (step 14's structural checks,
+/// compile, groups, cycles, plus the digest [`check_for_run`] has
+/// always attached to `Program.document`, never part of `run()`'s own
+/// structural-check step itself). `check_for_run` stays exactly this
+/// composition so every existing golden, `--dump-ir`, and osp's own use
+/// of this crate keep seeing the same result -- the three phases above
+/// exist so lane D's run wiring can call each on its own, not to change
+/// what this function itself does.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
     let loaded = prepare_document(path, options)?;
     let effective_runtime = merged_runtime_block(options, &loaded.document);
