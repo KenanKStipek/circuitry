@@ -71,6 +71,7 @@ _CASE_JSON_KEYS = frozenset(
         "known_divergence",
         "orchestration",
         "timeout_seconds",
+        "sort_warnings",
     }
 )
 _VALID_EXPECT = frozenset({"success", "failure"})
@@ -94,6 +95,7 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("replies_file", None)
     metadata.setdefault("known_divergence", None)
     metadata.setdefault("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+    metadata.setdefault("sort_warnings", False)
 
     if "expect" not in metadata:
         raise ValueError(f"{case_dir.name}: case.json is missing the required 'expect' key")
@@ -176,6 +178,30 @@ def run_case(
         check=False,
     )
     return CaseResult(proc.returncode, proc.stdout, proc.stderr, out_path)
+
+
+#: Circuitry's own CLI logging handler (`cli/logging_setup.py`) formats
+#: every record `{levelname}: {message}` -- always one of these five
+#: (Python's own fixed `logging` level names), never `_print_run_
+#: warnings`'s own `Warning:`/`Error:` lines, which don't share this
+#: prefix shape at all (lowercase "arning"/"rror", a different
+#: mechanism entirely -- see electricity/DESIGN.md §6.9's "CLI output").
+_LOG_LEVEL_PREFIXES = ("DEBUG: ", "INFO: ", "WARNING: ", "ERROR: ", "CRITICAL: ")
+
+
+def warning_lines(stderr: str, *, sort: bool = False) -> list[str]:
+    """The subset of *stderr*'s own lines that came from Circuitry's
+    `logging` module (issue #442's "Warning lines on stderr" item) --
+    `cli/dynamic.py`/`conditional.py`'s on_error/`finally:` degradation
+    warnings, `cli/config.py`'s "Unknown environment" warning, and
+    `cli/live_state.py`/`cli/events.py`'s mid-run write-failure warnings
+    among them. A chain keeps `cof run`'s own real order; *sort* (a case
+    whose document dispatches a tree `dynamic`, where two branches' own
+    warnings can land in either relative order between runs) compares
+    them as a sorted set instead -- `case.json`'s own `sort_warnings` key.
+    """
+    lines = [line for line in stderr.splitlines() if line.startswith(_LOG_LEVEL_PREFIXES)]
+    return sorted(lines) if sort else lines
 
 
 def parse_cli_error(stdout: str) -> str:

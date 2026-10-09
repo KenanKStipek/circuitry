@@ -73,6 +73,21 @@ def _redact_and_reserialize(raw_bytes: bytes, *, pretty: bool) -> bytes:
     return text.encode("utf-8")
 
 
+def _warnings_text(stderr: str, metadata: dict[str, Any]) -> bytes:
+    """`expected.warnings.txt` (issue #442's "Warning lines on stderr"
+    item): one line per `harness.warning_lines` entry, sorted when
+    `case.json` sets `sort_warnings` (a tree `dynamic` case, where two
+    branches' own warnings can land in either relative order between
+    runs) -- always written, even empty, so a case that stops producing
+    a warning it used to is caught by `--check` the same way any other
+    stale expected file is, rather than leaving a no-longer-applicable
+    file silently uncompared.
+    """
+    lines = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    text = "".join(f"{line}\n" for line in lines)
+    return text.encode("utf-8")
+
+
 def _generate_success(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) -> dict[str, bytes]:
     home_dir = tmp_root / "home"
     home_dir.mkdir(exist_ok=True)
@@ -94,6 +109,7 @@ def _generate_success(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
         # directory could leak into (`tests/conformance/normalize.py`'s
         # events comparator normalizes these at comparison time instead).
         "expected.events.jsonl": events_path.read_bytes(),
+        "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
     if metadata.get("also_pretty"):
         pretty_home = tmp_root / "home-pretty"
@@ -135,6 +151,7 @@ def _generate_failure(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
     return {
         "expected.json": text.encode("utf-8"),
         "expected.out.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),
+        "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
 
 

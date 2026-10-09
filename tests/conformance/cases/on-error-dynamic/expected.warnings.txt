@@ -1,0 +1,2 @@
+WARNING: Dynamic 'fail_skip': fail_skip.body: json: parse failed: Expecting value: line 1 column 1 (char 0); on_error=skip, continuing with the next effect
+WARNING: Dynamic 'fail_continue': fail_continue.body: json: parse failed: Expecting value: line 1 column 1 (char 0); on_error=continue, continuing with the next effect
