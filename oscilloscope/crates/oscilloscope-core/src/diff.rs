@@ -352,15 +352,29 @@ impl Differ {
                                 });
                                 lines.push(end_line_numbered(path, node, plan, *pass));
                             }
-                        } else if prev.is_running()
-                            && node.is_running()
-                            && prev.created_at != node.created_at
-                        {
-                            lines.push(LogLine {
-                                ts: node.created_at.clone(),
-                                text: format!("↻ {path} retry"),
-                            });
                         }
+                    }
+                    // A retry's own `↻` line is *not* gated on
+                    // `event_sourced` (N2): once `--events` is
+                    // flowing, every leaf becomes event-sourced as
+                    // soon as its `start` arrives (there's no earlier
+                    // `prev` without a start to fall back to), and
+                    // events carry no retry signal at all (design Q4)
+                    // — a tool's `created_at` moving while it's still
+                    // running is the *only* source for this line
+                    // either way, so gating it the same as the
+                    // events-redundant start/end lines above left it
+                    // unreachable for the entire life of a run with
+                    // `--events` on.
+                    if !is_container
+                        && prev.is_running()
+                        && node.is_running()
+                        && prev.created_at != node.created_at
+                    {
+                        lines.push(LogLine {
+                            ts: node.created_at.clone(),
+                            text: format!("↻ {path} retry"),
+                        });
                     }
 
                     if prev.branch.is_none() && node.branch.is_some() {
@@ -847,6 +861,38 @@ mod tests {
             &PlanTree::empty(),
         );
         assert!(failed[0].text.starts_with("✗ prime.fan.b  boom"));
+    }
+
+    #[test]
+    fn an_event_sourced_nodes_moved_created_at_still_gets_a_retry_line() {
+        // N2: every leaf becomes event-sourced the moment its `start`
+        // event arrives, and events carry no retry signal at all
+        // (design Q4) — so gating `↻` on "not event-sourced", the same
+        // as the start/end lines events already cover, made it
+        // unreachable for the rest of the run once `--events` is on.
+        let mut differ = Differ::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.flaky".to_string(),
+            },
+            &PlanTree::empty(),
+        );
+
+        let first = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        differ.diff(&first, &PlanTree::empty());
+
+        let retried = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t1", "completed_at": null, "provider": "shell"}}
+        }});
+        let lines = differ.diff(&retried, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
+            "{lines:?}"
+        );
     }
 
     #[test]
