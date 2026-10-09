@@ -9,7 +9,7 @@
 //! reporting (`cof config`'s own `Config:` line) has no electricity
 //! surface either, so it is not ported.
 
-use crate::util::get;
+use crate::util::{get, is_truthy};
 use electricity_json::ReadError;
 use electricity_value::{Dict, Value};
 use std::collections::HashMap;
@@ -83,6 +83,36 @@ impl Default for CircuitryConfig {
 }
 
 const VALID_ENVIRONMENTS: [&str; 3] = ["dev", "prod", "test"];
+
+/// `CircuitryConfig.from_dict`'s own `environment` field: a truthy value
+/// (Python's `d.get("environment") or "dev"`) not in
+/// [`VALID_ENVIRONMENTS`] falls back to `"dev"`, logging
+/// `cli/config.py::CircuitryConfig.from_dict`'s own
+/// `logger.warning("Unknown environment %r; falling back to 'dev'. Valid: "
+/// "%s", env, _VALID_ENVIRONMENTS)` word for word -- `%s` on the fixed
+/// `_VALID_ENVIRONMENTS` tuple is always this same literal text, and `%r`
+/// on *raw* (which can be any JSON type, not just a string) is its own
+/// Python `repr`, via [`Value::py_repr`]. A falsy raw value (`None`,
+/// `""`, `0`, ...) never warns, same as Python's `or "dev"` never even
+/// reaching the `not in` check for one.
+fn resolve_environment(raw: Option<&Value>) -> String {
+    let is_valid_str = raw
+        .and_then(Value::as_str)
+        .is_some_and(|env| VALID_ENVIRONMENTS.contains(&env));
+    if is_valid_str {
+        return raw
+            .and_then(Value::as_str)
+            .expect("checked above")
+            .to_string();
+    }
+    if is_truthy(raw) {
+        log::warn!(
+            "Unknown environment {}; falling back to 'dev'. Valid: ('dev', 'prod', 'test')",
+            raw.expect("is_truthy(None) is false").py_repr()
+        );
+    }
+    "dev".to_string()
+}
 
 /// `cli/config.py::SANE_DEFAULTS`.
 pub(crate) fn sane_defaults() -> Dict {
@@ -174,11 +204,7 @@ fn config_from_dict(merged: &Dict) -> CircuitryConfig {
         .and_then(Value::as_list)
         .map(<[Value]>::to_vec)
         .unwrap_or_default();
-    let environment = get(merged, "environment")
-        .and_then(Value::as_str)
-        .filter(|env| VALID_ENVIRONMENTS.contains(env))
-        .unwrap_or("dev")
-        .to_string();
+    let environment = resolve_environment(get(merged, "environment"));
     let runtime = match get(merged, "runtime") {
         Some(Value::Dict(_)) => get(merged, "runtime").cloned(),
         _ => None,

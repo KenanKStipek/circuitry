@@ -12,3 +12,7 @@ electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
 indexmap = { version = "2", features = ["serde"] }
 regex = "1"
+# `logger.warning` parity for `CircuitryConfig.from_dict`'s own "Unknown
+# environment" fallback (issue #442) -- a no-op unless a binary later
+# installs a logger, same as electricity-cel's own use of this crate.
+log = "0.4"

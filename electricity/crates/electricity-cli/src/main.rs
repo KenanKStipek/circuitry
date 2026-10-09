@@ -454,6 +454,61 @@ fn write_stderr(text: &str) {
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 
+/// `cli/logging_setup.py::configure_cli_logging`'s own stderr handler --
+/// WARNING and above (`cof run`'s default, never-`--verbose` level:
+/// electricity has no `--verbose` flag of its own) formatted as
+/// `{levelname}: {message}`, the same `logging.Formatter` the
+/// reference's own CLI installs -- written straight through
+/// [`write_stderr`], which never buffers across calls, so this is
+/// flushed per line the same way Python's own StreamHandler is. Every
+/// `log::warn!` this binary's own library dependencies call
+/// (electricity-cel's absent-path warning; electricity-vm's
+/// dynamic/conditional on_error degradation warnings;
+/// electricity-config's "Unknown environment" warning; electricity's
+/// own --live-state/--events mid-run write failures) reaches stderr
+/// through this one sink (issue #442) -- a no-op until this is
+/// installed, same as the reference's own NullHandler default for an
+/// embedding caller that never calls configure_cli_logging.
+struct StderrWarnLogger;
+
+impl log::Log for StderrWarnLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        // `Warn` is the only level any of this binary's own
+        // dependencies ever actually emit today (`enabled` above
+        // already excludes Info/Debug/Trace) -- Error is handled for
+        // forward compatibility with a future log::error! site,
+        // matching Python's own logging.WARNING-level threshold
+        // admitting both.
+        let levelname = match record.level() {
+            log::Level::Error => "ERROR",
+            log::Level::Warn => "WARNING",
+            log::Level::Info => "INFO",
+            log::Level::Debug | log::Level::Trace => "DEBUG",
+        };
+        write_stderr(&format!("{levelname}: {}\n", record.args()));
+    }
+
+    fn flush(&self) {}
+}
+
+static WARN_LOGGER: StderrWarnLogger = StderrWarnLogger;
+
+/// Installs [`StderrWarnLogger`] as the `log` crate's global logger, at
+/// WARNING and above -- called once, at the very start of [`main`],
+/// before any config/document loading that could emit one of these
+/// warnings runs.
+fn install_warning_logger() {
+    let _ = log::set_logger(&WARN_LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+}
+
 /// `electricity`'s own non-TTY stdout contract (issue #431's "CLI
 /// output" decision, "Same as `cof` when stdout is not a terminal"):
 /// success with `--out` prints nothing; success without `--out` prints
@@ -547,8 +602,20 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // whole CLI command, before `run()`'s own JSON-output logic is
     // ever reached, so unlike every other failure this prints no
     // stdout payload at all, `--out` or not (PR #441 review finding 8).
+    // `config_error` resolves *config_path* only to check for an
+    // error -- `run_orchestration` below resolves it again as its own
+    // step 1 (that function's own doc comment). A log::warn! a
+    // resolve triggers (electricity-config's own "Unknown environment"
+    // warning) must fire exactly once per invocation, as it would for
+    // a single `cof run`, so logging is silenced for this throwaway
+    // first resolve and restored right after (issue #442) -- a config
+    // error, below, ends the process before the real resolve would
+    // ever run, so no warning is lost by silencing this one.
     let config_path = PathBuf::from(&run_args.config);
-    if let Some(message) = electricity::config_error(&config_path) {
+    log::set_max_level(log::LevelFilter::Off);
+    let config_check = electricity::config_error(&config_path);
+    log::set_max_level(log::LevelFilter::Warn);
+    if let Some(message) = config_check {
         signal_guard.disarm();
         write_stderr(&format!("Error: {message}\n"));
         return ExitCode::from(1);
@@ -642,6 +709,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    install_warning_logger();
     // `args_os` + lossy conversion instead of `args()`, which panics on a
     // non-UTF-8 argument.
     let args: Vec<String> = std::env::args_os()
