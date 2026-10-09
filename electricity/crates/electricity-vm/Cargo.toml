@@ -11,6 +11,8 @@ description = "The M0-H VM: store, execution, cancellation, limiter (electricity
 electricity-value = { path = "../electricity-value" }
 electricity-bytecode = { path = "../electricity-bytecode" }
 electricity-tools = { path = "../electricity-tools" }
+electricity-template = { path = "../electricity-template" }
+electricity-json = { path = "../electricity-json" }
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros"] }
 
