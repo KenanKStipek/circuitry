@@ -4,19 +4,27 @@
 //! Circuitry's own version runs a background thread so a slow disk
 //! never stalls the effect dispatching it mirrors, coalescing writes
 //! under a `threading.Condition`. electricity has no worker threads of
-//! its own to stall -- the VM is single-threaded, cooperative `async`
-//! (DESIGN.md §6.1-6.2) -- so this port coalesces the same way (at most
-//! one write per [`LIVE_STATE_INTERVAL`]) but does so synchronously, on
-//! whichever call lands on or after the next due time: there is no
-//! second thread for a `--live-state` write to race against the store
-//! lock Python's own version has to avoid holding during I/O (this
-//! crate's `Store` has no such lock to begin with -- `std::cell::RefCell`
-//! borrows are taken and released well before this module ever runs).
+//! its own, and no second thread for a `--live-state` write to race a
+//! store borrow against either -- but it still never takes a snapshot
+//! (`Store::saved`) or does I/O from inside [`RunObserver::write`]
+//! itself (PR #441 review finding 7): that hook fires synchronously,
+//! *from inside* whatever `exec::dynamic`/`exec::tool` call just wrote
+//! to the store, which may still be holding a `RefCell` borrow a step
+//! or two up its own call stack -- `Store::saved` walking the same
+//! tree right then could panic on an already-borrowed node. Instead,
+//! [`LiveStateMirror::mark_pending`] (what the observer hook actually
+//! calls) only ever sets a flag; [`LiveStateMirror::flush_if_due`] is
+//! the one place that ever calls `Store::saved` or touches the
+//! filesystem for a coalesced write, and `run_orchestration`'s own
+//! `tokio::select!` loop (`src/lib.rs`) calls it only between
+//! `execute_root` polls -- never while that future is still holding
+//! control (and so never while any node's own borrow from this exact
+//! poll could still be live).
 //!
 //! The one write this module makes unconditionally, regardless of
-//! timing, is [`LiveStateMirror::close`]'s final one -- `--live-state`'s
-//! own promise to end equal to `--out` (issue #431's acceptance
-//! criteria).
+//! timing or the pending flag, is [`LiveStateMirror::close`]'s final
+//! one -- `--live-state`'s own promise to end equal to `--out` (issue
+//! #431's acceptance criteria).
 
 use crate::out::render_state;
 use electricity_value::Value;
@@ -66,6 +74,10 @@ pub struct LiveStateMirror {
     path: PathBuf,
     interval: Duration,
     next_due: Cell<Option<Instant>>,
+    /// Set by [`Self::mark_pending`] (the observer hook); cleared by
+    /// [`Self::flush_if_due`] once it actually writes. `close` ignores
+    /// this entirely -- its own write is unconditional.
+    pending: Cell<bool>,
     had_failure: Cell<bool>,
 }
 
@@ -79,6 +91,7 @@ impl LiveStateMirror {
             path,
             interval,
             next_due: Cell::new(None),
+            pending: Cell::new(false),
             had_failure: Cell::new(false),
         }
     }
@@ -93,29 +106,46 @@ impl LiveStateMirror {
         Ok(())
     }
 
-    /// A later write: skipped entirely unless at least [`Self::interval`]
-    /// has passed since the last one landed -- *state* is computed lazily
-    /// (only when actually due) so a caller's own snapshot (`Store::saved`)
-    /// is never taken for nothing. A failure here is recorded (see
-    /// [`LiveStateMirror::close`]), never propagated: the mirror is for
-    /// watchers, not the run's own result.
-    pub fn write_coalesced(&self, state: impl FnOnce() -> Value) {
+    /// Records that the store has changed since the last write --
+    /// [`crate::run::RunObserver::write`]'s own hook, called
+    /// synchronously from inside whatever just wrote to the store.
+    /// Never touches the store or the filesystem itself (this module's
+    /// own doc comment).
+    pub fn mark_pending(&self) {
+        self.pending.set(true);
+    }
+
+    /// Writes the current state if, and only if, both a change is
+    /// pending ([`Self::mark_pending`] was called at least once since
+    /// the last write) and at least [`Self::interval`] has passed since
+    /// then -- *snapshot* (`Store::saved`) is computed lazily, only
+    /// when a write is actually about to happen, so a caller that
+    /// polls this far more often than the interval itself (as
+    /// `run_orchestration`'s own select loop does, to stay responsive)
+    /// never pays for a snapshot it then discards. A failure here is
+    /// recorded (see [`Self::close`]), never propagated: the mirror is
+    /// for watchers, not the run's own result.
+    pub fn flush_if_due(&self, snapshot: impl FnOnce() -> Value) {
+        if !self.pending.get() {
+            return;
+        }
         let now = Instant::now();
         let due = self.next_due.get().is_none_or(|due| now >= due);
         if !due {
             return;
         }
+        self.pending.set(false);
         self.next_due.set(Some(now + self.interval));
-        if write_atomic(&self.path, &render_state(&state(), false)).is_err() {
+        if write_atomic(&self.path, &render_state(&snapshot(), false)).is_err() {
             self.had_failure.set(true);
         }
     }
 
     /// The final write (issue #431's run-wiring step 19): unconditional
-    /// regardless of timing, so `--live-state` ends equal to `--out`.
-    /// Returns whether any write over this mirror's whole lifetime --
-    /// mid-run or this one -- failed, so the caller can fold that into
-    /// one warning on the run's result.
+    /// regardless of timing or the pending flag, so `--live-state` ends
+    /// equal to `--out`. Returns whether any write over this mirror's
+    /// whole lifetime -- mid-run or this one -- failed, so the caller
+    /// can fold that into one warning on the run's result.
     pub fn close(&self, state: &Value) -> bool {
         if write_atomic(&self.path, &render_state(state, false)).is_err() {
             self.had_failure.set(true);
@@ -146,34 +176,68 @@ mod tests {
     }
 
     #[test]
-    fn a_coalesced_write_before_the_interval_is_skipped() {
+    fn flush_if_due_does_nothing_with_no_pending_change() {
+        let path = temp_path("no-pending");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        // Due, but nothing marked pending -- the closure below must
+        // never even be called.
+        mirror.flush_if_due(|| panic!("snapshot taken with nothing pending"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_pending_change_before_the_interval_is_skipped() {
         let path = temp_path("coalesced");
         let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_secs(60));
         mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+        mirror.mark_pending();
         let mut dict = Dict::new();
         dict.insert(Value::Str("x".to_string()), Value::from(1i64));
-        mirror.write_coalesced(|| Value::Dict(dict));
-        // Still the initial (empty) snapshot: the second write landed
+        mirror.flush_if_due(|| Value::Dict(dict));
+        // Still the initial (empty) snapshot: the pending write landed
         // well inside the interval and was skipped.
         assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
         fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn a_coalesced_write_after_the_interval_lands() {
+    fn a_pending_change_after_the_interval_lands() {
         let path = temp_path("due");
         let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
         mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
         std::thread::sleep(Duration::from_millis(5));
+        mirror.mark_pending();
         let mut dict = Dict::new();
         dict.insert(Value::Str("x".to_string()), Value::from(1i64));
-        mirror.write_coalesced(|| Value::Dict(dict));
+        mirror.flush_if_due(|| Value::Dict(dict));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
         fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn close_always_writes_the_final_state_regardless_of_timing() {
+    fn a_second_pending_change_before_the_next_interval_still_lands_once() {
+        let path = temp_path("re-pending");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.mark_pending();
+        let mut first = Dict::new();
+        first.insert(Value::Str("x".to_string()), Value::from(1i64));
+        mirror.flush_if_due(|| Value::Dict(first));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
+        // Nothing pending right after a flush -- a poll landing before
+        // the next change is marked must be a no-op, proving the flag
+        // (not just the timer) gates every write.
+        mirror.flush_if_due(|| panic!("snapshot taken with nothing pending"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn close_always_writes_the_final_state_regardless_of_timing_or_pending() {
         let path = temp_path("close");
         let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_secs(60));
         mirror.write_initial(&Value::Dict(Dict::new())).unwrap();

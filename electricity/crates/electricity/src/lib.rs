@@ -69,17 +69,28 @@ fn python_repr_str(s: &str) -> String {
 /// The [`electricity_compiler::CheckOptions`] an `electricity` run of
 /// *orchestration_path* against *config_path* checks against: trusting
 /// the document and skipping preflight (issue #408's CLI section),
-/// *config_path*'s own `runtime:` block (if the file exists and parses)
-/// merged under the document's own, key by key
-/// ([`config_runtime_block`]), and *inputs* (the CLI's own `-e
-/// key=value` pairs, [`parse_inputs`]'s own output -- issue #429)
-/// passed straight through as `CheckOptions.inputs`. The one place
-/// [`run_orchestration`] and [`dump_ir`] both build their options, so
-/// the two can never drift apart -- and what another tool in this
-/// workspace (`oscilloscope`, which links `electricity_compiler`
-/// directly) should call to compile a document with exactly the
-/// options a real `electricity` run would use for it, rather than
-/// reimplementing this merge itself.
+/// *config_path*'s own fully-resolved `runtime:` block --
+/// `SANE_DEFAULTS`, the file deep-merged on top, then `CIRCUITRY_*`
+/// env overlays, exactly [`run_orchestration`]'s own step 1
+/// ([`config_runtime_block`], `None` only when resolving it fails
+/// outright, lenient on purpose: this function has no error return of
+/// its own to report that failure through, unlike `run_orchestration`
+/// -- a caller that cares (this crate's own [`dump_ir`]) sees it
+/// surface instead as whatever document/structural error a document
+/// relying on that config would then fail with, same as the pre-#431
+/// preview build's own latitude here) -- and *inputs* (the CLI's own
+/// `-e key=value` pairs, [`parse_inputs`]'s own output -- issue #429)
+/// passed straight through as `CheckOptions.inputs`. What another tool
+/// in this workspace (`oscilloscope`, which links `electricity_
+/// compiler` directly) should call to compile a document with exactly
+/// the options a real `electricity` run would use for it, rather than
+/// reimplementing this merge itself (PR #441 review finding 14: this
+/// function's own `config_runtime_block` and `run_orchestration`'s own
+/// step 1 now both go through `electricity_config::resolve_config`, so
+/// `--dump-ir`/osp's own plan can no longer drift from what a real run
+/// sees just because `CIRCUITRY_MODEL`-style env overlays, or a
+/// config-file key `SANE_DEFAULTS` itself supplies, were never once
+/// part of this function's own, narrower raw-file read).
 pub fn check_options(
     config_path: &Path,
     inputs: &indexmap::IndexMap<String, String>,
@@ -92,19 +103,12 @@ pub fn check_options(
     }
 }
 
-/// *config_path*'s own `runtime:` block, or `None` when the file doesn't
-/// exist, isn't valid UTF-8 JSON, or has no such key -- lenient on
-/// purpose (issue #408's lane B section only asks for "what the
-/// pipeline needs from the config file, i.e. its runtime: block", not
-/// full config-file validation, which stays `cof`'s own job).
+/// *config_path*'s own fully-resolved `runtime:` block ([`check_options`]'s
+/// own doc comment), or `None` when resolving the config fails outright.
 fn config_runtime_block(config_path: &Path) -> Option<electricity_value::Value> {
-    let bytes = std::fs::read(config_path).ok()?;
-    let text = String::from_utf8(bytes).ok()?;
-    let value = electricity_json::loads(&text).ok()?;
-    value
-        .as_dict()?
-        .get(&electricity_value::Value::Str("runtime".to_string()))
-        .cloned()
+    electricity_config::resolve_config(config_path, &current_env_vars())
+        .ok()?
+        .runtime
 }
 
 /// `{"ir_version": "unstable", "program": ...}`, 2-space indented, for
@@ -448,7 +452,6 @@ impl Totals {
 /// `EventLog`, `LiveStateMirror` -- is each already `Cell`/`RefCell`-
 /// based for exactly that reason).
 struct Observer<'a> {
-    store: &'a Store,
     totals: &'a Totals,
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
@@ -475,8 +478,15 @@ impl RunObserver for Observer<'_> {
     }
 
     fn write(&self) {
+        // Finding 7's own fix: never take a store snapshot from inside
+        // this hook, which fires synchronously from inside whatever
+        // just wrote to the store and may still hold a borrow a frame
+        // or two up its own call stack -- only ever record that a
+        // change happened. `run_orchestration`'s own select loop is
+        // the one place that ever turns this into a real snapshot and
+        // a write (`LiveStateMirror::flush_if_due`'s own doc comment).
         if let Some(mirror) = self.live_state {
-            mirror.write_coalesced(|| self.store.saved(&self.store.root));
+            mirror.mark_pending();
         }
     }
 }
@@ -975,7 +985,6 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
 
     let totals = Totals::new();
     let observer = Observer {
-        store: &store,
         totals: &totals,
         events: event_log.as_ref(),
         live_state: live_mirror.as_ref(),
@@ -997,15 +1006,35 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     };
 
     // Step 17/18: execute the root, then the success or failure tail.
-    let exec_result = electricity_vm::execute_root(
+    // `tokio::select!`s this future against a plain poll tick rather
+    // than just `.await`ing it directly, so `--live-state`'s own
+    // pending-change flush (finding 7: see `live_state.rs`'s own doc
+    // comment) gets a chance to run between `execute_root`'s own polls
+    // -- never while it's still holding control, so never while any
+    // node's own store borrow from that exact poll could still be
+    // live. The tick itself is far shorter than `LIVE_STATE_INTERVAL`
+    // (`flush_if_due` is the one place that actually enforces that
+    // interval; this is only how often this loop gets to ask).
+    const LIVE_STATE_POLL_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+    let ctx_snapshot = store.snapshot(&store.root);
+    let mut exec_fut = std::pin::pin!(electricity_vm::execute_root(
         &program,
         &store,
-        &store.snapshot(&store.root),
+        &ctx_snapshot,
         &run_ctx,
         &observer,
         token,
-    )
-    .await;
+    ));
+    let exec_result = loop {
+        tokio::select! {
+            result = &mut exec_fut => break result,
+            () = tokio::time::sleep(LIVE_STATE_POLL_TICK) => {
+                if let Some(mirror) = &live_mirror {
+                    mirror.flush_if_due(|| store.saved(&store.root));
+                }
+            }
+        }
+    };
 
     let wall_time_s = run_t0.elapsed().as_secs_f64();
     let (ok, error, signal) = match exec_result {
@@ -1113,7 +1142,22 @@ mod tests {
             options.inputs.get("name").map(String::as_str),
             Some("World")
         );
-        assert!(options.config_runtime.is_some());
+        // PR #441 review finding 14: `config_runtime` is the fully
+        // resolved runtime (`SANE_DEFAULTS` deep-merged with the file),
+        // not just the file's own raw `runtime:` key -- `max_concurrency`
+        // (this file's own) and `adapters` (only ever a `SANE_DEFAULTS`
+        // key) are both present together.
+        let runtime = options.config_runtime.as_ref().unwrap().as_dict().unwrap();
+        assert_eq!(
+            runtime.get(&electricity_value::Value::Str(
+                "max_concurrency".to_string()
+            )),
+            Some(&electricity_value::Value::from(3i64))
+        );
+        assert!(
+            runtime.contains_key(&electricity_value::Value::Str("adapters".to_string())),
+            "expected SANE_DEFAULTS' own adapters key to still be merged in: {runtime:?}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

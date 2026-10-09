@@ -34,9 +34,9 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
                     [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
 
-electricity is a preview: this release cannot run orchestrations yet. Use
-`cof run` instead. --version, --help and --dump-ir are the only supported
-commands.
+electricity is a preview: it runs tool/dynamic/if/finally documents only
+(prompt/loop/use/reflector/yield, persistence and runtime plugins are
+refused with a preview marker; use `cof run` for those).
 
 Options:
   -V, --version       Print the version and exit
@@ -45,8 +45,9 @@ Options:
                       declared interface.inputs the same way `cof run -e`
                       does. Repeatable; a later -e for the same key wins.
   --out <path>        Write the final state to <path> instead of stdout.
-  --pretty            Sort state keys and indent by 2 spaces (only with
-                      --out).
+  --pretty            Sort state keys and indent by 2 spaces -- the final
+                      state, whether printed to stdout (no --out) or
+                      written to --out's own file.
   --live-state <path> Mirror the running state to <path> as it changes.
   --events <path>     Write a JSONL event stream to <path>.
   --profile <path>    Not supported in this preview (profiles land in a
@@ -552,6 +553,23 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         }
     };
 
+    // `cof`'s own "Orchestration not found" check (`_resolve_orchestration`)
+    // happens in the CLI layer, before `run()`/its own JSON-output logic
+    // is ever reached, exactly like the config-error check above --
+    // plain text on stderr, no stdout payload, no `--out` (PR #441
+    // review finding 16). electricity's own positional orchestration
+    // argument is always a literal path (no library-name resolution,
+    // unlike `cof run <name>`), so this is a plain existence check.
+    let orchestration_path = PathBuf::from(&run_args.orchestration);
+    if !orchestration_path.is_file() {
+        signal_guard.disarm();
+        write_stderr(&format!(
+            "Error: Orchestration not found: {}\n",
+            run_args.orchestration
+        ));
+        return ExitCode::from(1);
+    }
+
     let out_path = run_args.out.map(PathBuf::from);
 
     // `--profile` refuses with the preview marker before anything else
@@ -561,7 +579,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     } else {
         let req = RunRequest {
             config_path,
-            orchestration_path: PathBuf::from(&run_args.orchestration),
+            orchestration_path,
             inputs,
             out_path: out_path.clone(),
             pretty: run_args.pretty,

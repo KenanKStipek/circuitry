@@ -133,6 +133,33 @@ fn a_missing_config_file_fails_with_circuitrys_own_text_and_writes_no_out() {
     assert!(!out.exists());
 }
 
+/// A missing orchestration file -- unlike every other failure -- prints
+/// no stdout JSON payload at all, matching `cof`'s own "Orchestration
+/// not found" check (which happens in the CLI layer, before `run()`'s
+/// own JSON-output logic is ever reached, same as a config error --
+/// PR #441 review finding 16).
+#[test]
+fn a_missing_orchestration_file_fails_with_cofs_own_text_and_writes_no_out() {
+    let (mut cmd, home) = command("missing-orchestration");
+    let config = home.config("{}");
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            "no-such-doc.yml",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr, "Error: Orchestration not found: no-such-doc.yml\n");
+    assert!(!out.exists());
+}
+
 #[test]
 fn known_run_flag_in_first_position_is_a_run_request() {
     let (mut cmd, home) = command("run-flag-first");

@@ -29,7 +29,12 @@ electricity-vm = { path = "../electricity-vm" }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 indexmap = "2"
 serde_json = "1"
+# "time"/"macros": run_orchestration's own tokio::select! loop around
+# execute_root polls LiveStateMirror::flush_if_due between its polls
+# (PR #441 review finding 7) -- never "rt", since this crate builds no
+# runtime of its own; it always runs inside a caller's.
+tokio = { version = "1", features = ["time", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }
