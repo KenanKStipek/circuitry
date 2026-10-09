@@ -452,3 +452,117 @@ async fn finally_still_runs_when_the_token_is_already_cancelled() {
         "finally must still run to completion despite the cancellation"
     );
 }
+
+#[tokio::test]
+async fn finally_also_runs_after_a_successful_body() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = ToolRegistry::new();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let root = dynamic_with_finally(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![chain_dynamic(
+            root_path().push_name("a"),
+            "a",
+            OnError::Fail,
+            vec![],
+        )],
+        vec![chain_dynamic(
+            root_path().push_name("cleanup"),
+            "cleanup",
+            OnError::Fail,
+            vec![],
+        )],
+    );
+
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    assert!(get(prime, "a").is_some());
+    assert!(get(prime, "cleanup").is_some());
+    assert_eq!(get(prime, "value"), Some(&Value::Bool(true)));
+    let meta = as_dict(get(prime, "meta").unwrap());
+    assert_eq!(get(meta, "error"), Some(&Value::None));
+}
+
+#[tokio::test]
+async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = ToolRegistry::new();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    // Unbounded concurrency (no max_concurrency, no stop_on_error): both
+    // failing branches start before either one can matter to the other.
+    let root = tree_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        None,
+        false,
+        vec![
+            chain_dynamic(
+                root_path().push_name("x0"),
+                "x0",
+                OnError::Fail,
+                vec![tool_leaf(root_path().push_name("x0").push_name("b"), "b")],
+            ),
+            chain_dynamic(
+                root_path().push_name("x1"),
+                "x1",
+                OnError::Fail,
+                vec![tool_leaf(root_path().push_name("x1").push_name("b"), "b")],
+            ),
+        ],
+    );
+
+    let err = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+
+    let VmError::Message(text) = err else {
+        panic!("expected a Message error, got {err:?}");
+    };
+    assert!(
+        text.starts_with("2 effects failed in parallel:\n"),
+        "got {text:?}"
+    );
+    // Double-wrapped, matching Python exactly: `x0`'s own chain already
+    // wraps `b`'s failure with `x0`'s own path before raising out of
+    // `x0.execute()`, and the tree's own `_await_tree_branches` wraps
+    // *that* again with `x0`'s path as seen from the tree's dispatch.
+    assert!(text.contains(&format!("[1] prime.x0: prime.x0.b: {TOOL_STUB_TEXT}")));
+    assert!(text.contains(&format!("[2] prime.x1: prime.x1.b: {TOOL_STUB_TEXT}")));
+
+    // Both branches still ran (and failed) and both are merged in.
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    assert!(get(prime, "x0").is_some());
+    assert!(get(prime, "x1").is_some());
+}
