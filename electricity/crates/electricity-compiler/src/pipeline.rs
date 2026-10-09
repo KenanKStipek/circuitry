@@ -816,8 +816,7 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
     // OSError: document_hash = None` exactly (`cli/runtime_shim.py::run`,
     // ~:678-683) -- a digest only matters for a future `--resume`, so a
     // failure computing it must never fail the run itself.
-    let computed_digest =
-        digest::document_content_digest(path, &document, &confinement_root).ok();
+    let computed_digest = digest::document_content_digest(path, &document, &confinement_root).ok();
     program.document = Some(DocumentInfo {
         path_as_given: path.display().to_string(),
         resolved_directory: document_dir,
