@@ -378,6 +378,7 @@ name = "electricity-redaction"
 version = "0.1.0"
 dependencies = [
  "electricity-value",
+ "regex",
 ]
 
 [[package]]
@@ -404,6 +405,7 @@ name = "electricity-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "electricity-json",
  "electricity-value",
  "tokio",
 ]
@@ -425,6 +427,8 @@ name = "electricity-vm"
 version = "0.1.0"
 dependencies = [
  "electricity-bytecode",
+ "electricity-json",
+ "electricity-template",
  "electricity-tools",
  "electricity-value",
  "indexmap",

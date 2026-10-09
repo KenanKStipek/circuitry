@@ -16,6 +16,7 @@ test-tools = []
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
+electricity-json = { path = "../electricity-json" }
 async-trait = "0.1"
 
 [dev-dependencies]
