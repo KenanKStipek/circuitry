@@ -262,7 +262,19 @@ async fn decide_and_run<'a>(
             Ok(()) => {
                 executed.push(effect_record(child_op, index));
                 let local = local_writes(branch_parent, &baseline, &own_names);
-                step_chain = vec![CtxSource::Live(build_overlay(ctx_chain, &local))];
+                // `core/scope.py::scope_ctx`'s own early return (`if not
+                // local: return ctx`): nothing has been written at this
+                // branch's own level yet, so the next step keeps the
+                // chain exactly as received -- still live, all the way
+                // up -- rather than being handed an overlay built from
+                // an empty `local`, whose own cloned `prime` snapshot
+                // would predate whatever that next step itself goes on
+                // to create and could never gain it.
+                step_chain = if local.is_empty() {
+                    ctx_chain.clone()
+                } else {
+                    vec![CtxSource::Live(build_overlay(ctx_chain, &local))]
+                };
             }
             Err(e) => {
                 failure = Some(match e {

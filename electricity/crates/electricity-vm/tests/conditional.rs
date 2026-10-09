@@ -744,6 +744,68 @@ async fn a_dynamic_created_by_an_ifs_own_second_branch_step_cannot_resolve_its_q
 }
 
 #[tokio::test]
+async fn an_empty_first_step_leaves_the_next_step_the_received_live_chain() {
+    // `core/scope.py::scope_ctx`'s own early return (`if not local:
+    // return ctx`): the gate's branch starts with an unnamed inner `if`
+    // whose condition is false and has no `else`, so it writes nothing
+    // at all -- `local` is empty once it finishes. Python hands the
+    // *next* step `ctx` itself, still live; this crate must not swap in
+    // an overlay built from that empty `local` instead, since that
+    // overlay's own cloned `prime` snapshot predates `pipeline` (the
+    // next step) ever existing, and can never gain it. `pipeline`'s own
+    // second step reads `prime.pipeline.outline.value` -- a path that
+    // only exists once `pipeline` itself (this branch's *second* step)
+    // has started -- exactly as in `a_dynamic_created_by_an_ifs_own_
+    // first_branch_step_resolves_its_qualified_path` above, but with an
+    // empty-write step ahead of `pipeline` rather than `pipeline` being
+    // the branch's literal first step.
+    let inner_if = cel_if(root_path(), None, "false", OnError::Fail, vec![], None);
+    let outline = chain_dynamic(
+        root_path().push_name("pipeline").push_name("outline"),
+        "outline",
+        OnError::Fail,
+        vec![],
+    );
+    let check = cel_if(
+        root_path().push_name("pipeline").push_name("check"),
+        Some("check"),
+        "has(state.prime.pipeline.outline.value)",
+        OnError::Fail,
+        vec![],
+        None,
+    );
+    let pipeline = chain_dynamic(
+        root_path().push_name("pipeline"),
+        "pipeline",
+        OnError::Fail,
+        vec![outline, check],
+    );
+    let gate = cel_if(
+        root_path(),
+        None,
+        "true",
+        OnError::Fail,
+        vec![inner_if, pipeline],
+        None,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![gate]);
+    let (store, _observer, result) = run(root).await;
+    result.unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let pipeline_node = as_dict(get(prime, "pipeline").unwrap());
+    let check_node = as_dict(get(pipeline_node, "check").unwrap());
+    let meta = as_dict(get(check_node, "meta").unwrap());
+    assert_eq!(
+        get(meta, "condition_result"),
+        Some(&Value::Bool(true)),
+        "an empty-write step must not freeze `prime` before `pipeline` exists"
+    );
+}
+
+#[tokio::test]
 async fn a_shadowing_steps_bare_name_is_invisible_without_the_branchs_own_names() {
     // Probe D: unlike the shadowing test above (which uses a *named*
     // gate, so the enclosing baseline never actually contains `shared`
