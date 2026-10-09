@@ -292,9 +292,14 @@ fn apply_router_precedence(
 /// `resolve_effective_settings`, as narrowed by this module's own doc
 /// comment: merges `config` > `document` > built-in default for a
 /// single run, recording `sources` and `warnings` the same way.
+/// *document_name* labels the "Applied host settings" notice exactly as
+/// `resolve_effective_settings`'s own *document_name* does (`cli/
+/// runtime_shim.py:527` passes the run's document file name; `None`
+/// falls back to "the orchestration").
 pub fn effective_settings(
     config: &CircuitryConfig,
     document: &Value,
+    document_name: Option<&str>,
 ) -> Result<EffectiveSettings, ConfigError> {
     let empty = Dict::new();
     let doc_dict = document.as_dict().unwrap_or(&empty);
@@ -351,7 +356,7 @@ pub fn effective_settings(
         &orch_runtime,
         &orch_plugins,
         config,
-        None,
+        document_name,
     ));
 
     // plugins: config's own list, then the orchestration's (trusted, so
@@ -488,7 +493,7 @@ mod tests {
             default_adapter: Some("ollama".to_string()),
             ..CircuitryConfig::default()
         };
-        let settings = effective_settings(&config, &doc(vec![])).unwrap();
+        let settings = effective_settings(&config, &doc(vec![]), None).unwrap();
         assert_eq!(settings.model, Some("llama3.1:8b".to_string()));
         assert_eq!(settings.adapter, Some("ollama".to_string()));
         assert_eq!(settings.sources.get("model").unwrap(), "config");
@@ -502,7 +507,7 @@ mod tests {
             ..CircuitryConfig::default()
         };
         let settings =
-            effective_settings(&config, &doc(vec![("model", Value::from("gpt-4"))])).unwrap();
+            effective_settings(&config, &doc(vec![("model", Value::from("gpt-4"))]), None).unwrap();
         assert_eq!(settings.model, Some("gpt-4".to_string()));
         assert_eq!(settings.sources.get("model").unwrap(), "orchestration");
     }
@@ -510,7 +515,7 @@ mod tests {
     #[test]
     fn sources_are_recorded_in_insertion_order() {
         let config = CircuitryConfig::default();
-        let settings = effective_settings(&config, &doc(vec![])).unwrap();
+        let settings = effective_settings(&config, &doc(vec![]), None).unwrap();
         let keys: Vec<&str> = settings.sources.keys().map(String::as_str).collect();
         assert_eq!(
             &keys[..5],
@@ -527,6 +532,7 @@ mod tests {
         let err = effective_settings(
             &config,
             &doc(vec![("plugins", Value::List(vec![Value::from(1i64)]))]),
+            None,
         )
         .unwrap_err();
         assert_eq!(err.0, "Plugins must be strings.");
@@ -538,12 +544,30 @@ mod tests {
         let mut runtime = Dict::new();
         runtime.insert(Value::Str("max_concurrency".to_string()), Value::from(2i64));
         let settings =
-            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))])).unwrap();
+            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))]), None)
+                .unwrap();
         assert_eq!(
             settings.warnings,
             vec![
                 "Applied host settings from the orchestration: runtime.max_concurrency".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn applied_host_settings_notice_names_the_document_when_given_one() {
+        let config = CircuitryConfig::default();
+        let mut runtime = Dict::new();
+        runtime.insert(Value::Str("max_concurrency".to_string()), Value::from(2i64));
+        let settings = effective_settings(
+            &config,
+            &doc(vec![("runtime", Value::Dict(runtime))]),
+            Some("doc.yml"),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.warnings,
+            vec!["Applied host settings from doc.yml: runtime.max_concurrency".to_string()]
         );
     }
 
@@ -559,15 +583,15 @@ mod tests {
             Value::Str("complexity".to_string()),
             Value::Dict(complexity),
         );
-        let err =
-            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))])).unwrap_err();
+        let err = effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))]), None)
+            .unwrap_err();
         assert!(err.0.contains("no bands are defined"));
     }
 
     #[test]
     fn persistence_source_is_recorded_only_when_configured() {
         let config = CircuitryConfig::default();
-        let settings = effective_settings(&config, &doc(vec![])).unwrap();
+        let settings = effective_settings(&config, &doc(vec![]), None).unwrap();
         assert!(!settings.sources.contains_key("persistence"));
 
         let mut persistence = Dict::new();
@@ -580,7 +604,8 @@ mod tests {
             Value::Dict(persistence),
         );
         let settings =
-            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))])).unwrap();
+            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))]), None)
+                .unwrap();
         assert_eq!(
             settings.sources.get("persistence").unwrap(),
             "orchestration"
@@ -609,7 +634,8 @@ mod tests {
             Value::Dict(complexity),
         );
         let settings =
-            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))])).unwrap();
+            effective_settings(&config, &doc(vec![("runtime", Value::Dict(runtime))]), None)
+                .unwrap();
         assert_eq!(settings.model, Some("router-model".to_string()));
         assert_eq!(settings.sources.get("model").unwrap(), "router");
     }
