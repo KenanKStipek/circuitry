@@ -1,0 +1,1224 @@
+{
+  "json_tool_cases": [
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{\"a\": 1}"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": "JsonPlugin: parse mode requires params['input'] as a string.",
+      "err_char": null,
+      "err_prefix": null,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "err": null,
+      "err_char": 0,
+      "err_prefix": "json: parse failed: ",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "not json"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "none"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "null"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": "json: unknown mode 'none'",
+      "err_char": null,
+      "err_prefix": null,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "null"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "int",
+        "v": "1"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "PARSE"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "{\"a\": 1}"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "{\n  \"a\": 1\n}"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "indent"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "null"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "[1, \"a\", null, true]"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "{\"true\": \"one-value\"}"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "bool",
+                    "v": true
+                  },
+                  {
+                    "t": "str",
+                    "v": "one-value"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "{\"null\": \"none-value\"}"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "none"
+                  },
+                  {
+                    "t": "str",
+                    "v": "none-value"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "{\"1.5\": \"float-key\"}"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "bits": "3ff8000000000000",
+                    "t": "float"
+                  },
+                  {
+                    "t": "str",
+                    "v": "float-key"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "int",
+        "v": "2"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "foo"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "bar"
+                        },
+                        {
+                          "t": "list",
+                          "v": [
+                            {
+                              "t": "int",
+                              "v": "1"
+                            },
+                            {
+                              "t": "int",
+                              "v": "2"
+                            }
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "foo.bar[1]"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "fallback"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "missing"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "default"
+            },
+            {
+              "t": "str",
+              "v": "fallback"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": "JsonPlugin: extract mode requires params['path'].",
+      "err_char": null,
+      "err_prefix": null,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "int",
+        "v": "1"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{\"a\": 1}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": 0,
+      "err_prefix": "json: extract input is a string but not valid JSON: ",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "not json"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "d"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a[99999999999999999999]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "default"
+            },
+            {
+              "t": "str",
+              "v": "d"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "str",
+        "v": "d"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a[-99999999999999999999]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "default"
+            },
+            {
+              "t": "str",
+              "v": "d"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": null,
+      "err_char": null,
+      "err_prefix": null,
+      "ok": {
+        "t": "int",
+        "v": "3"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "[-1]"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "extract"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "err": "json: unknown mode 'bogus'",
+      "err_char": null,
+      "err_prefix": null,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    }
+  ]
+}
