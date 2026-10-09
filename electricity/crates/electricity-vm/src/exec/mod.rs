@@ -34,9 +34,9 @@ use std::pin::Pin;
 pub(crate) type BoxExecFuture<'a> = Pin<Box<dyn Future<Output = Result<(), VmError>> + 'a>>;
 
 /// POSIX signal numbers `core/dynamic.py::_error_text` branches on --
-/// matching [`crate::CancellationToken`]'s own doc comment (`SIGINT` 2,
-/// `SIGTERM` 15, `SIGHUP` 1).
-const SIGINT: i32 = 2;
+/// matching [`crate::CancellationToken`]'s own doc comment (`SIGTERM`
+/// 15, `SIGHUP` 1; `SIGINT` is 2, but never needs its own arm below --
+/// see [`interrupted_text`]'s own comment).
 const SIGTERM: i32 = 15;
 const SIGHUP: i32 = 1;
 
@@ -52,8 +52,9 @@ pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
         Some(SIGHUP) => "Interrupted (SIGHUP)".to_string(),
         // `Some(SIGINT)`, and -- defensively, since this is only ever
         // called once `token.is_set()` is already known true -- any
-        // other/missing signum too.
-        Some(SIGINT) => "Interrupted (Ctrl-C/SIGINT)".to_string(),
+        // other/missing signum too. Deliberately one arm, not two: a
+        // dedicated `Some(SIGINT)` match next to this would just
+        // repeat it (issue #431 review finding on PR #440).
         _ => "Interrupted (Ctrl-C/SIGINT)".to_string(),
     }
 }
