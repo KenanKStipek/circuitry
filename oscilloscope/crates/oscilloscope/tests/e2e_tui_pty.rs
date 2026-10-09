@@ -125,6 +125,14 @@ fn spawn_osp_on_pty(
         "ANTHROPIC_API_KEY",
         "CYBERDINER_TOKEN",
         "CYBERDINER_EXPO_URL",
+        // `effective_log_mode` (DESIGN.md §6.2) forces the plain
+        // stream whenever `CI` is set, which GitHub Actions sets for
+        // every job regardless of what osp's own stdout actually is
+        // -- without removing it here, this whole test file always
+        // exercised the plain path on CI, pty and all, and never the
+        // TUI it exists to test (caught by the real CI run, not by
+        // this machine, which never had `CI` set to begin with).
+        "CI",
     ] {
         cmd.env_remove(key);
     }
