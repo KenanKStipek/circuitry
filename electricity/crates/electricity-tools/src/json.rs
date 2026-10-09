@@ -75,7 +75,16 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 )));
             }
             let index_text: String = chars[pos + 1..end].iter().collect();
-            let index: i64 = index_text.parse().expect("matched -?\\d+ above");
+            // Python's `int(index)` never fails here (the token already
+            // matched `-?\d+`; CPython `int` has no width limit), so an
+            // index too large for every real list is simply out of range
+            // once it reaches `cursor[int(index)]` -- an `IndexError`,
+            // caught the same as any other miss. An `i64` overflow here
+            // is that same case (no real `Value::List` ever reaches
+            // `i64::MAX` elements), so it's a miss too, never a panic.
+            let Ok(index) = index_text.parse::<i64>() else {
+                return Ok((Value::None, false));
+            };
             pos = end + 1;
             match &cursor {
                 Value::List(items) => match python_list_index(items.len(), index) {
@@ -330,6 +339,43 @@ mod tests {
         ]);
         let result = tool.execute(params, 30).await.unwrap();
         assert_eq!(result.value, Value::from(2i64));
+    }
+
+    #[tokio::test]
+    async fn extract_mode_returns_default_on_an_index_too_large_for_i64() {
+        // `JsonPlugin().execute(params={"mode": "extract", "input":
+        // {"a": [1]}, "path": "a[99999999999999999999]", "default":
+        // "d"})` returns `"d"` -- Python's `int()` parses the literal
+        // fine, then `IndexError` turns the out-of-range index into a
+        // miss; it never raises on the index itself.
+        let tool = JsonTool;
+        let params = dict(vec![
+            ("mode", Value::from("extract")),
+            (
+                "input",
+                dict(vec![("a", Value::List(vec![Value::from(1i64)]))]),
+            ),
+            ("path", Value::from("a[99999999999999999999]")),
+            ("default", Value::from("d")),
+        ]);
+        let result = tool.execute(params, 30).await.unwrap();
+        assert_eq!(result.value, Value::from("d"));
+    }
+
+    #[tokio::test]
+    async fn extract_mode_returns_default_on_a_negative_index_too_large_for_i64() {
+        let tool = JsonTool;
+        let params = dict(vec![
+            ("mode", Value::from("extract")),
+            (
+                "input",
+                dict(vec![("a", Value::List(vec![Value::from(1i64)]))]),
+            ),
+            ("path", Value::from("a[-99999999999999999999]")),
+            ("default", Value::from("d")),
+        ]);
+        let result = tool.execute(params, 30).await.unwrap();
+        assert_eq!(result.value, Value::from("d"));
     }
 
     #[tokio::test]
