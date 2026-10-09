@@ -1450,6 +1450,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_huge_raw_value_is_capped_through_execute_tools_own_wiring() {
+        // The real `json` tool's own `ToolResult.raw` is always a tiny
+        // `{"mode": "..."}` -- the 64 KiB cap can never fire through it.
+        // This mock plugin returns a `raw` well past the cap so this
+        // test exercises `execute_tool`'s own `capped_raw` wiring end to
+        // end, not just `electricity_redaction::cap_raw`'s own (already
+        // golden-tested) unit behaviour.
+        struct HugeRawTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for HugeRawTool {
+            fn name(&self) -> &str {
+                "huge_raw"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _timeout_seconds: u32,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                let mut raw = Dict::new();
+                let body = "a".repeat(electricity_redaction::RAW_META_MAX_BYTES + 1);
+                raw.insert(Value::from("body"), Value::from(body.as_str()));
+                Ok(electricity_tools::ToolResult::new(
+                    Value::from("ok"),
+                    Value::Dict(raw),
+                ))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "huge_raw".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(HugeRawTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        let raw = meta.get(&Value::from("raw")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            raw.get(&Value::from("_truncated")),
+            Some(&Value::Bool(true))
+        );
+        assert!(raw.contains_key(&Value::from("_original_bytes")));
+        assert!(raw.contains_key(&Value::from("_preview")));
+    }
+
+    #[tokio::test]
     async fn a_cancelled_token_stops_a_queued_retry() {
         let mut params = IndexMap::new();
         params.insert(Value::from("mode"), template("bogus"));
