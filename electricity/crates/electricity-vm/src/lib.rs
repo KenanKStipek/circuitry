@@ -22,6 +22,7 @@ pub mod cancel;
 pub mod exec;
 pub mod limiter;
 pub mod observer;
+pub mod params;
 pub mod store;
 
 pub use cancel::CancellationToken;
@@ -75,7 +76,10 @@ pub enum VmError {
     /// A `tool` effect's `provider:` has no registered
     /// [`electricity_tools::ToolPlugin`].
     ToolNotFound(String),
-    /// A registered plugin's own [`electricity_tools::ToolError`], as text.
+    /// A registered plugin's own [`electricity_tools::ToolError`], or any
+    /// other tool-effect failure (a render error, an allowlist denial, a
+    /// failed `expect:`), as text -- what [`crate::exec::tool::execute_tool`]
+    /// returns for `on_error: fail` once retries are exhausted.
     Tool(String),
     /// This run's own [`CancellationToken`] was requested while an effect
     /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
