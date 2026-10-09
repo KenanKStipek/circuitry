@@ -115,6 +115,35 @@ add({
 })
 
 add({
+    "name": "tool_params_bool_key",
+    "files": {"doc.yml": (
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: fetch\n"
+        "    provider: json\n"
+        "    params:\n"
+        "      yes: 1\n"
+        "      mode: parse\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "tool_params_int_key",
+    "files": {"doc.yml": (
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: fetch\n"
+        "    provider: json\n"
+        "    params:\n"
+        "      1: one\n"
+        "      '1': also one but a different key\n"
+        "      mode: parse\n"
+    )},
+    "entry": "doc.yml",
+})
+
+add({
     "name": "use_path_happy_path",
     "files": {
         "doc.yml": (

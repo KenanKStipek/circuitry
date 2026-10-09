@@ -812,8 +812,12 @@ pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, Run
 
     cycles::detect_cycles(&document, Some(path)).map_err(|err| RunCheckError::Cycle(err.0))?;
 
+    // `None` on any digest failure, matching Circuitry's own `except
+    // OSError: document_hash = None` exactly (`cli/runtime_shim.py::run`,
+    // ~:678-683) -- a digest only matters for a future `--resume`, so a
+    // failure computing it must never fail the run itself.
     let computed_digest =
-        digest::document_content_digest(path, &document, &confinement_root).unwrap_or_default();
+        digest::document_content_digest(path, &document, &confinement_root).ok();
     program.document = Some(DocumentInfo {
         path_as_given: path.display().to_string(),
         resolved_directory: document_dir,
@@ -1308,5 +1312,24 @@ mod tests {
             check_interface_inputs_error(&doc, &options),
             Some("missing required input 'prime' declared in orchestration interface.".to_string())
         );
+    }
+
+    #[test]
+    fn check_for_run_fills_document_digest_as_some_not_an_empty_string() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-pipeline-digest-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc_path = dir.join("doc.yml");
+        std::fs::write(&doc_path, "effects: []\n").unwrap();
+
+        let program = check_for_run(&doc_path, &CheckOptions::default()).unwrap();
+        let digest = program.document.unwrap().digest;
+        // Not `unwrap_or_default()`'s old `Some("")` -- a real digest, and
+        // never an empty string standing in for "unknown".
+        assert!(matches!(digest, Some(ref d) if !d.is_empty()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
