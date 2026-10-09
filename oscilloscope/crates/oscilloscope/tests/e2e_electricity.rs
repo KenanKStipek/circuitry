@@ -228,8 +228,12 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
 /// `sleep` provider, long enough for every signal test below to send
 /// a signal mid-flight and still have time left to observe its
 /// effect (the same shape `electricity-cli`'s own `signals.rs` uses).
-const LONG_SLEEP_DOC: &str =
-    "effects:\n  - name: slow\n    type: tool\n    provider: sleep\n    params: {seconds: 30}\n";
+/// The `finally: json` step is the orchestrator's own duplicate-✗
+/// repro shape: electricity's final `end` event for `prime` and its
+/// final `state.live.json` write land within the same sub-millisecond
+/// window, which used to make osp's own polling loop observe both in
+/// the same tick and print `prime`'s own ✗ line twice.
+const LONG_SLEEP_DOC: &str = "effects:\n  - name: slow\n    type: tool\n    provider: sleep\n    params: {seconds: 30}\nfinally:\n  - name: cleanup\n    type: tool\n    provider: json\n    params:\n      mode: parse\n      input: \"\\\"done\\\"\"\n";
 
 #[test]
 fn a_single_sigint_forwards_and_osp_exits_130() {
@@ -264,6 +268,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
 
     // A single SIGINT still writes a final snapshot (DESIGN.md §4.1's
     // own signal table): `events.jsonl`'s own last line is this run's
@@ -359,6 +364,7 @@ fn sigterm_forwards_and_osp_exits_143() {
     assert_eq!(status.code(), Some(143), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
 
     assert!(run_dir.join("events.jsonl").is_file());
     assert!(run_dir.join("state.live.json").is_file());
@@ -402,6 +408,7 @@ fn sighup_forwards_and_osp_exits_129() {
     assert_eq!(status.code(), Some(129), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 129"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
 
     assert!(run_dir.join("events.jsonl").is_file());
     assert!(run_dir.join("state.live.json").is_file());

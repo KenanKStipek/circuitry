@@ -118,6 +118,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     assert_eq!(status.code(), Some(130), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 130"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
 
     assert_no_leftover_process(work.path());
 }
@@ -213,6 +214,7 @@ fn sigterm_forwards_and_osp_exits_143() {
     assert_eq!(status.code(), Some(143), "stdout:\n{stdout}");
     assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 143"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
 
     assert_no_leftover_process(work.path());
 }
