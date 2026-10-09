@@ -19,8 +19,9 @@ use crate::keys::{App, Dialog, Pane, visible_rows};
 /// `RunningOrQueued` have no glyph of their own in that table — `?`
 /// for an abort (nothing else in the set means "unknown"), and the
 /// same `◐`/`◌` a confirmed running/queued row uses for a guess at
-/// one, left visually distinct only by the dim "likely"/"≤" duration
-/// text `row_line` adds.
+/// one (review finding 16: `row_line` draws no separate "likely"/"≤"
+/// text of its own, so a guess currently looks identical to the real
+/// thing).
 fn status_glyph(kind: StatusKind) -> char {
     match kind {
         StatusKind::Pending => '·',
