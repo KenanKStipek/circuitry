@@ -71,14 +71,36 @@ fn python_repr_str(s: &str) -> String {
     electricity_value::Value::Str(s.to_string()).py_repr()
 }
 
+/// The [`electricity_compiler::CheckOptions`] an `electricity` run of
+/// *orchestration_path* against *config_path* checks against: trusting
+/// the document and skipping preflight (issue #408's CLI section),
+/// *config_path*'s own `runtime:` block (if the file exists and parses)
+/// merged under the document's own, key by key
+/// ([`config_runtime_block`]), and *inputs* (the CLI's own `-e
+/// key=value` pairs, [`parse_inputs`]'s own output -- issue #429)
+/// passed straight through as `CheckOptions.inputs`. The one place
+/// [`run_orchestration`] and [`dump_ir`] both build their options, so
+/// the two can never drift apart -- and what another tool in this
+/// workspace (`oscilloscope`, which links `electricity_compiler`
+/// directly) should call to compile a document with exactly the
+/// options a real `electricity` run would use for it, rather than
+/// reimplementing this merge itself.
+pub fn check_options(
+    config_path: &Path,
+    inputs: &indexmap::IndexMap<String, String>,
+) -> electricity_compiler::CheckOptions {
+    electricity_compiler::CheckOptions {
+        skip_preflight: true,
+        trust_document: true,
+        config_runtime: config_runtime_block(config_path),
+        inputs: inputs.clone(),
+    }
+}
+
 /// Runs *orchestration_path* the way `electricity <config.json> <doc> ...`
 /// does (issue #408's CLI section): [`electricity_compiler::check_for_run`]
-/// first, trusting the document and skipping preflight, with
-/// *config_path*'s own `runtime:` block (if the file exists and parses)
-/// merged under the document's own, key by key, and *inputs* (the CLI's
-/// own `-e key=value` pairs, [`parse_inputs`]'s own output -- issue
-/// #429) passed straight through as `CheckOptions.inputs` -- then, on
-/// success, still this preview's one refusal, since there is no VM yet.
+/// first, against [`check_options`]'s own options -- then, on success,
+/// still this preview's one refusal, since there is no VM yet.
 ///
 /// A [`RunOutcome::CheckFailed`] carries [`electricity_compiler::check_for_run`]'s
 /// own error text verbatim -- the exact text the CLI writes to stderr on a
@@ -90,12 +112,7 @@ pub fn run_orchestration(
     orchestration_path: &Path,
     inputs: &indexmap::IndexMap<String, String>,
 ) -> RunOutcome {
-    let options = electricity_compiler::CheckOptions {
-        skip_preflight: true,
-        trust_document: true,
-        config_runtime: config_runtime_block(config_path),
-        inputs: inputs.clone(),
-    };
+    let options = check_options(config_path, inputs);
     match electricity_compiler::check_for_run(orchestration_path, &options) {
         Ok(_) => RunOutcome::PreviewRefusal(PreviewUnsupported),
         Err(err) => RunOutcome::CheckFailed(err.to_string()),
@@ -161,12 +178,7 @@ pub fn dump_ir(
     orchestration_path: &Path,
     inputs: &indexmap::IndexMap<String, String>,
 ) -> Result<String, String> {
-    let options = electricity_compiler::CheckOptions {
-        skip_preflight: true,
-        trust_document: true,
-        config_runtime: config_runtime_block(config_path),
-        inputs: inputs.clone(),
-    };
+    let options = check_options(config_path, inputs);
     let program = electricity_compiler::check_for_run(orchestration_path, &options)
         .map_err(|err| err.to_string())?;
     // `serde_json::json!` would `.unwrap()` internally on a `Program`
@@ -282,6 +294,40 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_options_merges_config_runtime_and_inputs() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-check-options-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.json");
+        std::fs::write(&config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
+
+        let mut inputs = indexmap::IndexMap::new();
+        inputs.insert("name".to_string(), "World".to_string());
+        let options = check_options(&config, &inputs);
+
+        assert!(options.skip_preflight);
+        assert!(options.trust_document);
+        assert_eq!(
+            options.inputs.get("name").map(String::as_str),
+            Some("World")
+        );
+        assert!(options.config_runtime.is_some());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_options_tolerates_a_missing_config_file() {
+        let options = check_options(
+            Path::new("/does/not/exist/config.json"),
+            &indexmap::IndexMap::new(),
+        );
+        assert_eq!(options.config_runtime, None);
     }
 
     #[test]

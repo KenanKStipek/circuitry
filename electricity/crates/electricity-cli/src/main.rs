@@ -169,10 +169,10 @@ fn main() -> ExitCode {
         Action::Run(config_path, orchestration_path, raw_inputs) => {
             // `electricity::parse_inputs`'s own malformed-`-e` text,
             // Circuitry's own `BadParameter` message word for word
-            // (issue #429) -- not reached today, since `e_entries`
-            // (every entry already has a value) says nothing about
-            // whether that value itself contains `=`; this is the
-            // `cli/app.py::_parse_env_vars` check proper.
+            // (issue #429): `e_entries` only checks that `-e` has *some*
+            // value, saying nothing about whether that value itself
+            // contains `=` -- a value with no `=` (`-e badtext`) reaches
+            // this, `cli/app.py::_parse_env_vars`'s own check proper.
             let inputs = match electricity::parse_inputs(&raw_inputs) {
                 Ok(inputs) => inputs,
                 Err(message) => {
