@@ -185,6 +185,21 @@ pub fn exit_code(status: ExitStatus) -> i32 {
     1
 }
 
+/// The same `128 + signum` mapping as [`exit_code`], from a `--events`
+/// `run_end` line's own `signal` field (DESIGN.md §3's format table)
+/// instead of a real `ExitStatus` — `osp watch` has no child process
+/// of its own to read a status from, so this is the only way it can
+/// report the same exit code `cof` itself used (P2-7) rather than just
+/// ok-vs-failed.
+pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
+    match signal {
+        "SIGHUP" => Some(129),
+        "SIGINT" => Some(130),
+        "SIGTERM" => Some(143),
+        _ => None,
+    }
+}
+
 /// Whether a process with this pid still exists, probed the
 /// conventional way (`kill(pid, 0)`, which sends no signal and only
 /// checks for `ESRCH`). Used by `osp watch` (F4), which has no `Child`

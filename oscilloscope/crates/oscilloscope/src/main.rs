@@ -29,7 +29,9 @@ use oscilloscope_core::observe::{
     EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, parse_event,
 };
 use oscilloscope_core::plan::PlanTree;
-use oscilloscope_core::supervise::{SignalWatcher, SupervisedChild, exit_code};
+use oscilloscope_core::supervise::{
+    ForwardSignal, SignalWatcher, SupervisedChild, exit_code, exit_code_for_signal_name,
+};
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (preview)");
 
@@ -587,10 +589,16 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // once, what watch is relying on instead: Ctrl-C.
     let mut warned_no_events = false;
     let events_path = run_dir.join("events.jsonl");
+    // P2-7: a local Ctrl-C is recorded rather than returned on the
+    // spot, so watch still reaches the same ending every other stop
+    // condition does — draining whatever's left, then the same
+    // summary and `exit` lines `osp`'s own run prints.
+    let mut local_signal: Option<ForwardSignal> = None;
     loop {
         if let Some(watcher) = signals.as_mut() {
-            if !watcher.pending().is_empty() {
-                return ExitCode::from(130);
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                local_signal = Some(sig);
+                break;
             }
         }
         if let Some(state) = drain_observations(
@@ -649,22 +657,68 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         std::thread::sleep(POLL_INTERVAL);
     }
 
-    match last_state {
-        Some(state) if oscilloscope_core::model::run_ended(&state) => {
-            if oscilloscope_core::model::run_ok(&state) {
-                ExitCode::from(0)
-            } else {
-                ExitCode::from(1)
+    // P2-7: one more drain, whatever the loop broke out on, catches any
+    // event or state write that landed between the loop's last check
+    // and now — the same reasoning `do_run` already applies after its
+    // own child exits.
+    if let Some(state) = drain_observations(
+        &mut out,
+        &mut clock,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+    ) {
+        last_state = Some(state);
+    }
+
+    // Parity with `do_run`'s own ending (P2-7): a summary line even
+    // when neither source ever produced one, and the engine's own
+    // exit code when it's knowable — from a signal `run_end` named, or
+    // from this watch's own local Ctrl-C — rather than only ok-vs-
+    // failed.
+    if !differ.run_line_emitted() {
+        if let Ok(bytes) = std::fs::read(run_dir.join("state.json")) {
+            if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                for line in differ.diff(&state, &plan) {
+                    print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+                }
+                last_state = Some(state);
             }
         }
-        _ if model.run_end_ok() == Some(true) => ExitCode::from(0),
-        _ => {
-            // Stopped on a dead pid (or a `run_end` whose promised final
-            // write never actually showed up), with nothing that counts
-            // as a clean completion: an abort (F4).
-            ExitCode::from(1)
-        }
     }
+    if !differ.run_line_emitted() {
+        print_line(&mut out, &mut clock, None, "■ run aborted (no final state)");
+    }
+
+    let code = if let Some(sig) = local_signal {
+        match sig {
+            ForwardSignal::Int => 130,
+            ForwardSignal::Term => 143,
+            ForwardSignal::Hup => 129,
+        }
+    } else if let Some(signal) = model.run_end_signal() {
+        exit_code_for_signal_name(signal).unwrap_or(1)
+    } else {
+        match &last_state {
+            Some(state) if oscilloscope_core::model::run_ended(state) => {
+                if oscilloscope_core::model::run_ok(state) {
+                    0
+                } else {
+                    1
+                }
+            }
+            _ if model.run_end_ok() == Some(true) => 0,
+            _ => {
+                // Stopped on a dead pid, with nothing that counts as a
+                // clean completion: an abort (F4).
+                1
+            }
+        }
+    };
+    let _ = writeln!(out, "exit {code}");
+    ExitCode::from(code as u8)
 }
 
 /// Prints a clap parse error to the right stream and returns its exit
@@ -836,6 +890,27 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(handle.join().unwrap(), ExitCode::from(1));
+    }
+
+    #[test]
+    fn watch_reports_the_signal_run_end_named_not_just_ok_vs_failed() {
+        // P2-7: a run_end event names the real signal that ended the
+        // run (DESIGN.md §3's format table); osp watch should report
+        // that same exit code (130 for SIGINT), not just 1.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            r#"{"runtime":{"last_run":{"completed_at":null}},"prime":{"value":null,"meta":{"completed_at":null}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_end\",\"ok\":false,\"error\":\"Interrupted (Ctrl-C/SIGINT)\",\"signal\":\"SIGINT\"}\n",
+        )
+        .unwrap();
+
+        let code = run(args(&["watch", dir.path().to_str().unwrap()]));
+        assert_eq!(code, ExitCode::from(130));
     }
 
     #[test]

@@ -272,7 +272,7 @@ pub struct RunModel {
     ended: BTreeMap<String, EventEnd>,
     cancelled_by_run_end: BTreeSet<String>,
     run_start: Option<(String, Option<i32>)>,
-    run_end: Option<(bool, Option<String>)>,
+    run_end: Option<(bool, Option<String>, Option<String>)>,
 }
 
 impl RunModel {
@@ -352,8 +352,10 @@ impl RunModel {
                     },
                 );
             }
-            Event::RunEnd { ok, error, .. } => {
-                self.run_end = Some((*ok, error.clone()));
+            Event::RunEnd {
+                ok, error, signal, ..
+            } => {
+                self.run_end = Some((*ok, error.clone(), signal.clone()));
                 let interrupted = error
                     .as_deref()
                     .is_some_and(|e| e.starts_with("Interrupted"));
@@ -384,7 +386,18 @@ impl RunModel {
     /// a completed run's exit status from the event itself rather than
     /// re-deriving it from state (F4).
     pub fn run_end_ok(&self) -> Option<bool> {
-        self.run_end.as_ref().map(|(ok, _)| *ok)
+        self.run_end.as_ref().map(|(ok, _, _)| *ok)
+    }
+
+    /// `run_end`'s own `signal` field (DESIGN.md §3's format table),
+    /// when one has arrived and the run ended by a forwarded signal
+    /// rather than cleanly — lets `osp watch` report the same exit
+    /// code `cof` itself used (130/143/129), not just ok-vs-failed
+    /// (P2-7).
+    pub fn run_end_signal(&self) -> Option<&str> {
+        self.run_end
+            .as_ref()
+            .and_then(|(_, _, signal)| signal.as_deref())
     }
 
     /// The engine's own pid, from `run_start` (DESIGN.md §3's format
