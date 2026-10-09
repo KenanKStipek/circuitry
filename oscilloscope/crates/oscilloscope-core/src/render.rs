@@ -203,7 +203,15 @@ pub fn build(
     let statuses = model.observe(state_ref, plan, process);
 
     let header = build_header(
-        document, engine, state, process, elapsed_s, plan, &flat, &statuses,
+        document,
+        engine,
+        model.run_start_id(),
+        state,
+        process,
+        elapsed_s,
+        plan,
+        &flat,
+        &statuses,
     );
     let rows = build_rows(plan, &flat, &statuses);
 
@@ -314,6 +322,7 @@ fn display_value(v: &Value) -> String {
 fn build_header(
     document: &str,
     engine: &str,
+    run_id: Option<&str>,
     state: Option<&Value>,
     process: ProcessState,
     elapsed_s: f64,
@@ -397,7 +406,7 @@ fn build_header(
     Header {
         document: document.to_string(),
         engine: engine.to_string(),
-        run_id: None,
+        run_id: run_id.map(str::to_string),
         status,
         elapsed_s,
         effects_done,

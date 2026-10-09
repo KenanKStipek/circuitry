@@ -440,28 +440,72 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 00:05.7 ■ run ok  5.7s · 12 effects · ↑3 ↓1
 ```
 
-### 6.3 TUI
+### 6.3 TUI (shipped, issue #434)
 
-- **Header:** document, engine, run ID, state (running / ok / failed / cancelled / aborted), elapsed time, effects done out of planned, tokens ↑↓, and the ETA of the innermost running loop. There is no run-level ETA: plans have data-dependent loops.
+`ratatui` (`=0.30.0`, default features off, `crossterm` + `underline-color`
+only) and `crossterm` `0.29` (the version ratatui's own crossterm backend
+uses), both building on the workspace MSRV (1.86). `--log`, or any non-TTY
+stdout (a pipe, a file, `CI` set), keeps §6.2's plain stream unchanged; a
+TTY gets this instead, for both `osp <doc>` and `osp watch`.
+
+The render model is `oscilloscope-core`'s own (`render.rs`): a `Header`, the
+plan tree flattened to depth-first `Row`s, and a selected row's `Details` —
+no terminal code, so a GUI front end could lay the same `RenderState` out
+its own way. Only `oscilloscope`'s `tui.rs` imports `ratatui` widgets.
+
+- **Header:** document, engine, run state (running / ok / failed /
+  cancelled / aborted), elapsed time, effects done out of planned, tokens
+  ↑↓, and the ETA of the innermost running loop. There is no run-level
+  ETA: plans have data-dependent loops. The run ID shows once `--events`
+  has carried a `run_start`; state alone never has one.
 - **Left: the plan tree.** Each row shows:
-  - a status glyph: `·` pending, `◐` running, `◌` running/queued, `✓`, `✗`, `!` failed-handled, `↷` skipped, `⊘` cancelled;
-  - the duration, `n/total` for loops, and the provider or model in a dim colour.
-- **Right: details for the selected row.** Type, path, plan summary, meta summary (command and args, exit code, stderr tail, model, tokens, `waiting_for`), and the error. `prompt_sent` and the value are shown truncated, with `v` to expand.
-- **Bottom: the log pane** (§2.4 lines plus engine stderr).
+  - a status glyph: `·` pending, `◐` running (also shown for a "likely
+    running" guess), `◌` running/queued, `✓`, `✗`, `!` failed-handled,
+    `↷` skipped, `⊘` cancelled, `?` aborted (no glyph of its own in the
+    original table; `?` is the one status left with no better fit);
+  - the duration, `n/total` for a loop's own progress, and the provider
+    or model in a dim colour.
+- **Right: details for the selected row.** Type, path, plan summary, a
+  meta summary (provider/model, exit code, command, `waiting_for`,
+  tokens, retries, a stderr tail), and the error. `prompt_sent` and the
+  value are shown truncated (200 characters), with `v` showing either in
+  full in an overlay.
+- **Bottom: the log pane** — the same lines `--log` prints (§2.4), plus
+  the engine's own stderr, as a scrolling tail (no scrollback in this
+  milestone: always the most recent lines that fit).
 - **Keys:**
 
 | Key | Action |
 |---|---|
 | `↑↓`/`jk` | move |
 | `←→` | collapse / expand |
-| `f` | follow running |
-| `e` | errors only |
-| `/` | filter |
+| `f` | follow the running row |
+| `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
+| `/` | filter (substring, on path or label; same ancestor-keeping rule) |
 | `tab` | switch pane |
-| `v` | full value |
-| `c` | cancel, with confirm (= Ctrl-C) |
-| `q` | quit; asks if a run is going |
+| `v` | full value, in an overlay; any key closes it |
+| `c` | cancel, with a confirm — the same as Ctrl-C (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
+| `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`); in `osp watch`, always just detaches, with no confirm — watch owns no engine to cancel |
 | `?` | help |
+
+**Terminal safety.** A `TerminalGuard` enters raw mode and the alternate
+screen once; `Drop` restores both on every normal return from the TUI
+loop (osp's own error, the engine exiting, a confirmed quit), and a panic
+hook installed alongside it restores the terminal before the default
+panic handler's own message would otherwise print into it. A forwarded
+SIGINT/SIGTERM/SIGHUP never leaves the TUI loop early on its own — it's
+forwarded to the engine exactly like `do_run`'s plain loop already does,
+and the loop keeps rendering until the engine actually exits, so `Drop`
+still runs on the normal path out. `osp` itself being `SIGKILL`ed is the
+one exception (§4.1): nothing can run cleanup code after that at all.
+Redraws are capped at 10/s and skipped unless something changed.
+
+**Simplification from the original design:** the TUI does not keep a
+separate "finished" screen open after the engine exits for the user to
+review before quitting — it ends at the same point the plain loop does,
+and `finish_run`/`finish_watch` print the usual plain summary once the
+terminal session is already torn down. A later milestone could add a
+review screen if that turns out to matter in practice.
 
 ### 6.4 Tests
 
@@ -470,13 +514,16 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests.** `ratatui::backend::TestBackend` buffers for a few model states.
-- **End-to-end with `cof`** (feature `e2e-cof`, run in CI on the electricity-generated Python 3.11 job):
+- **TUI render tests (shipped, issue #434).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, failed, failed and handled, cancelled, aborted (no final state) and `osp watch`.
+- **Key handling (shipped, issue #434).** Unit tests in `oscilloscope/src/keys.rs`: navigation, collapse/expand, follow, errors-only, filter, and both confirm dialogs (`c`, and `q` while a run is going) — pure, with no real terminal.
+- **Terminal restore (shipped, issue #434).** A unit test in `oscilloscope/src/terminal.rs` proves `TerminalGuard`'s own entered/restored bookkeeping; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
+- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
   - a temporary `HOME`;
   - credential variables removed (the four named in this repository's CLAUDE.md);
   - a hard timeout per test;
-  - one test per probe shape, plus SIGINT once, SIGINT twice and SIGTERM, asserting exit codes and final statuses.
+  - one test per probe shape, plus SIGINT once, SIGINT twice and SIGTERM, asserting exit codes and final statuses;
+  - the pty tests additionally assert the alternate-screen entry/exit escape sequences, and that nothing osp or cof started survives, with no `osp-*` directory left in the real system temp directory (every pty test uses its own `--out-dir`).
 
   Live tests are never run.
 - **End-to-end with electricity:** same tests, enabled once M0-H runs documents.

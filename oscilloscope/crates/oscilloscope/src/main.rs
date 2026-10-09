@@ -98,10 +98,8 @@ enum EngineChoice {
 }
 
 /// `--log` is chosen automatically when stdout is not a TTY or `CI` is
-/// set (DESIGN.md §6.2). O-1 has no TUI yet (O-2's job), so this value
-/// isn't load-bearing for *how* osp prints today — every run uses the
-/// plain-text stream either way. It's still computed (and tested) so
-/// O-2 only has to branch on it, not reimplement the detection.
+/// set (DESIGN.md §6.2). `true` keeps the plain-text stream; `false`
+/// means `do_run`/`do_watch` hand off to the TUI instead (§6.3).
 fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
 }
