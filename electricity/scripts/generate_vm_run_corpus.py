@@ -117,6 +117,7 @@ def build_case(
     orchestration: str,
     home_root: Path,
     inputs: dict[str, str] | None = None,
+    branch_order: dict[str, list[str]] | None = None,
 ) -> dict:
     case_dir = home_root / name
     case_dir.mkdir(parents=True)
@@ -129,8 +130,10 @@ def build_case(
     # two runs of the same document (real thread scheduling) -- without
     # this, `tree_dynamic`'s own golden would be nondeterministic from
     # one generator run to the next (`canonical_event_order`'s own doc
-    # comment has the full rationale).
-    result["events"] = canonical_event_order(result["events"])
+    # comment has the full rationale). A no-op for every other case
+    # (*branch_order* `None`, and none of them dispatch a `dynamic` tree
+    # at all).
+    result["events"] = canonical_event_order(result["events"], branch_order)
     normalized = normalize_result(result, str(case_dir.resolve()))
     return {"name": name, "inputs": inputs or {}, "result": normalized}
 
@@ -153,7 +156,15 @@ def main() -> int:
                 inputs={"n": "5"},
             ),
             build_case(
-                name="tree_dynamic", orchestration=TREE_DYNAMIC_DOC, home_root=root
+                name="tree_dynamic",
+                orchestration=TREE_DYNAMIC_DOC,
+                home_root=root,
+                # `TREE_DYNAMIC_DOC`'s own two children are named, not
+                # iterated -- their declared order (`left` before
+                # `right`) is this generator's own, not anything
+                # recoverable from the events alone
+                # (`_branch_sort_key`'s own doc comment).
+                branch_order={"prime.fan_out": ["left", "right"]},
             ),
             build_case(
                 name="json_parse_failure", orchestration=FAILURE_DOC, home_root=root

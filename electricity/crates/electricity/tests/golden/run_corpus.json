@@ -164,7 +164,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
-          "engine": "cof 0.1.0",
+          "engine": "<ENGINE>",
           "pid": "<PID>"
         },
         {
@@ -179,41 +179,13 @@
           "v": 1,
           "seq": 2,
           "ts": "<TS>",
-          "ev": "end",
-          "id": 0,
-          "path": "prime",
-          "ok": true,
-          "ms": "<MS>"
-        },
-        {
-          "v": 1,
-          "seq": 3,
-          "ts": "<TS>",
-          "ev": "start",
-          "id": 2,
-          "path": "prime.decode"
-        },
-        {
-          "v": 1,
-          "seq": 4,
-          "ts": "<TS>",
-          "ev": "end",
-          "id": 2,
-          "path": "prime.decode",
-          "ok": true,
-          "ms": "<MS>"
-        },
-        {
-          "v": 1,
-          "seq": 5,
-          "ts": "<TS>",
           "ev": "start",
           "id": 1,
           "path": "prime.encode"
         },
         {
           "v": 1,
-          "seq": 6,
+          "seq": 3,
           "ts": "<TS>",
           "ev": "end",
           "id": 1,
@@ -223,7 +195,25 @@
         },
         {
           "v": 1,
-          "seq": 7,
+          "seq": 4,
+          "ts": "<TS>",
+          "ev": "start",
+          "id": 2,
+          "path": "prime.decode"
+        },
+        {
+          "v": 1,
+          "seq": 5,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 2,
+          "path": "prime.decode",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 6,
           "ts": "<TS>",
           "ev": "start",
           "id": 3,
@@ -231,11 +221,21 @@
         },
         {
           "v": 1,
-          "seq": 8,
+          "seq": 7,
           "ts": "<TS>",
           "ev": "end",
           "id": 3,
           "path": "prime.extract",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 8,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
           "ok": true,
           "ms": "<MS>"
         },
@@ -548,7 +548,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
-          "engine": "cof 0.1.0",
+          "engine": "<ENGINE>",
           "pid": "<PID>"
         },
         {
@@ -563,23 +563,31 @@
           "v": 1,
           "seq": 2,
           "ts": "<TS>",
-          "ev": "end",
-          "id": 0,
-          "path": "prime",
-          "ok": true,
-          "ms": "<MS>"
-        },
-        {
-          "v": 1,
-          "seq": 3,
-          "ts": "<TS>",
           "ev": "start",
           "id": 1,
           "path": "prime.gate"
         },
         {
           "v": 1,
+          "seq": 3,
+          "ts": "<TS>",
+          "ev": "start",
+          "id": 2,
+          "path": "prime.gate.yes_branch"
+        },
+        {
+          "v": 1,
           "seq": 4,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 2,
+          "path": "prime.gate.yes_branch",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 5,
           "ts": "<TS>",
           "ev": "end",
           "id": 1,
@@ -589,19 +597,11 @@
         },
         {
           "v": 1,
-          "seq": 5,
-          "ts": "<TS>",
-          "ev": "start",
-          "id": 2,
-          "path": "prime.gate.yes_branch"
-        },
-        {
-          "v": 1,
           "seq": 6,
           "ts": "<TS>",
           "ev": "end",
-          "id": 2,
-          "path": "prime.gate.yes_branch",
+          "id": 0,
+          "path": "prime",
           "ok": true,
           "ms": "<MS>"
         },
@@ -906,7 +906,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
-          "engine": "cof 0.1.0",
+          "engine": "<ENGINE>",
           "pid": "<PID>"
         },
         {
@@ -921,23 +921,13 @@
           "v": 1,
           "seq": 2,
           "ts": "<TS>",
-          "ev": "end",
-          "id": 0,
-          "path": "prime",
-          "ok": true,
-          "ms": "<MS>"
-        },
-        {
-          "v": 1,
-          "seq": 3,
-          "ts": "<TS>",
           "ev": "start",
           "id": 1,
           "path": "prime.fan_out"
         },
         {
           "v": 1,
-          "seq": 4,
+          "seq": 3,
           "ts": "<TS>",
           "ev": "dispatch",
           "path": "prime.fan_out",
@@ -946,17 +936,7 @@
         },
         {
           "v": 1,
-          "seq": 5,
-          "ts": "<TS>",
-          "ev": "end",
-          "id": 1,
-          "path": "prime.fan_out",
-          "ok": true,
-          "ms": "<MS>"
-        },
-        {
-          "v": 1,
-          "seq": 6,
+          "seq": 4,
           "ts": "<TS>",
           "ev": "start",
           "id": 2,
@@ -964,7 +944,7 @@
         },
         {
           "v": 1,
-          "seq": 7,
+          "seq": 5,
           "ts": "<TS>",
           "ev": "end",
           "id": 2,
@@ -974,7 +954,7 @@
         },
         {
           "v": 1,
-          "seq": 8,
+          "seq": 6,
           "ts": "<TS>",
           "ev": "start",
           "id": 3,
@@ -982,11 +962,31 @@
         },
         {
           "v": 1,
-          "seq": 9,
+          "seq": 7,
           "ts": "<TS>",
           "ev": "end",
           "id": 3,
           "path": "prime.fan_out.right",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 8,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 1,
+          "path": "prime.fan_out",
+          "ok": true,
+          "ms": "<MS>"
+        },
+        {
+          "v": 1,
+          "seq": 9,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
           "ok": true,
           "ms": "<MS>"
         },
@@ -1261,7 +1261,7 @@
           "ev": "run_start",
           "run_id": "<RUN_ID>",
           "orchestration": "orchestration.yml",
-          "engine": "cof 0.1.0",
+          "engine": "<ENGINE>",
           "pid": "<PID>"
         },
         {
@@ -1276,24 +1276,13 @@
           "v": 1,
           "seq": 2,
           "ts": "<TS>",
-          "ev": "end",
-          "id": 0,
-          "path": "prime",
-          "ok": false,
-          "ms": "<MS>",
-          "error": "prime.broken: JsonPlugin: parse mode requires params['input'] as a string."
-        },
-        {
-          "v": 1,
-          "seq": 3,
-          "ts": "<TS>",
           "ev": "start",
           "id": 1,
           "path": "prime.broken"
         },
         {
           "v": 1,
-          "seq": 4,
+          "seq": 3,
           "ts": "<TS>",
           "ev": "end",
           "id": 1,
@@ -1301,6 +1290,17 @@
           "ok": false,
           "ms": "<MS>",
           "error": "JsonPlugin: parse mode requires params['input'] as a string."
+        },
+        {
+          "v": 1,
+          "seq": 4,
+          "ts": "<TS>",
+          "ev": "end",
+          "id": 0,
+          "path": "prime",
+          "ok": false,
+          "ms": "<MS>",
+          "error": "prime.broken: JsonPlugin: parse mode requires params['input'] as a string."
         },
         {
           "v": 1,

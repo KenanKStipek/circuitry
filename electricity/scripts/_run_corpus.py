@@ -173,6 +173,17 @@ _NORMALIZED_KEYS: dict[str, str] = {
     "wall_time_s": "<DURATION>",
 }
 
+#: Key name -> placeholder, replaced unconditionally (never gated on
+#: [`_looks_environment_dependent`], unlike [`_NORMALIZED_KEYS`]) --
+#: `run_start`'s own `engine` field (`cli/events.py::_engine_label`) is
+#: always the installed `cof <version>` text, which doesn't match any of
+#: [`_looks_environment_dependent`]'s own shapes but would otherwise go
+#: stale on *any* `pyproject.toml` version bump, failing `--check` for a
+#: change this corpus has nothing to do with.
+_UNCONDITIONALLY_NORMALIZED_KEYS: dict[str, str] = {
+    "engine": "<ENGINE>",
+}
+
 
 def _looks_environment_dependent(value: Any) -> bool:
     if isinstance(value, bool):
@@ -189,6 +200,8 @@ def _looks_environment_dependent(value: Any) -> bool:
 
 
 def _normalize(key: str | None, value: Any, root: str) -> Any:
+    if key is not None and key in _UNCONDITIONALLY_NORMALIZED_KEYS:
+        return _UNCONDITIONALLY_NORMALIZED_KEYS[key]
     if isinstance(value, str):
         value = value.replace(root, "<root>")
         placeholder = _NORMALIZED_KEYS.get(key) if key is not None else None
@@ -205,41 +218,137 @@ def _normalize(key: str | None, value: Any, root: str) -> Any:
     return value
 
 
-#: `ev` -> a rank used only to make a tree case's own golden JSON
-#: reproducible: two tree branches that finish in a different order
-#: between two runs of the very same document emit their `start`/`end`
-#: pair in a different relative position in the raw `--events` stream
-#: (real `ThreadPoolExecutor` scheduling, confirmed directly: the same
-#: document's own generated golden was observed to differ run to run
-#: before this normalization existed). This is *not* the comparison rule
-#: a later lane's own conformance test should use for two *different*
-#: engines' `--events` output -- issue #431's own acceptance criteria
-#: already specifies that one: "compare the start-before-child /
-#: child-end-before-container partial order and the per-path multiset,
-#: not the interleaving". This is only what keeps *this* generator's own
-#: output stable from one invocation to the next so it can be committed
-#: and checked with `--check` at all.
-_EVENT_KIND_RANK = {"start": 0, "dispatch": 1, "end": 2}
-
-
-def canonical_event_order(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reorders *events* into a stable, path-then-kind order (`run_start`
-    first, `run_end` last, everything else sorted by its own `path` then
-    [`_EVENT_KIND_RANK`]), and renumbers `seq` to match that order --
-    see [`_EVENT_KIND_RANK`]'s own doc comment for why a tree case needs
-    this at all.
+def _branch_sort_key(
+    segment: str, declared: list[str], seen_order: list[str]
+) -> tuple[int, int]:
+    """Where *segment* (a tree branch's own immediate child-path segment,
+    right after its parent dispatch's own path) belongs in canonical
+    order: by *declared* position when the caller knows the document's
+    own declared branch order for this dispatch (every named-child tree
+    case -- `prime.fan_out.left`/`prime.fan_out.right`, no index of any
+    kind in the path at all, so nothing *in* the event stream can ever
+    recover this order generically); otherwise by `EffectPath`'s own
+    `iter_N` placeholder, resolved, which numbers an *iterated* branch's
+    own path directly (`prime.loop.0`, `prime.loop.1`, out of scope for
+    M0-H's own tree `dynamic` but handled here so a later lane's own
+    generator, iterating `each`-style branches, doesn't have to touch
+    this helper at all); last, a segment neither names -- not a gap this
+    generator's own corpus exercises today -- falls back to first-seen
+    order (a no-op, i.e. exactly [`_reorder_branches`]'s pre-ordering
+    behaviour for it, not a new source of nondeterminism beyond what
+    already existed before this function ran).
     """
-    run_start = [e for e in events if e.get("ev") == "run_start"]
-    run_end = [e for e in events if e.get("ev") == "run_end"]
-    middle = [e for e in events if e.get("ev") not in ("run_start", "run_end")]
-    middle.sort(
-        key=lambda e: (e.get("path", ""), _EVENT_KIND_RANK.get(e.get("ev"), 99))
-    )
-    ordered = run_start + middle + run_end
+    if segment in declared:
+        return (0, declared.index(segment))
+    try:
+        return (1, int(segment))
+    except ValueError:
+        return (2, seen_order.index(segment))
+
+
+def _reorder_branches(
+    events: list[dict[str, Any]],
+    branch_order: dict[str, list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Moves each `dispatch` event's own branch region into canonical
+    branch order, recursively (a branch's own events can themselves
+    contain a nested dispatch) -- every event outside a dispatch's own
+    region (there is none at all in a document with no concurrent
+    `dynamic`) keeps its real relative position, so this is a no-op for
+    every sequential case ([`canonical_event_order`]'s own doc comment
+    has the full rationale for why only this, not a global sort, is
+    safe). *branch_order* maps a dispatch's own `path` to its own
+    branches' declared order (immediate child-path segments, e.g.
+    `{"prime.fan_out": ["left", "right"]}`) -- the generator's own case
+    passes this for a named-child tree, since nothing in the events
+    themselves names that order ([`_branch_sort_key`]'s own doc comment).
+    """
+    branch_order = branch_order or {}
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(events):
+        event = events[index]
+        if event.get("ev") != "dispatch":
+            result.append(event)
+            index += 1
+            continue
+        parent_path = event.get("path", "")
+        result.append(event)
+        index += 1
+        region: list[dict[str, Any]] = []
+        while index < len(events) and not (
+            events[index].get("path") == parent_path
+            and events[index].get("ev") == "end"
+        ):
+            region.append(events[index])
+            index += 1
+        declared = branch_order.get(parent_path, [])
+        prefix = f"{parent_path}."
+        branches: dict[str, list[dict[str, Any]]] = {}
+        seen_order: list[str] = []
+        for branch_event in region:
+            path = branch_event.get("path", "")
+            if not path.startswith(prefix):
+                result.append(branch_event)
+                continue
+            segment = path[len(prefix) :].split(".", 1)[0]
+            if segment not in branches:
+                branches[segment] = []
+                seen_order.append(segment)
+            branches[segment].append(branch_event)
+        for segment in sorted(
+            seen_order, key=lambda s: _branch_sort_key(s, declared, seen_order)
+        ):
+            result.extend(_reorder_branches(branches[segment], branch_order))
+        if index < len(events):
+            result.append(events[index])  # the dispatching container's own `end`
+            index += 1
+    return result
+
+
+def canonical_event_order(
+    events: list[dict[str, Any]],
+    branch_order: dict[str, list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Reorders *events* so a tree `dynamic`'s own branches always come
+    out in canonical order rather than real finish order
+    ([`_reorder_branches`]), then renumbers `seq` and each `start`/`end`
+    pair's own `id` to match -- two tree branches running on separate
+    threads can have their `start`/`end` writes (and the numeric `id`
+    `cli/events.py`'s own `_next_instance_id` hands each one, under one
+    process-wide lock, in whichever thread gets there first) land in
+    either relative order between two runs of the very same document
+    (confirmed directly: the same document's own generated golden was
+    observed to differ run to run before this normalization existed).
+    *branch_order* is [`_reorder_branches`]'s own, unchanged.
+
+    This reordering is deliberately narrow -- see [`_reorder_branches`]'s
+    own doc comment -- so a sequential case's events (and a tree case's
+    own events *outside* a branch region) keep their real emission
+    order exactly as `cof run --events` wrote it; renumbering `id`/`seq`
+    afterwards is then a no-op for every one of those, since canonical
+    order already equals real order there. This is *not* the comparison
+    rule a later lane's own conformance test should use for two
+    *different* engines' `--events` output -- issue #431's own
+    acceptance criteria already specifies that one: "compare the
+    start-before-child / child-end-before-container partial order and
+    the per-path multiset, not the interleaving". This is only what
+    keeps *this* generator's own output stable from one invocation to
+    the next so it can be committed and checked with `--check` at all.
+    """
+    ordered = _reorder_branches(events, branch_order)
+    id_map: dict[int, int] = {}
+    next_id = 0
     renumbered = []
-    for index, original in enumerate(ordered):
+    for position, original in enumerate(ordered):
         copy = dict(original)
-        copy["seq"] = index
+        copy["seq"] = position
+        old_id = copy.get("id")
+        if old_id is not None:
+            if copy.get("ev") == "start":
+                id_map[old_id] = next_id
+                next_id += 1
+            copy["id"] = id_map.get(old_id, old_id)
         renumbered.append(copy)
     return renumbered
 
