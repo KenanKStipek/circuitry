@@ -105,6 +105,11 @@ fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render
         RunStatus::Aborted => ("aborted", Color::Red),
     };
     let effects = match header.effects_planned {
+        // Finding 6: a `+` marks "planned" as a lower bound when some
+        // loop's own total pass count isn't known yet.
+        Some(planned) if header.effects_planned_is_lower_bound => {
+            format!("{}/{planned}+", header.effects_done)
+        }
         Some(planned) => format!("{}/{planned}", header.effects_done),
         None => header.effects_done.to_string(),
     };
@@ -533,6 +538,42 @@ mod golden_tests {
             "b": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
             "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 4, "elapsed_s": 1.0, "eta_s": 3.0}},
                 "iter_0": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+            }
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.fan",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Review finding 6: with two passes of a known four-pass loop
+    /// already done, "effects done out of planned" must multiply the
+    /// loop body's own single leaf template by the loop's `progress.
+    /// total` (6 planned: `a`, `b`, four `nap` passes) rather than
+    /// counting `nap`'s own template path once (3) — and `done` must
+    /// count each finished pass separately (4: `a`, `b`, `iter_0`,
+    /// `iter_1`), not just leaves-with-a-template (3).
+    #[test]
+    fn running_tree_loop_with_two_passes_done() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::Dispatch {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 4,
+            concurrency: Some(2),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "b": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 2, "total": 4, "elapsed_s": 2.0, "eta_s": 2.0}},
+                "iter_0": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+                "iter_1": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "error": null, "provider": "shell"}}
             }
         }});
         let text = snapshot(

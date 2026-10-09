@@ -140,6 +140,13 @@ pub struct Header {
     pub elapsed_s: f64,
     pub effects_done: u64,
     pub effects_planned: Option<u64>,
+    /// Set when a loop somewhere under an `effects_planned` leaf has
+    /// no known `progress.total` yet (review finding 6): `planned`
+    /// then only counts that leaf once rather than once per eventual
+    /// pass, so it's a lower bound, not the true total — a front end
+    /// shows it with a trailing `+` (`3/3+`) rather than as if it
+    /// were exact.
+    pub effects_planned_is_lower_bound: bool,
     pub tokens_sent: u64,
     pub tokens_received: u64,
     pub innermost_loop_eta_s: Option<f64>,
@@ -332,15 +339,21 @@ fn build_header(
 ) -> Header {
     let status = run_status(state, process);
 
-    let effects_planned = if plan.has_plan() {
-        Some(
-            plan.leaf_paths()
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len() as u64,
-        )
+    let (effects_planned, effects_planned_is_lower_bound) = if plan.has_plan() {
+        let mut total = 0u64;
+        let mut lower_bound = false;
+        for leaf in plan
+            .leaf_paths()
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let (passes, leaf_lower_bound) = leaf_pass_count(leaf, flat);
+            total = total.saturating_add(passes);
+            lower_bound |= leaf_lower_bound;
+        }
+        (Some(total), lower_bound)
     } else {
-        None
+        (None, false)
     };
     let effects_done = statuses
         .iter()
@@ -411,10 +424,45 @@ fn build_header(
         elapsed_s,
         effects_done,
         effects_planned,
+        effects_planned_is_lower_bound,
         tokens_sent,
         tokens_received,
         innermost_loop_eta_s,
     }
+}
+
+/// Review finding 6: a loop-body leaf's own display path (DESIGN.md
+/// §5's `iter_*` placeholder) counts as one pass in `plan.leaf_paths
+/// ()` no matter how many times the loop actually runs it — "planned"
+/// needs its own named loop's `meta.progress.total` instead, when
+/// it's known, multiplied across every `iter_*` segment the leaf's
+/// own path crosses (a loop nested inside another named loop). An
+/// unnamed loop writes its body straight into its own parent
+/// (DESIGN.md §1.3) with no `iter_*` segment of its own at all, so
+/// every `iter_*` in a display path names a *named* loop's own
+/// container — the path up to, not including, that segment — whose
+/// `progress.total` this can read directly from `flat`. Returns `(1,
+/// false)` for a leaf outside any loop. The second element is `true`
+/// when any crossed loop's own total isn't known yet, in which case
+/// the first is a lower bound (a single pass), not the true count.
+fn leaf_pass_count(leaf_path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, bool) {
+    let mut multiplier: u64 = 1;
+    let mut lower_bound = false;
+    let mut container = String::new();
+    for segment in leaf_path.split('.') {
+        if segment == "iter_*" {
+            match flat.get(container.as_str()).and_then(|n| n.progress_total) {
+                Some(total) if total > 0 => multiplier = multiplier.saturating_mul(total),
+                _ => lower_bound = true,
+            }
+            continue;
+        }
+        if !container.is_empty() {
+            container.push('.');
+        }
+        container.push_str(segment);
+    }
+    (multiplier, lower_bound)
 }
 
 fn row_kind_for(path: &str, plan: &PlanTree, node: Option<&NodeMeta>) -> RowKind {
@@ -750,6 +798,125 @@ mod tests {
             .map(|r| r.label.as_str())
             .collect();
         assert_eq!(order, vec!["iter_0", "iter_1"]);
+    }
+
+    fn named_loop_with_one_leaf_program() -> electricity_bytecode::Program {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
+            Program, Region, ToolOp,
+        };
+
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let body_path = pass_path.push_name("nap");
+        Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: loop_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![Op {
+                                    path: body_path,
+                                    name: Some("nap".to_string()),
+                                    kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                                        provider: "shell".to_string(),
+                                        params: ParamNode::Literal(electricity_value::Value::None),
+                                        params_json: None,
+                                        prompt: None,
+                                        model: None,
+                                        timeout_ms: None,
+                                        retries: Default::default(),
+                                        expect: None,
+                                        description: None,
+                                        group: None,
+                                    }))),
+                                    on_error: OnError::Fail,
+                                    labels: None,
+                                    enabled: true,
+                                }],
+                                overlay: true,
+                            }),
+                            flow: LoopFlow::Tree,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn effects_planned_multiplies_a_loop_bodys_leaf_by_its_known_total() {
+        // Review finding 6: `fan`'s own single leaf template
+        // (`fan.iter_*.nap`) must count as 4 once the loop's own
+        // `progress.total` says so, not once — two passes already
+        // done count as 2 of those 4, not as 1 of 1.
+        let plan = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 2, "total": 4}},
+                "iter_0": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}},
+                "iter_1": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}}
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            &[],
+        );
+        assert_eq!(rendered.header.effects_planned, Some(4));
+        assert!(!rendered.header.effects_planned_is_lower_bound);
+        assert_eq!(rendered.header.effects_done, 2);
+    }
+
+    #[test]
+    fn effects_planned_is_a_lower_bound_before_the_loops_own_total_is_known() {
+        let plan = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let mut model = RunModel::new();
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            &[],
+        );
+        assert_eq!(rendered.header.effects_planned, Some(1));
+        assert!(rendered.header.effects_planned_is_lower_bound);
     }
 
     #[test]
