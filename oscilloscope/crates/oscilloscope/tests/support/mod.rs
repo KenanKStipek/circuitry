@@ -32,12 +32,34 @@ pub fn e2e_enabled() -> bool {
     true
 }
 
+/// The same shape as [`e2e_enabled`], for issue #431's lane E2: these
+/// tests need an `electricity` built with `--features test-tools`
+/// (`cargo build -p electricity-cli --features test-tools` from
+/// `electricity/`) on `PATH`, since the `sleep`/`fail` providers below
+/// only exist in that build (never in a release one).
+pub fn e2e_electricity_enabled() -> bool {
+    if std::env::var_os("OSP_E2E_ELECTRICITY").is_none() {
+        return false;
+    }
+    if which("electricity").is_none() {
+        panic!("OSP_E2E_ELECTRICITY=1 but `electricity` is not on PATH");
+    }
+    true
+}
+
 /// `default_adapter`/`default_model` are Circuitry's own config keys
 /// (`cli/config.py`); a bare `"adapter": "scripted"` is an unknown key
 /// the config loader silently ignores, so every one of these runs
 /// used to fall back to the built-in `ollama` default instead (K1).
 pub const SCRIPTED_CONFIG: &str =
     r#"{"default_adapter":"scripted","default_model":"scripted-model"}"#;
+
+/// electricity's M0-H VM never dispatches a prompt effect (the
+/// `_noop` adapter, issue #431's run wiring), so none of its own e2e
+/// tests need `default_adapter`/`default_model` at all -- an empty
+/// config is exactly what `electricity/crates/electricity/tests/
+/// run_wiring.rs`'s own tests already use.
+pub const ELECTRICITY_CONFIG: &str = "{}";
 
 /// How long every signal test waits before sending its first signal
 /// (a cold process start can legitimately take longer than this on a
@@ -83,6 +105,16 @@ pub fn osp_command(home: &TestHome) -> Command {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd
+}
+
+/// [`osp_command`], with `--engine electricity` already appended
+/// (issue #431's lane E2) -- every one of this crate's electricity
+/// e2e tests opts into it the same way, so each one doesn't repeat
+/// the same two-argument tail.
+pub fn osp_electricity_command(home: &TestHome) -> Command {
+    let mut cmd = osp_command(home);
+    cmd.arg("--engine").arg("electricity");
     cmd
 }
 

@@ -109,6 +109,43 @@ jobs:
           CARGO_BUILD_JOBS: "4"
         run: cargo test --workspace
 
+  e2e-electricity:
+    name: end-to-end with electricity (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    # Issue #431's lane E2: same hard ceiling as e2e-cof, for the
+    # same reason -- a hang in the build or in electricity itself
+    # still gets killed rather than running to the workflow default.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            oscilloscope
+            electricity
+
+      - name: build electricity (test-tools) and put it on PATH
+        working-directory: electricity
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          cargo build -p electricity-cli --features test-tools
+          echo "$PWD/target/debug" >> "$GITHUB_PATH"
+
+      - name: cargo test (OSP_E2E_ELECTRICITY=1)
+        working-directory: oscilloscope
+        env:
+          OSP_E2E_ELECTRICITY: "1"
+          CARGO_BUILD_JOBS: "4"
+        run: cargo test --workspace
+
   build:
     name: release build (no publish)
     uses: ./.github/workflows/rust-release-build.yml
