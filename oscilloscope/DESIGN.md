@@ -348,15 +348,19 @@ osp behaviour:
 
 ### 4.2 electricity
 
-**M0-H (issue #431) landed this.** electricity is still a preview: it
-runs `tool`/`dynamic`/a CEL `if`/`finally:` documents only, with `json`
-as its one tool provider, and refuses everything else
+**M0-H's run wiring (issue #441) landed electricity's own side of
+this; issue #431's lane E2 wires osp to it.** electricity is still a
+preview: it runs `tool`/`dynamic`/a CEL `if`/`finally:` documents only,
+with `json` as its one tool provider, and refuses everything else
 (`prompt`/`loop`/`use`/`reflector`/`yield`, a model-mode `if`,
 persistence/runtime plugins, `--profile`) up front, before any state is
 written, with a message naming the preview marker
 (`is a preview and cannot run orchestrations yet`). osp shows that
 refusal the same way it shows an invalid document: a pre-execution
-failure, `■ run failed: ...`, exit 1, nothing under the run directory.
+failure, `■ run failed: ...`, exit 1 -- though only the refusal writes
+nothing at all under the run directory; an invalid document still gets
+its own `--out` (electricity's `fail!` macro saves state before
+returning the error).
 
 - `electricity <config.json> <orchestration.yml> -e k=v... --out
   <dir>/state.json [--events <dir>/events.jsonl] [--live-state
@@ -372,13 +376,17 @@ failure, `■ run failed: ...`, exit 1, nothing under the run directory.
   state only"), worded for whichever engine is actually missing it.
 - Exit codes are exactly `cof`'s own: 0, 1, 2, 130 (SIGINT), 143
   (SIGTERM), 129 (SIGHUP). A config error has nothing on stdout and
-  `Error: <text>` on stderr; every other pre-execution failure (an
-  invalid document, a refusal) prints `cof`'s own `{"ok":false,
-  "error":...,"warnings":[...],"state_out":...}` shape on stdout
-  instead, which osp's existing `read_stdout_json_error`/
-  `failure_reason_fallback`/`run_status` (DESIGN.md §2.1 rule 7)
-  already read engine-agnostically -- nothing engine-specific was
-  needed there.
+  `Error: <text>` on stderr; an invalid document or a refusal prints
+  `cof`'s own `{"ok":false, "error":...,"warnings":[...],
+  "state_out":...}` shape on stdout instead, which osp's existing
+  `read_stdout_json_error`/`failure_reason_fallback`/`run_status`
+  (DESIGN.md §2.1 rule 7) already read engine-agnostically -- nothing
+  engine-specific was needed there. (A missing orchestration file is
+  the one exception, on both engines: a plain `Error: Orchestration
+  not found: ...` on stdout, not the JSON shape -- `read_stdout_json_
+  error` doesn't parse that line either, so the summary falls back to
+  "aborted (no final state)" there, same as `cof`; this predates this
+  PR.)
 - `--events`/`--live-state` are electricity's own, in `cof`'s exact
   format (events format v1, a final live-state write equal to
   `--out`), so osp's plan join, status inference and `--log` output
