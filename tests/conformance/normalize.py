@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -400,30 +399,68 @@ def _split_and_check_order(
     return events[0], events[1:-1], events[-1]
 
 
-def _group_events_by_path(events: list[dict[str, Any]]) -> dict[str, list[tuple[Any, ...]]]:
-    groups: dict[str, list[tuple[Any, ...]]] = {}
+def _group_events_by_path(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Every event that carries a `path`, in stream order, grouped by that
+    path. A path's own events have a fixed internal order in M0-H --
+    `start`, then (a tree container only) `dispatch`, then `end` -- so
+    comparing each path's own list *as a list*, not a multiset, catches an
+    end-before-start or a dispatch-after-end on the same path, which a
+    `collections.Counter` comparison cannot: distinct `ev` values compare
+    equal as a set regardless of which order they came in."""
+    groups: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         path = event.get("path")
         if path is None:
             continue
-        comparable = _comparable_event(event)
-        groups.setdefault(path, []).append(tuple(sorted(comparable.items())))
+        groups.setdefault(path, []).append(_comparable_event(event))
     return groups
+
+
+def _chain_sibling_order(events: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """For every container path whose own stream carries no `dispatch`
+    event (a chain, never a tree -- `fire_concurrent_dispatch` only ever
+    fires for a tree-flow dynamic), the order its own *direct* children's
+    `start` events occurred in, keyed by the container's path. A chain's
+    children run strictly one after another, in document order, on both
+    engines -- unlike a tree dynamic's branches, which are free to
+    interleave with each other on either engine (cof's real OS threads vs.
+    electricity's single-threaded cooperative scheduler) and are
+    deliberately excluded here by the `dispatch`-event check."""
+    dispatch_paths = {
+        event["path"]
+        for event in events
+        if event.get("ev") == "dispatch" and event.get("path") is not None
+    }
+    order: dict[str, list[str]] = {}
+    for event in events:
+        if event.get("ev") != "start":
+            continue
+        path = event.get("path")
+        if path is None or "." not in path:
+            continue
+        parent = path.rsplit(".", 1)[0]
+        if parent in dispatch_paths:
+            continue
+        order.setdefault(parent, []).append(path)
+    return order
 
 
 def assert_events_equal(actual_text: str, expected_text: str) -> None:
     """Compare two `--events` JSONL streams (runtime-semantics §8.7,
     issue #431's events-conformance acceptance criterion): `run_start`
-    and `run_end` are compared directly after normalization; every other
-    event is grouped by its own `path` and compared as a
-    `collections.Counter` multiset, after checking both streams
-    independently satisfy the start-before-child / child-end-before-
-    container ordering rule (`_split_and_check_order`). Chains have only
-    one valid order to begin with, so this reduces to a plain sequence
-    comparison for them; a tree dynamic's siblings may interleave freely
-    with each other on either engine, so their *relative* interleaving is
-    deliberately never compared, only each path's own event bag and the
-    nesting order between a container and its children."""
+    and `run_end` are compared directly after normalization; both streams
+    are independently checked against the start-before-child / child-end-
+    before-container ordering rule (`_split_and_check_order`); every other
+    event is grouped by its own `path` and compared *as an ordered list*
+    (`_group_events_by_path`) -- a path's own events have exactly one
+    valid order (`start`, optionally `dispatch`, then `end`), so this
+    catches a same-path reordering a multiset comparison would miss; and a
+    chain container's own direct children are compared for the order their
+    `start` events occurred in (`_chain_sibling_order`) -- a tree
+    dynamic's branches are excluded from that check and may interleave
+    freely with each other on either engine, since only the nesting order
+    between a container and its descendants (not sibling interleaving) is
+    asserted for one of those."""
     actual = parse_event_lines(actual_text)
     expected = parse_event_lines(expected_text)
     actual_start, actual_middle, actual_end = _split_and_check_order(actual, label="actual")
@@ -453,10 +490,16 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
             f"  expected: {sorted(expected_groups)}"
         )
     for path in actual_groups:
-        actual_counter = Counter(actual_groups[path])
-        expected_counter = Counter(expected_groups[path])
-        if actual_counter != expected_counter:
+        if actual_groups[path] != expected_groups[path]:
             raise AssertionError(
-                f"{path}: events differ:\n  actual:   {sorted(actual_groups[path])}\n"
-                f"  expected: {sorted(expected_groups[path])}"
+                f"{path}: events differ:\n  actual:   {actual_groups[path]!r}\n"
+                f"  expected: {expected_groups[path]!r}"
             )
+
+    actual_siblings = _chain_sibling_order(actual)
+    expected_siblings = _chain_sibling_order(expected)
+    if actual_siblings != expected_siblings:
+        raise AssertionError(
+            f"chain sibling start order differs:\n  actual:   {actual_siblings!r}\n"
+            f"  expected: {expected_siblings!r}"
+        )

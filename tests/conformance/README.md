@@ -135,11 +135,19 @@ single-threaded cooperative scheduler) — comparing their absolute values
 would assert an implementation detail neither engine commits to. What *is*
 checked: both streams open with `run_start` and close with `run_end`
 (compared directly); every path's own `start`/`dispatch`/`end` appear in a
-container-before-child, child-before-container order; and each path's own
-set of events is the same multiset in both streams (`collections.Counter`),
-regardless of how tree siblings happened to interleave with each other. A
-chain has only one valid order to begin with, so this reduces to a plain
-sequence comparison for it.
+container-before-child, child-before-container order; each path's own
+list of events (grouped by `path`) is compared *in stream order*, not as a
+multiset — a path's own events have exactly one valid order in M0-H
+(`start`, then a tree container's own `dispatch`, then `end`), so an
+end-before-start or a dispatch-after-end on the same path is caught, which
+a `collections.Counter` comparison alone couldn't tell from the correct
+order; and a chain container's (one with no `dispatch` event of its own)
+direct children are compared for the relative order their own `start`
+events occurred in across the two streams — a chain's children run
+strictly one after another in document order on both engines, unlike a
+tree dynamic's branches, which may freely interleave with each other on
+either engine and are excluded from that last check by the `dispatch`
+event check alone.
 
 `--live-state`'s final write is asserted byte-identical to `--out` for
 every success case, in both engines (electricity/DESIGN.md §10.5) — no
