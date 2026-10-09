@@ -147,7 +147,9 @@ def build_json_tool_cases() -> list[dict]:
     # (finding 6's "non-string keys" probe): `True` and `1` collide as
     # dict keys (`True == 1`), so only the last-written entry survives.
     cases.append(
-        json_tool_case({"mode": "stringify", "input": {True: "yes-value", 1: "one-value"}})
+        json_tool_case(
+            {"mode": "stringify", "input": {True: "yes-value", 1: "one-value"}}  # noqa: F601
+        )
     )
     cases.append(json_tool_case({"mode": "stringify", "input": {None: "none-value"}}))
     cases.append(json_tool_case({"mode": "stringify", "input": {1.5: "float-key"}}))
