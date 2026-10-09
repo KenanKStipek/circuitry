@@ -9,7 +9,7 @@
 //! an unnamed `if`").
 
 use super::dynamic::now_iso;
-use super::{BoxExecFuture, execute_op, key, normalize_labels, store_err};
+use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
 use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
@@ -65,10 +65,15 @@ pub(crate) fn execute_conditional<'a>(
                     token,
                 )
                 .await;
-                observer.effect_complete(
-                    &op.path,
-                    result.as_ref().err().map(VmError::to_string).as_deref(),
-                );
+                // `cli/events.py::EventLog.on_complete` reads the node's
+                // own `meta.error` for the `end` event, never the
+                // exception `decide_and_run` returned -- the two diverge
+                // for a condition error absorbed by `on_error: skip`/
+                // `continue` (meta.error is set, but `decide_and_run`
+                // still returns `Ok`) and for an interrupted branch
+                // (`decide_and_run` returns `Err(Cancelled)`, but
+                // meta.error is never written for a cancellation).
+                observer.effect_complete(&op.path, node_error(store, &meta).as_deref());
                 result
             }
             None => {
@@ -79,6 +84,19 @@ pub(crate) fn execute_conditional<'a>(
             }
         }
     })
+}
+
+/// *meta*'s own current `error` value, if it is a string -- what
+/// [`execute_conditional`] reports to `effect_complete` instead of
+/// whatever `decide_and_run` itself returned (see that call site).
+fn node_error(store: &Store, meta: &NodeRef) -> Option<String> {
+    match &store.snapshot(meta) {
+        Value::Dict(map) => match map.get(&key("error")) {
+            Some(Value::Str(text)) => Some(text.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// `meta["created_at"] = ...` through `meta["labels"] = ...`
@@ -175,11 +193,19 @@ async fn decide_and_run<'a>(
     let mut failure: Option<VmError> = None;
 
     for (index, child_op) in branch_ops.iter().enumerate() {
+        // `execute_op` wants an as-yet-unmaterialized [`CtxChain`], not
+        // a `Value` -- *live_ctx* is already fully resolved (this
+        // branch's own `scope_ctx` overlay, rebuilt fresh after every
+        // sibling), so it becomes the chain's one frozen entry. A
+        // further-nested `dynamic` child extends this exact chain with
+        // its own live enclosing-scope entry on top (Quirk Q1's
+        // `{**ctx_override, **store.state}` re-merge, DESIGN.md §6.3).
+        let child_chain: CtxChain = vec![CtxSource::Frozen(live_ctx.clone())];
         match execute_op(
             child_op,
             store,
             branch_parent,
-            &live_ctx,
+            &child_chain,
             run_ctx,
             observer,
             token,
@@ -193,7 +219,7 @@ async fn decide_and_run<'a>(
             }
             Err(e) => {
                 failure = Some(match e {
-                    VmError::Interrupted(_) => e,
+                    VmError::Cancelled => e,
                     other => match &child_op.name {
                         Some(name) => VmError::Message(format!("{name}: {other}")),
                         None => other,
@@ -208,7 +234,7 @@ async fn decide_and_run<'a>(
         // Python's own outer `except Exception` (never `BaseException`)
         // around the whole branch loop: a cancellation propagates raw,
         // with no `value`/`meta.error` write at all.
-        if matches!(err, VmError::Interrupted(_)) {
+        if matches!(err, VmError::Cancelled) {
             return Err(err);
         }
         if let Some((node, meta)) = named {

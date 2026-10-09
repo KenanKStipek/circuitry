@@ -5,19 +5,27 @@
 //! class behind both.
 //!
 //! **`ctx` is never cached.** Python's own `ctx` is a *live* dict
-//! reference (`store.state`), so a chain's later sibling automatically
-//! sees an earlier one's writes with no code of its own doing anything
-//! -- this crate's own [`crate::Store::snapshot`] instead returns an
-//! owned, point-in-time [`Value`], so [`execute_chain`] recomputes it
-//! fresh (via [`super::resolve_ctx`]) immediately before *every* chain
-//! step, not once at the dynamic's own entry. A tree's branches are the
-//! opposite: Python takes exactly one shallow `dict(ctx)` snapshot
+//! reference (`store.state`), so a chain's later sibling -- and a
+//! deeper descendant several `dynamic` levels down, through the
+//! fully-qualified `prime.*` spelling -- automatically sees an earlier
+//! write with no code of its own doing anything; this crate's own
+//! [`crate::Store::snapshot`] instead returns an owned, point-in-time
+//! [`Value`], so neither [`execute_chain`] nor [`execute_tree`]
+//! materializes a `ctx` `Value` at all -- they thread a [`super::
+//! CtxChain`] (a chain of still-live [`NodeRef`]s plus any already-
+//! frozen overlay) down through [`execute_op`] instead, and
+//! [`super::live_ctx`] only ever collapses it into a `Value` at the
+//! actual point of use (CEL eval, tool rendering), always re-snapshotting
+//! every live entry fresh right there. A tree's branches are the one
+//! exception: Python takes exactly one shallow `dict(ctx)` snapshot
 //! before dispatch and every branch shares it (runtime-semantics.md
-//! §5.5), so [`execute_tree`] snapshots once too.
+//! §5.5), so [`execute_tree`] collapses the inherited chain into one
+//! [`super::CtxSource::Frozen`] entry before dispatch, matching that
+//! one-time snapshot exactly.
 
 use super::{
-    BoxExecFuture, execute_op, interrupted_text, key, normalize_labels, resolve_ctx, store_err,
-    wrap_effect_error,
+    BoxExecFuture, CtxChain, CtxSource, effect_label, execute_op, interrupted_text, key,
+    normalize_labels, store_err, wrap_effect_error,
 };
 use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{LoopFlow, NodeKind, OnError, Op, Region};
@@ -40,19 +48,21 @@ pub(crate) fn now_iso() -> String {
 /// Runs *op* -- the document root, or a nested `dynamic` -- against
 /// *store*, writing its own node under *parent* at `op.name` (always
 /// `Some`: an unnamed `dynamic` cannot be compiled, unlike an unnamed
-/// `if`/`loop`). *ctx_override* is Quirk Q1's `ctx_override` parameter
-/// (`core/dynamic.py::DynamicRuntime.execute`): [`Value::None`] for "no
-/// override" (the document root, or an ordinary dynamic nested directly
-/// in a chain/tree with no enclosing scope overlay), or the enclosing
-/// `if` branch's own overlaid ctx for a dynamic nested inside one
-/// (DESIGN.md §6.3's own re-merge quirk) -- this function always
-/// recomputes its own effective ctx as `resolve_ctx(ctx_override,
-/// store.snapshot(parent))`, never using *ctx_override* directly.
+/// `if`/`loop`). *ctx_chain* is Quirk Q1's `ctx_override` parameter
+/// (`core/dynamic.py::DynamicRuntime.execute`), not yet materialized:
+/// empty for "no override" (the document root, or an ordinary dynamic
+/// nested directly in a chain/tree with no enclosing scope overlay), or
+/// carrying the enclosing `if` branch's own overlaid ctx as a single
+/// [`CtxSource::Frozen`] entry for a dynamic nested inside one
+/// (DESIGN.md §6.3's own re-merge quirk) -- this dynamic's own children
+/// always get *ctx_chain* extended with one more [`CtxSource::Live`]
+/// entry for *parent* (never collapsed into a `Value` here: see this
+/// module's own doc comment on why that has to stay live).
 pub(crate) fn execute_dynamic<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
-    ctx_override: &'a Value,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -85,26 +95,30 @@ pub(crate) fn execute_dynamic<'a>(
 
         observer.effect_start(&op.path);
 
-        // *ctx* for this dynamic's own children is always recomputed
-        // from *parent* -- the **enclosing** scope this dynamic itself
-        // was created under, exactly as `core/dynamic.py::DynamicRuntime.
-        // execute`'s own `ctx = store.state if ctx_override is None else
-        // ...` reads `store.state` (the parameter *store*, not the
-        // `child_store` this dynamic's own children write into). Passing
-        // `&dyn_node` here instead would have every child read this
-        // dynamic's own node as if it were one level higher up the tree
-        // than it really is -- the Quirk Q1 overlay rebuild inside a
-        // nested `if` branch (`tests/conditional.rs::
+        // *ctx_chain* for this dynamic's own children always extends the
+        // *inherited* chain with one more live entry for *parent* -- the
+        // **enclosing** scope this dynamic itself was created under,
+        // exactly as `core/dynamic.py::DynamicRuntime.execute`'s own `ctx
+        // = store.state if ctx_override is None else ...` reads
+        // `store.state` (the parameter *store*, not the `child_store`
+        // this dynamic's own children write into). Pushing `&dyn_node`
+        // here instead would have every child read this dynamic's own
+        // node as if it were one level higher up the tree than it really
+        // is -- the Quirk Q1 overlay rebuild inside a nested `if` branch
+        // (`tests/conditional.rs::
         // a_later_branch_effect_sees_an_earlier_siblings_write_by_bare_
         // name`) is what first caught this getting that backwards.
+        let mut child_chain: CtxChain = ctx_chain.clone();
+        child_chain.push(CtxSource::Live(parent.clone()));
+
         let body_result = match body {
             Region::Block { ops, .. } => {
                 execute_chain(
                     ops,
                     store,
                     &dyn_node,
-                    parent,
-                    ctx_override,
+                    name,
+                    &child_chain,
                     run_ctx,
                     observer,
                     token,
@@ -123,8 +137,7 @@ pub(crate) fn execute_dynamic<'a>(
                     *stop_on_error,
                     store,
                     &dyn_node,
-                    parent,
-                    ctx_override,
+                    &child_chain,
                     run_ctx,
                     observer,
                     token,
@@ -140,7 +153,24 @@ pub(crate) fn execute_dynamic<'a>(
         // cancelled -- against a fresh, never-cancelled token
         // (`core/dynamic.py`'s own `get_token().cleanup()` context,
         // which suppresses *every* nested check for the duration, not
-        // just this dynamic's own chain loop).
+        // just this dynamic's own chain loop). Same *child_chain* as the
+        // body: a `finally` effect writes into the same namespace as the
+        // body (`core/dynamic.py::_execute_chain`'s own `label` defaults
+        // to this dynamic's own name either way, never a distinct
+        // `.finally.` segment).
+        //
+        // *was_set_before_finally* is the **real** *token* (not
+        // *finally_token*), read right before `finally:` starts -- a
+        // real signal handler still runs (and raises) on Python's own
+        // main thread no matter what `get_token().cleanup()` suppresses,
+        // so a signal landing *during* an otherwise-successful `finally:`
+        // still interrupts it there; this crate's own cooperative
+        // `token.is_set()` polling has no equivalent mid-effect
+        // interruption, so the closest approximation is: if *token*
+        // wasn't set before `finally:` started but is set once it ends,
+        // treat that as if `finally:` itself were cancelled (issue #431
+        // review finding on PR #440).
+        let was_set_before_finally = token.is_set();
         let finally_result = match finally {
             Some(Region::Block { ops, .. }) => {
                 let finally_token = CancellationToken::new();
@@ -149,8 +179,8 @@ pub(crate) fn execute_dynamic<'a>(
                         ops,
                         store,
                         &dyn_node,
-                        parent,
-                        ctx_override,
+                        name,
+                        &child_chain,
                         run_ctx,
                         observer,
                         &finally_token,
@@ -163,19 +193,28 @@ pub(crate) fn execute_dynamic<'a>(
         };
 
         let body_exc = body_result.err();
-        let finally_exc = finally_result.and_then(|r| r.err());
+        let finally_exc = match finally_result {
+            None => None,
+            Some(Err(e)) => Some(e),
+            Some(Ok(())) if !was_set_before_finally && token.is_set() => Some(VmError::Cancelled),
+            Some(Ok(())) => None,
+        };
 
         let reported_error = if let Some(be) = &body_exc {
             store.set_leaf(&dyn_node, key("value"), Value::Bool(false));
-            let text = be.to_string();
+            let text = error_text(be, token);
             store.set_leaf(&meta_node, key("error"), Value::Str(text.clone()));
             if let Some(fe) = &finally_exc {
-                store.set_leaf(&meta_node, key("finally_error"), Value::Str(fe.to_string()));
+                store.set_leaf(
+                    &meta_node,
+                    key("finally_error"),
+                    Value::Str(error_text(fe, token)),
+                );
             }
             Some(text)
         } else if let Some(fe) = &finally_exc {
             store.set_leaf(&dyn_node, key("value"), Value::Bool(false));
-            let text = fe.to_string();
+            let text = error_text(fe, token);
             store.set_leaf(&meta_node, key("error"), Value::Str(text.clone()));
             Some(text)
         } else {
@@ -187,14 +226,14 @@ pub(crate) fn execute_dynamic<'a>(
         observer.effect_complete(&op.path, reported_error.as_deref());
 
         if let Some(be) = body_exc {
-            let is_cancellation = matches!(be, VmError::Interrupted(_));
+            let is_cancellation = matches!(be, VmError::Cancelled);
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(be);
             }
             return Ok(());
         }
         if let Some(fe) = finally_exc {
-            let is_cancellation = matches!(fe, VmError::Interrupted(_));
+            let is_cancellation = matches!(fe, VmError::Cancelled);
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(fe);
             }
@@ -202,6 +241,16 @@ pub(crate) fn execute_dynamic<'a>(
         }
         Ok(())
     })
+}
+
+/// *err*'s own `meta.error` text -- [`interrupted_text`] resolved
+/// against *token* for [`VmError::Cancelled`] (which carries no text of
+/// its own), *err*'s plain [`std::fmt::Display`] otherwise.
+fn error_text(err: &VmError, token: &CancellationToken) -> String {
+    match err {
+        VmError::Cancelled => interrupted_text(token),
+        other => other.to_string(),
+    }
 }
 
 /// `meta.update({...})` (`core/dynamic.py::DynamicRuntime.execute`) --
@@ -244,16 +293,23 @@ fn write_dynamic_meta_start(
 /// first: a chain that is already cancelled before it starts runs
 /// nothing at all) -- "Queued branches never start once cancelled"
 /// applies just as much to "the next chain step" as to a tree's own
-/// queue. `finally:`'s own chain reuses this with a *token* that is
-/// never cancelled (see [`execute_dynamic`]'s own call site) rather than
-/// a separate code path.
+/// queue. *container_name* is this dynamic's own name (`op.name`, never
+/// the full state path), the prefix a child's own failure gets wrapped
+/// with -- [`effect_label`]. *ctx_chain* is handed straight to
+/// [`execute_op`] unmaterialized at every step: a later sibling (or, for
+/// a `prime.*`-qualified reference, a sibling three `dynamic` levels up)
+/// seeing an earlier one's write falls straight out of every
+/// [`CtxSource::Live`] entry's own [`super::live_ctx`] re-snapshot, with
+/// no extra bookkeeping in this loop. `finally:`'s own chain reuses this
+/// with a *token* that is never cancelled (see [`execute_dynamic`]'s own
+/// call site) rather than a separate code path.
 #[allow(clippy::too_many_arguments)]
 fn execute_chain<'a>(
     ops: &'a [Op],
     store: &'a Store,
     write_node: &'a NodeRef,
-    ctx_node: &'a NodeRef,
-    ctx_override: &'a Value,
+    container_name: &'a str,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -261,14 +317,17 @@ fn execute_chain<'a>(
     Box::pin(async move {
         for child_op in ops {
             if token.is_set() {
-                return Err(VmError::Interrupted(interrupted_text(token)));
+                return Err(VmError::Cancelled);
             }
-            let live_ctx = resolve_ctx(ctx_override, store.snapshot(ctx_node));
-            execute_op(
-                child_op, store, write_node, &live_ctx, run_ctx, observer, token,
+            let result = execute_op(
+                child_op, store, write_node, ctx_chain, run_ctx, observer, token,
             )
-            .await
-            .map_err(|e| wrap_effect_error(&child_op.path, e))?;
+            .await;
+            // `core/dynamic.py`'s own chain loop calls `store.on_write`
+            // from a `finally:` around every single effect -- success or
+            // failure alike, never skipped by an absorbed `on_error`.
+            observer.write();
+            result.map_err(|e| wrap_effect_error(&effect_label(container_name, child_op), e))?;
         }
         Ok(())
     })
@@ -294,8 +353,7 @@ fn execute_tree<'a>(
     stop_on_error: bool,
     store: &'a Store,
     dyn_node: &'a NodeRef,
-    ctx_node: &'a NodeRef,
-    ctx_override: &'a Value,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -307,18 +365,32 @@ fn execute_tree<'a>(
             None => std::cmp::max(1, n),
         };
         let concurrency = std::cmp::min(max_workers, n);
-        observer.dispatch(&op.path, concurrency, n);
+        // `RunObserver::dispatch`'s own declared parameter order is
+        // `(path, branches, concurrency)` (`observer.rs`) -- *n* (the
+        // total) first, *concurrency* second.
+        observer.dispatch(&op.path, n, concurrency);
 
         if n == 0 {
             return Ok(());
         }
 
-        let tree_ctx = resolve_ctx(ctx_override, store.snapshot(ctx_node));
+        // Python's own `tree_ctx = dict(ctx)`: one shallow snapshot taken
+        // right here, shared by every branch -- the one place a `ctx`
+        // *is* allowed to freeze, since nothing else can mutate any of
+        // *ctx_chain*'s own ancestors while this tree's branches run (an
+        // isolated branch store is the only thing any of them can write
+        // into until the merge below).
+        let tree_chain: CtxChain = vec![CtxSource::Frozen(super::live_ctx(ctx_chain, store))];
         let branches = store.parallel_branches(dyn_node, n).map_err(store_err)?;
 
+        let container_name = op
+            .name
+            .as_deref()
+            .expect("a dynamic (root or nested) always has a name");
+
         // Scoped so `launch`/`in_flight`/`pending` -- which all borrow
-        // *branches*/*tree_ctx* -- are fully dropped before *branches* is
-        // moved into `store.merge` below.
+        // *branches*/*tree_chain* -- are fully dropped before *branches*
+        // is moved into `store.merge` below.
         let (tree_errors, interrupted) = {
             let mut pending: VecDeque<usize> = (0..n).collect();
             let mut in_flight = FuturesUnordered::new();
@@ -329,21 +401,28 @@ fn execute_tree<'a>(
             let launch = |idx: usize| {
                 let branch_op = &branch_ops[idx];
                 let branch_node = &branches[idx];
-                let tree_ctx = &tree_ctx;
+                let tree_chain = &tree_chain;
                 async move {
                     if token.is_set() {
-                        return (idx, Err(VmError::Interrupted(interrupted_text(token))));
+                        return (idx, Err(VmError::Cancelled));
                     }
                     let result = execute_op(
                         branch_op,
                         store,
                         branch_node,
-                        tree_ctx,
+                        tree_chain,
                         run_ctx,
                         observer,
                         token,
                     )
                     .await;
+                    // `core/dynamic.py::DynamicRuntime._execute_branch`'s
+                    // own `finally: store.on_write(...)` -- once this
+                    // branch settles, success or failure, never for a
+                    // branch that never started (the `token.is_set()`
+                    // early return above skips it, same as Python's own
+                    // `get_token().check()` before that `finally`'s try).
+                    observer.write();
                     (idx, result)
                 }
             };
@@ -357,13 +436,24 @@ fn execute_tree<'a>(
             while let Some((idx, result)) = in_flight.next().await {
                 match result {
                     Ok(()) => {}
-                    Err(VmError::Interrupted(_)) => {
+                    Err(VmError::Cancelled) => {
                         interrupted = true;
                     }
                     Err(e) => {
-                        tree_errors.push(wrap_effect_error(&branch_ops[idx].path, e));
-                        if stop_on_error {
-                            stopped = true;
+                        // `core/dynamic.py::DynamicRuntime._await_tree_
+                        // branches` breaks out of its own drain loop
+                        // immediately after recording the first failure
+                        // under `stop_on_error` -- a later branch's own
+                        // result is waited for (never force-cancelled)
+                        // but never inspected for an error again, so
+                        // exactly one failure, never more, ever lands in
+                        // `tree_errors` once `stopped` is set.
+                        if !stopped {
+                            let label = effect_label(container_name, &branch_ops[idx]);
+                            tree_errors.push(wrap_effect_error(&label, e));
+                            if stop_on_error {
+                                stopped = true;
+                            }
                         }
                     }
                 }
@@ -381,10 +471,13 @@ fn execute_tree<'a>(
         };
 
         if interrupted {
-            return Err(VmError::Interrupted(interrupted_text(token)));
+            return Err(VmError::Cancelled);
         }
 
         store.merge(dyn_node, branches).map_err(store_err)?;
+        // `core/dynamic.py`'s own tree-flow merge loop ends with one
+        // more `store.on_write(...)`, after every branch has landed.
+        observer.write();
 
         if !tree_errors.is_empty() {
             return Err(combine_tree_errors(tree_errors));

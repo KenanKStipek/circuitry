@@ -210,10 +210,39 @@ impl RunObserver for RecordingObserver {
             .push(Event::Complete(path.to_string(), error.map(str::to_string)));
     }
 
-    fn dispatch(&self, path: &EffectPath, concurrency: usize, total: usize) {
+    fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
         self.events
             .borrow_mut()
-            .push(Event::Dispatch(path.to_string(), concurrency, total));
+            .push(Event::Dispatch(path.to_string(), branches, concurrency));
+    }
+}
+
+/// A [`RunObserver`] that cancels *token* the moment *target*'s own
+/// `effect_start` fires -- lets a test drive a real mid-run
+/// cancellation deterministically, with no real thread/signal/sleep
+/// involved, by picking exactly the path whose own start should trigger
+/// it. *token* must be the same [`electricity_vm::CancellationToken`]
+/// the run itself was started with.
+pub struct CancelOnStart<'a> {
+    pub inner: RecordingObserver,
+    pub token: &'a electricity_vm::CancellationToken,
+    pub target: &'a str,
+}
+
+impl RunObserver for CancelOnStart<'_> {
+    fn effect_start(&self, path: &EffectPath) {
+        self.inner.effect_start(path);
+        if path.to_string() == self.target {
+            self.token.request(2);
+        }
+    }
+
+    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+        self.inner.effect_complete(path, error);
+    }
+
+    fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
+        self.inner.dispatch(path, branches, concurrency);
     }
 }
 

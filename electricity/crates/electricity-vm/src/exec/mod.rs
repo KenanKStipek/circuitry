@@ -13,8 +13,9 @@ pub mod dynamic;
 pub mod tool;
 
 use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
-use electricity_bytecode::{EffectPath, LeafKind, NodeKind, Op, Region};
+use electricity_bytecode::{LeafKind, NodeKind, Op, Region};
 use electricity_value::Value;
+use indexmap::IndexMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -40,10 +41,11 @@ const SIGTERM: i32 = 15;
 const SIGHUP: i32 = 1;
 
 /// Python's `core/dynamic.py::_error_text`'s own signal-name fallback --
-/// the text [`crate::VmError::Interrupted`] carries. Every real call site
-/// in this crate only ever constructs an `Interrupted` through this
-/// function, so the three wordings here are the only ones that type's
-/// `String` payload ever holds.
+/// the text an interrupted [`crate::VmError::Cancelled`] is reported as
+/// (a dynamic's own `meta.error`, a run's own failure text) once a
+/// caller resolves it through *token*. Every real call site in this
+/// crate builds that text through this function, so the three wordings
+/// here are the only ones any of them ever produce.
 pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
     match token.signum() {
         Some(SIGTERM) => "Interrupted (SIGTERM)".to_string(),
@@ -51,10 +53,8 @@ pub(crate) fn interrupted_text(token: &CancellationToken) -> String {
         // `Some(SIGINT)`, and -- defensively, since this is only ever
         // called once `token.is_set()` is already known true -- any
         // other/missing signum too.
-        _ => {
-            let _ = SIGINT;
-            "Interrupted (Ctrl-C/SIGINT)".to_string()
-        }
+        Some(SIGINT) => "Interrupted (Ctrl-C/SIGINT)".to_string(),
+        _ => "Interrupted (Ctrl-C/SIGINT)".to_string(),
     }
 }
 
@@ -93,32 +93,84 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// immediately before every use, never cached, so a chain's later
 /// sibling sees an earlier one's writes the same way Python's live dict
 /// reference does -- see `exec::dynamic`'s own module doc comment).
-/// [`Value::None`] is this crate's spelling of Python's `ctx_override is
-/// None` (lane A's own test already calls [`crate::execute_root`] with
-/// exactly that sentinel for the document root, which has no override of
-/// its own).
-pub(crate) fn resolve_ctx(ctx_override: &Value, live: Value) -> Value {
-    let Value::Dict(override_map) = ctx_override else {
-        return live;
-    };
-    let mut merged = override_map.clone();
-    if let Value::Dict(live_map) = &live {
-        for (k, v) in live_map {
-            merged.insert(k.clone(), v.clone());
+///
+/// A chain entry is either [`CtxSource::Live`] -- re-snapshotted fresh
+/// every time [`live_ctx`] is called, so a write anywhere underneath it
+/// (including one made *after* this entry joined the chain) is always
+/// visible -- or [`CtxSource::Frozen`], a `Value` already materialized
+/// once and never refreshed (a tree's own one-time `dict(ctx)` snapshot,
+/// DESIGN.md ::5.5; an `if` branch's own per-step `scope_ctx` overlay,
+/// Quirk Q1, which is safe to freeze because nothing else ever mutates
+/// its own ancestors while that branch's sequential loop runs). Python's
+/// own `ctx = store.state if ctx_override is None else {**ctx_override,
+/// **store.state}` never actually copies a nested dict -- the dict
+/// literal/spread only ever touches the *top* level, so every nested
+/// value (in particular `ctx["prime"]`, however many `dynamic` levels up
+/// it came from) is the exact same live object `store.state` itself
+/// mutates -- so a Rust `Value`, once cloned out of a [`Store::snapshot`],
+/// can never reproduce that by staying put: it has to be rebuilt from
+/// the *live* [`NodeRef`] chain at the moment it is actually used
+/// instead (issue #431 review, the P0 "a nested container freezes its
+/// own ancestors' state" finding on PR #440).
+#[derive(Clone)]
+pub(crate) enum CtxSource {
+    Live(NodeRef),
+    Frozen(Value),
+}
+
+/// The override chain behind an as-yet-unmaterialized `ctx` -- see
+/// [`CtxSource`]. Cloning a chain is a handful of `Rc`/`Value` clones
+/// (cheap: an `Rc` clone is a refcount bump, and the whole chain is at
+/// most as many entries deep as the document has `dynamic`/`if` levels
+/// of nesting), never a store walk of its own.
+pub(crate) type CtxChain = Vec<CtxSource>;
+
+/// Collapses *chain* into the one `Value` CEL/template rendering (or a
+/// further-nested `dynamic`'s own `ctx_override`) actually reads --
+/// `{**chain[0], **chain[1], ..., **chain[-1]}` (`core/dynamic.py::
+/// DynamicRuntime.execute`'s own repeated top-level dict-spread,
+/// unrolled: see this module's own doc comment above), with every
+/// [`CtxSource::Live`] entry's own [`Store::snapshot`] taken fresh right
+/// here, not at whatever earlier moment that entry joined the chain.
+pub(crate) fn live_ctx(chain: &CtxChain, store: &Store) -> Value {
+    let mut merged: IndexMap<Value, Value> = IndexMap::new();
+    for source in chain {
+        let resolved = match source {
+            CtxSource::Live(node) => store.snapshot(node),
+            CtxSource::Frozen(value) => value.clone(),
+        };
+        if let Value::Dict(ref map) = resolved {
+            for (k, v) in map {
+                merged.insert(k.clone(), v.clone());
+            }
         }
     }
     Value::Dict(merged)
 }
 
-/// Wraps *err* with *path*'s own `"<path>: <message>"` prefix
+/// `core/dynamic.py::DynamicRuntime._effect_path` -- *container_name*
+/// (this container's own name, never the full state path) plus *child*'s
+/// own name, or just *container_name* alone for an unnamed child (an
+/// unnamed `if` has no state node/path segment of its own).
+pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
+    match &child.name {
+        Some(name) => format!("{container_name}.{name}"),
+        None => container_name.to_string(),
+    }
+}
+
+/// Wraps *err* with *label*'s own `"<label>: <message>"` prefix
 /// (`core/dynamic.py`'s chain-flow wrap, `RuntimeError(f"{effect_path}:
-/// {e}")`) -- except a cancellation, which Python's own `except
-/// Exception` (never `BaseException`) never catches, so it always
-/// propagates unwrapped here too.
-pub(crate) fn wrap_effect_error(path: &EffectPath, err: VmError) -> VmError {
+/// {e}")`, where `effect_path` is [`effect_label`]'s own result, not a
+/// full state path -- issue #431 review finding on PR #440: a nested
+/// `dynamic`'s own wrap must read `"<its own name>.<child>"`, never
+/// `"<child's full path>"`) -- except a cancellation, which Python's own
+/// `except Exception` (never `BaseException`) never catches, so it
+/// always propagates unwrapped here too.
+pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
-        VmError::Interrupted(_) => err,
-        other => VmError::Message(format!("{path}: {other}")),
+        VmError::Cancelled => err,
+        other => VmError::Message(format!("{label}: {other}")),
     }
 }
 
@@ -128,12 +180,15 @@ pub(crate) fn wrap_effect_error(path: &EffectPath, err: VmError) -> VmError {
 /// (through [`conditional::execute_conditional`]). *parent* is the
 /// `NodeRef` *op* itself writes under (`store.ensure_dict(parent,
 /// op.name)` for a named effect; passed straight through for a
-/// transparent, unnamed `if`). *ctx* is already the caller's own fully
-/// resolved rendering context -- for a `tool`/`if` child this is used
-/// directly; for a nested `dynamic` child, [`dynamic::execute_dynamic`]
-/// treats it as *that* dynamic's own `ctx_override` (Quirk Q1's
-/// re-merge), exactly mirroring `core/dynamic.py::_execute_effect`'s own
-/// per-effect-type dispatch.
+/// transparent, unnamed `if`). *ctx_chain* is the caller's own
+/// not-yet-materialized rendering context (see [`CtxSource`]) -- a
+/// `tool`/`if` child collapses it into a `Value` with [`live_ctx`] right
+/// here, at the moment it is actually needed; a nested `dynamic` child
+/// gets the chain itself, unresolved, which [`dynamic::execute_dynamic`]
+/// then extends with its own enclosing scope (Quirk Q1's re-merge) --
+/// exactly mirroring `core/dynamic.py::_execute_effect`'s own
+/// per-effect-type dispatch, where only a `dynamic` child ever receives
+/// `ctx` as an `ctx_override` rather than a resolved value.
 ///
 /// `prompt`/`use`/`yield`/`reflector`/`loop`/a `mode: model` `if` are all
 /// refused before a real run ever starts (lane A's `first_unsupported`),
@@ -143,7 +198,7 @@ pub(crate) fn execute_op<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
-    ctx: &'a Value,
+    ctx_chain: &'a CtxChain,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -152,7 +207,8 @@ pub(crate) fn execute_op<'a>(
         match &op.kind {
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
                 LeafKind::Tool(tool_op) => {
-                    tool::execute_tool(op, tool_op, store, parent, ctx, run_ctx, observer, token)
+                    let ctx = live_ctx(ctx_chain, store);
+                    tool::execute_tool(op, tool_op, store, parent, &ctx, run_ctx, observer, token)
                         .await
                 }
                 _ => Err(VmError::NotImplemented(format!(
@@ -162,13 +218,15 @@ pub(crate) fn execute_op<'a>(
             },
             NodeKind::Control(region) => match region {
                 Region::If { .. } => {
+                    let ctx = live_ctx(ctx_chain, store);
                     conditional::execute_conditional(
-                        op, store, parent, ctx, run_ctx, observer, token,
+                        op, store, parent, &ctx, run_ctx, observer, token,
                     )
                     .await
                 }
                 Region::Block { .. } | Region::Parallel { .. } | Region::TryFinally { .. } => {
-                    dynamic::execute_dynamic(op, store, parent, ctx, run_ctx, observer, token).await
+                    dynamic::execute_dynamic(op, store, parent, ctx_chain, run_ctx, observer, token)
+                        .await
                 }
                 Region::Loop { .. } => Err(VmError::NotImplemented(format!(
                     "{}: `loop` is not supported by the M0-H interpreter",

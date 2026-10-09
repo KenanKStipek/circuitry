@@ -2,8 +2,10 @@
 //! `exec::{mod,dynamic,conditional}` and `limiter` (lane B); `exec::
 //! tool::execute_tool` and `electricity-tools`'s `json` (lane C, params
 //! rendering/retries/redaction); `exec::tool::run_tool` and `cancel`
-//! (lane A, real, final). [`execute_root`] is lane A's one remaining
-//! stub: the actual tree-walking interpreter loop lane B builds.
+//! (lane A, real, final). [`execute_root`] is lane B2's tree-walking
+//! interpreter loop: a document root is always a `dynamic`-shaped
+//! container, so running it is exactly `exec::dynamic::execute_dynamic`
+//! against the store's own root node.
 //!
 //! `execute_root` takes every argument by reference, so lane B's own
 //! tree branches can't each be a `tokio::task::spawn_local` (which
@@ -75,6 +77,17 @@ pub enum VmError {
     ToolNotFound(String),
     /// A registered plugin's own [`electricity_tools::ToolError`], as text.
     Tool(String),
+    /// This run's own [`CancellationToken`] was requested while an effect
+    /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
+    /// `on_error` entirely and fires no observer `effect_complete`, mirroring
+    /// Python's `RunCancelledBySignal`: a `BaseException`, not `Exception`,
+    /// so `ToolRuntime.execute`'s own `except Exception` never catches it
+    /// (`core/cancellation.py`). The caller (lane B's own tree-walking
+    /// interpreter) checks `token.is_set()`/`token.signum()` itself to build
+    /// the interrupt text a cancelled run's `RunResult.error` carries; this
+    /// variant only ever signals *that* cancellation happened here, not with
+    /// what signal.
+    Cancelled,
     /// Lane B's own execution loop isn't implemented yet (a `loop`/
     /// `mode: model` `if` -- refused before the run starts by lane A's
     /// `first_unsupported` in a real document, but the interpreter still
@@ -86,15 +99,6 @@ pub enum VmError {
     /// `TreeExecutionError`-shaped multi-branch summary, a conditional
     /// branch's own bare-name wrap, or a failed CEL evaluation's text.
     Message(String),
-    /// The run was cancelled (DESIGN.md §6.5/§6.9) -- carries the exact
-    /// text Python's own `core/dynamic.py::_error_text` reports for the
-    /// signal that cancelled it (`"Interrupted (Ctrl-C/SIGINT)"`,
-    /// `"Interrupted (SIGTERM)"`, `"Interrupted (SIGHUP)"`). Never wrapped
-    /// with a `"<path>: "` prefix by a chain/tree/branch caller -- the
-    /// same `except Exception` (not `BaseException`) split Python's own
-    /// wrap sites have, since a `CancellationToken` cancellation is not
-    /// an ordinary effect failure.
-    Interrupted(String),
 }
 
 impl fmt::Display for VmError {
@@ -102,9 +106,9 @@ impl fmt::Display for VmError {
         match self {
             VmError::ToolNotFound(provider) => write!(f, "Unknown tool provider: {provider}"),
             VmError::Tool(message) => write!(f, "{message}"),
+            VmError::Cancelled => write!(f, "cancelled"),
             VmError::NotImplemented(message) => write!(f, "{message}"),
             VmError::Message(message) => write!(f, "{message}"),
-            VmError::Interrupted(message) => write!(f, "{message}"),
         }
     }
 }
@@ -127,7 +131,15 @@ impl std::error::Error for VmError {}
 /// [`exec::dynamic::execute_dynamic`] against *store*'s own root node,
 /// with no `ctx` override of its own (*ctx* is Quirk Q1's `ctx_override`
 /// parameter here, not a pre-resolved rendering context -- see that
-/// function's own doc comment).
+/// function's own doc comment). [`exec::dynamic::execute_dynamic`] itself
+/// takes that override as an [`exec::CtxChain`], not yet materialized
+/// (so a reference several `dynamic` levels deep can still re-snapshot
+/// every ancestor fresh instead of reading a frozen `Value`) -- *ctx*
+/// here is always [`Value::None`] (the document root has no enclosing
+/// scope of its own), which becomes the empty chain; a caller that ever
+/// passed an already-resolved override `Value` gets it wrapped as the
+/// chain's one frozen entry instead, so this function's own signature
+/// can stay exactly what lane A fixed it as.
 pub async fn execute_root(
     program: &Program,
     store: &Store,
@@ -136,11 +148,15 @@ pub async fn execute_root(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
+    let chain: exec::CtxChain = match ctx {
+        Value::None => Vec::new(),
+        other => vec![exec::CtxSource::Frozen(other.clone())],
+    };
     exec::dynamic::execute_dynamic(
         &program.root,
         store,
         &store.root,
-        ctx,
+        &chain,
         run_ctx,
         observer,
         token,
