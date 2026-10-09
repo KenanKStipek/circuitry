@@ -359,8 +359,10 @@ dependencies = [
 name = "electricity-config"
 version = "0.1.0"
 dependencies = [
+ "electricity-json",
  "electricity-value",
  "indexmap",
+ "regex",
 ]
 
 [[package]]

@@ -45,31 +45,21 @@ fn runtime_block(document: &Value) -> Option<&Value> {
 }
 
 /// The document's `runtime:` block merged over *options*' config-file
-/// runtime block, document key winning (issue #408's CLI section:
-/// "Merge the document's runtime: block over the config file's, key by
-/// key" -- electricity trusts every document, so there is no
-/// untrusted-split branch to reproduce here, only the merge itself).
-/// Corpus cases never carry a `config_runtime` (Circuitry's own
+/// runtime block, through [`electricity_config::merge_runtime`] (issue
+/// #431's lane D1: `cli/effective_settings.py::_merge_runtime`'s real
+/// deep merge -- `plugins`/`adapters` one level deeper than the rest,
+/// the shell `allowed_commands` ceiling re-intersected afterward --
+/// replacing this function's own pre-#431 shallow, top-level-only
+/// merge). Electricity trusts every document (DESIGN.md §11), so there
+/// is no untrusted-split branch to reproduce here, only the merge
+/// itself. Corpus cases never carry a `config_runtime` (Circuitry's own
 /// ground truth always calls `validate`/`run` with `config=None`), so
 /// this reduces to the document's own `runtime:` block verbatim for
 /// every golden case -- the config-file merge is exercised by the CLI
 /// alone.
 fn merged_runtime_block(options: &CheckOptions, document: &Value) -> Option<Value> {
     let document_runtime = runtime_block(document);
-    match (&options.config_runtime, document_runtime) {
-        (None, None) => None,
-        (Some(config), None) => Some(config.clone()),
-        (None, Some(doc_runtime)) => Some(doc_runtime.clone()),
-        (Some(config), Some(doc_runtime)) => {
-            let mut merged = config.as_dict().cloned().unwrap_or_default();
-            if let Some(doc_dict) = doc_runtime.as_dict() {
-                for (key, value) in doc_dict {
-                    merged.insert(key.clone(), value.clone());
-                }
-            }
-            Some(Value::Dict(merged))
-        }
-    }
+    electricity_config::merge_runtime(options.config_runtime.as_ref(), document_runtime)
 }
 
 /// `core/concurrency.py::parse_max_concurrency`'s own error, if any.
@@ -845,22 +835,20 @@ pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, R
 ///
 /// *effective_runtime* is the already-merged config+document `runtime:`
 /// block the concurrency/group checks run against -- [`check_for_run`]
-/// passes [`merged_runtime_block`]'s own result (its pre-#431 shallow
-/// merge, unchanged); a caller with a real [`electricity_config::
-/// EffectiveSettings`] (lane D) passes its own `runtime` field instead,
-/// once `electricity_config::merge_runtime` replaces [`merged_runtime_
-/// block`] as the thing that produces it.
+/// passes [`merged_runtime_block`]'s own result, now
+/// [`electricity_config::merge_runtime`]'s real deep merge (issue
+/// #431's lane D1); a caller with a real [`electricity_config::
+/// EffectiveSettings`] (lane D2's run wiring) passes its own `runtime`
+/// field instead, which that same function also produces.
 ///
 /// Order, exactly `check_for_run`'s own: [`effective_settings_shape_error`];
-/// [`electricity_config::validate_complexity`] (lane D's own hook -- a
-/// no-op today, [`electricity_config`]'s own crate docs have the
-/// resulting, already-documented divergence), matching `resolve_
+/// [`electricity_config::validate_complexity`], matching `resolve_
 /// complexity_settings`'s own position *inside* `resolve_effective_
 /// settings`, which `cli/runtime_shim.py::run` calls before building the
 /// concurrency limiter; [`concurrency_config_errors`]; [`electricity_
-/// config::validate_persistence`] (lane D's own hook, same no-op today),
-/// matching `build_persistence_backend`'s own position *after* the
-/// limiter; [`build_input_namespace`].
+/// config::validate_persistence`], matching `build_persistence_
+/// backend`'s own position *after* the limiter; [`build_input_
+/// namespace`].
 pub fn pre_state_checks(
     loaded: &Loaded,
     options: &CheckOptions,
@@ -953,16 +941,16 @@ pub fn post_state_checks(
 /// config::validate_persistence`] (step 9, `build_persistence_backend`,
 /// *after* the limiter); [`build_input_namespace`] (step 10,
 /// `check_interface_inputs` -- its own *effective_runtime* is
-/// [`merged_runtime_block`]'s result, this function's pre-#431
-/// computation, unchanged), then [`post_state_checks`] (step 14's
-/// structural checks, compile, groups, cycles, plus the digest
-/// [`check_for_run`] has always attached to `Program.document`, never
-/// part of `run()`'s own structural-check step itself). `check_for_run`
-/// stays exactly this composition so every existing golden, `--dump-ir`,
-/// and osp's own use of this crate keep seeing `check_for_run`'s
-/// pre-#431 behavior unchanged -- the three phases above exist so lane
-/// D's run wiring can call each on its own, not to change what this
-/// function itself does.
+/// [`merged_runtime_block`]'s result, now the real [`electricity_
+/// config::merge_runtime`] deep merge (see that function's own doc
+/// comment), then [`post_state_checks`] (step 14's structural checks,
+/// compile, groups, cycles, plus the digest [`check_for_run`] has
+/// always attached to `Program.document`, never part of `run()`'s own
+/// structural-check step itself). `check_for_run` stays exactly this
+/// composition so every existing golden, `--dump-ir`, and osp's own use
+/// of this crate keep seeing the same result -- the three phases above
+/// exist so lane D's run wiring can call each on its own, not to change
+/// what this function itself does.
 pub fn check_for_run(path: &Path, options: &CheckOptions) -> Result<Program, RunCheckError> {
     let loaded = prepare_document(path, options)?;
     let effective_runtime = merged_runtime_block(options, &loaded.document);
