@@ -71,18 +71,27 @@ impl From<TaggedValue> for Value {
 }
 
 /// A `params`/`params_json` overlay shape built from a Python literal
-/// dict (never a template or a `{from: ...}` reference, for every case
-/// this corpus generates) turns into a [`ParamNode`] tree exactly the
-/// way `electricity-compiler::compile::params::build_param_node` would
+/// dict turns into a [`ParamNode`] tree exactly the way
+/// `electricity-compiler::compile::params::build_param_node` would
 /// compile the same literal YAML: every string leaf -- regardless of
 /// whether it contains `{{`/`{from:...}` syntax of its own -- becomes
 /// [`ParamNode::Template`] (plain Mustache rendering of a tag-free
 /// string is a no-op, matching a literal value exactly); dicts/lists
-/// recurse; every other scalar is a [`ParamNode::Literal`].
+/// recurse; every other scalar is a [`ParamNode::Literal`] -- except a
+/// dict shaped exactly `{"from": <str>}`/`{"from": <str>, "default":
+/// ...}`, matching `core/tool.py::param_reference`'s own shape check
+/// exactly (only these two key sets, and only a string `from` value,
+/// are a by-reference leaf; any other dict, even one with an extra key
+/// mixed in, is passed through literally) -- becomes [`ParamNode::
+/// From`], the same shape `electricity-compiler::compile::params`
+/// compiles a document's own `{from: ...}` YAML into.
 fn value_to_param_node(value: &Value) -> ParamNode {
     match value {
         Value::Str(s) => ParamNode::Template(TemplateText::new(s.clone(), true, Escape::Html)),
         Value::Dict(dict) => {
+            if let Some(from_node) = param_reference(dict) {
+                return from_node;
+            }
             let mut map = IndexMap::new();
             for (k, v) in dict {
                 map.insert(k.clone(), value_to_param_node(v));
@@ -91,6 +100,29 @@ fn value_to_param_node(value: &Value) -> ParamNode {
         }
         Value::List(items) => ParamNode::List(items.iter().map(value_to_param_node).collect()),
         other => ParamNode::Literal(other.clone()),
+    }
+}
+
+/// `core/tool.py::param_reference`'s own shape check, ported directly:
+/// `Some` only for a dict whose key set is exactly `{"from"}` or
+/// `{"from", "default"}` with a string `from` value.
+fn param_reference(dict: &Dict) -> Option<ParamNode> {
+    let from_key = Value::Str("from".to_string());
+    let default_key = Value::Str("default".to_string());
+    let path = match dict.get(&from_key) {
+        Some(Value::Str(s)) => s.trim().to_string(),
+        _ => return None,
+    };
+    match dict.len() {
+        1 => Some(ParamNode::From {
+            path,
+            default: None,
+        }),
+        2 if dict.contains_key(&default_key) => Some(ParamNode::From {
+            path,
+            default: Some(dict.get(&default_key).unwrap().clone()),
+        }),
+        _ => None,
     }
 }
 
@@ -139,17 +171,29 @@ fn on_error_from_str(s: &str) -> OnError {
 /// fixed placeholder -- real wall-clock timestamps on both sides of the
 /// comparison, normalized away exactly the way `electricity/scripts/
 /// _run_corpus.py`'s own normalizer treats them (matching only the
-/// `YYYY-MM-DDTHH:MM:SS` prefix, never the exact instant).
+/// `YYYY-MM-DDTHH:MM:SS` prefix, never the exact instant) -- and, the
+/// same pass, every `meta.expect.error` leaf: a raising CEL `expect:`
+/// folds its own evaluator's error text in there (`core/expect.py`'s
+/// own `cel_meta["error"] = str(e)`), and that text is third-party --
+/// Python's own `cel-python` vs. this crate's own CEL evaluator (DESIGN.
+/// md SS1/SS12) -- so only `meta.error`/`meta.expect.result`, not this
+/// leaf, are Circuitry's own text to match byte for byte.
 fn normalize_timestamps(value: &mut Value) {
     match value {
         Value::Dict(dict) => {
+            let is_expect_meta = dict.contains_key(&Value::Str("expr".to_string()))
+                && dict.contains_key(&Value::Str("result".to_string()));
             for (key, inner) in dict.iter_mut() {
                 let is_timestamp_key = matches!(
                     key,
                     Value::Str(s) if s == "created_at" || s == "completed_at"
                 );
+                let is_expect_error_key =
+                    is_expect_meta && matches!(key, Value::Str(s) if s == "error");
                 if is_timestamp_key && matches!(inner, Value::Str(_)) {
                     *inner = Value::Str("<TIMESTAMP>".to_string());
+                } else if is_expect_error_key && matches!(inner, Value::Str(_)) {
+                    *inner = Value::Str("<CEL_ERROR>".to_string());
                 } else {
                     normalize_timestamps(inner);
                 }

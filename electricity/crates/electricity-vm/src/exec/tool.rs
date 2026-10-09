@@ -62,6 +62,7 @@
 use crate::params::{
     RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params, render_params_json,
 };
+#[cfg(test)]
 use crate::store::Slot;
 use crate::{CancellationToken, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
@@ -128,9 +129,10 @@ fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
         .and_then(|d| d.get(&Value::Str("timeout_seconds".to_string())));
     match raw {
         None | Some(Value::None) => DEFAULT_TOOL_TIMEOUT_SECONDS,
+        // `max(1, int(raw))` -- a negative/zero value floors to 1, same as
+        // any other `int(raw)` result.
         Some(value) => match python_int_floor(value) {
-            Some(n) if n > 0 => n.min(u64::from(u32::MAX)) as u32,
-            Some(_) => 1,
+            Some(n) => n.clamp(1, i64::from(u32::MAX)) as u32,
             // `except (TypeError, ValueError): ... return DEFAULT_TOOL_TIMEOUT_SECONDS`
             // -- Python also logs a warning here; this crate has no run
             // logger yet to port that side effect to.
@@ -140,16 +142,18 @@ fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
 }
 
 /// `int(raw)`, as far as [`resolve_timeout_seconds`] needs it: `bool`/
-/// `int`/`float` coerce the way CPython's `int()` does; a numeric `str`
-/// parses the same way; anything else (including a non-numeric `str`) is
-/// `None`, this function's caller's cue to fall back to the default
-/// rather than Python's own `ValueError`/`TypeError` text (never
-/// surfaced in state, so there is nothing here to match byte for byte).
-fn python_int_floor(value: &Value) -> Option<u64> {
+/// `int`/`float` coerce the way CPython's `int()` does (including
+/// negative values -- the caller's own `max(1, ...)` floors those, just
+/// as Python's does), a numeric `str` parses the same way; anything else
+/// (including a non-numeric `str`) is `None`, this function's caller's
+/// cue to fall back to the default rather than Python's own
+/// `ValueError`/`TypeError` text (never surfaced in state, so there is
+/// nothing here to match byte for byte).
+fn python_int_floor(value: &Value) -> Option<i64> {
     match value {
-        Value::Bool(b) => Some(u64::from(*b)),
+        Value::Bool(b) => Some(i64::from(*b)),
         Value::Int(i) => i.to_string().parse().ok(),
-        Value::Float(f) if f.is_finite() && *f >= 0.0 => Some(f.trunc() as u64),
+        Value::Float(f) if f.is_finite() => Some(f.trunc() as i64),
         Value::Str(s) => s.trim().parse().ok(),
         _ => None,
     }
@@ -345,6 +349,12 @@ fn full_jitter_backoff_ms(attempt_index: u32, base_ms: u32) -> u32 {
     rand::thread_rng().gen_range(0..=ceiling)
 }
 
+/// Test-only now: `execute_tool`'s own `setdefault`-shaped check reads
+/// the node's own `IndexMap` directly (`contains_key`), since this
+/// function's `None`-on-either collapsing can't tell a `Slot::Node`
+/// apart from an absent key; only this module's own tests still read a
+/// plain leaf value back out this way.
+#[cfg(test)]
 fn get_leaf(node: &crate::NodeRef, key: &str) -> Option<Value> {
     match node.borrow().get(&Value::Str(key.to_string())) {
         Some(Slot::Value(v)) => Some(v.clone()),
@@ -365,7 +375,7 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
 /// block, up to and including `rendered = {**top_level, **params}`) can
 /// fail with, already flattened to its own `Display` text -- the only
 /// thing a caller here ever needs it for.
-fn render_tool_call(tool: &ToolOp, ctx: &Value) -> Result<Dict, String> {
+fn render_tool_call(name: &str, tool: &ToolOp, ctx: &Value) -> Result<Dict, String> {
     let mut rendered: Dict = Dict::new();
     if let Some(prompt) = &tool.prompt {
         let text = electricity_template::render_template(
@@ -382,7 +392,7 @@ fn render_tool_call(tool: &ToolOp, ctx: &Value) -> Result<Dict, String> {
     }
 
     reject_security_sensitive_literal(tool_params_map(&tool.params))?;
-    let mut params = render_params(tool.provider.as_str(), tool_params_map(&tool.params), ctx)
+    let mut params = render_params(name, tool_params_map(&tool.params), ctx)
         .map_err(|err: RenderParamsError| err.to_string())?;
     if let Some(params_json) = &tool.params_json {
         let overlay = render_params_json(&params_json.source, ctx)
@@ -420,8 +430,14 @@ pub async fn execute_tool(
     let effect_node = store
         .ensure_dict(parent, name_key)
         .map_err(|err| VmError::Tool(err.to_string()))?;
-    // `node.setdefault("value", None)`.
-    if get_leaf(&effect_node, "value").is_none() {
+    // `node.setdefault("value", None)` -- a plain presence check, unlike
+    // `get_leaf`'s own `None`-on-promoted-dict behaviour, so a `Slot::Node`
+    // already there (e.g. a nested-dict value written by an earlier
+    // attempt) is never clobbered back to a leaf `None`.
+    if !effect_node
+        .borrow()
+        .contains_key(&Value::Str("value".to_string()))
+    {
         set_leaf(store, &effect_node, "value", Value::None);
     }
     let meta_node = store
@@ -475,10 +491,18 @@ pub async fn execute_tool(
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
+        // Published the moment a fresh attempt's own `meta` is visible,
+        // the same way `--live-state` would catch up with Python's own
+        // plain dict mutations here (never behind a `store.set` of their
+        // own, but always live through the same shared node) -- lane
+        // D2's own mirror only ever learns a run changed shape by
+        // polling `RunObserver::write`'s own call count, never by
+        // diffing the store itself.
+        observer.write();
 
         let mut failure: Option<String> = None;
 
-        match render_tool_call(tool, ctx) {
+        match render_tool_call(name, tool, ctx) {
             Err(message) => {
                 failure = Some(message);
             }
@@ -503,9 +527,11 @@ pub async fn execute_tool(
                                     "waiting_for",
                                     Value::Str(label.to_string()),
                                 );
+                                observer.write();
                             }
                             crate::limiter::SlotEvent::Acquired => {
                                 set_leaf(store, &meta_node, "waiting_for", Value::None);
+                                observer.write();
                             }
                         });
                 let acquired = tokio::select! {
@@ -519,20 +545,37 @@ pub async fn execute_tool(
                         failure = Some(limiter_err.to_string());
                     }
                     Some(Ok(guard)) => {
-                        let dispatch = run_tool(
-                            run_ctx.registry,
-                            &tool.provider,
-                            rendered_value,
-                            timeout_seconds,
-                        )
-                        .await;
+                        // `run_tool`'s own future is not itself
+                        // cancellation-aware (it has no token to check),
+                        // so this `select!` is the only thing standing
+                        // between a cancelled run and a tool dispatch
+                        // that blocks indefinitely -- a hit here, like
+                        // every other cancellation point in this
+                        // function, is `VmError::Cancelled` and bypasses
+                        // `on_error` entirely, never folded into an
+                        // ordinary `VmError::Tool` failure.
+                        let dispatch = tokio::select! {
+                            result = run_tool(
+                                run_ctx.registry,
+                                &tool.provider,
+                                rendered_value,
+                                timeout_seconds,
+                            ) => Some(result),
+                            () = token.cancelled() => None,
+                        };
                         // Released before this attempt's own backoff
                         // sleep (and before a model-mode `expect:` would
                         // run, if M0-H ever dispatched one) -- a
                         // retrying/`expect`-checking attempt must never
                         // hold its slot while it isn't actually using it.
+                        // Also unconditionally the right thing to do on
+                        // the cancelled branch above: the slot is never
+                        // held past this `select!`, cancelled or not.
                         drop(guard);
 
+                        let Some(dispatch) = dispatch else {
+                            return Err(VmError::Cancelled);
+                        };
                         match dispatch {
                             Err(err) => failure = Some(err.to_string()),
                             Ok(result) => {
@@ -615,7 +658,7 @@ pub async fn execute_tool(
                                                 "expect",
                                                 Value::Dict(expect_meta),
                                             );
-                                            failure = Some(cel_err.to_string());
+                                            failure = Some(format!("expect failed: {expr}"));
                                         }
                                     }
                                 }
@@ -643,6 +686,12 @@ pub async fn execute_tool(
                 set_leaf(store, &effect_node, "value", Value::None);
             }
             observer.effect_complete(&op.path, Some(&message));
+            // The final store write for this effect (whichever
+            // `on_error` branch below actually returns) -- same
+            // contract as the per-attempt reset's own `observer.
+            // write()` above, just for the terminal state instead of a
+            // fresh attempt's.
+            observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Tool(message));
             }
@@ -658,6 +707,7 @@ pub async fn execute_tool(
             );
         }
         observer.effect_complete(&op.path, None);
+        observer.write();
         return Ok(());
     }
     unreachable!("the attempt loop always returns on its last iteration")
@@ -858,6 +908,56 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err, VmError::Tool("json: unknown mode 'bogus'".to_string()));
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_from_reference_names_the_effect_not_the_provider() {
+        // `core/tool.py::ToolRuntime.execute` calls `_render_params`
+        // with `name=self.defn.name` (the effect's own name, `fetch`
+        // here), never `self.defn.provider` (`json`) -- the message
+        // this produces is `meta.error` and the propagated error text.
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::from("n"),
+            ParamNode::From {
+                path: "input.missing".to_string(),
+                default: None,
+            },
+        );
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool_op(params.clone())),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let tool = tool_op(params);
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            VmError::Tool(
+                "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not \
+                 resolve to a value."
+                    .to_string()
+            )
+        );
     }
 
     #[tokio::test]
@@ -1124,6 +1224,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_raising_cel_expect_fails_with_expect_failed_text_not_the_cel_error() {
+        // `core/expect.py::evaluate_expect` catches `CelEvaluationError`
+        // itself and returns `passed=False` with the error text folded
+        // into `meta.expect.error` -- `tool.py` never sees a raised
+        // exception here, so the failure text it writes is the same
+        // `expect failed: {expr}` an ordinary failing (non-raising)
+        // `expect:` gets, not the CEL evaluator's own error text.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("{}"));
+        let mut tool = tool_op(params);
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 1,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value.missing == 1".to_string(),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Skip)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from("expect failed: value.missing == 1"))
+        );
+        let expect_meta = meta.get(&Value::from("expect")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            expect_meta.get(&Value::from("result")),
+            Some(&Value::Bool(false))
+        );
+        assert!(expect_meta.contains_key(&Value::from("error")));
+    }
+
+    #[tokio::test]
     async fn a_passing_cel_expect_succeeds_on_the_first_attempt() {
         let mut params = IndexMap::new();
         params.insert(Value::from("mode"), template("parse"));
@@ -1256,6 +1422,20 @@ mod tests {
             .ensure_dict(&effect_node, Value::from("meta"))
             .unwrap();
 
+        // `Store.set`'s own `on_write` is what drives `cof run
+        // --live-state` (`tool.py`'s `_on_wait`/`_on_acquired`); this
+        // crate's own equivalent is `RunObserver::write`, which must
+        // fire from inside the `acquire_reporting` callback too, not
+        // just from the per-attempt `meta` writes `execute_tool` makes
+        // on its own.
+        struct CountingObserver(std::cell::Cell<u32>);
+        impl RunObserver for CountingObserver {
+            fn write(&self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let observer = CountingObserver(std::cell::Cell::new(0));
+
         let run = async {
             execute_tool(
                 &op,
@@ -1264,7 +1444,7 @@ mod tests {
                 &store.root,
                 &Value::None,
                 &run_ctx,
-                &crate::NullObserver,
+                &observer,
                 &token,
             )
             .await
@@ -1279,9 +1459,26 @@ mod tests {
             }
         }
         assert_eq!(get_leaf(&meta_node, "waiting_for"), Some(Value::from("io")));
+        // 2 by now: the per-attempt `meta` reset's own write, then the
+        // `Waiting` event's -- not just the latter, since the reset
+        // fires its own `observer.write()` too (this same contract,
+        // just for the start of a fresh attempt rather than a limiter
+        // event).
+        assert_eq!(
+            observer.0.get(),
+            2,
+            "the per-attempt reset's own write, then one for the Waiting event"
+        );
         drop(holder);
         run.await;
         assert_eq!(get_leaf(&meta_node, "waiting_for"), Some(Value::None));
+        // 2 more: `Acquired`, then the final store write once the
+        // (successful) attempt completes.
+        assert_eq!(
+            observer.0.get(),
+            4,
+            "a write for Acquired, then one more for the final store write"
+        );
     }
 
     /// A test-only [`electricity_tools::ToolPlugin`] that fails its
@@ -1524,15 +1721,48 @@ mod tests {
             .unwrap();
         let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
         let raw = meta.get(&Value::from("raw")).unwrap().as_dict().unwrap();
+        // Exact values, not just key presence: `{"body": "<N+1 a's>"}`
+        // is plain ASCII with no redaction-sensitive shape, so its own
+        // `json.dumps` encoding (`core/tool.py::_capped_raw`'s own
+        // separators, matched byte for byte against
+        // `electricity-json/src/writer.rs`) is computable here directly,
+        // the same way `generate_tool_runtime_corpus.py`'s own
+        // `cap_raw_cases` compute `_capped_raw`'s own
+        // `_original_bytes`/`_preview` fields from a real encoded byte
+        // string.
+        let encoded = format!(
+            "{{\"body\": \"{}\"}}",
+            "a".repeat(electricity_redaction::RAW_META_MAX_BYTES + 1)
+        );
         assert_eq!(
             raw.get(&Value::from("_truncated")),
             Some(&Value::Bool(true))
         );
-        assert!(raw.contains_key(&Value::from("_original_bytes")));
-        assert!(raw.contains_key(&Value::from("_preview")));
+        assert_eq!(
+            raw.get(&Value::from("_original_bytes")),
+            Some(&Value::from(encoded.len() as i64))
+        );
+        assert_eq!(
+            raw.get(&Value::from("_preview")),
+            Some(&Value::from(
+                &encoded[..electricity_redaction::RAW_META_MAX_BYTES]
+            ))
+        );
     }
 
     #[tokio::test]
+    // Cancellation point 1 of 3 this module tests directly (the fourth,
+    // the synchronous `token.is_set()` fast path in front of a retry --
+    // the same guard clause as the `tokio::select!` below, just for a
+    // token that was already cancelled before this attempt was even due
+    // -- is not independently observable by a black-box test: a token
+    // cancelled before `execute_tool` is even called also races this
+    // same attempt's own limiter-wait `select!` below, so a test built
+    // that way is flaky rather than exercising the fast path in
+    // isolation. This test instead cancels *while genuinely suspended*
+    // in the backoff sleep -- no race, since `token.cancelled()` is the
+    // only ready branch at that point -- which is the deterministic,
+    // reachable half of the same guard clause.
     async fn a_cancelled_token_stops_a_queued_retry() {
         let mut params = IndexMap::new();
         params.insert(Value::from("mode"), template("bogus"));
@@ -1572,6 +1802,135 @@ mod tests {
         for _ in 0..4 {
             tokio::select! {
                 _ = &mut run => unreachable!("must still be sleeping its backoff"),
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+        token.request(2);
+        let err = run.await.unwrap_err();
+        assert_eq!(err, VmError::Cancelled);
+    }
+
+    #[tokio::test]
+    // Cancellation point 2 of 3: the limiter wait (already exercised
+    // indirectly by `a_contended_group_slot_reports_waiting_for_then_
+    // clears_it`'s own `Waiting` assertions, but this test is the one
+    // that actually cancels the token while blocked there and checks
+    // the function returns `Err(VmError::Cancelled)`, not an ordinary
+    // `VmError::Tool` failure or a successful completion once the slot
+    // frees up later).
+    async fn a_cancelled_token_stops_a_queued_limiter_wait() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("1"));
+        let mut tool = tool_op(params);
+        tool.group = Some("io".to_string());
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::with_limits(None, [("io".to_string(), 1)]);
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        // Hold the only `io` slot for the whole test -- never dropped,
+        // so `execute_tool`'s own wait never resolves on its own.
+        let _holder = limiter.acquire(Some("io")).await.unwrap();
+
+        let run = async {
+            execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            )
+            .await
+        };
+        tokio::pin!(run);
+
+        for _ in 0..4 {
+            tokio::select! {
+                _ = &mut run => unreachable!("must not finish while the group slot is held"),
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+        token.request(2);
+        let err = run.await.unwrap_err();
+        assert_eq!(err, VmError::Cancelled);
+    }
+
+    #[tokio::test]
+    // Cancellation point 3 of 3: inside `run_tool`'s own dispatch --
+    // `run_tool`'s future carries no token of its own, so this is the
+    // one point where a cancellation hit depends entirely on
+    // `execute_tool`'s own `select!` racing it against the dispatch,
+    // not on anything the dispatched plugin itself checks.
+    async fn a_cancelled_token_stops_a_tool_dispatch_in_flight() {
+        struct PendingForeverTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for PendingForeverTool {
+            fn name(&self) -> &str {
+                "pending_forever"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _timeout_seconds: u32,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                std::future::pending::<()>().await;
+                unreachable!("never resolves")
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "pending_forever".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(PendingForeverTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let run = async {
+            execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            )
+            .await
+        };
+        tokio::pin!(run);
+
+        for _ in 0..4 {
+            tokio::select! {
+                _ = &mut run => unreachable!("must still be waiting on the pending dispatch"),
                 _ = tokio::task::yield_now() => {}
             }
         }

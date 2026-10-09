@@ -242,6 +242,45 @@ def build_cases() -> list[dict]:
             params_json='{"allowed_commands": ["ls"]}',
         )
     )
+    cases.append(
+        # Finding 1's own probe: `_render_params`'s own "did not
+        # resolve" message names the *effect* (`self.defn.name`), never
+        # the provider -- this case's own name is deliberately not
+        # `json` (the provider every case here uses), so a regression
+        # that swaps them back would show up as a mismatched
+        # `error`/`node.meta.error` text.
+        run_case(
+            name="from_reference_unresolved_no_default",
+            on_error="skip",
+            params={"mode": "stringify", "input": {"from": "input.missing"}},
+            ctx={"input": {}},
+        )
+    )
+    cases.append(
+        run_case(
+            name="from_reference_with_default",
+            params={
+                "mode": "stringify",
+                "input": {"from": "input.missing", "default": {"got": "default"}},
+            },
+            ctx={"input": {}},
+        )
+    )
+    cases.append(
+        # Finding 2's own probe: a CEL `expect:` that *raises*
+        # (`value.missing` on an empty dict, an unresolved path) is
+        # caught inside `evaluate_expect` itself -- `tool.py` never sees
+        # an exception here, so the failure text is the same `expect
+        # failed: {expr}` an ordinary failing (non-raising) `expect:`
+        # gets, not the CEL evaluator's own error text.
+        run_case(
+            name="cel_expect_raises",
+            on_error="skip",
+            params={"mode": "parse", "input": "{}"},
+            retries=RetryPolicyDef(max_attempts=1, backoff_ms=0),
+            expect=ExpectDef(mode="cel", expr="value.missing == 1"),
+        )
+    )
 
     return cases
 
