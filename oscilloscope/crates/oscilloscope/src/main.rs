@@ -1,8 +1,7 @@
-//! `osp` — the CLI binary (DESIGN.md §4, §6.2). Milestone O-1 (issue
-//! #424) fills in the run logic and `osp watch`: `--log` plain-text
-//! mode is the only front end until O-2's TUI lands, so every run
-//! prints this stream today regardless of `effective_log_mode`'s
-//! answer.
+//! `osp` — the CLI binary (DESIGN.md §4, §6.2, §6.3). `--log`, or
+//! any non-TTY stdout, keeps O-1's plain-text stream unchanged; a TTY
+//! gets O-2's ratatui/crossterm TUI (issue #434) instead, in
+//! `run_tui`/`run_tui_watch`, `tui.rs` and `keys.rs`.
 //!
 //! The two forms share no top-level `clap` command: `osp watch ...` is
 //! dispatched by a plain string check on the first argument (`watch`
@@ -19,19 +18,29 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod keys;
+mod terminal;
+mod tui;
 
 use clap::{Parser, ValueEnum};
+use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{CofEngine, ElectricityEngine, Engine, EngineError, RunSpec};
-use oscilloscope_core::model::RunModel;
+use oscilloscope_core::model::{ProcessState, RunModel};
 use oscilloscope_core::observe::{
     EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, parse_event,
 };
 use oscilloscope_core::plan::PlanTree;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+
+use keys::App;
 use oscilloscope_core::supervise::{
     ForwardSignal, SignalWatcher, SupervisedChild, exit_code, exit_code_for_signal_name,
 };
+use terminal::TerminalGuard;
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (preview)");
 
@@ -316,10 +325,6 @@ fn do_run(args: RunArgs) -> ExitCode {
         }
     };
 
-    // Computed (and unit-tested) so O-2's TUI only has to branch on it;
-    // every run prints the same plain-text stream today regardless.
-    let _log_mode = effective_log_mode(args.log);
-
     // The run directory is created only right here, immediately before
     // the spawn it exists for (P2-1): every check above (the config,
     // the plan compile) can fail without ever needing it on disk at
@@ -377,6 +382,23 @@ fn do_run(args: RunArgs) -> ExitCode {
             }
         };
 
+    // DESIGN.md §6.2/§6.3: a TTY gets the interactive TUI; `--log` or
+    // any non-TTY stdout keeps this function's own plain-text stream
+    // below, byte for byte.
+    if !effective_log_mode(args.log) {
+        return run_tui(
+            child,
+            stderr_rx,
+            spec,
+            plan,
+            run_dir,
+            is_default_dir,
+            args.orchestration.clone(),
+            engine.name().to_string(),
+            signals,
+        );
+    }
+
     let mut clock = Clock::new();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -384,10 +406,6 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
-    // Dispatch info (branches/concurrency, DESIGN.md §2.1 rule 4) is
-    // tracked as soon as events arrive, even though nothing renders it
-    // back yet: there's no TUI before O-2, and --log's own output comes
-    // from `differ` alone.
     let mut model = RunModel::new();
 
     let mut signal_count: u32 = 0;
@@ -446,23 +464,59 @@ fn do_run(args: RunArgs) -> ExitCode {
     // does not: a line the tee thread hadn't gotten to yet was silently
     // dropped, and `stdout.txt`/`stderr.txt` could be cut off
     // mid-write.
+    let code = finish_run(
+        &mut out,
+        &mut clock,
+        &mut child,
+        &stderr_rx,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+        &spec,
+        &run_dir,
+        exit_status,
+        args.out_dir.is_none(),
+    );
+    ExitCode::from(code)
+}
+
+/// The common ending every run reaches, however it got there (the
+/// engine simply exiting, in `do_run`'s own plain loop; the TUI's own
+/// loop breaking the same way, once its terminal session is already
+/// torn down and a plain writer is all that's left): reaps the
+/// engine, drains whatever's left of its stderr and the final
+/// live-state write, computes the run's own summary line exactly
+/// once (M1: never mid-run), and prints the exit code and (for the
+/// default run directory only) where its files ended up. Returns the
+/// engine's own exit code, the same number every path through here
+/// has always used to build its `ExitCode` from.
+#[allow(clippy::too_many_arguments)]
+fn finish_run(
+    out: &mut std::io::StdoutLock<'_>,
+    clock: &mut Clock,
+    child: &mut SupervisedChild,
+    stderr_rx: &std::sync::mpsc::Receiver<String>,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+    spec: &RunSpec,
+    run_dir: &Path,
+    exit_status: std::process::ExitStatus,
+    print_run_dir: bool,
+) -> u8 {
     let exit_status = child.wait().unwrap_or(exit_status);
 
     // Drain what's left after the engine exited: its last stderr lines,
     // and the final live-state write (DESIGN.md §1.1: `run_end`, when
     // present, lands after it).
     for line in stderr_rx.try_iter() {
-        print_line(&mut out, &mut clock, None, &format!("engine: {line}"));
+        print_line(out, clock, None, &format!("engine: {line}"));
     }
-    drain_observations(
-        &mut out,
-        &mut clock,
-        &mut live_poller,
-        &mut events_tailer,
-        &mut differ,
-        &mut model,
-        &plan,
-    );
+    drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
 
     // M1: the run's own summary line is computed exactly once, here,
     // after every other line this run will ever produce has already
@@ -481,20 +535,18 @@ fn do_run(args: RunArgs) -> ExitCode {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     if let Some(state) = &final_state {
-        for line in differ.diff(state, &plan) {
-            print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+        for line in differ.diff(state, plan) {
+            print_line(out, clock, line.ts.as_deref(), &line.text);
         }
     }
     let summary = final_state
         .as_ref()
-        .and_then(|state| {
-            differ.finish(state, failure_reason_fallback(&run_dir, &model).as_deref())
-        })
+        .and_then(|state| differ.finish(state, failure_reason_fallback(run_dir, model).as_deref()))
         .or_else(|| {
             if differ.run_line_emitted() {
                 return None;
             }
-            let text = match failure_reason_fallback(&run_dir, &model) {
+            let text = match failure_reason_fallback(run_dir, model) {
                 Some(err) => format!(
                     "■ run failed: {}",
                     oscilloscope_core::diff::format_reason_for_summary(&err)
@@ -504,15 +556,262 @@ fn do_run(args: RunArgs) -> ExitCode {
             Some(oscilloscope_core::diff::LogLine { ts: None, text })
         });
     if let Some(line) = summary {
-        print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+        print_line(out, clock, line.ts.as_deref(), &line.text);
     }
     let _ = writeln!(out, "exit {}", exit_code(exit_status));
 
-    if args.out_dir.is_none() {
+    if print_run_dir {
         let _ = writeln!(out, "run directory: {}", run_dir.display());
     }
 
-    ExitCode::from(exit_code(exit_status) as u8)
+    exit_code(exit_status) as u8
+}
+
+/// How often the TUI redraws at most (DESIGN.md §6.3: "Redraws are
+/// capped (for example 10 per second) and happen only when something
+/// changed").
+const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+/// How long one loop tick waits for a key before giving the rest of
+/// the loop (signals, observation polling, the redraw check) another
+/// turn — short enough that navigation feels immediate, long enough
+/// not to spin a whole CPU core on a shared machine.
+const KEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
+
+/// Sends one cancelling signal to the engine's process group and
+/// applies the same escalation `do_run`'s plain loop applies to a real
+/// forwarded signal (DESIGN.md §4.1) — shared by both, since `c`/a
+/// confirmed `q` (§6.3: "cancel, with confirm (= Ctrl-C)") must behave
+/// exactly like Ctrl-C itself, never a separate path that could drift
+/// from it.
+fn cancel_once(
+    child: &SupervisedChild,
+    signal_count: &mut u32,
+    kill_deadline: &mut Option<Instant>,
+    log_lines: &mut Vec<String>,
+    clock: &mut Clock,
+) {
+    *signal_count += 1;
+    child.forward(ForwardSignal::Int);
+    if *signal_count == 1 {
+        log_lines.push(format_log_line(
+            clock,
+            None,
+            "cancelling, finally running...",
+        ));
+    } else if *signal_count == 2 {
+        *kill_deadline = Some(Instant::now() + Duration::from_secs(10));
+    }
+}
+
+/// `print_line`'s own formatting, into the TUI's own log buffer
+/// instead of straight to stdout (DESIGN.md §6.3's log pane: "the
+/// same lines as `--log`").
+fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
+    let elapsed = clock.elapsed_for(ts);
+    format!("{} {text}", Clock::format(elapsed))
+}
+
+/// `osp <doc>`'s own TUI loop (DESIGN.md §6.3): supervises the engine
+/// exactly like `do_run`'s plain loop (the same signal forwarding,
+/// kill-deadline escalation, and observation polling), but renders a
+/// `RenderState` and reads keys instead of printing a plain-text
+/// stream. Ends the moment the engine does (the same point `do_run`'s
+/// own loop ends) — osp does not keep a separate "finished" screen
+/// open afterwards; the plain summary `finish_run` already prints
+/// once the terminal session is torn down is the review surface,
+/// exactly as it already is for `--log`.
+#[allow(clippy::too_many_arguments)]
+fn run_tui(
+    mut child: SupervisedChild,
+    stderr_rx: std::sync::mpsc::Receiver<String>,
+    spec: RunSpec,
+    plan: PlanTree,
+    run_dir: PathBuf,
+    print_run_dir: bool,
+    document: String,
+    engine_name: String,
+    mut signals: Option<SignalWatcher>,
+) -> ExitCode {
+    let mut live_poller = LiveStatePoller::new(spec.live_state_path());
+    let mut events_tailer = EventsTailer::new(spec.events_path());
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut clock = Clock::new();
+    let mut log_lines: Vec<String> = Vec::new();
+    let mut current_state: Option<serde_json::Value> = None;
+    let start = Instant::now();
+
+    let mut app = App::new(false);
+    let mut signal_count: u32 = 0;
+    let mut kill_deadline: Option<Instant> = None;
+
+    let guard_and_terminal = TerminalGuard::enter()
+        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
+    let (_guard, mut terminal) = match guard_and_terminal {
+        Ok(pair) => pair,
+        Err(err) => {
+            // DESIGN.md's own TTY check (`effective_log_mode`) said
+            // this should be a real terminal; if it still isn't one
+            // underneath (an exotic CI pty, a stdout swapped out from
+            // under osp), fall back to a quiet wait rather than a
+            // broken half-raw-mode session.
+            eprintln!("osp: couldn't start the TUI ({err}); waiting for the engine to finish");
+            let exit_status = child.wait().expect("waiting on a freshly spawned child");
+            let stdout = std::io::stdout();
+            let mut out = stdout.lock();
+            let code = finish_run(
+                &mut out,
+                &mut clock,
+                &mut child,
+                &stderr_rx,
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+                &spec,
+                &run_dir,
+                exit_status,
+                print_run_dir,
+            );
+            return ExitCode::from(code);
+        }
+    };
+
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut dirty = true;
+
+    let exit_status = loop {
+        if let Some(watcher) = signals.as_mut() {
+            for _sig in watcher.pending() {
+                cancel_once(
+                    &child,
+                    &mut signal_count,
+                    &mut kill_deadline,
+                    &mut log_lines,
+                    &mut clock,
+                );
+                dirty = true;
+            }
+        }
+        if let Some(deadline) = kill_deadline {
+            if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
+                log_lines.push(format_log_line(
+                    &mut clock,
+                    None,
+                    "engine still running 10s after the second signal; sending SIGKILL",
+                ));
+                child.kill_group();
+                kill_deadline = None;
+                dirty = true;
+            }
+        }
+
+        for line in stderr_rx.try_iter() {
+            log_lines.push(format_log_line(
+                &mut clock,
+                None,
+                &format!("engine: {line}"),
+            ));
+            dirty = true;
+        }
+
+        let (lines, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        dirty |= !lines.is_empty();
+        for line in &lines {
+            log_lines.push(format_log_line(&mut clock, line.ts.as_deref(), &line.text));
+        }
+        if let Some(state) = state {
+            current_state = Some(state);
+            dirty = true;
+        }
+
+        let render_state = oscilloscope_core::render::build(
+            &document,
+            &engine_name,
+            &plan,
+            &mut model,
+            current_state.as_ref(),
+            ProcessState::Running,
+            start.elapsed().as_secs_f64(),
+            &[],
+        );
+        if app.follow {
+            if let Some(target) = App::follow_target(&render_state.rows) {
+                app.selected_path = Some(target.to_string());
+            }
+        }
+        if app.selected_path.is_none() {
+            app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+        }
+        let visible = keys::visible_rows(&render_state.rows, &app);
+
+        if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
+            if let Ok(ev) = event::read() {
+                match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        let running = matches!(child.try_wait(), Ok(None));
+                        if let keys::Action::Cancel = app.handle_key(key, &visible, running) {
+                            cancel_once(
+                                &child,
+                                &mut signal_count,
+                                &mut kill_deadline,
+                                &mut log_lines,
+                                &mut clock,
+                            );
+                        }
+                        dirty = true;
+                    }
+                    CEvent::Resize(_, _) => dirty = true,
+                    _ => {}
+                }
+            }
+        }
+
+        if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let details = app
+                .selected_path
+                .as_deref()
+                .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
+            let _ = terminal.draw(|f| {
+                tui::draw(f, &render_state, details.as_ref(), &log_lines, &app);
+            });
+            last_draw = Instant::now();
+            dirty = false;
+        }
+
+        if let Ok(Some(status)) = child.try_wait() {
+            break status;
+        }
+    };
+
+    drop(terminal);
+    drop(_guard);
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let code = finish_run(
+        &mut out,
+        &mut clock,
+        &mut child,
+        &stderr_rx,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+        &spec,
+        &run_dir,
+        exit_status,
+        print_run_dir,
+    );
+    ExitCode::from(code)
 }
 
 /// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
@@ -779,11 +1078,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         std::thread::sleep(POLL_INTERVAL);
     }
 
-    // P2-7: one more drain, whatever the loop broke out on, catches any
-    // event or state write that landed between the loop's last check
-    // and now — the same reasoning `do_run` already applies after its
-    // own child exits.
-    if let Some(state) = drain_observations(
+    let code = finish_watch(
         &mut out,
         &mut clock,
         &mut live_poller,
@@ -791,31 +1086,55 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &mut differ,
         &mut model,
         &plan,
-    ) {
-        last_state = Some(state);
+        &run_dir,
+        &mut last_state,
+        local_signal,
+    );
+    let _ = writeln!(out, "exit {code}");
+    ExitCode::from(code as u8)
+}
+
+/// The common ending every `osp watch` session reaches, however its
+/// own loop stopped (a completed run, a local Ctrl-C, or a dead pid
+/// with nothing left to watch): one more drain for anything that
+/// landed between the loop's last check and now, the same single
+/// final-summary computation `do_run`'s own `finish_run` uses (M1),
+/// and the exit code `osp run` of the same document would have used
+/// — from a signal `run_end` named, or from watch's own local Ctrl-C,
+/// rather than only ok-vs-failed. Returns that exit code; the caller
+/// prints it and `ExitCode::from`s it, the same shape `finish_run`
+/// leaves to its own callers.
+#[allow(clippy::too_many_arguments)]
+fn finish_watch(
+    out: &mut std::io::StdoutLock<'_>,
+    clock: &mut Clock,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+    run_dir: &Path,
+    last_state: &mut Option<serde_json::Value>,
+    local_signal: Option<ForwardSignal>,
+) -> u8 {
+    if let Some(state) =
+        drain_observations(out, clock, live_poller, events_tailer, differ, model, plan)
+    {
+        *last_state = Some(state);
     }
 
-    // Parity with `do_run`'s own ending (P2-7): a summary line even
-    // when neither source ever produced one, and the engine's own
-    // exit code when it's knowable — from a signal `run_end` named, or
-    // from this watch's own local Ctrl-C — rather than only ok-vs-
-    // failed.
-    // M1: the same single, final `finish` call `do_run` uses, in
-    // place of the per-tick heuristic.
     let final_state = std::fs::read(run_dir.join("state.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
     if let Some(state) = &final_state {
-        for line in differ.diff(state, &plan) {
-            print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+        for line in differ.diff(state, plan) {
+            print_line(out, clock, line.ts.as_deref(), &line.text);
         }
-        last_state = Some(state.clone());
+        *last_state = Some(state.clone());
     }
     let summary = final_state
         .as_ref()
-        .and_then(|state| {
-            differ.finish(state, failure_reason_fallback(&run_dir, &model).as_deref())
-        })
+        .and_then(|state| differ.finish(state, failure_reason_fallback(run_dir, model).as_deref()))
         .or_else(|| {
             if differ.run_line_emitted() {
                 return None;
@@ -826,19 +1145,19 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             })
         });
     if let Some(line) = summary {
-        print_line(&mut out, &mut clock, line.ts.as_deref(), &line.text);
+        print_line(out, clock, line.ts.as_deref(), &line.text);
     }
 
-    let code = if let Some(sig) = local_signal {
+    if let Some(sig) = local_signal {
         match sig {
             ForwardSignal::Int => 130,
             ForwardSignal::Term => 143,
             ForwardSignal::Hup => 129,
         }
     } else if let Some(signal) = model.run_end_signal() {
-        exit_code_for_signal_name(signal).unwrap_or(1)
+        exit_code_for_signal_name(signal).unwrap_or(1) as u8
     } else {
-        match &last_state {
+        match last_state {
             Some(state) if oscilloscope_core::model::run_ended(state) => {
                 if oscilloscope_core::model::run_ok(state) {
                     0
@@ -853,9 +1172,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
                 1
             }
         }
-    };
-    let _ = writeln!(out, "exit {code}");
-    ExitCode::from(code as u8)
+    }
 }
 
 /// Prints a clap parse error to the right stream and returns its exit

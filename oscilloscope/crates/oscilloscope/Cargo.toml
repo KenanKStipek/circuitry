@@ -19,6 +19,19 @@ oscilloscope-core = { path = "../oscilloscope-core" }
 clap = { version = "=4.6.7", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Pinned (not "0.30"): ratatui 0.30.2 declares rust-version 1.88,
+# newer than the workspace MSRV (1.86); 0.30.0 is the newest 0.30.x
+# that still builds on 1.86. default-features off: "all-widgets"
+# (termwiz/termion backends, the calendar widget) pulls in dependencies
+# osp's own TUI never uses; "crossterm" alone (ratatui-crossterm's own
+# default feature) brings in crossterm 0.29, pinned to match directly
+# below so osp's own signal/raw-mode calls and ratatui's backend never
+# disagree about which crossterm they're linking.
+ratatui = { version = "=0.30.0", default-features = false, features = [
+    "crossterm",
+    "underline-color",
+] }
+crossterm = "0.29"
 
 [dev-dependencies]
 tempfile = "3"
