@@ -23,6 +23,7 @@ mod float_repr;
 mod generated;
 pub mod int_value;
 mod numeric;
+pub mod pycompat;
 mod string_repr;
 
 pub use cancel::CancellationToken;
