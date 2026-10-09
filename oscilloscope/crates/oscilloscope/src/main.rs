@@ -502,6 +502,16 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // then) and, failing both, once the engine's own pid — from a
     // `run_start` event, when the stream has one — is confirmed dead.
     let mut last_state: Option<serde_json::Value> = None;
+    // N3: a run supervised by a bare `cof run --live-state ... --out
+    // ...` (no `--events`) never gives this loop a pid to check, and
+    // an aborted run (a second signal, SIGKILL, a crash) never writes
+    // a completed state either, so neither of this loop's other two
+    // stop conditions can ever fire for it. The orchestrator's own
+    // decision on this finding: no staleness timeout (a quiet run can
+    // legitimately stay quiet for a long time) — just tell the user,
+    // once, what watch is relying on instead: Ctrl-C.
+    let mut warned_no_events = false;
+    let events_path = run_dir.join("events.jsonl");
     loop {
         if let Some(watcher) = signals.as_mut() {
             if !watcher.pending().is_empty() {
@@ -524,6 +534,18 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             .is_some_and(oscilloscope_core::model::run_ended)
         {
             break;
+        }
+        if !warned_no_events
+            && last_state.is_some()
+            && model.run_start_pid().is_none()
+            && !model.run_ended_by_events()
+            && !events_path.exists()
+        {
+            eprintln!(
+                "osp: this run has no --events stream; an aborted run can't be \
+                 detected without one. Ctrl-C stops this watch."
+            );
+            warned_no_events = true;
         }
         if model.run_ended_by_events() {
             // DESIGN.md §3's own ordering guarantee: the final

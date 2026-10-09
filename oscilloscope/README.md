@@ -36,6 +36,13 @@ osp watch ./run
 - `cof run --events` (issue #419) is detected from `cof run --help`; without
   it `osp` falls back to `--live-state`/`--out` alone, state-only (DESIGN.md
   §2's "From state alone" rules).
+- `osp watch <dir>` on a run with no `--events` stream has no engine pid to
+  check and no way to tell a genuinely aborted run (a second signal,
+  `SIGKILL`, a crash) from one that's simply still going quietly: neither
+  ever writes a final snapshot. `osp watch` warns once on stderr when this
+  is the case, and otherwise just keeps waiting — there is no staleness
+  timeout, since a quiet run can stay quiet for a long time. Ctrl-C always
+  stops the watch.
 - A document that fails to compile (or an engine whose compiler is still a
   stub) falls back to a plan-free run: rows come only from what's observed.
 - The first Ctrl-C forwards `SIGINT` to the engine's process group and logs
