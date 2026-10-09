@@ -24,6 +24,42 @@ fn is_namespace(root: &str) -> bool {
     NAMESPACES.contains(&root)
 }
 
+/// `core/state_ns.py::migrate_legacy_state`'s own `input`-namespace
+/// rule, applied to *inline* (the CLI's own `-e` entries, already
+/// JSON-sniffed and string-restored -- `pipeline::cli_input_namespace`'s
+/// own input): an `input` key, if present, wins outright -- every other
+/// key in *inline* is ignored, and the returned namespace is that
+/// key's own value if it is a dict, or empty otherwise (Python's
+/// `if INPUT_NS in state: return state` followed by
+/// `cli/runtime_shim.py::run`'s own `if not isinstance(input_ns, dict):
+/// input_ns = {}`). Otherwise every key that is neither a namespace
+/// name (`NAMESPACES`) nor `_`-prefixed is lifted into the returned
+/// namespace -- a key named `prime`/`runtime`, or `_`-prefixed, is
+/// never lifted and so can never satisfy a declared `interface.inputs`
+/// entry of the same name via `-e` (`core/state_ns.py`'s own
+/// `key not in NAMESPACES and not key.startswith("_")`).
+pub(crate) fn migrate_legacy_input_namespace(
+    inline: &indexmap::IndexMap<String, Value>,
+) -> indexmap::IndexMap<String, Value> {
+    if let Some(value) = inline.get("input") {
+        return match value {
+            Value::Dict(dict) => dict
+                .iter()
+                .filter_map(|(k, v)| match k {
+                    Value::Str(s) => Some((s.clone(), v.clone())),
+                    _ => None,
+                })
+                .collect(),
+            _ => indexmap::IndexMap::new(),
+        };
+    }
+    inline
+        .iter()
+        .filter(|(key, _)| !is_namespace(key) && !key.starts_with('_'))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 /// Hard-errors unless a by-reference `{from: <path>}` leaf has a legal
 /// root: rooted at `input.`/`prime.`/`runtime.`, or a binding of an
 /// enclosing loop (`each.as`, `iter`). Ports
@@ -549,5 +585,49 @@ mod tests {
         );
 
         assert!(validate_bare_input_refs(&Value::Dict(document)).is_ok());
+    }
+
+    fn inline(pairs: Vec<(&str, Value)>) -> indexmap::IndexMap<String, Value> {
+        pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+    }
+
+    #[test]
+    fn plain_keys_are_lifted_under_input() {
+        let result = migrate_legacy_input_namespace(&inline(vec![(
+            "name",
+            Value::Str("World".to_string()),
+        )]));
+        assert_eq!(result.get("name"), Some(&Value::Str("World".to_string())));
+    }
+
+    #[test]
+    fn underscore_prefixed_keys_are_never_lifted() {
+        let result =
+            migrate_legacy_input_namespace(&inline(vec![("_token", Value::Str("x".to_string()))]));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn namespace_named_keys_are_never_lifted() {
+        let result = migrate_legacy_input_namespace(&inline(vec![("prime", Value::from(5i64))]));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn an_input_key_wins_outright_and_nothing_else_is_lifted() {
+        let mut nested = Dict::new();
+        nested.insert(Value::Str("name".to_string()), Value::Str("W".to_string()));
+        let result = migrate_legacy_input_namespace(&inline(vec![
+            ("input", Value::Dict(nested)),
+            ("other", Value::Str("ignored".to_string())),
+        ]));
+        assert_eq!(result.get("name"), Some(&Value::Str("W".to_string())));
+        assert_eq!(result.get("other"), None);
+    }
+
+    #[test]
+    fn a_non_dict_input_key_becomes_an_empty_namespace() {
+        let result = migrate_legacy_input_namespace(&inline(vec![("input", Value::from(5i64))]));
+        assert!(result.is_empty());
     }
 }

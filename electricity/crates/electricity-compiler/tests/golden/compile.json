@@ -7,7 +7,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -68,7 +69,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -138,7 +140,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -201,7 +204,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -268,7 +272,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -329,7 +334,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -388,7 +394,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -443,7 +450,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -491,7 +499,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -577,7 +586,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -698,7 +708,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -799,7 +810,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -880,7 +892,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -961,7 +974,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -1043,7 +1057,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -1124,7 +1139,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -1204,7 +1220,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -1265,7 +1282,8 @@
     "entry": "bad.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1298,7 +1316,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1327,7 +1346,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1356,7 +1376,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1385,7 +1406,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1414,7 +1436,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1443,7 +1466,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1472,7 +1496,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1501,7 +1526,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1530,7 +1556,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1563,7 +1590,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1592,7 +1620,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1621,7 +1650,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1652,7 +1682,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1681,7 +1712,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1710,7 +1742,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1741,7 +1774,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1772,7 +1806,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1801,7 +1836,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1830,7 +1866,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1859,7 +1896,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1890,7 +1928,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1921,7 +1960,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1950,7 +1990,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1979,7 +2020,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2008,7 +2050,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2037,7 +2080,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2066,7 +2110,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2095,7 +2140,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2124,7 +2170,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -2179,7 +2226,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2210,7 +2258,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2239,7 +2288,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2268,7 +2318,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2297,7 +2348,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2326,7 +2378,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2355,7 +2408,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2384,7 +2438,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2413,7 +2468,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2442,7 +2498,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2471,7 +2528,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2500,7 +2558,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2529,7 +2588,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2559,7 +2619,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2588,7 +2649,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2617,7 +2679,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2646,7 +2709,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2675,7 +2739,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2704,7 +2769,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2733,7 +2799,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2762,7 +2829,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2795,7 +2863,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2826,7 +2895,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2857,7 +2927,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2888,7 +2959,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2917,7 +2989,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2946,7 +3019,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -2975,7 +3049,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3004,7 +3079,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3033,7 +3109,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3062,7 +3139,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -3121,7 +3199,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3150,7 +3229,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3179,7 +3259,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3208,7 +3289,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3237,7 +3319,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3266,7 +3349,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3295,7 +3379,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3324,7 +3409,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3353,7 +3439,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3382,7 +3469,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3413,7 +3501,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3443,7 +3532,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3473,7 +3563,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3503,7 +3594,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3533,7 +3625,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3562,7 +3655,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3591,7 +3685,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3620,7 +3715,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3649,7 +3745,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3678,7 +3775,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3711,7 +3809,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3772,7 +3871,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3860,7 +3960,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3889,7 +3990,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -3918,7 +4020,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -3973,7 +4076,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4034,7 +4138,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4094,7 +4199,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4156,7 +4262,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4223,7 +4330,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4271,7 +4379,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4300,7 +4409,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4329,7 +4439,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4359,7 +4470,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4388,7 +4500,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4417,7 +4530,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4446,7 +4560,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4526,7 +4641,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4606,7 +4722,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4676,7 +4793,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4729,7 +4847,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4814,7 +4933,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -4900,7 +5020,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -4929,7 +5050,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5143,7 +5265,8 @@
     "entry": "a.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5203,7 +5326,8 @@
     "entry": "a.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -5260,7 +5384,8 @@
     "entry": "a.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5321,7 +5446,8 @@
     "entry": "b.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5380,7 +5506,8 @@
     "entry": "a.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5440,7 +5567,8 @@
     "entry": "entry.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -5500,7 +5628,8 @@
     "entry": "entry.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -5557,7 +5686,8 @@
     "entry": "entry.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,

@@ -152,6 +152,17 @@
 //!   '<path>'`). Only the Circuitry-owned prefix in front of it is
 //!   pinned exactly by a corpus case; the OS-specific suffix is
 //!   compared by location only (DESIGN.md §1, §12).
+//! - [`pipeline`]'s `int()`/`float()`/boolean emulation for a CLI
+//!   `-e` text value accepts only ASCII digits and strips only its own
+//!   ASCII whitespace set (`is_python_strip_whitespace`, same
+//!   divergence as the file-emptiness check above) -- where CPython's
+//!   own `int()`/`float()`/`str.strip()` accept any Unicode
+//!   `Nd`-category decimal digit and the full `str.isspace()` set. No
+//!   exact Unicode `Nd` table exists anywhere in this workspace to
+//!   port against; a `-e` value made of non-ASCII decimal digits
+//!   (e.g. Arabic-Indic digits) reports electricity's own "could not
+//!   be converted"/"is not a boolean" text where `cof run` would
+//!   accept it.
 
 pub mod compile;
 pub mod compose;
@@ -269,6 +280,17 @@ pub struct CheckOptions {
     pub skip_preflight: bool,
     pub trust_document: bool,
     pub config_runtime: Option<Value>,
+    /// The CLI's `-e key=value` pairs, as given, text — in command-line
+    /// order, with a later occurrence of a key replacing an earlier
+    /// one's *value* but not its position (`IndexMap::insert`'s own
+    /// behavior on a repeated key, matching Python's `dict.__setitem__`
+    /// exactly: `cli/app.py::_parse_env_vars`'s `result[key] = parsed`
+    /// keeps a repeated key at its first position, last value wins).
+    /// Empty by default, so every existing caller and golden corpus
+    /// case behaves as it did before this field existed —
+    /// [`pipeline::check_interface_inputs_error`] reduces to its old,
+    /// always-empty-input-namespace behavior when this is empty.
+    pub inputs: indexmap::IndexMap<String, String>,
 }
 
 /// Matches `runtime_shim.validate(...)`'s return shape.

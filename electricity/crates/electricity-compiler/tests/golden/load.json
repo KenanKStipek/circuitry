@@ -7,7 +7,8 @@
     "entry": "doc.md",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -36,7 +37,8 @@
     "entry": "doc.toon",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -65,7 +67,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -106,7 +109,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -135,7 +139,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -164,7 +169,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -193,7 +199,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -234,7 +241,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -263,7 +271,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -292,7 +301,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -321,7 +331,8 @@
     "entry": "doc.json",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -350,7 +361,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -432,7 +444,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -505,6 +518,46 @@
     }
   },
   {
+    "name": "non_string_root_key_warns_with_its_yaml_read_type",
+    "files": {
+      "doc.yml": "1: unexpected\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, model, plugins, prompts, runtime, steps, strategy, version."
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "45b169c3f856b44e227ec13abea87a4b92d903d193d6def004573a29a68612d3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "schema_violation_loop_needs_exactly_one_of_while_or_each",
     "files": {
       "doc.yml": "effects:\n  - type: loop\n    name: poll\n    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
@@ -512,7 +565,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -541,7 +595,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -620,7 +675,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -661,7 +717,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -702,7 +759,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -739,7 +797,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -776,7 +835,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -813,7 +873,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
@@ -843,12 +904,1093 @@
     }
   },
   {
+    "name": "interface_input_e_string_value_int_shaped_text_is_recovered",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_boolean_shaped_text_is_recovered",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "true"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_exponent_shaped_text_is_recovered",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1e3"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_null_text_stays_present_via_restore",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "null"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_string_value_array_shaped_text_passes_only_via_restore",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1]"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "c8dc1e84a9e7026f1dcd5d72879358feba45c97b3736360d99e3a3c8ab9e555c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_required_non_string_input_given_null_is_still_missing",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "null"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'x' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_word_that_json_sniffs_to_an_int",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'boolean' but got int.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_number_word_that_json_sniffs_to_a_bool",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "true"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'number' but got bool.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_array_value_that_json_sniffs_to_an_object",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "{\"a\": 1}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'array' but got dict.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_underscore_prefixed_key_is_never_lifted",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    _token: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input '_token' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "4a93ac98def6fbba14e959351fac1089d6c28e16d430974da430a42b1d3f11da",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_input_namespace_key_satisfies_required_input",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "{\"name\": \"W\"}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'name' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_input_key_present_other_e_keys_are_not_lifted",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "input": "{}",
+        "name": "W"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'name' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_declared_input_named_prime_cannot_be_satisfied",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    prime: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "prime": "5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "missing required input 'prime' declared in orchestration interface.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "a1ff70e8eac9f9ea3d6545637ac9bf46f2c8412c9f2992822c909e6fced8af2e",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_number_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "5.5"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_number_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: number, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "notanumber"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'number' but 'notanumber' could not be converted: could not convert string to float: 'notanumber'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "9a75ca2b87e3dd1821f546e759e9ff936e863464cf5b662a9915a18334068b02",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_integer_with_underscores",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "1_000"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_integer_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: integer, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "abc"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "73c106a9925597d77e56e7812003199c0c98f46de505d835d48d78765792ea57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_word_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "yes"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_boolean_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: boolean, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "nope"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'boolean' but 'nope' could not be converted: 'nope' is not a boolean",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f56bf078f49b832755b4e2a6877022cd54eac39acd59f8001caea52a7866b9f3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "interface_input_e_array_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1,2,3]"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_array_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: array, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "[1,2,"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'array' but '[1,2,' could not be converted: Expecting value: line 1 column 6 (char 5)",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "f771632b07d49da5dc3d84b29923ff46404aa1eca6100e1df83ed2635e6a9334",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "interface_input_e_object_valid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: object, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "{\"a\": 1}"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "interface_input_e_object_invalid",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    x: {type: object, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "x": "notjson"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'x' declared type 'object' but 'notjson' could not be converted: Expecting value: line 1 column 1 (char 0)",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "07d9bfa006bfa65576bae91d4720ef71086d2668781327202709df0d20b3f511",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "required_interface_input_supplied_via_e_run_succeeds",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "name": "World"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "default_overridden_by_provided_e_value",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    count: {type: integer, default: 3}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "count": "abc"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "input 'count' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "03226346747cf8bb15c326c69c25f3cfe492f885aaef977b3fc88a61ab7c2ecd",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "undeclared_extra_e_input_is_allowed",
+    "files": {
+      "doc.yml": "interface:\n  inputs:\n    name: {type: string, required: true}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {
+        "name": "World",
+        "unrelated": "1"
+      }
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "80f946b323cc5a4220b27924f73ed908f21739dede0e5cb2ebed5ad632f69cbc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "missing_entry_file_with_an_unsupported_suffix",
     "files": {},
     "entry": "missing.txt",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -879,7 +2021,8 @@
     "entry": "doc.png",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -908,7 +2051,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -972,7 +2116,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1029,6 +2174,50 @@
     }
   },
   {
+    "name": "concurrency_groups_non_string_key_config_error",
+    "files": {
+      "doc.yml": "runtime: {concurrency_groups: {1: 3}}\neffects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "runtime.concurrency_groups has a non-string or empty group name: 1."
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.concurrency_groups.1"
+      ]
+    },
+    "lint_warnings": [],
+    "run_error": "Invalid runtime concurrency configuration:\n  - runtime.concurrency_groups has a non-string or empty group name: 1.",
+    "definition": {
+      "name": "prime",
+      "effects": [],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": []
+    },
+    "definition_error": null,
+    "digest": "bedd7eb5cf3ac867dff6588e7f9ae329e2caef13bfc36f14ee5af56415fccad3",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "if_threshold_huge_int_is_a_maximum_error",
     "files": {
       "doc.yml": "effects:\n  - type: if\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n    threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n"
@@ -1036,7 +2225,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1069,7 +2259,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": false,
@@ -1151,7 +2342,8 @@
     "entry": "doc.yml",
     "options": {
       "skip_preflight": true,
-      "trust_document": true
+      "trust_document": true,
+      "inputs": {}
     },
     "validate": {
       "ok": true,
