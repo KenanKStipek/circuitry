@@ -7,7 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use electricity_bytecode::OnError;
 use serde_json::Value;
 
-use crate::model::{NodeMeta, RunModel, flatten_state, run_ended, run_error, run_ok, run_totals};
+use crate::model::{
+    EndedOutcome, NodeMeta, RunModel, ended_outcome, flatten_state, run_ended, run_error,
+    run_totals,
+};
 use crate::observe::Event;
 use crate::plan::PlanTree;
 
@@ -97,7 +100,25 @@ pub fn format_reason_for_summary(reason: &str) -> String {
     out
 }
 
-fn summary_for(node: &NodeMeta) -> String {
+/// The plan's own label for `path` (DESIGN.md §6.2/§6.3's "show the
+/// effect kind from the plan ... instead of `effect`", #433) —
+/// `summary_for`'s own fallback when a leaf's `meta` carries none of
+/// the shape-based clues (`provider`, `adapter`) it otherwise reads,
+/// and `diff_event`'s fallback for a `▶` line whose path has no state
+/// at all yet. `"effect"` remains the fallback with no plan, or for a
+/// path the plan doesn't recognise (an inline `use` child, a
+/// reflector pass) — both discovered from observations alone.
+fn plan_kind_label(path: &str, plan: &PlanTree) -> &'static str {
+    match plan.match_path(path).and_then(|m| m.entries.first()) {
+        Some(entry) => match entry.kind {
+            crate::plan::PlanEntryKind::Leaf(kind) => kind.label(),
+            _ => "effect",
+        },
+        None => "effect",
+    }
+}
+
+fn summary_for(node: &NodeMeta, path: &str, plan: &PlanTree) -> String {
     let meta = &node.meta;
     if let Some(provider) = meta.get("provider").and_then(Value::as_str) {
         if let Some(rendered) = meta.get("params_rendered") {
@@ -128,7 +149,7 @@ fn summary_for(node: &NodeMeta) -> String {
             truncate_chars(prompt_sent, 60)
         );
     }
-    "effect".to_string()
+    plan_kind_label(path, plan).to_string()
 }
 
 fn result_summary(node: &NodeMeta) -> String {
@@ -189,10 +210,7 @@ fn container_signal(
     }
     if let Some(m) = plan.match_path(path) {
         if let Some(entry) = m.entries.first() {
-            return Some(!matches!(
-                entry.kind,
-                crate::plan::PlanEntryKind::Leaf | crate::plan::PlanEntryKind::Use
-            ));
+            return Some(!matches!(entry.kind, crate::plan::PlanEntryKind::Leaf(_)));
         }
     }
     if model.dispatch_info(path).is_some() {
@@ -328,8 +346,8 @@ impl Differ {
                 let summary = self
                     .last
                     .get(path)
-                    .map(summary_for)
-                    .unwrap_or_else(|| "effect".to_string());
+                    .map(|node| summary_for(node, path, plan))
+                    .unwrap_or_else(|| plan_kind_label(path, plan).to_string());
                 vec![LogLine {
                     ts: Some(ts.clone()),
                     text: format!("▶ {path}  {summary}"),
@@ -423,12 +441,16 @@ impl Differ {
     /// ran) has no error of its own to report. The caller supplies one
     /// in priority order: a `run_end` event's own `error`, then cof's
     /// pre-execution stdout JSON, then the engine's last stderr line.
+    ///
+    /// The ok/cancelled/failed split is `ended_outcome` (DESIGN.md
+    /// §2.1 rule 7's first bullet), the same one `run_status` uses for
+    /// the TUI header — a run the user cancelled must read "cancelled"
+    /// here too, not "failed".
     pub fn finish(&mut self, state: &Value, fallback_reason: Option<&str>) -> Option<LogLine> {
         if self.run_line_emitted || !run_ended(state) {
             return None;
         }
         self.run_line_emitted = true;
-        let ok = run_ok(state);
         let totals = run_totals(state);
         let totals_text = totals
             .as_ref()
@@ -436,16 +458,22 @@ impl Differ {
             .and_then(Value::as_f64)
             .map(|w| format!("  {w:.1}s"))
             .unwrap_or_default();
-        let status_text = if ok {
-            "ok".to_string()
-        } else {
-            match run_error(state).filter(|e| !e.is_empty()) {
+        let status_text = match ended_outcome(state) {
+            EndedOutcome::Ok => "ok".to_string(),
+            EndedOutcome::Cancelled => {
+                // `ended_outcome` only returns `Cancelled` when
+                // `run_error` is `Some` and starts with "Interrupted",
+                // so this is always present — no fallback needed.
+                let reason = run_error(state).unwrap_or_default();
+                format!("cancelled: {}", format_reason_for_summary(&reason))
+            }
+            EndedOutcome::Failed => match run_error(state).filter(|e| !e.is_empty()) {
                 Some(reason) => format!("failed: {}", format_reason_for_summary(&reason)),
                 None => match fallback_reason.filter(|r| !r.is_empty()) {
                     Some(reason) => format!("failed: {}", format_reason_for_summary(reason)),
                     None => "failed".to_string(),
                 },
-            }
+            },
         };
         let run_ts = state
             .pointer("/runtime/last_run/completed_at")
@@ -508,12 +536,12 @@ impl Differ {
                     if node.is_running() {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
-                            text: format!("▶ {path}  {}", summary_for(node)),
+                            text: format!("▶ {path}  {}", summary_for(node, path, plan)),
                         });
                     } else {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
-                            text: format!("▶ {path}  {}", summary_for(node)),
+                            text: format!("▶ {path}  {}", summary_for(node, path, plan)),
                         });
                         lines.push(end_line(path, node, plan));
                     }
@@ -531,7 +559,10 @@ impl Differ {
                                 *pass += 1;
                                 lines.push(LogLine {
                                     ts: node.created_at.clone(),
-                                    text: format!("▶ {path} #{pass}  {}", summary_for(node)),
+                                    text: format!(
+                                        "▶ {path} #{pass}  {}",
+                                        summary_for(node, path, plan)
+                                    ),
                                 });
                                 lines.push(end_line_numbered(path, node, plan, *pass));
                             }
@@ -679,6 +710,65 @@ mod tests {
             .find(|l| l.text.starts_with("▶ prime.step1"))
             .expect("start line");
         assert!(step1_line.text.contains("sleep"));
+    }
+
+    /// #433: a `yield` leaf's own `meta` carries neither `provider`
+    /// nor `adapter`, so with no plan at all `summary_for` has nothing
+    /// to go on but the generic `"effect"` fallback (DESIGN.md §6.2's
+    /// example never needs it: every leaf there is a tool or a
+    /// prompt) — but with a real plan, osp can and should say
+    /// `"yield"` instead.
+    #[test]
+    fn a_yield_leaf_with_no_distinguishing_meta_takes_its_kind_from_the_plan() {
+        use electricity_bytecode::{
+            EffectPath, Escape, LeafKind, NodeKind, OnError, Op, Region, TemplateText, YieldOp,
+        };
+
+        let root_path = EffectPath::root();
+        let child_path = root_path.clone().push_name("announce");
+        let program = electricity_bytecode::Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: child_path,
+                        name: Some("announce".to_string()),
+                        kind: NodeKind::Leaf(Box::new(LeafKind::Yield(YieldOp {
+                            template: TemplateText::new("hi", true, Escape::None),
+                            inputs: None,
+                            description: None,
+                        }))),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        let mut differ = Differ::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "announce": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        }});
+        let lines = differ.diff(&state, &plan);
+        let line = lines
+            .iter()
+            .find(|l| l.text.starts_with("▶ prime.announce"))
+            .expect("start line");
+        assert_eq!(line.text, "▶ prime.announce  yield");
     }
 
     #[test]
@@ -933,12 +1023,14 @@ mod tests {
     }
 
     #[test]
-    fn finish_reports_an_interrupted_run_as_failed_even_with_an_open_event_sourced_path() {
+    fn finish_reports_an_interrupted_run_as_cancelled_even_with_an_open_event_sourced_path() {
         // M1: there is no `open_event_paths` gate left to release --
         // an effect interrupted mid-flight never gets its own `end`
         // event at all, but that no longer matters, since the caller
         // decides when to call `finish`, from a state it already
-        // knows is final.
+        // knows is final. The run itself was cancelled, not failed
+        // (DESIGN.md §2.1 rule 7): `prime.meta.error` starts with
+        // "Interrupted".
         let mut differ = Differ::new();
         differ.diff_event(
             &Event::Start {
@@ -954,7 +1046,29 @@ mod tests {
             "prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)"}}
         });
         let line = differ.finish(&state, None).expect("a summary line");
-        assert!(line.text.starts_with("■ run failed"), "{line:?}");
+        assert!(
+            line.text
+                .starts_with("■ run cancelled: Interrupted (Ctrl-C/SIGINT)"),
+            "{line:?}"
+        );
+    }
+
+    #[test]
+    fn finish_reports_a_real_failure_distinctly_from_a_cancelled_run() {
+        // The orchestrator's own regression: an ended run whose error
+        // does *not* start with "Interrupted" must still read
+        // "failed", never "cancelled".
+        let mut differ = Differ::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": false, "meta": {"completed_at": "t1", "error": "prime.a: /bin/ls failed (exit 1): ls: no"}}
+        });
+        let line = differ.finish(&state, None).expect("a summary line");
+        assert!(
+            line.text
+                .starts_with("■ run failed: prime.a: /bin/ls failed"),
+            "{line:?}"
+        );
     }
 
     #[test]

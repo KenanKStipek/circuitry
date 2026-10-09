@@ -176,10 +176,9 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
    - **With events:** the container's own `dispatch` event gives an exact bound instead of this estimate — `branches` is the true total (so progress reads "`done` of `branches`" instead of the plan's own, possibly data-dependent, count), and `concurrency`, when the stream has it, is the exact running ceiling in place of the `max_concurrency`/`cpu`-guess above.
 5. A running `use`: its plan children (from compiling a `path` child) follow rule 1. An `inline` child has no static plan, so its children are discovered from the observations.
 6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)**. A prompt retry cannot be detected from state.
-7. Run status:
-   - `runtime.last_run.completed_at` set means the run **ended**; `ok` is `prime.meta.error == null`.
-   - The process exit code always wins: 0, 1, 129, 130, 143.
-   - An exit with the file still at `completed_at: null` means the run was **aborted** (second signal, SIGKILL, crash).
+7. Run status (one function, shared by the TUI header, the plain `--log` summary and `osp watch`):
+   - `runtime.last_run.completed_at` set means the run **ended**: **ok** if `prime.meta.error` is `null`, **cancelled** if it starts with `"Interrupted"` (a confirmed `q`, a Ctrl-C cancel, or a forwarded SIGINT/SIGTERM/SIGHUP always reach this branch, §4.1), otherwise **failed**.
+   - The process exited with no ended state: **failed** only when the exit code is exactly 1 *and* there is a pre-execution failure reason (`cof`'s own stdout JSON, or a `run_end` event's error) -- the shape of a document invalid enough that nothing ever ran (§4.1). Otherwise **aborted** (a second signal, SIGKILL, a crash: no final write). `osp watch`, which owns no process of its own, reads `--events`' own `run_end.ok == false` in place of the exit code.
 
 ### 2.2 Why a node was skipped
 
@@ -440,28 +439,98 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 00:05.7 ■ run ok  5.7s · 12 effects · ↑3 ↓1
 ```
 
-### 6.3 TUI
+### 6.3 TUI (shipped, issue #434)
 
-- **Header:** document, engine, run ID, state (running / ok / failed / cancelled / aborted), elapsed time, effects done out of planned, tokens ↑↓, and the ETA of the innermost running loop. There is no run-level ETA: plans have data-dependent loops.
+`ratatui` (`=0.30.0`, default features off, `crossterm` + `underline-color`
+only) and `crossterm` `0.29` (the version ratatui's own crossterm backend
+uses), both building on the workspace MSRV (1.86). `--log`, or any non-TTY
+stdout (a pipe, a file, `CI` set), keeps §6.2's plain stream unchanged; a
+TTY gets this instead, for both `osp <doc>` and `osp watch`.
+
+The render model is `oscilloscope-core`'s own (`render.rs`): a `Header`, the
+plan tree flattened to depth-first `Row`s, and a selected row's `Details` —
+no terminal code, so a GUI front end could lay the same `RenderState` out
+its own way. Only `oscilloscope`'s `tui.rs` imports `ratatui` widgets.
+
+- **Header:** document, engine, run state (running / ok / failed /
+  cancelled / aborted), elapsed time, effects done out of planned, tokens
+  ↑↓, and the ETA of the innermost running loop. There is no run-level
+  ETA: plans have data-dependent loops. The run ID shows once `--events`
+  has carried a `run_start`; state alone never has one. "Planned"
+  multiplies a loop body's own leaf by that named loop's `meta.progress.
+  total` once it's known (so a four-pass loop's one-leaf body counts as
+  4, not 1), and "done" counts every finished pass separately; while any
+  crossed loop's own total isn't known yet, "planned" is a lower bound,
+  shown with a trailing `+` (`3/3+`).
 - **Left: the plan tree.** Each row shows:
-  - a status glyph: `·` pending, `◐` running, `◌` running/queued, `✓`, `✗`, `!` failed-handled, `↷` skipped, `⊘` cancelled;
-  - the duration, `n/total` for loops, and the provider or model in a dim colour.
-- **Right: details for the selected row.** Type, path, plan summary, meta summary (command and args, exit code, stderr tail, model, tokens, `waiting_for`), and the error. `prompt_sent` and the value are shown truncated, with `v` to expand.
-- **Bottom: the log pane** (§2.4 lines plus engine stderr).
+  - a status glyph: `·` pending, `◐` running (also shown for a "likely
+    running" guess), `◌` running/queued, `✓`, `✗`, `!` failed-handled,
+    `↷` skipped, `⊘` cancelled, `?` aborted (no glyph of its own in the
+    original table; `?` is the one status left with no better fit);
+  - the duration, `n/total` for a loop's own progress, and the provider
+    or model in a dim colour.
+- **Right: details for the selected row.** Type, path, plan summary, a
+  meta summary (provider/model, exit code, command, `waiting_for`,
+  tokens, retries, a stderr tail), and the error. `prompt_sent` and the
+  value are shown truncated (200 characters), with `v` showing either in
+  full in an overlay.
+- **Bottom: the log pane** — the same lines `--log` prints (§2.4), plus
+  the engine's own stderr, as a scrolling tail (no scrollback in this
+  milestone: always the most recent lines that fit).
 - **Keys:**
 
 | Key | Action |
 |---|---|
 | `↑↓`/`jk` | move |
 | `←→` | collapse / expand |
-| `f` | follow running |
-| `e` | errors only |
-| `/` | filter |
+| `f` | follow the running row |
+| `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
+| `/` | filter (substring, on path or label; same ancestor-keeping rule) |
 | `tab` | switch pane |
-| `v` | full value |
-| `c` | cancel, with confirm (= Ctrl-C) |
-| `q` | quit; asks if a run is going |
+| `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it |
+| `c` | cancel, with a confirm — the same as a *confirmed* `c`/`q` always has (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
+| `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osp watch`, always just detaches, with no confirm — watch owns no engine to cancel |
+| Ctrl-C | checked before any dialog, and never merely dismisses one: forwards SIGINT at once with no confirm while something's running (a second Ctrl-C starts the same 10s kill deadline a real repeated SIGINT would), quits at once with nothing running, and in `osp watch` always just detaches |
 | `?` | help |
+
+**The finished screen.** The engine exiting (or, for `osp watch`, the
+watched run ending) does not, on its own, end this loop: the header, every
+row's final status, and the details pane (`v` included) stay live and
+navigable on whatever the run ended with — ok, failed, cancelled or
+aborted — until the user explicitly leaves. Only three things make this
+loop leave the instant the engine has exited, rather than staying on that
+final state: a confirmed `q`, a Ctrl-C cancel, or any external
+INT/TERM/HUP osp itself received (a SIGHUP in particular never waits for
+a key — the terminal is gone by definition). Short of one of those three,
+a run that simply finishes on its own stays up for `q`/Ctrl-C to leave.
+`osp watch`'s own `q` while the watched run is *still going* prints a
+distinct "■ detached (the run is still going)" ending and exits 0, rather
+than the generic "no final state" abort every other stop condition
+without one falls into; `q` once the run has already ended gets the
+normal ok/failed/aborted summary instead. `finish_run`/`finish_watch`
+still print the usual plain summary once the terminal session is torn
+down, exactly as they already do for `--log`.
+
+**Terminal safety.** A `TerminalGuard` enters raw mode and the alternate
+screen once (undoing raw mode again if the alternate screen fails to
+open); `Drop` restores both on every normal return from the TUI loop
+(osp's own error, the engine exiting, a confirmed quit), and a panic hook
+installed alongside it restores the terminal before the default panic
+handler's own message would otherwise print into it. A forwarded
+SIGINT/SIGTERM/SIGHUP is forwarded to the engine as the *same* signal
+(never turned into a SIGINT regardless of which arrived), with the same
+escalation `do_run`'s plain loop applies, and never leaves the TUI loop
+early on its own — the loop keeps rendering until the engine actually
+exits, so `Drop` still runs on the normal path out. If the TUI itself
+can't start (an exotic CI pty, a stdout swapped out from under osp), both
+`osp <doc>` and `osp watch` fall back to their own plain supervise/watch
+loop rather than a bare, signal-blind wait. `osp` itself being
+`SIGKILL`ed is the one exception (§4.1): nothing can run cleanup code
+after that at all. A redraw, and the render state (plan-tree rows,
+header counts) it draws, are rebuilt at most once every `REDRAW_INTERVAL`
+and only when an observation, a key or a resize actually changed
+something — forced at least once a second regardless, so the header's own
+elapsed time still visibly ticks while the run is otherwise quiet.
 
 ### 6.4 Tests
 
@@ -470,13 +539,17 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests.** `ratatui::backend::TestBackend` buffers for a few model states.
-- **End-to-end with `cof`** (feature `e2e-cof`, run in CI on the electricity-generated Python 3.11 job):
+- **TUI render tests (shipped, issue #434).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, failed, failed and handled, cancelled, aborted (no final state) and `osp watch`.
+- **Key handling (shipped, issue #434).** Unit tests in `oscilloscope/src/keys.rs`: navigation, collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow, errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), and Ctrl-C's own action (checked before, and never merely dismissing, a dialog) — pure, with no real terminal.
+- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever).
+- **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
+- **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;
   - a temporary `HOME`;
   - credential variables removed (the four named in this repository's CLAUDE.md);
   - a hard timeout per test;
-  - one test per probe shape, plus SIGINT once, SIGINT twice and SIGTERM, asserting exit codes and final statuses.
+  - one test per probe shape, plus SIGINT once, SIGINT twice and SIGTERM, asserting exit codes and final statuses;
+  - the pty tests additionally assert the alternate-screen entry/exit escape sequences, and that nothing osp or cof started survives, with no `osp-*` directory left in the real system temp directory (every pty test uses its own `--out-dir`); since the TUI now stays open on its own final state, every pty test that lets a run finish on its own sends `q` to leave, and three further pty tests assert SIGTERM (143), SIGHUP (129) and a raw Ctrl-C byte, `0x03` (130, since raw mode disables the kernel's own `ISIG`) in the TUI specifically.
 
   Live tests are never run.
 - **End-to-end with electricity:** same tests, enabled once M0-H runs documents.

@@ -10,13 +10,11 @@ processing. A terminal UI comes first; a GUI can reuse the same core later.
 CYBERDINER_TOKEN=... osp do-thing.yml config.json
 ```
 
-**This is a preview.** Milestone O-1 (issue #424) fills in the core: `osp
+**This is a preview.** Milestone O-1 (issue #424) filled in the core: `osp
 <orchestration>` launches and supervises `cof` (or, once it runs documents,
-electricity), prints a plain-text log of what's running, and exits with the
-engine's own exit code; `osp watch <dir>` attaches to a run `osp` didn't
-start. There is no terminal UI yet — that's milestone O-2 — so every run
-prints the same plain-text stream today, `--log` notwithstanding. See
-[`DESIGN.md`](DESIGN.md).
+electricity) and exits with the engine's own exit code; `osp watch <dir>`
+attaches to a run `osp` didn't start. Milestone O-2 (issue #434) adds the
+terminal UI below. See [`DESIGN.md`](DESIGN.md).
 
 ```
 osp do-thing.yml config.json
@@ -70,6 +68,71 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   is `osp` itself being `SIGKILL`ed: nothing can run its own cleanup code
   after that, so the engine (in its own process group) keeps running.
 
+## The terminal UI
+
+On a TTY, `osp <doc>` and `osp watch <dir>` show the interactive terminal UI
+(DESIGN.md §6.3) instead of the plain-text stream: a header (document,
+engine, run state, elapsed time, effects done out of planned, tokens, the
+innermost running loop's own ETA), the plan tree on the left (a status
+glyph, duration, loop `n/total`, and the provider or model in a dim colour),
+the selected row's own details on the right, and a log pane at the bottom —
+the same lines `--log` prints, plus the engine's stderr. `--log`, or any
+non-TTY stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j`/`k` | move |
+| `←` / `→` | collapse / expand |
+| `tab` | switch pane |
+| `f` | follow the running row |
+| `e` | errors only |
+| `/` | filter |
+| `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
+| `c` | cancel, with a confirm (the same as a confirmed `q`) |
+| `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osp watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
+| Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osp watch` always just detaches |
+| `?` | help |
+
+The engine exiting does not, on its own, end the TUI: the header, every
+row's final status and the details pane stay live on whatever the run
+ended with until the user leaves with a confirmed `q`, a Ctrl-C cancel, or
+an external `INT`/`TERM`/`HUP` to osp itself (a `SIGHUP` never waits for a
+key — the terminal is gone by definition). Short of one of those three, a
+run that finishes on its own stays up for `q`/Ctrl-C to leave.
+
+A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
+golden tests) of a running tree loop, at 70×20:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│do-thing.yml  cof  running  5.0s  effects 3/6  ↑0 ↓0  ETA 3.0s      │
+└────────────────────────────────────────────────────────────────────┘
+┌ plan ──────────────────────────────────┐┌ details ─────────────────┐
+│◐ prime                                 ││path   prime.fan          │
+│✓ a  shell                              ││type   loop               │
+│✓ b  shell                              ││plan   loop "fan"         │
+│◐ fan  1/4                              ││                          │
+│  ✓ iter_0  shell                       ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+│                                        ││                          │
+└────────────────────────────────────────┘└──────────────────────────┘
+┌ log ───────────────────────────────────────────────────────────────┐
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+Raw mode and the alternate screen are entered once and restored on every
+exit path — a normal end, osp's own error, a panic (a panic hook), and a
+forwarded `SIGINT`/`SIGTERM`/`SIGHUP`, forwarded to the engine as the same
+signal it was — the same `SIGKILL` exception as the supervision section
+below. Quitting while osp is running the engine cancels the run first (the
+confirmed `q`/`c` dialog, or Ctrl-C): osp never leaves the engine running.
+
 `oscilloscope/` is its own Cargo workspace, versioned in lockstep with the
 rest of this repository (`pyproject.toml`, `electricity/Cargo.toml`). It
 depends on `electricity`'s `electricity-compiler` and `electricity-bytecode`
@@ -96,8 +159,8 @@ cargo test --workspace
 oscilloscope/
   Cargo.toml                 # workspace; path deps on ../electricity/crates/{electricity-compiler,electricity-bytecode}
   crates/
-    oscilloscope-core/       # no terminal code, so a future GUI can reuse it
-    oscilloscope/            # the `osp` binary: clap CLI, ratatui TUI (O-2)
+    oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model)
+    oscilloscope/            # the `osp` binary: clap CLI, the plain stream, and the ratatui/crossterm TUI (tui.rs, keys.rs, terminal.rs)
 ```
 
 ## Read more

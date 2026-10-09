@@ -107,9 +107,7 @@ fn replay(name: &str) -> String {
     for (i, state) in fixture.snapshots.iter().enumerate() {
         let is_last = i == last_index;
         let process = if is_last {
-            ProcessState::Exited {
-                interrupted: interrupted_exit,
-            }
+            ProcessState::exited(interrupted_exit)
         } else {
             ProcessState::Running
         };
@@ -179,13 +177,7 @@ fn replay_events(name: &str) -> String {
         .and_then(Value::as_str)
         .is_some_and(|e| e.starts_with("Interrupted"));
     let final_state = fixture.snapshots.last().cloned().unwrap_or(Value::Null);
-    let rows = model.observe(
-        &final_state,
-        &plan,
-        ProcessState::Exited {
-            interrupted: interrupted_exit,
-        },
-    );
+    let rows = model.observe(&final_state, &plan, ProcessState::exited(interrupted_exit));
     let _ = writeln!(out, "status:");
     out.push_str(&format_rows(&rows));
 

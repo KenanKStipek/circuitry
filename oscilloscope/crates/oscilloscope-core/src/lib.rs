@@ -13,4 +13,5 @@ pub mod engine;
 pub mod model;
 pub mod observe;
 pub mod plan;
+pub mod render;
 pub mod supervise;
