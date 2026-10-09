@@ -86,6 +86,9 @@ def _run_electricity(
     *,
     out_path: Path,
     home_dir: Path,
+    pretty: bool = False,
+    events_path: Path | None = None,
+    live_state_path: Path | None = None,
 ) -> harness.CaseResult:
     """Invoke `electricity` the same way `harness.run_case` invokes `cof
     run`, so the two engines are given the same inputs: cwd set to the case
@@ -105,6 +108,12 @@ def _run_electricity(
         "--out",
         str(out_path),
     ]
+    if pretty:
+        cmd.append("--pretty")
+    if events_path is not None:
+        cmd += ["--events", str(events_path)]
+    if live_state_path is not None:
+        cmd += ["--live-state", str(live_state_path)]
     cmd += [str(arg) for arg in metadata.get("cli_args", [])]
     proc = subprocess.run(
         cmd,
@@ -154,10 +163,32 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         actual_state = json.loads(actual_text)
         expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
         assert_states_equal(normalize(actual_state), normalize(expected_state))
-        # The plain/--pretty pair (C23) is not run here: electricity's CLI
-        # has no `--pretty` flag yet (`electricity/crates/electricity-cli`'s
-        # usage text), so `also_pretty` cases are a documented
-        # `known_divergence` for this engine until it does.
+
+        if metadata.get("also_pretty"):
+            pretty_out_path = tmp_path / "out.pretty.json"
+            pretty_home_dir = tmp_path / "home-pretty"
+            pretty_home_dir.mkdir()
+            pretty_result = _run_electricity(
+                electricity_binary,
+                case_dir,
+                metadata,
+                out_path=pretty_out_path,
+                home_dir=pretty_home_dir,
+                pretty=True,
+            )
+            assert pretty_result.returncode == 0, (
+                f"expected success (--pretty), got exit {pretty_result.returncode}\n"
+                f"stdout: {pretty_result.stdout}\nstderr: {pretty_result.stderr}"
+            )
+            actual_pretty_text = pretty_out_path.read_text(encoding="utf-8")
+            assert_out_serialization(actual_pretty_text, pretty=True)
+            actual_pretty_state = json.loads(actual_pretty_text)
+            expected_pretty_state = json.loads(
+                (case_dir / "expected.pretty.json").read_text(encoding="utf-8")
+            )
+            assert_states_equal(
+                normalize(actual_pretty_state), normalize(expected_pretty_state)
+            )
         return
 
     if metadata["expect"] == "failure":
