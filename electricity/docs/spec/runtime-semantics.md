@@ -1525,12 +1525,17 @@ whitespace-different. A trailing `"\n"` is always appended
 | Run failed (ordinary error) | `1` |
 | Run interrupted by Ctrl-C/SIGINT | `130` (128+SIGINT) |
 | Run interrupted by SIGTERM | `143` (128+SIGTERM) |
+| Run interrupted by SIGHUP | `129` (128+SIGHUP) |
 
-(`cli/app.py:1384`: `raise typer.Exit(code=143 if result.sigterm else 130 if
-result.interrupted else 1)`, only reached when `not result.ok` — the success
-path falls through to Typer's default `0`.) Both interrupted cases still
+(`cli/app.py:1423`: `raise typer.Exit(code=143 if result.sigterm else 129 if
+result.sighup else 130 if result.interrupted else 1)`, only reached when
+`not result.ok` — the success
+path falls through to Typer's default `0`.) All three interrupted cases still
 write `--out`/the `--last` stash exactly like an ordinary failure — the exit
-code alone distinguishes the three; state/resumability is identical.
+code alone distinguishes them; state/resumability is identical. SIGHUP never
+counts as the *second* signal during cleanup (§6.5) — only SIGINT/SIGTERM do
+— and if it is ignored at process start (`nohup`), it stays ignored for the
+whole run (electricity/DESIGN.md §6.9; issue #431's Signals section).
 
 ### 8.5 `--resume` rules
 
@@ -1591,9 +1596,13 @@ is still the behavior to match when a document *is* trusted.
 ### 8.7 Event stream (`--events`)
 
 Required for VM milestone **M0-H** (`electricity-vm`'s `fire_effect_start`/
-`fire_effect_complete` are exactly the two call sites this stream reads) —
-electricity's own `--live-state` does not land until M3-B (#419, #418 Q2), so
-until M3 this is the VM's only live channel.
+`fire_effect_complete` are exactly the two call sites this stream reads).
+electricity's own `--live-state` also lands in M0-H (issue #431), alongside
+`--events` — not M3-B as an earlier draft of this section said (#419, #418
+Q2): a live-state mirror needs only the store's own write hook, nothing
+`loop`-specific, so both ship together with the rest of M0-H's run wiring.
+Only loop progress (`meta.progress`, DESIGN.md §10.5's second bullet) still
+waits for `loop` (M1-E).
 
 `cof run --events <file>` (also `run-library`) writes a JSONL stream of
 effect starts and ends: one complete JSON object per line, UTF-8, created

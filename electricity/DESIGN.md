@@ -1995,6 +1995,12 @@ infrastructure configured still gets spans visible somewhere.
 
 ### 10.5 Live state, loop progress, run totals
 
+The first and third bullets below landed in M0-H (issue #431), not in M3-B where an earlier
+draft of §15 put every bullet in this section: a `--live-state` mirror and a run-totals
+accumulator need no `loop` support, only the store's own write hook, so both ship with the rest
+of M0-H's run wiring. Only **loop progress** (the second bullet) still waits for M1-E, since it
+has nothing to report before `loop` exists.
+
 - **Live state**: a `Store::on_write`-driven mirror (not a `RuntimePlugin`), writing the full
   current state to a path atomically (temp file + rename, never a predictable sibling path),
   coalesced to at most one write per fixed interval regardless of write volume, with the first
@@ -2316,7 +2322,7 @@ features layered on top of a document set that already runs, not gates on any on
 | M0-E | `electricity-cel`: the `cel` crate wrapped in the strict/non-strict layer, the two binding entry points (§7.2). | M0-A |
 | M0-F | `electricity-schema`: Draft7 validation against the synced schema copy, offline, plus the sync script and its CI check. | M0-A |
 | M0-G | `electricity-bytecode` + `electricity-compiler`: IR types, the load-and-check pipeline (§4), compiling a document with no effects that need runtime support yet. | M0-B, M0-C, M0-D, M0-E, M0-F (the compile-time checks in §4 step 4 walk every template and every `mode: cel` expression, so the compiler needs the tokenizer and the CEL parser, not just YAML/JSON/schema) |
-| M0-H | `electricity-vm` skeleton: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree — runnable against a document with only `tool`/`dynamic`/`if` effects and an in-process fake tool. | M0-G |
+| M0-H **(done)** | `electricity-vm`: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree, run wiring, signals, the CLI and its output contract — runs a document made of `tool` (the real `json` provider, not a fake), `dynamic` (chain and tree), `if` (CEL mode) and `finally:` end to end, with `--out`/`--events`/`--live-state` matching `cof run`'s own byte for byte after the conformance normalizer (issue #431). The live-state mirror and its run-totals accumulator (§10.5's first two bullets) land here, not in M3-B — only loop progress (which needs `loop`, M1-E) still does. | M0-G |
 | M0-I | The conformance harness itself: running `cof run` from the same checkout to generate expected state, diffing with normalization rules (§12). | — (parallel with all of the above) |
 | M0-J **(gate, Python side)** | The `scripted` fixture adapter and the shared fixture-config format (§12) — a change to Circuitry's Python package in the same repository; blocks any conformance case that needs a scripted model reply, which is most of them. | — (parallel with M0-A..I, but gates M0-I actually producing usable fixtures) |
 
@@ -2329,7 +2335,9 @@ regardless, but `runtime.last_run.{dry_run,validate_only,verbose}` are compared 
 one case, not byte-for-byte, since electricity always writes `false` there (§6.10) while the
 reference's own `validate_only` run writes `true`. **C9 (tree loop), C24 (named loop), and the
 `while` half of C7 move to M1's acceptance** — an earlier draft claimed C9 and C24 here, but loop
-support doesn't exist until M1-E; M0-H's VM skeleton only covers `tool`/`dynamic`/`if`.
+support doesn't exist until M1-E; M0-H covers `tool`/`dynamic`/`if`/`finally:` (a *tree* `dynamic`,
+unlike a tree *loop*, needs no loop support and is in M0-H's own acceptance — lane E1's
+conformance suite exercises it, issue #431).
 
 ### M1 — Run the production tool/adapter set (unlocks the first two document sets)
 
@@ -2380,7 +2388,7 @@ state to `cof run`.
 | Lane | Deliverable | Depends on |
 |---|---|---|
 | M3-A | OpenTelemetry runtime plugin (OTLP/http, console-exporter fallback when unconfigured — §10.4), including the thread/task-identity span disambiguation under unnamed `tree` concurrency. | M1 |
-| M3-B | Live state mirror, loop progress, run totals (§10.5) — the live-event-stream-based totals accumulator, not a post-hoc state walk. | M1 |
+| M3-B | Loop progress (§10.5's third bullet, `meta.progress`) — needs `loop` (M1-E). The live state mirror and the live-event-stream-based run-totals accumulator (§10.5's first two bullets) already landed in M0-H, not here. | M1 |
 | M3-C | The public embedding API (`electricity` lib crate): a stable `run_orchestration()`-shaped entry point, caller-supplied tool/adapter sets, `initial_state` for resume without a file stash. | M1 (crate boundary already exists from §2; this lane is the API-stability pass) |
 | M3-D | v1 release hardening: the preview release jobs from M0-0 lose their preview label once M1–M3 pass; `mimalloc` on the musl targets; the container image hardened (scratch/distroless, CA roots); crates.io publishing stays out of v1 (Decisions, §1). | M1 (needs a stable, buildable binary; does not need M2) |
 
