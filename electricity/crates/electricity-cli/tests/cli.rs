@@ -11,6 +11,18 @@ fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_electricity"))
 }
 
+/// A document that fails at run time regardless of whether
+/// `electricity_vm::execute_root` is still lane B's own stub or the
+/// real interpreter (issue #431's golden run corpus's own
+/// `json_parse_failure` case: `prime.broken: JsonPlugin: parse mode
+/// requires params['input'] as a string.`) -- unlike `effects: []`
+/// (which the stub also fails today, but will *succeed* once lane B2
+/// lands), every test below that only needs an ordinary ``--out``-
+/// writing failure, not any particular error text, uses this instead
+/// (PR #441 review finding 10).
+const FAILURE_DOC: &str = "\
+effects:\n  - name: broken\n    type: tool\n    provider: json\n    params: {mode: parse, input: 123}\n";
+
 /// A temporary `HOME` directory, removed when the test ends.
 struct TempHome {
     path: PathBuf,
@@ -258,18 +270,18 @@ fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() 
     );
 }
 
-/// A document that only declares content the M0-H VM actually runs
-/// (`effects: []`) is never refused -- it reaches `execute_root`
-/// (still lane B's own stub as of this PR), so this is an *ordinary*
-/// failure, not the preview refusal: `--out`/`--events`/`--live-state`
-/// are written, same as any other failed run (issue #431's run-wiring
-/// step 20).
+/// A document that only declares content the M0-H VM actually runs is
+/// never refused -- [`FAILURE_DOC`] fails at run time regardless of
+/// whether `execute_root` is still lane B's own stub or the real
+/// interpreter, so this is an *ordinary* failure, not the preview
+/// refusal: `--out`/`--events`/`--live-state` are written, same as any
+/// other failed run (issue #431's run-wiring step 20).
 #[test]
 fn run_request_with_every_new_flag_writes_out_events_and_live_state_on_an_ordinary_failure() {
     let (mut cmd, home) = command("run-new-flags");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
-    fs::write(&doc, "effects: []\n").unwrap();
+    fs::write(&doc, FAILURE_DOC).unwrap();
     let out = home.path.join("out.json");
     let events = home.path.join("events.jsonl");
     let live_state = home.path.join("live.json");
@@ -328,7 +340,7 @@ fn live_state_is_byte_identical_to_out_without_pretty() {
     let (mut cmd, home) = command("live-state-byte-identical");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
-    fs::write(&doc, "effects: []\n").unwrap();
+    fs::write(&doc, FAILURE_DOC).unwrap();
     let out = home.path.join("out.json");
     let live_state = home.path.join("live.json");
     let output = cmd
@@ -357,7 +369,7 @@ fn run_request_with_every_new_flag_in_equals_form_also_writes_out() {
     let (mut cmd, home) = command("run-new-flags-equals");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
-    fs::write(&doc, "effects: []\n").unwrap();
+    fs::write(&doc, FAILURE_DOC).unwrap();
     let out = home.path.join("out.json");
     let events = home.path.join("events.jsonl");
     let live_state = home.path.join("live.json");
@@ -437,10 +449,22 @@ fn a_boolean_flag_with_an_equals_value_is_a_usage_error() {
 #[test]
 fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
     let (mut cmd, home) = command("run-e-malformed");
+    // A real (if empty) config file: config resolution is step 1 of
+    // issue #431's run-wiring table, strictly before `-e` parsing
+    // (step 2, `cli/app.py`'s own `resolve_config` at line ~1127 vs.
+    // `_parse_env_vars` at ~1261/1270) -- a missing config file would
+    // otherwise mask this test's own bad-`-e` assertion behind "Config
+    // file not found" instead.
+    let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(&doc, "effects: []\n").unwrap();
     let output = cmd
-        .args(["config.json", doc.to_str().unwrap(), "-e", "badtext"])
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "-e",
+            "badtext",
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -492,17 +516,16 @@ fn a_circuitry_env_overlay_outranks_the_config_files_own_default_model() {
     );
 }
 
-/// A run that succeeds its document check but reaches `execute_root`
-/// (still lane B's own stub) with no `--out` at all: on failure,
-/// stdout always carries the JSON payload regardless of `--out`
-/// (issue #431's "CLI output" decision) -- `state_out` is `null` since
-/// none was given.
+/// A run that succeeds its document check but fails at run time
+/// ([`FAILURE_DOC`]) with no `--out` at all: on failure, stdout always
+/// carries the JSON payload regardless of `--out` (issue #431's "CLI
+/// output" decision) -- `state_out` is `null` since none was given.
 #[test]
 fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
     let (mut cmd, home) = command("no-out-failure");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
-    fs::write(&doc, "effects: []\n").unwrap();
+    fs::write(&doc, FAILURE_DOC).unwrap();
     let output = cmd
         .args([config.to_str().unwrap(), doc.to_str().unwrap()])
         .output()
@@ -512,5 +535,5 @@ fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
     let payload: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["state_out"], serde_json::Value::Null);
-    assert!(payload["error"].as_str().unwrap().contains("execute_root"));
+    assert!(!payload["error"].as_str().unwrap().is_empty());
 }

@@ -27,12 +27,13 @@ from .normalize import (
 CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 PREVIEW_MESSAGE_MARKER = "is a preview and cannot run orchestrations yet"
-#: `electricity_compiler::not_implemented`'s own text (lib.rs) -- lanes
-#: land one at a time (issue #408), so a case whose real document needs
-#: a lane that hasn't merged yet still fails, just with this marker
-#: instead of either a real error or `PREVIEW_MESSAGE_MARKER`. Skipped
-#: the same way: there is nothing this test can usefully compare yet.
-STUB_MESSAGE_MARKER = "is not implemented in lane"
+#: `electricity_vm::execute_root`'s (and friends') own stub text --
+#: lanes land one at a time (issue #408), so a case whose real document
+#: needs a lane that hasn't merged yet still fails, just with this
+#: marker instead of either a real error or `PREVIEW_MESSAGE_MARKER`.
+#: Skipped the same way: there is nothing this test can usefully
+#: compare yet.
+STUB_MESSAGE_MARKER = "is not implemented yet (lane"
 
 #: electricity's CLI has no notion yet of "no config file" the way `cof
 #: run` does (an explicit --config, CIRCUITRY_CONFIG, a discovered
@@ -163,15 +164,12 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         assert result.returncode != 0, (
             f"expected a load/check failure, but exited 0\nstdout: {result.stdout}"
         )
-        # electricity reports an error on stderr as plain text (`eprintln!`
-        # in `electricity-cli/src/main.rs`), unlike `cof run`'s
-        # `{"ok": false, "error": ...}` JSON on stdout — there's no shared
-        # `parse_cli_error` to reuse here. electricity's own error-reporting
-        # contract is still open (this branch is unreachable in practice
-        # today: the preview-message skip above always fires first), so
-        # this is a best-effort guess that may need to change once
-        # electricity settles on one.
-        actual_error = result.stderr.strip()
+        # electricity's non-TTY stdout contract matches `cof run`'s own:
+        # `{"ok": false, "error": ...}` JSON on stdout regardless of
+        # `--out` (issue #431's "CLI output" decision) — so the same
+        # `harness.parse_cli_error` the Python runner uses applies here
+        # too.
+        actual_error = harness.parse_cli_error(result.stdout)
         expected_error = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))[
             "error"
         ]

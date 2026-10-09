@@ -12,8 +12,10 @@ use std::io;
 use std::path::Path;
 
 /// *state*'s saved-form JSON text, plus a trailing newline -- the exact
-/// bytes `--out` writes, and (without `--out`) the exact bytes a
-/// successful run with nothing to redirect to prints on stdout.
+/// bytes `--out`/`--live-state` write (`core/saved_state.py::
+/// dumps_saved_state`'s own `ensure_ascii=True` default, kept for a
+/// file -- never the stdout JSON summary, which goes through Rich's
+/// `console.print_json` instead; see [`render_state_for_stdout`]).
 pub fn render_state(state: &Value, pretty: bool) -> String {
     let mode = if pretty {
         electricity_json::WriteMode::PRETTY
@@ -34,6 +36,35 @@ pub fn render_state(state: &Value, pretty: bool) -> String {
             format!("{{\"error\":\"could not serialize run state: {}\"}}\n", err)
         }
     }
+}
+
+/// The non-TTY stdout JSON summary's own serialization (issue #431's
+/// "CLI output" decision): `indent=2`, `ensure_ascii=False` always --
+/// Rich's `console.print_json` always re-dumps with its own defaults,
+/// regardless of how the string it's given was itself serialized
+/// (`cli/app.py:1406,1451`) -- `sort_keys` only when *sort_keys* is
+/// (the success-without-`--out` state print passes `--pretty` here;
+/// the failure payload always passes `false`, since `cli/app.py`'s own
+/// failure branch calls `console.print_json(json.dumps(payload))` with
+/// no `sort_keys` of its own, never governed by `--pretty`).
+fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
+    electricity_json::WriteMode {
+        indent: Some(2),
+        sort_keys,
+        ensure_ascii: false,
+    }
+}
+
+/// *state*'s own stdout rendering for a successful run with no `--out`
+/// to redirect to (issue #431's "CLI output" decision) -- distinct from
+/// [`render_state`] (`--out`/`--live-state`'s own file bytes): the
+/// terminal gets Rich's `console.print_json` re-dump instead
+/// (`indent=2`, `ensure_ascii=False`, sorted exactly when `--pretty`
+/// was given), never a trailing newline of its own (the caller's
+/// `print!`/`println!` choice, not this function's).
+pub fn render_state_for_stdout(state: &Value, pretty: bool) -> String {
+    electricity_json::dumps(state, stdout_json_mode(pretty))
+        .unwrap_or_else(|err| format!("{{\"error\": \"could not serialize run state: {}\"}}", err))
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory
@@ -69,8 +100,8 @@ pub fn failure_payload(error: &str, warnings: &[String], state_out: Option<&Path
             None => Value::None,
         },
     );
-    let body = electricity_json::dumps(&Value::Dict(payload), electricity_json::WriteMode::COMPACT)
-        .unwrap_or_else(|_| "{\"ok\":false}".to_string());
+    let body = electricity_json::dumps(&Value::Dict(payload), stdout_json_mode(false))
+        .unwrap_or_else(|_| "{\n  \"ok\": false\n}".to_string());
     format!("{body}\n")
 }
 
@@ -107,15 +138,21 @@ mod tests {
     }
 
     #[test]
-    fn failure_payload_has_the_cof_key_order() {
+    fn failure_payload_has_the_cof_key_order_indent_2_and_is_never_sorted() {
+        // Rich's own `console.print_json` always re-dumps with
+        // `indent=2`/`ensure_ascii=False`, and the failure branch never
+        // passes `sort_keys` (`cli/app.py`'s own
+        // `console.print_json(json.dumps(payload))`) -- so this stays
+        // in `ok, error, warnings, state_out` order regardless of
+        // `--pretty` (issue #431 PR #441 review finding 2).
         let payload = failure_payload(
             "boom",
             &["careful".to_string()],
-            Some(Path::new("/tmp/out.json")),
+            Some(Path::new("run/out.json")),
         );
         assert_eq!(
             payload,
-            "{\"ok\": false, \"error\": \"boom\", \"warnings\": [\"careful\"], \"state_out\": \"/tmp/out.json\"}\n"
+            "{\n  \"ok\": false,\n  \"error\": \"boom\",\n  \"warnings\": [\n    \"careful\"\n  ],\n  \"state_out\": \"run/out.json\"\n}\n"
         );
     }
 
@@ -124,7 +161,7 @@ mod tests {
         let payload = failure_payload("boom", &[], None);
         assert_eq!(
             payload,
-            "{\"ok\": false, \"error\": \"boom\", \"warnings\": [], \"state_out\": null}\n"
+            "{\n  \"ok\": false,\n  \"error\": \"boom\",\n  \"warnings\": [],\n  \"state_out\": null\n}\n"
         );
     }
 }

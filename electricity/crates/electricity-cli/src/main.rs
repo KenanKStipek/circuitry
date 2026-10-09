@@ -21,6 +21,7 @@
 //! preview marker (profiles are M1-I) before `run_orchestration` is ever
 //! called -- no state is written for it, same as any other refusal.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -371,28 +372,53 @@ fn profile_refusal() -> RunResult {
     }
 }
 
+/// Writes *text* to stdout, ignoring any error -- `print!`/`println!`
+/// panic on a write error (a closed terminal after SIGHUP, a closed
+/// pipe downstream), which would report this run's own exit code as
+/// 101 instead of whichever one its own result earned. DESIGN.md §6.5:
+/// a stdout/stderr write failure "never stops cleanup, `--out` or the
+/// exit code" -- this is the one place that promise is kept, since
+/// every other caller in this file goes through here rather than the
+/// panicking macros directly.
+fn write_stdout(text: &str) {
+    let _ = std::io::stdout().lock().write_all(text.as_bytes());
+}
+
+/// [`write_stdout`]'s own stderr counterpart.
+fn write_stderr(text: &str) {
+    let _ = std::io::stderr().lock().write_all(text.as_bytes());
+}
+
 /// `electricity`'s own non-TTY stdout contract (issue #431's "CLI
 /// output" decision, "Same as `cof` when stdout is not a terminal"):
 /// success with `--out` prints nothing; success without `--out` prints
 /// the state JSON; a failure prints `{"ok": false, ...}` regardless of
 /// `--out`. `--pretty` governs only the success-without-`--out` case --
 /// `--out`'s own file is `electricity::out::write_out`'s job, not this
-/// function's.
+/// function's. A config error ([`run_action`]'s own early exit) never
+/// reaches this function at all -- Circuitry's own `CircuitryGroup.
+/// invoke` catches a `ConfigError` *around* the whole CLI command,
+/// before `run()`'s own JSON-output logic is ever reached, so a config
+/// error prints nothing on stdout, not even the failure payload.
 fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bool) {
     if !result.ok {
-        print!(
-            "{}",
-            electricity::out::failure_payload(
-                result.error.as_deref().unwrap_or(""),
-                &result.warnings,
-                out_path,
-            )
-        );
+        // `state_out` names *out_path* only when a file was actually
+        // written there -- a refusal (or any other `state: None`
+        // failure) leaves `--out` unwritten even when `--out` was given
+        // (PR #441 review finding 8), so this is `None` whenever
+        // `result.state` is, regardless of what the caller asked for.
+        let state_out = out_path.filter(|_| result.state.is_some());
+        write_stdout(&electricity::out::failure_payload(
+            result.error.as_deref().unwrap_or(""),
+            &result.warnings,
+            state_out,
+        ));
         return;
     }
     if out_path.is_none() {
         if let Some(state) = &result.state {
-            print!("{}", electricity::out::render_state(state, pretty));
+            write_stdout(&electricity::out::render_state_for_stdout(state, pretty));
+            write_stdout("\n");
         }
     }
 }
@@ -401,10 +427,13 @@ fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bo
 /// line -- issue #431's "CLI output" decision's own stderr contract.
 fn print_stderr_contract(result: &RunResult) {
     for warning in &result.warnings {
-        eprintln!("Warning: {warning}");
+        write_stderr(&format!("Warning: {warning}\n"));
     }
     if !result.ok {
-        eprintln!("Error: {}", result.error.as_deref().unwrap_or(""));
+        write_stderr(&format!(
+            "Error: {}\n",
+            result.error.as_deref().unwrap_or("")
+        ));
     }
 }
 
@@ -422,17 +451,28 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
 }
 
 fn run_action(run_args: RunArgs) -> ExitCode {
-    // `electricity::parse_inputs`'s own malformed-`-e` text, Circuitry's
-    // own `BadParameter` message word for word (issue #429):
-    // `parse_flags` only checks that `-e` has *some* value, saying
-    // nothing about whether that value itself contains `=` -- a value
-    // with no `=` (`-e badtext`) reaches this, `cli/app.py::
+    // Step 1 of issue #431's run-wiring table: a config error exits 1
+    // with Circuitry's own text, on stderr alone -- Circuitry's
+    // `CircuitryGroup.invoke` catches a `ConfigError` *around* the
+    // whole CLI command, before `run()`'s own JSON-output logic is
+    // ever reached, so unlike every other failure this prints no
+    // stdout payload at all, `--out` or not (PR #441 review finding 8).
+    let config_path = PathBuf::from(&run_args.config);
+    if let Some(message) = electricity::config_error(&config_path) {
+        write_stderr(&format!("Error: {message}\n"));
+        return ExitCode::from(1);
+    }
+
+    // Step 2: `electricity::parse_inputs`'s own malformed-`-e` text,
+    // Circuitry's own `BadParameter` message word for word (issue
+    // #429): `parse_flags` only checks that `-e` has *some* value,
+    // saying nothing about whether that value itself contains `=` -- a
+    // value with no `=` (`-e badtext`) reaches this, `cli/app.py::
     // _parse_env_vars`'s own check proper.
     let inputs = match electricity::parse_inputs(&run_args.inputs) {
         Ok(inputs) => inputs,
         Err(message) => {
-            eprintln!("electricity: {message}");
-            eprintln!("{USAGE}");
+            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
             return ExitCode::from(2);
         }
     };
@@ -445,7 +485,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         profile_refusal()
     } else {
         let req = RunRequest {
-            config_path: PathBuf::from(&run_args.config),
+            config_path,
             orchestration_path: PathBuf::from(&run_args.orchestration),
             inputs,
             out_path: out_path.clone(),
@@ -473,10 +513,10 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     if let Some(path) = &out_path {
         if let Some(state) = &result.state {
             if let Err(err) = electricity::out::write_out(path, state, run_args.pretty) {
-                eprintln!(
-                    "electricity: could not write --out {}: {err}",
+                write_stderr(&format!(
+                    "electricity: could not write --out {}: {err}\n",
                     path.display()
-                );
+                ));
                 return ExitCode::from(1);
             }
         }
@@ -496,11 +536,11 @@ fn main() -> ExitCode {
         .collect();
     match classify(&args) {
         Action::Version => {
-            println!("{}", electricity::version_string());
+            write_stdout(&format!("{}\n", electricity::version_string()));
             ExitCode::SUCCESS
         }
         Action::Help => {
-            println!("{USAGE}");
+            write_stdout(&format!("{USAGE}\n"));
             ExitCode::SUCCESS
         }
         Action::Run(run_args) => run_action(run_args),
@@ -508,8 +548,7 @@ fn main() -> ExitCode {
             let inputs = match electricity::parse_inputs(&raw_inputs) {
                 Ok(inputs) => inputs,
                 Err(message) => {
-                    eprintln!("electricity: {message}");
-                    eprintln!("{USAGE}");
+                    write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
                     return ExitCode::from(2);
                 }
             };
@@ -519,18 +558,17 @@ fn main() -> ExitCode {
                 &inputs,
             ) {
                 Ok(json) => {
-                    println!("{json}");
+                    write_stdout(&format!("{json}\n"));
                     ExitCode::SUCCESS
                 }
                 Err(message) => {
-                    eprintln!("{message}");
+                    write_stderr(&format!("{message}\n"));
                     ExitCode::from(1)
                 }
             }
         }
         Action::UsageError(message) => {
-            eprintln!("electricity: {message}");
-            eprintln!("{USAGE}");
+            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
             ExitCode::from(2)
         }
     }

@@ -507,6 +507,38 @@ fn signal_from_token(token: &CancellationToken) -> Option<Signal> {
     }
 }
 
+/// The current process environment, as [`electricity_config::resolve_config`]'s
+/// own `CIRCUITRY_*`-overlay parameter -- the one place this crate
+/// reads `std::env::vars()` for that, so [`config_error`] and
+/// [`run_orchestration`] always resolve the exact same config for the
+/// exact same *config_path*, never drifting apart on what counts as
+/// "the environment" between the two.
+fn current_env_vars() -> std::collections::HashMap<String, String> {
+    std::env::vars().collect()
+}
+
+/// *config_path*'s own config error, if resolving it fails -- `None` on
+/// success. `electricity-cli`'s own "a config error exits 1 with
+/// Circuitry's own text and writes no `--out`" special case (issue
+/// #431's run-wiring step 1): Circuitry's `CircuitryGroup.invoke`
+/// catches a `ConfigError` *around* the whole CLI command, before
+/// `run()`'s own JSON-output logic (`json_out`/`console.print_json`)
+/// is ever reached, so a config error prints nothing on stdout at
+/// all -- unlike every other failure [`run_orchestration`] itself
+/// reports, which always goes through that logic. A caller that wants
+/// this distinction checks this function *before* building a
+/// [`RunRequest`] and calling [`run_orchestration`] (which still
+/// resolves the same config again, internally, as step 1 of its own
+/// run-wiring table -- this is deliberately not threaded through as a
+/// parameter, so a direct [`run_orchestration`] caller, like this
+/// crate's own tests, never has to resolve a config twice itself just
+/// to get a [`RunResult`]).
+pub fn config_error(config_path: &Path) -> Option<String> {
+    electricity_config::resolve_config(config_path, &current_env_vars())
+        .err()
+        .map(|err| err.0)
+}
+
 /// Runs *req* the way `electricity <config.json> <doc> ...` does (issue
 /// #431's run-wiring table, steps 1-19) -- resolving the config,
 /// seeding and checking the document, refusing unsupported content,
@@ -530,7 +562,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
 
     // Step 1: config -- a config error exits 1 with Circuitry's own
     // text and writes no --out (no state exists yet to write).
-    let env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let env_vars = current_env_vars();
     let cfg = match electricity_config::resolve_config(&req.config_path, &env_vars) {
         Ok(cfg) => cfg,
         Err(err) => {
