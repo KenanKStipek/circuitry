@@ -198,18 +198,31 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
     let mut stderr = child.stderr.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        // The notice interpolates a path, so it reaches the pipe in
+        // several separate writes; a reader that stops at the first
+        // chunk containing "waiting for" can see that phrase before
+        // the path itself has arrived. Collect raw bytes and only
+        // stop once a newline follows "waiting for" (the notice's own
+        // line is complete), decoding once at the end so a multi-byte
+        // character split across two reads isn't garbled mid-stream.
         let mut buf = [0u8; 4096];
-        let mut collected = String::new();
-        while let Ok(n) = stderr.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            collected.push_str(&String::from_utf8_lossy(&buf[..n]));
-            if collected.contains("waiting for") {
-                break;
+        let mut collected: Vec<u8> = Vec::new();
+        loop {
+            match stderr.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    collected.extend_from_slice(&buf[..n]);
+                    let needle = b"waiting for";
+                    if let Some(pos) = collected.windows(needle.len()).position(|w| w == needle) {
+                        if collected[pos + needle.len()..].contains(&b'\n') {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
             }
         }
-        let _ = tx.send(collected);
+        let _ = tx.send(String::from_utf8_lossy(&collected).into_owned());
     });
     let collected = rx
         .recv_timeout(Duration::from_secs(5))
