@@ -85,6 +85,51 @@ fn on_error_continue_still_exits_ok() {
 }
 
 #[test]
+fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass() {
+    // LOOP REGRESSION (issue #444's rework): an unnamed loop's body
+    // writes its named `if` straight into the parent's node, so the
+    // exact same path is reused every pass (no `iter_<n>` disambiguator
+    // the way a *named* loop gets one) -- here a strict CEL condition
+    // that always errors fails that `if` on its own, with `on_error:
+    // continue` so nothing ever stops the loop. cof emits one `end`
+    // event with `ok: false` per pass for it (the same shape as
+    // tests/conformance/cases/on-error-if's `gate_continue`), so osp
+    // must print one ✗ per pass too, not collapse every pass but the
+    // first into nothing.
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    each:\n      in: prime.items.value\n      as: item\n    body:\n      - type: if\n        name: gate\n        on_error: continue\n        if:\n          mode: cel\n          expr: \"state.input.missing > 1\"\n          strict: true\n        then:\n          - type: tool\n            name: branch\n            provider: json\n            params: {mode: stringify, input: {branch: \"then\"}}\n        else:\n          - type: tool\n            name: branch\n            provider: json\n            params: {mode: stringify, input: {branch: \"else\"}}\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert_eq!(
+        stdout.matches("✗ prime.gate ").count(),
+        2,
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
 fn a_single_sigint_forwards_and_osp_exits_130() {
     if !e2e_enabled() {
         eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
