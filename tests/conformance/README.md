@@ -19,6 +19,8 @@ cases/<name>/
   replies.json            # optional — reserved for the scripted model adapter (#362); unused today
   expected.json            # the captured --out state (success), or {"error": "..."} (failure)
   expected.pretty.json      # only when case.json sets "also_pretty": true
+  expected.out.json        # failure cases only -- the --out `cof run` still writes on a load/check failure
+  expected.events.jsonl     # success cases only -- the --events stream `cof run` wrote for this case
 ```
 
 `case.json`:
@@ -105,6 +107,16 @@ insertion order vs. `--out --pretty`'s alphabetical order is itself the
 property C23 exists to check (`assert_out_serialization` round-trips a
 file's own content through the exact `json.dumps` call that should have
 produced it and asserts byte equality).
+
+`cof run` writes `--out` on a load/check failure too, not only on success
+(run-wiring step 20, issue #431) — a minimal seeded state plus whatever of
+`runtime`/`effective_settings` had already resolved before the failure,
+which varies by which step failed. Every failure case therefore also
+commits `expected.out.json`, captured and redacted the same way a success
+case's `expected.json` is, and both runners compare their own `--out`
+against it (under `normalize()`, like any other state) in addition to the
+error text. `also_pretty` is success-only — `harness.load_case` rejects it
+on a failure case.
 
 ## Running it
 

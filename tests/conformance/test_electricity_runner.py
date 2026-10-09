@@ -211,6 +211,14 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
             byte_for_byte=error_compare == "exact",
             location_pattern=metadata.get("location_pattern"),
         )
+
+        actual_out_text = out_path.read_text(encoding="utf-8")
+        assert_out_serialization(actual_out_text, pretty=False)
+        actual_out_state = json.loads(actual_out_text)
+        expected_out_state = json.loads(
+            (case_dir / "expected.out.json").read_text(encoding="utf-8")
+        )
+        assert_states_equal(normalize(actual_out_state), normalize(expected_out_state))
         return
 
     raise AssertionError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")

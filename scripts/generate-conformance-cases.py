@@ -112,7 +112,16 @@ def _generate_failure(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
     error = harness.parse_cli_error(result.stdout)
     payload = {"error": error}
     text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
-    return {"expected.json": text.encode("utf-8")}
+    # `cof run` writes `--out` on a load/check failure too (run-wiring step
+    # 20, issue #431): a minimal seed state plus whatever of
+    # `runtime`/`effective_settings` got resolved before the failure, which
+    # varies by *which* step failed. Captured and normalized the same way a
+    # success case's state is, so electricity's own `--out` on the matching
+    # failure can be compared against it, not just the error text.
+    return {
+        "expected.json": text.encode("utf-8"),
+        "expected.out.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),
+    }
 
 
 def generate_case(case_dir: Path) -> dict[str, bytes]:

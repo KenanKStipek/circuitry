@@ -113,6 +113,10 @@ def load_case(case_dir: Path) -> dict[str, Any]:
             f"{case_dir.name}: case.json 'error_compare' must be one of "
             f"{sorted(_VALID_ERROR_COMPARE)}, got {metadata['error_compare']!r}"
         )
+    if metadata.get("also_pretty") and metadata["expect"] != "success":
+        raise ValueError(
+            f"{case_dir.name}: case.json 'also_pretty' only applies to a 'success' case"
+        )
     return metadata
 
 
