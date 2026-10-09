@@ -173,7 +173,7 @@ fn reject_unknown_keys(block: &Dict, allowed: &[&str], path: &str) -> Result<(),
 
 fn as_bool(block: &Dict, key: &str, path: &str, default: bool) -> Result<bool, ConfigError> {
     match get(block, key) {
-        None | Some(Value::None) => Ok(default),
+        None => Ok(default),
         Some(Value::Bool(b)) => Ok(*b),
         Some(other) => Err(ConfigError(format!(
             "{path}.{key} must be true or false; found {}.",
