@@ -50,6 +50,12 @@ pub struct CorpusResult {
     pub live_state: Option<Value>,
 }
 
+// This module is compiled fresh into each integration-test binary that
+// declares `mod support;` -- `#[allow(dead_code)]` on these two because
+// not every one of those binaries calls `load_corpus` itself (lane C's
+// own `tool_run_corpus.rs` only ever calls `load_corpus_at` directly, a
+// different golden file).
+#[allow(dead_code)]
 fn golden_path() -> &'static Path {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -60,14 +66,24 @@ fn golden_path() -> &'static Path {
 /// Loads and parses `tests/golden/run_corpus.json` -- panics (this is
 /// test support, not a library API) on a missing file, invalid JSON, or
 /// a case missing one of [`CorpusResult`]'s own required fields.
+#[allow(dead_code)]
 pub fn load_corpus() -> Vec<CorpusCase> {
-    let text = fs::read_to_string(golden_path())
-        .unwrap_or_else(|err| panic!("{}: {err}", golden_path().display()));
+    load_corpus_at(golden_path().to_str().expect("golden_path is valid UTF-8"))
+}
+
+/// Like [`load_corpus`], but for any golden file this same corpus shape
+/// was written to -- every later lane's own `generate_*_run_corpus.py`
+/// writes a file of this exact shape (`_run_corpus.py`'s own
+/// `render_corpus`), just somewhere other than `tests/golden/run_corpus.
+/// json`.
+pub fn load_corpus_at(path: &str) -> Vec<CorpusCase> {
+    let path = Path::new(path);
+    let text = fs::read_to_string(path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
     let raw: Value = serde_json::from_str(&text)
-        .unwrap_or_else(|err| panic!("{}: invalid JSON: {err}", golden_path().display()));
+        .unwrap_or_else(|err| panic!("{}: invalid JSON: {err}", path.display()));
     let cases = raw
         .as_array()
-        .unwrap_or_else(|| panic!("{}: expected a JSON array", golden_path().display()));
+        .unwrap_or_else(|| panic!("{}: expected a JSON array", path.display()));
 
     cases
         .iter()
@@ -76,7 +92,7 @@ pub fn load_corpus() -> Vec<CorpusCase> {
                 .as_str()
                 .unwrap_or_else(|| panic!("case missing a string 'name': {case}"))
                 .to_string();
-            let inputs = case["inputs"].clone();
+            let inputs = case.get("inputs").cloned().unwrap_or(Value::Null);
             let result = &case["result"];
             let returncode = result["returncode"]
                 .as_i64()

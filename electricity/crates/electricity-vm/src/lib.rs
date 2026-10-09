@@ -20,6 +20,7 @@ pub mod cancel;
 pub mod exec;
 pub mod limiter;
 pub mod observer;
+pub mod params;
 pub mod store;
 
 pub use cancel::CancellationToken;
@@ -73,8 +74,22 @@ pub enum VmError {
     /// A `tool` effect's `provider:` has no registered
     /// [`electricity_tools::ToolPlugin`].
     ToolNotFound(String),
-    /// A registered plugin's own [`electricity_tools::ToolError`], as text.
+    /// A registered plugin's own [`electricity_tools::ToolError`], or any
+    /// other tool-effect failure (a render error, an allowlist denial, a
+    /// failed `expect:`), as text -- what [`crate::exec::tool::execute_tool`]
+    /// returns for `on_error: fail` once retries are exhausted.
     Tool(String),
+    /// This run's own [`CancellationToken`] was requested while an effect
+    /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
+    /// `on_error` entirely and fires no observer `effect_complete`, mirroring
+    /// Python's `RunCancelledBySignal`: a `BaseException`, not `Exception`,
+    /// so `ToolRuntime.execute`'s own `except Exception` never catches it
+    /// (`core/cancellation.py`). The caller (lane B's own tree-walking
+    /// interpreter) checks `token.is_set()`/`token.signum()` itself to build
+    /// the interrupt text a cancelled run's `RunResult.error` carries; this
+    /// variant only ever signals *that* cancellation happened here, not with
+    /// what signal.
+    Cancelled,
     /// Lane B's own execution loop isn't implemented yet.
     NotImplemented(String),
 }
@@ -84,6 +99,7 @@ impl fmt::Display for VmError {
         match self {
             VmError::ToolNotFound(provider) => write!(f, "Unknown tool provider: {provider}"),
             VmError::Tool(message) => write!(f, "{message}"),
+            VmError::Cancelled => write!(f, "cancelled"),
             VmError::NotImplemented(message) => write!(f, "{message}"),
         }
     }
