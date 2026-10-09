@@ -8,7 +8,7 @@ status:
 --- observation 1 ---
 log:
   ▶ prime.slow  shell tail -f /dev/null
-  ■ run failed: Interrupted (Ctrl-C/SIGINT)  0.2s
+  ■ run cancelled: Interrupted (Ctrl-C/SIGINT)  0.2s
 status:
 prime: Failed skip=None retrying=false
 prime.slow: Cancelled skip=None retrying=false
