@@ -1,0 +1,2423 @@
+{
+  "tool_execute_cases": [
+    {
+      "case": "success",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "str",
+              "v": "{\"a\": 1}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "a"
+                              },
+                              {
+                                "t": "int",
+                                "v": "1"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "tool_error_fail",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": "json: unknown mode 'bogus'",
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json: unknown mode 'bogus'"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "bogus"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": true,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "tool_error_skip",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json: unknown mode 'bogus'"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "bogus"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "skip",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "tool_error_continue",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json: unknown mode 'bogus'"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "bogus"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "continue",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "expect_always_fails_exhausts_retries",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": {
+        "expr": "value == 2",
+        "mode": "cel"
+      },
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "expect failed: value == 2"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "parse"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "str",
+                          "v": "1"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "parse"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "value == 2"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": false
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "skip",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": {
+        "backoff_ms": 0,
+        "max_attempts": 3
+      },
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "expect_always_passes_first_attempt",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": {
+        "expr": "value == 2",
+        "mode": "cel"
+      },
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "parse"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "str",
+                          "v": "2"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "parse"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "value == 2"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "2"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "allowlist_denial",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": "tool 'json' not in enabled_tools allowlist (enabled: ['other'])",
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{}"
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": true,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "_allowlists"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "tools"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "str",
+                        "v": "other"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "params_json_merge",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "str",
+              "v": "{\"a\": 1, \"b\": 2}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "a"
+                              },
+                              {
+                                "t": "int",
+                                "v": "1"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "b"
+                              },
+                              {
+                                "t": "int",
+                                "v": "2"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": "{\"input\": {\"b\": 2}}",
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "non_string_param_keys",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "str",
+              "v": "{\"true\": \"one-value\"}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "bool",
+                                "v": true
+                              },
+                              {
+                                "t": "str",
+                                "v": "one-value"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "bool",
+                    "v": true
+                  },
+                  {
+                    "t": "str",
+                    "v": "one-value"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "redaction_in_params_rendered",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": null,
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "str",
+              "v": "{\"api_key\": \"super-secret\", \"name\": \"ok\"}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "params_rendered"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "input"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "api_key"
+                              },
+                              {
+                                "t": "str",
+                                "v": "***REDACTED***"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "name"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "raw"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stringify"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "stringify"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "api_key"
+                  },
+                  {
+                    "t": "str",
+                    "v": "super-secret"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "name"
+                  },
+                  {
+                    "t": "str",
+                    "v": "ok"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": false,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "allowed_commands_templated_item_refused",
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "target"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "error": "params.allowed_commands must be a literal list of strings; a templated value is not honoured for this security-sensitive setting.",
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "params.allowed_commands must be a literal list of strings; a templated value is not honoured for this security-sensitive setting."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "allowed_commands"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "rm {{input.target}}"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": true,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "allowed_commands_non_string_item_refused",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": "params.allowed_commands must be a literal list of strings; a by-reference '{from: ...}' value is not honoured for this security-sensitive setting.",
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "params.allowed_commands must be a literal list of strings; a by-reference '{from: ...}' value is not honoured for this security-sensitive setting."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "allowed_commands"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "params_json": null,
+      "raised": true,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "case": "params_json_allowed_commands_override_refused",
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "error": "params_json must not set ['allowed_commands']: security-sensitive settings are only honoured from a document's literal params block.",
+      "expect": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "provider"
+                  },
+                  {
+                    "t": "str",
+                    "v": "json"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "params_json must not set ['allowed_commands']: security-sensitive settings are only honoured from a document's literal params block."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stdout"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "stderr"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "exit_code"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "waiting_for"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "on_error": "fail",
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "parse"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "{}"
+            }
+          ]
+        ]
+      },
+      "params_json": "{\"allowed_commands\": [\"ls\"]}",
+      "raised": true,
+      "retries": null,
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  ]
+}
