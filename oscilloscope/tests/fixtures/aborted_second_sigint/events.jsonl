@@ -1,0 +1,4 @@
+{"v":1,"seq":0,"ts":"2026-10-08T23:53:14.181Z","ev":"run_start","run_id":"bd85af45-26c9-49a2-ac60-ffb4901a74ea","orchestration":"do.yml","engine":"cof 0.1.0","pid":43228}
+{"v":1,"seq":1,"ts":"2026-10-08T23:53:14.194Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-08T23:53:14.194Z","ev":"start","id":1,"path":"prime.slow"}
+{"v":1,"seq":3,"ts":"2026-10-08T23:53:14.817Z","ev":"start","id":2,"path":"prime.cleanup"}

@@ -1,0 +1,8 @@
+prime.greet:
+  - text: "hello there"
+    tokens_sent: 5
+    tokens_received: 3
+prime.thank:
+  - text: "you're welcome"
+    tokens_sent: 4
+    tokens_received: 3

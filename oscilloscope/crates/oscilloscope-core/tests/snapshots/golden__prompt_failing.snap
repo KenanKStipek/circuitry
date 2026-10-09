@@ -1,0 +1,14 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+  ▶ prime.ask  prompt scripted/scripted-model "Ask something risky."
+  ✗ prime.ask  All adapter attempts failed: [{'adapter': 'scripted', 'model': 'scripted-model', 'status': 'failed', 'error': 'scripted 
+  ■ run failed: prime.ask: All adapter attempts failed: [{'adapter': 'scripted', 'model': 'scripted-model', 'status': 'failed', 'error': 'scripted failure', 'tokens_sent': None, 'tokens_received': None}]  0.0s
+status:
+prime: Failed skip=None retrying=false
+prime.ask: Failed skip=None retrying=false
+--- exit ---
+exit_code: 1

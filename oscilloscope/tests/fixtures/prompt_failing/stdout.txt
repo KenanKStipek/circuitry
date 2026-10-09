@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "error": "prime.ask: All adapter attempts failed: [{'adapter': 'scripted', 'model': 'scripted-model', 'status': 'failed', 'error': 'scripted failure', 'tokens_sent': None, 'tokens_received': None}]",
+  "warnings": [],
+  "state_out": "<SCRUBBED>/run/state.json"
+}

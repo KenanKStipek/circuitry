@@ -1,0 +1,17 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+status:
+--- observation 1 ---
+log:
+  ▶ prime.slow  shell tail -f /dev/null
+  ▶ prime.cleanup  effect
+status:
+prime: Aborted skip=None retrying=false
+prime.cleanup: Aborted skip=None retrying=false
+prime.slow: Aborted skip=None retrying=false
+--- exit ---
+exit_code: 130

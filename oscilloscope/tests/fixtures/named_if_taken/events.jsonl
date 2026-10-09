@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-08T23:53:15.315Z","ev":"run_start","run_id":"cf9e2037-3eae-4f2b-a66f-df30815f25b1","orchestration":"do.yml","engine":"cof 0.1.0","pid":43237}
+{"v":1,"seq":1,"ts":"2026-10-08T23:53:15.319Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-08T23:53:15.319Z","ev":"start","id":1,"path":"prime.gate"}
+{"v":1,"seq":3,"ts":"2026-10-08T23:53:15.319Z","ev":"start","id":2,"path":"prime.gate.chosen"}
+{"v":1,"seq":4,"ts":"2026-10-08T23:53:15.323Z","ev":"end","id":2,"path":"prime.gate.chosen","ok":true,"ms":4}
+{"v":1,"seq":5,"ts":"2026-10-08T23:53:15.323Z","ev":"end","id":1,"path":"prime.gate","ok":true,"ms":4}
+{"v":1,"seq":6,"ts":"2026-10-08T23:53:15.323Z","ev":"end","id":0,"path":"prime","ok":true,"ms":4}
+{"v":1,"seq":7,"ts":"2026-10-08T23:53:15.324Z","ev":"run_end","ok":true}

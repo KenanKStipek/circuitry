@@ -1,0 +1,17 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+--- observation 0 ---
+log:
+  ▶ prime.greet  prompt scripted/scripted-model "Say hello!"
+  ✓ prime.greet  0.0s  ↑5 ↓3
+  ▶ prime.thank  prompt scripted/scripted-model "Say thank you!"
+  ✓ prime.thank  0.0s  ↑4 ↓3
+  ■ run ok  0.0s
+status:
+prime: Done skip=None retrying=false
+prime.greet: Done skip=None retrying=false
+prime.thank: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

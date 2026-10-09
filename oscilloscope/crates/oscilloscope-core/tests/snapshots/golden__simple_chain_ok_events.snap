@@ -1,0 +1,15 @@
+---
+source: crates/oscilloscope-core/tests/golden.rs
+expression: rendered
+---
+log:
+  ▶ prime.first  effect
+  ✓ prime.first  0.0s  ok
+  ▶ prime.second  effect
+  ✓ prime.second  0.0s  ok
+status:
+prime: Done skip=None retrying=false
+prime.first: Done skip=None retrying=false
+prime.second: Done skip=None retrying=false
+--- exit ---
+exit_code: 0

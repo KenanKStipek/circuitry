@@ -1,0 +1,13 @@
+effects:
+  - name: first
+    type: tool
+    provider: shell
+    params:
+      command: echo
+      args: ["one"]
+  - name: second
+    type: tool
+    provider: shell
+    params:
+      command: echo
+      args: ["two"]

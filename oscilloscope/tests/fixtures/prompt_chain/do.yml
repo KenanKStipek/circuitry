@@ -1,0 +1,7 @@
+effects:
+  - name: greet
+    type: prompt
+    template: "Say hello!"
+  - name: thank
+    type: prompt
+    template: "Say thank you!"

@@ -1,0 +1,18 @@
+interface:
+  inputs:
+    items: {type: array, default: ["a", "b", "c", "d"]}
+effects:
+  - type: loop
+    name: each_tree
+    flow: tree
+    max_concurrency: 2
+    each:
+      in: input.items
+      as: item
+    body:
+      - name: nap
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["{{item}}"]
