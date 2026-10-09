@@ -27,7 +27,7 @@ reality: a lane that fills in a stub should update the row(s) it touches in the 
 | `electricity-config` | `src/lib.rs` | `validate_complexity` | A (stub, no-op) | Lane D: the real `resolve_complexity_settings` validation `electricity-compiler`'s own crate docs already list as a known divergence. |
 | `electricity-config` | `src/lib.rs` | `validate_persistence` | A (stub, no-op) | Lane D: the real `build_persistence_backend` validation, same known divergence. |
 | `electricity-vm` | `src/store.rs` | `NodeRef`, `Store::new` | A | `NodeRef` type and an empty-root constructor are final; `ensure_dict`/`child`/`parallel_branches`/`merge` are lane B stubs -- lane B also owns the internal convention for `last`-style aliasing inside a node's own `IndexMap<Value, Value>` (not fixed by lane A). |
-| `electricity-vm` | `src/cancel.rs` | `CancellationToken` | A | Final and complete -- a self-contained token tree, no lane B/C/D work needed. |
+| `electricity-vm` | `src/cancel.rs` | `CancellationToken` | A | Final and complete -- a self-contained, `Send + Sync` token tree (`Arc`/`AtomicI32`, not `Rc`/`Cell`: lane D's signal handler cancels a run from a thread or task other than the one blocked in the VM), with an awaitable `cancelled()` lane B/C select on; no lane B/C/D work needed. |
 | `electricity-vm` | `src/limiter.rs` | `Limiter`, `SlotGuard` | A (stub) | Lane B implements the real group-then-global async semaphore. |
 | `electricity-vm` | `src/observer.rs` | `RunObserver`, `NullObserver` | A | Final and complete. |
 | `electricity-vm` | `src/lib.rs` | `RunContext` | A | Final shape: the registry/limiter/model/adapter/runtime-config bag `execute_root` and `run_tool` read -- lane D's `run_orchestration` is the first caller that builds a real one. |
