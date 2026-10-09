@@ -173,12 +173,7 @@ fn a_missing_orchestration_file_wins_over_a_malformed_e_value() {
     let (mut cmd, home) = command("missing-orchestration-bad-e");
     let config = home.config("{}");
     let output = cmd
-        .args([
-            config.to_str().unwrap(),
-            "no-such-doc.yml",
-            "-e",
-            "badtext",
-        ])
+        .args([config.to_str().unwrap(), "no-such-doc.yml", "-e", "badtext"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
