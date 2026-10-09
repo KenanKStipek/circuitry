@@ -135,6 +135,28 @@ pub fn run_error(state: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Rule 7's first bullet, shared by `run_status` (the TUI header) and
+/// `Differ::finish` (the plain `--log` summary and `osp watch`'s own):
+/// how an **ended** run's `prime.meta.error` reads, so the two
+/// surfaces can never label the very same ended run differently.
+/// `state` must already satisfy `run_ended`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndedOutcome {
+    Ok,
+    Cancelled,
+    Failed,
+}
+
+pub fn ended_outcome(state: &Value) -> EndedOutcome {
+    if run_ok(state) {
+        return EndedOutcome::Ok;
+    }
+    match run_error(state) {
+        Some(error) if error.starts_with("Interrupted") => EndedOutcome::Cancelled,
+        _ => EndedOutcome::Failed,
+    }
+}
+
 pub fn run_totals(state: &Value) -> Option<Value> {
     state.pointer("/runtime/last_run/totals").cloned()
 }
@@ -214,11 +236,42 @@ pub enum RunStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Running,
-    /// The process exited; `interrupted` is `prime.meta.error` starting
-    /// with `"Interrupted"` (distinguishing cancelled from aborted).
+    /// The process exited.
     Exited {
+        /// `prime.meta.error` starting with `"Interrupted"` — colours a
+        /// still-open *row* cancelled vs aborted (rule 2). Not used for
+        /// the run-wide status (`run_status`, rule 7): an ended run's
+        /// own cancelled/failed split there comes from the state alone
+        /// (`ended_outcome`), and an unended run has no single node to
+        /// read this from at all.
         interrupted: bool,
+        /// Rule 7's "no ended state" branch: a positive sign that this
+        /// run specifically *failed*, not merely stopped — a real
+        /// process exit code of exactly 1 for `osp run`/the TUI (what
+        /// `cof` exits with for a pre-execution validation failure,
+        /// DESIGN.md §4.1), or, for `osp watch` (which owns no process
+        /// to read an exit code from), `--events`' own
+        /// `run_end.ok == false`.
+        likely_failed: bool,
+        /// Whatever `failure_reason_fallback` already finds for this
+        /// run: a `run_end` event's own error, or cof's pre-execution
+        /// stdout JSON. Required alongside `likely_failed` — a stray
+        /// leftover stderr line is not a failure reason on its own.
+        has_failure_reason: bool,
     },
+}
+
+impl ProcessState {
+    /// `Exited` with no run-wide-failure information at all, for a
+    /// caller that only needs the per-row `interrupted` colouring
+    /// (rule 2), not `run_status` (rule 7).
+    pub fn exited(interrupted: bool) -> Self {
+        ProcessState::Exited {
+            interrupted,
+            likely_failed: false,
+            has_failure_reason: false,
+        }
+    }
 }
 
 /// A tree container's own `dispatch` event (DESIGN.md §2.1 rule 4):
@@ -505,8 +558,12 @@ impl RunModel {
             let kind = if node.is_running() {
                 match process {
                     ProcessState::Running => StatusKind::Running,
-                    ProcessState::Exited { interrupted: true } => StatusKind::Cancelled,
-                    ProcessState::Exited { interrupted: false } => StatusKind::Aborted,
+                    ProcessState::Exited {
+                        interrupted: true, ..
+                    } => StatusKind::Cancelled,
+                    ProcessState::Exited {
+                        interrupted: false, ..
+                    } => StatusKind::Aborted,
                 }
             } else if node.is_ok() {
                 StatusKind::Done
@@ -597,6 +654,20 @@ impl RunModel {
 
         if !entry.enabled {
             return RowStatus::skipped(SkipReason::Disabled);
+        }
+
+        // Finding 9: an unnamed `if`'s own branches have no node to
+        // report `meta.branch` from the way a *named* if's own does —
+        // but once any path on the *other* side has a real node, this
+        // one, still absent, is definitely the branch that didn't run,
+        // not merely one the chain-flow heuristic below hasn't caught
+        // up to yet.
+        if plan
+            .branch_alternates(path)
+            .iter()
+            .any(|alt| flat.contains_key(alt))
+        {
+            return RowStatus::skipped(SkipReason::UntakenBranch);
         }
 
         // An ancestor is complete and this path never appeared: skipped,
@@ -718,29 +789,40 @@ fn classify_failure(path: &str, plan: &PlanTree) -> StatusKind {
     }
 }
 
-/// Status of the run as a whole (DESIGN.md §2.1 rule 7).
+/// Status of the run as a whole (DESIGN.md §2.1 rule 7), shared by
+/// the TUI header, the plain `--log` summary and `osp watch`: all
+/// three derive the same answer from the same inputs, rather than
+/// each guessing from `prime.meta.error` on its own.
+///
+/// - Running while the process is alive.
+/// - An **ended** run (`runtime.last_run.completed_at` set): `ok` if
+///   `prime.meta.error` is `null`, **cancelled** if it starts with
+///   `"Interrupted"`, otherwise **failed** (`ended_outcome`).
+/// - A process exited with no ended state: **failed** only when the
+///   caller's `likely_failed` and `has_failure_reason` both hold
+///   (a real pre-execution validation failure); otherwise **aborted**
+///   (a second signal, SIGKILL, a crash: no final write).
 pub fn run_status(state: Option<&Value>, process: ProcessState) -> RunStatus {
     match process {
         ProcessState::Running => RunStatus::Running,
-        ProcessState::Exited { interrupted } => {
-            let Some(state) = state else {
-                return if interrupted {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Aborted
-                };
-            };
-            if !run_ended(state) {
-                return if interrupted {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Aborted
-                };
+        ProcessState::Exited {
+            likely_failed,
+            has_failure_reason,
+            ..
+        } => {
+            if let Some(state) = state {
+                if run_ended(state) {
+                    return match ended_outcome(state) {
+                        EndedOutcome::Ok => RunStatus::Ok,
+                        EndedOutcome::Cancelled => RunStatus::Cancelled,
+                        EndedOutcome::Failed => RunStatus::Failed,
+                    };
+                }
             }
-            if run_ok(state) {
-                RunStatus::Ok
-            } else {
+            if likely_failed && has_failure_reason {
                 RunStatus::Failed
+            } else {
+                RunStatus::Aborted
             }
         }
     }
@@ -751,6 +833,148 @@ mod tests {
     use super::*;
     use crate::observe::Event;
     use serde_json::json;
+
+    /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
+    /// rule 7), the function the orchestrator measured labelling a
+    /// cancelled run `failed` and an invalid document `aborted`.
+    #[test]
+    fn run_status_follows_design_rule_7() {
+        let ended_ok = json!({
+            "runtime": {"last_run": {"completed_at": "t"}},
+            "prime": {"meta": {"error": null}}
+        });
+        let ended_cancelled_sigint = json!({
+            "runtime": {"last_run": {"completed_at": "t"}},
+            "prime": {"meta": {"error": "Interrupted (Ctrl-C/SIGINT)"}}
+        });
+        let ended_cancelled_sigterm = json!({
+            "runtime": {"last_run": {"completed_at": "t"}},
+            "prime": {"meta": {"error": "Interrupted (SIGTERM)"}}
+        });
+        let ended_failed = json!({
+            "runtime": {"last_run": {"completed_at": "t"}},
+            "prime": {"meta": {"error": "/bin/ls failed (exit 1): ls: no"}}
+        });
+        let ended_failed_no_prime = json!({"runtime": {"last_run": {"completed_at": "t"}}});
+        let not_ended = json!({"prime": {"meta": {"completed_at": null, "error": null}}});
+
+        struct Case<'a> {
+            name: &'static str,
+            state: Option<&'a Value>,
+            running: bool,
+            likely_failed: bool,
+            has_failure_reason: bool,
+            want: RunStatus,
+        }
+        let cases = [
+            Case {
+                name: "running, regardless of state",
+                state: None,
+                running: true,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Running,
+            },
+            Case {
+                name: "ended ok",
+                state: Some(&ended_ok),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Ok,
+            },
+            Case {
+                name: "ended, error starts with Interrupted (SIGINT)",
+                state: Some(&ended_cancelled_sigint),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Cancelled,
+            },
+            Case {
+                name: "ended, error starts with Interrupted (SIGTERM)",
+                state: Some(&ended_cancelled_sigterm),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Cancelled,
+            },
+            Case {
+                name: "ended, error does not start with Interrupted",
+                state: Some(&ended_failed),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Failed,
+            },
+            Case {
+                name: "ended, no prime node at all (K6)",
+                state: Some(&ended_failed_no_prime),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Failed,
+            },
+            Case {
+                name: "not ended, likely_failed and a failure reason (invalid document, exit 1)",
+                state: None,
+                running: false,
+                likely_failed: true,
+                has_failure_reason: true,
+                want: RunStatus::Failed,
+            },
+            Case {
+                name: "not ended, likely_failed but no failure reason",
+                state: None,
+                running: false,
+                likely_failed: true,
+                has_failure_reason: false,
+                want: RunStatus::Aborted,
+            },
+            Case {
+                name: "not ended, a failure reason but not likely_failed (second signal, stray stderr line)",
+                state: None,
+                running: false,
+                likely_failed: false,
+                has_failure_reason: true,
+                want: RunStatus::Aborted,
+            },
+            Case {
+                name: "not ended, neither likely_failed nor a failure reason",
+                state: None,
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Aborted,
+            },
+            Case {
+                name: "state present but not yet ended, no failure signal",
+                state: Some(&not_ended),
+                running: false,
+                likely_failed: false,
+                has_failure_reason: false,
+                want: RunStatus::Aborted,
+            },
+        ];
+
+        for case in cases {
+            let process = if case.running {
+                ProcessState::Running
+            } else {
+                ProcessState::Exited {
+                    interrupted: false,
+                    likely_failed: case.likely_failed,
+                    has_failure_reason: case.has_failure_reason,
+                }
+            };
+            assert_eq!(
+                run_status(case.state, process),
+                case.want,
+                "case {:?}",
+                case.name
+            );
+        }
+    }
 
     #[test]
     fn dispatch_event_is_recorded_and_retrievable() {
@@ -939,19 +1163,11 @@ mod tests {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "slow": {"value": null, "meta": {"completed_at": null}}
         }});
-        let rows = model.observe(
-            &state,
-            &PlanTree::empty(),
-            ProcessState::Exited { interrupted: true },
-        );
+        let rows = model.observe(&state, &PlanTree::empty(), ProcessState::exited(true));
         assert_eq!(rows["prime.slow"].kind, StatusKind::Cancelled);
 
         let mut model2 = RunModel::new();
-        let rows2 = model2.observe(
-            &state,
-            &PlanTree::empty(),
-            ProcessState::Exited { interrupted: false },
-        );
+        let rows2 = model2.observe(&state, &PlanTree::empty(), ProcessState::exited(false));
         assert_eq!(rows2["prime.slow"].kind, StatusKind::Aborted);
     }
 
@@ -1043,6 +1259,122 @@ mod tests {
         // step3's own earlier sibling, step2, is still absent/incomplete,
         // so step3 itself stays Pending even though step1 is done.
         assert_eq!(rows["prime.step3"].kind, StatusKind::Pending);
+    }
+
+    fn chain_with_an_unnamed_if_else_program() -> electricity_bytecode::Program {
+        use electricity_bytecode::{
+            Condition, EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp,
+        };
+
+        let root_path = EffectPath::root();
+        let tool = |path: EffectPath| Op {
+            path,
+            name: None,
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: electricity_bytecode::ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let named = |path: EffectPath, name: &str| {
+            let mut op = tool(path);
+            op.name = Some(name.to_string());
+            op
+        };
+        electricity_bytecode::Program {
+            root: Op {
+                path: root_path.clone(),
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![
+                        named(root_path.clone().push_name("a"), "a"),
+                        Op {
+                            path: root_path.clone(),
+                            name: None,
+                            kind: NodeKind::Control(Region::If {
+                                cond: Condition::Cel {
+                                    expr: "true".to_string(),
+                                    strict: false,
+                                },
+                                then_: Box::new(Region::Block {
+                                    ops: vec![named(
+                                        root_path.clone().push_name("then_branch"),
+                                        "then_branch",
+                                    )],
+                                    overlay: true,
+                                }),
+                                else_: Some(Box::new(Region::Block {
+                                    ops: vec![named(
+                                        root_path.clone().push_name("else_branch"),
+                                        "else_branch",
+                                    )],
+                                    overlay: true,
+                                })),
+                                threshold: 0.5,
+                            }),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                        named(root_path.push_name("b"), "b"),
+                    ],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn an_untaken_if_else_branch_never_blocks_the_chain_sibling_that_follows_it() {
+        // Review finding 9: once the taken branch (`else_branch` here)
+        // is actually observed, the untaken one (`then_branch`) must
+        // resolve to something `sibling_is_complete` counts as settled
+        // — not get stuck forever at `LikelyRunning`, which would also
+        // keep `b`, after the `if`, Pending forever.
+        let plan = PlanTree::from_program(&chain_with_an_unnamed_if_else_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}},
+            "else_branch": {"value": "", "meta": {"created_at": "t1", "completed_at": "t2", "error": null}}
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(rows["prime.then_branch"].kind, StatusKind::Skipped);
+        assert_eq!(rows["prime.b"].kind, StatusKind::LikelyRunning);
+    }
+
+    #[test]
+    fn with_neither_if_else_branch_observed_yet_the_chain_sibling_after_stays_pending() {
+        // Before either side has run, both are equally plausible, and
+        // DESIGN.md §2.1 rule 1 still requires every earlier sibling —
+        // the whole `if`, here — to be complete before `b` can even be
+        // a *guess* at running.
+        let plan = PlanTree::from_program(&chain_with_an_unnamed_if_else_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}}
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(rows["prime.b"].kind, StatusKind::Pending);
     }
 
     #[test]
@@ -1266,11 +1598,7 @@ mod tests {
         });
         assert!(model.run_ended_by_events());
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
-        let rows = model.observe(
-            &state,
-            &PlanTree::empty(),
-            ProcessState::Exited { interrupted: true },
-        );
+        let rows = model.observe(&state, &PlanTree::empty(), ProcessState::exited(true));
         assert_eq!(rows["prime.slow"].kind, StatusKind::Cancelled);
     }
 
@@ -1284,11 +1612,7 @@ mod tests {
         });
         assert!(!model.run_ended_by_events());
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
-        let rows = model.observe(
-            &state,
-            &PlanTree::empty(),
-            ProcessState::Exited { interrupted: false },
-        );
+        let rows = model.observe(&state, &PlanTree::empty(), ProcessState::exited(false));
         assert_eq!(rows["prime.slow"].kind, StatusKind::Aborted);
     }
 
