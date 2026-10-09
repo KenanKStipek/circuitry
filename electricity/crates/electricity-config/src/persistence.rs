@@ -9,7 +9,7 @@
 //! Circuitry's own `from_config` raises for a malformed block, which a
 //! run must still fail on before reaching the refusal.
 
-use crate::util::get;
+use crate::util::{get, is_truthy};
 use electricity_value::{Dict, Value};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -36,20 +36,6 @@ fn str_or_empty(config: &Dict, key: &str) -> String {
         Some(Value::Int(i)) if !i.is_zero() => i.to_string(),
         Some(Value::Float(f)) if *f != 0.0 => f.to_string(),
         _ => String::new(),
-    }
-}
-
-fn is_truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::None) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Int(i)) => !i.is_zero(),
-        Some(Value::Float(f)) => *f != 0.0,
-        Some(Value::Str(s)) => !s.is_empty(),
-        Some(Value::List(items)) => !items.is_empty(),
-        Some(Value::Dict(d)) => !d.is_empty(),
-        Some(Value::Bytes(b)) => !b.is_empty(),
-        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
     }
 }
 
@@ -83,21 +69,23 @@ fn validate_mongodb(config: &Dict) -> Result<(), String> {
         return Err("Persistence backend 'mongodb' requires runtime.persistence.uri".to_string());
     }
     let database = str_or_empty(config, "database");
-    let database = if database.trim().is_empty() {
+    let database = if database.is_empty() {
         "circuitry".to_string()
     } else {
         database
     };
-    if database.trim().is_empty() {
+    let database = database.trim();
+    if database.is_empty() {
         return Err("runtime.persistence.database must be a non-empty string".to_string());
     }
     let collection = str_or_empty(config, "collection");
-    let collection = if collection.trim().is_empty() {
+    let collection = if collection.is_empty() {
         "circuitry_runs".to_string()
     } else {
         collection
     };
-    if collection.trim().is_empty() {
+    let collection = collection.trim();
+    if collection.is_empty() {
         return Err("runtime.persistence.collection must be a non-empty string".to_string());
     }
     Ok(())
@@ -109,15 +97,16 @@ fn validate_postgres(config: &Dict) -> Result<(), String> {
         return Err("Persistence backend 'postgres' requires runtime.persistence.dsn".to_string());
     }
     let table = str_or_empty(config, "table");
-    let table = if table.trim().is_empty() {
+    let table = if table.is_empty() {
         "circuitry_runs".to_string()
     } else {
         table
     };
-    if table.trim().is_empty() {
+    let table = table.trim();
+    if table.is_empty() {
         return Err("runtime.persistence.table must be a non-empty string".to_string());
     }
-    validate_table_name(table.trim())?;
+    validate_table_name(table)?;
 
     let sslmode = {
         let s = str_or_empty(config, "sslmode");
@@ -156,15 +145,16 @@ fn validate_sqlite(config: &Dict) -> Result<(), String> {
         );
     }
     let table = str_or_empty(config, "table");
-    let table = if table.trim().is_empty() {
+    let table = if table.is_empty() {
         "circuitry_runs".to_string()
     } else {
         table
     };
-    if table.trim().is_empty() {
+    let table = table.trim();
+    if table.is_empty() {
         return Err("runtime.persistence.table must be a non-empty string".to_string());
     }
-    validate_table_name(table.trim())?;
+    validate_table_name(table)?;
     Ok(())
 }
 

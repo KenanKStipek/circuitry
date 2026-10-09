@@ -20,6 +20,26 @@ pub(crate) fn as_dict(value: &Value) -> Option<&Dict> {
     value.as_dict()
 }
 
+/// Python's own truthiness (`bool(value)`): `None`/`False`/`0`/`0.0`/
+/// `""`/`[]`/`{}`/empty bytes are falsy, everything else (including a
+/// date/datetime, which Python never asks to be falsy) is truthy.
+/// Shared by every `x or default`/`x or y` idiom this crate ports
+/// (persistence's per-backend defaults, `allowlist.py`'s own
+/// `effects or steps` fallback).
+pub(crate) fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::None) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => !i.is_zero(),
+        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Str(s)) => !s.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+        Some(Value::Dict(d)) => !d.is_empty(),
+        Some(Value::Bytes(b)) => !b.is_empty(),
+        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
+    }
+}
+
 /// Python's `type(value)`-keyed type name used throughout
 /// `cli/complexity_config.py`'s own validation messages
 /// (`_type_name`): `None` -> `"null"`, `bool` -> `"a boolean"`, an
