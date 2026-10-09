@@ -718,15 +718,18 @@ dependencies = [
  "num-bigint 0.5.1",
  "num-traits",
  "serde",
+ "tokio",
 ]
 
 [[package]]
 name = "electricity-vm"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "electricity-bytecode",
  "electricity-cel",
+ "electricity-config",
  "electricity-json",
  "electricity-redaction",
  "electricity-template",
