@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'params_json'",
+  "description": "`params_json` renders a Mustache template to text, parses it as JSON, and deep-merges the result over `params` -- splicing a prior tool's native array into a real JSON array via triple-stache, not a Mustache-escaped string (electricity/docs/spec/runtime-semantics.md §5.2, orchestration-reference.md 'params_json').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

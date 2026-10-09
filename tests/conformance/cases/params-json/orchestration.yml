@@ -1,0 +1,11 @@
+name: params-json
+effects:
+  - type: tool
+    name: symbol_list
+    provider: json
+    params: {mode: stringify, input: ["AAPL", "MSFT", "TSLA"]}
+  - type: tool
+    name: merged
+    provider: json
+    params: {mode: stringify}
+    params_json: '{"input": {"symbols": {{{prime.symbol_list.value}}} }}'

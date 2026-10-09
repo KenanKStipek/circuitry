@@ -499,8 +499,9 @@ fn execute_tree<'a>(
 /// failure's own already-wrapped (`"<path>: <message>"`) text verbatim;
 /// two or more are folded into one numbered summary.
 ///
-/// Known deviation: Python's own numbered lines additionally show each
-/// failure's *original* (pre-wrap) exception class name (`"[1]
+/// Known deviation (tracked in #442, the M0-H follow-ups issue): Python's
+/// own numbered lines additionally show each failure's *original*
+/// (pre-wrap) exception class name (`"[1]
 /// ValueError: <path>: <message>"`) by unwrapping one level of
 /// `__cause__` -- this crate's [`VmError`] does not carry a Python-style
 /// exception class name to reproduce that with, so each line here is

@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §6.1",
+  "description": "A tool effect's own `on_error: skip` and `on_error: continue` both swallow its failure on itself (meta.error set, value null) and let the enclosing chain continue to the next effect -- the same degradation for both (electricity/docs/spec/runtime-semantics.md §6.1 on_error matrix).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

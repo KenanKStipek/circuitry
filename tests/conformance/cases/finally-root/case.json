@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §6.4",
+  "description": "A top-level `finally:` on the document root runs after the body succeeds, sharing the root dynamic's own scope (no separate finally namespace) (electricity/docs/spec/runtime-semantics.md §6.4, orchestration-reference.md 'File Structure').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

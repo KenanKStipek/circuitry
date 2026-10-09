@@ -1,0 +1,14 @@
+name: finally-error
+effects:
+  - type: dynamic
+    name: with_cleanup
+    effects:
+      - type: tool
+        name: body
+        provider: json
+        params: {mode: parse, input: "not valid json"}
+    finally:
+      - type: tool
+        name: cleanup
+        provider: json
+        params: {mode: parse, input: "also not valid json"}

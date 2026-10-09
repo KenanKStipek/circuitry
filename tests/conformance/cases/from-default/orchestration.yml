@@ -1,0 +1,9 @@
+name: from-default
+effects:
+  - type: tool
+    name: use_default
+    provider: json
+    params:
+      mode: stringify
+      input:
+        symbols: {from: prime.missing.value, default: []}

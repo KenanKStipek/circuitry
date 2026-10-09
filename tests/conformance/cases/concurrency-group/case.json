@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'Concurrency Limits'",
+  "description": "A `runtime.concurrency_groups` group defined in the document's own `runtime:` block (a trusted, path-run document) and joined by two tool effects' `group:` -- both still run to completion and land in state identically; the group only ever affects dispatch timing, never the final value (electricity/docs/spec/runtime-semantics.md §7.2, orchestration-reference.md 'Concurrency Limits').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §6.4",
+  "description": "A nested (non-root) `dynamic` with its own `finally:` runs after that dynamic's own body succeeds, same as the root's (electricity/docs/spec/runtime-semantics.md §6.4, orchestration-reference.md '`dynamic`').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

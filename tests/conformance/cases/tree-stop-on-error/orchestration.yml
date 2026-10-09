@@ -1,0 +1,20 @@
+name: tree-stop-on-error
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 1
+    stop_on_error: true
+    effects:
+      - type: tool
+        name: a
+        provider: json
+        params: {mode: parse, input: "not valid json"}
+      - type: tool
+        name: b
+        provider: json
+        params: {mode: stringify, input: {x: 2}}
+      - type: tool
+        name: c
+        provider: json
+        params: {mode: stringify, input: {x: 3}}

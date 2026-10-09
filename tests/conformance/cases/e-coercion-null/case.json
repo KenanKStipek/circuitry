@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §1.5",
+  "description": "`-e count=null` JSON-sniffs to Python None, which `check_interface_inputs` treats as absent -- an input value that is absent or None gets its declared `default:` filled in (electricity/docs/spec/runtime-semantics.md §1.5). `count`'s declared type is `number`, not `string`, so raw-text restoration never applies here (contrast e-coercion-string-numeric, where it does).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "count=null"]
+}

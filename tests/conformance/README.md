@@ -19,6 +19,8 @@ cases/<name>/
   replies.json            # optional — reserved for the scripted model adapter (#362); unused today
   expected.json            # the captured --out state (success), or {"error": "..."} (failure)
   expected.pretty.json      # only when case.json sets "also_pretty": true
+  expected.out.json        # failure cases only -- the --out `cof run` still writes on a load/check failure
+  expected.events.jsonl     # success cases only -- the --events stream `cof run` wrote for this case
 ```
 
 `case.json`:
@@ -46,9 +48,10 @@ config case); the electricity runner has a different fallback for the same
 "omitted" case, see "Running it" below.
 
 A case document never calls a real model or network: cases accepted so far
-use only the pure-Python `json` tool (no subprocess, no network), so none
-need `fakes/`, `config.json`, or `replies.json` yet — the slots exist for
-cases that will.
+use only the pure-Python `json` tool (no subprocess, no network). `config.json`
+is used by a case that needs one (e.g. `config-deep-merge-adapters`); `fakes/`
+and `replies.json` remain unused — those two slots exist for cases that will
+need a process-backed tool fake or (once #362 lands) a scripted model reply.
 
 ## How a case runs
 
@@ -60,6 +63,14 @@ own `fakes/` first on `PATH` if present, and `cwd` set to the case
 directory. Both `scripts/generate-conformance-cases.py` and
 `test_python_runner.py` call it, so generation and verification can never
 silently diverge on *how* a case is run.
+
+`test_electricity_runner.py` parses electricity's own stdout the same way
+`harness.parse_cli_error` parses `cof run`'s, per the non-TTY CLI output
+contract both engines commit to byte for byte (electricity/DESIGN.md §6.9,
+"CLI output"): a run failure's error is in the `{"ok": false, ...}` stdout
+payload, never on stderr; only a config error (never a case this suite
+exercises, since every case's `config.json`, if any, is valid) prints a
+bare `Error: <text>` line on stderr instead.
 
 ## Normalization
 
@@ -106,26 +117,83 @@ property C23 exists to check (`assert_out_serialization` round-trips a
 file's own content through the exact `json.dumps` call that should have
 produced it and asserts byte equality).
 
+`cof run` writes `--out` on any failure too, not only on success
+(run-wiring step 20, issue #431) — a load/check failure before any effect
+ever dispatches gets a minimal seeded state plus whatever of
+`runtime`/`effective_settings` had already resolved by then; a run failure
+(a tool exhausting its retries, a `dynamic`'s `stop_on_error`, a failed
+`finally:`) gets the full state as it stood when the run gave up. Either
+way it varies by which step failed. Every failure case therefore also
+commits `expected.out.json`, captured and redacted the same way a success
+case's `expected.json` is, and both runners compare their own `--out`
+against it (under `normalize()`, like any other state) in addition to the
+error text. `also_pretty` is success-only — `harness.load_case` rejects it
+on a failure case.
+
+## Events and live state
+
+Every success case also commits `expected.events.jsonl`, `cof run --events`'s
+own output for that case (runtime-semantics.md §8.7). Both runners re-run
+the case with `--events`/`--live-state` set to a path under `tmp_path` and
+compare: electricity's own stream against the committed fixture; the Python
+runner's fresh stream against the same fixture, the same determinism check
+`expected.json` already gets. `normalize.assert_events_equal` does the
+comparison: `ts`/`ms`/`run_id`/`pid`/`engine` are shape-checked and replaced
+with a placeholder, like any other volatile state field; the per-instance
+`seq`/`id` are dropped outright rather than normalized, because a tree
+dynamic's branches are free to start and finish in a different wall-clock
+order on the two engines (cof's real OS threads vs. electricity's
+single-threaded cooperative scheduler) — comparing their absolute values
+would assert an implementation detail neither engine commits to. What *is*
+checked: both streams open with `run_start` and close with `run_end`
+(compared directly); every path's own `start`/`dispatch`/`end` appear in a
+container-before-child, child-before-container order; each path's own
+list of events (grouped by `path`) is compared *in stream order*, not as a
+multiset — a path's own events have exactly one valid order in M0-H
+(`start`, then a tree container's own `dispatch`, then `end`), so an
+end-before-start or a dispatch-after-end on the same path is caught, which
+a `collections.Counter` comparison alone couldn't tell from the correct
+order; and a chain container's (one with no `dispatch` event of its own)
+direct children are compared for the relative order their own `start`
+events occurred in across the two streams — a chain's children run
+strictly one after another in document order on both engines, unlike a
+tree dynamic's branches, which may freely interleave with each other on
+either engine and are excluded from that last check by the `dispatch`
+event check alone.
+
+`--live-state`'s final write is asserted byte-identical to `--out` for
+every success case, in both engines (electricity/DESIGN.md §10.5) — no
+separate fixture needed, since it's compared against the same run's own
+`--out` rather than a committed file.
+
 ## Running it
 
 ```sh
-pytest tests/conformance/                      # both runners (electricity skips
-                                                 # today — see below)
+pytest tests/conformance/                      # both runners
 pytest tests/conformance/test_python_runner.py  # python engine only
+pytest tests/conformance/test_electricity_runner.py  # electricity engine only
 ```
 
 The electricity runner (`test_electricity_runner.py`) builds the
 `electricity` binary from `electricity/` with `cargo` (once per test
-session) and skips every case — with a reason naming why — when `cargo`
-isn't on `PATH` (a contributor machine that genuinely has no Rust
-toolchain; the ordinary `pytest -q -m 'not integration'` gate itself *does*
-have one — CI's `ubuntu-latest` image ships `cargo`, so each of
-`quality.yml`'s pytest jobs builds this crate once) or when the binary's
-own preview build refuses to run any document yet (`electricity 0.1.0 is a
-preview and cannot run orchestrations yet; use \`cof run\` instead`,
-`electricity/crates/electricity-cli`). Once electricity can run a
-document, these stop auto-skipping and start actually diffing state
-against the same `expected.json` the Python runner uses.
+session) and skips every case it applies to — with a reason naming why —
+only when `cargo` isn't on `PATH` (a contributor machine that genuinely has
+no Rust toolchain; the ordinary `pytest -q -m 'not integration'` gate
+itself *does* have one — CI's `ubuntu-latest` image ships `cargo`, so each
+of `quality.yml`'s pytest jobs builds this crate once). All of M0-H
+(issues #408, #431) is on `main`: electricity runs `tool`/`dynamic`/`if`/
+`finally:` documents end to end, so a case that lists `electricity` in its
+own `engines` and expects success now actually runs and is diffed against
+the same `expected.json`/`expected.events.jsonl` the Python runner uses —
+not skipped. A *failure* case may still legitimately skip for electricity
+if its document uses content M0-H's own preview genuinely doesn't support
+yet (`prompt`/`loop`/`use`/`reflector`/`yield`/...): the binary refuses
+those up front with a message containing `is a preview and cannot run
+orchestrations yet` (`electricity/crates/electricity-cli`), and the runner
+treats that refusal as an expected skip rather than a failure. The same
+refusal on a case that expects *success* is never skipped — it fails the
+test, since a success case electricity wrongly refuses is a real
+regression.
 
 electricity is invoked with the case's own `fakes/` first on `PATH` and no
 credential/`CIRCUITRY_*` env vars, same as the Python runner
@@ -133,9 +201,7 @@ credential/`CIRCUITRY_*` env vars, same as the Python runner
 has no equivalent to `cof run`'s "no config given" yet — a case without an
 explicit `case.json` `"config"` gets `default_config.json` (`{}`) as a
 placeholder baseline for the electricity runner only (see that file's
-comment in `test_electricity_runner.py`). A success case's `--pretty` half
-(`also_pretty`) isn't run against electricity: its CLI has no `--pretty`
-flag yet, so `c23-out-plain-vs-pretty` records this as a `known_divergence`.
+comment in `test_electricity_runner.py`).
 
 ## Adding a case
 

@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'Params by reference'",
+  "description": "A `{from: <path>, default: ...}` param reference whose path never resolves (names an effect that does not exist) falls back to `default:` instead of raising (electricity/docs/spec/runtime-semantics.md §3.5, orchestration-reference.md 'Params by reference').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

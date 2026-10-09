@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from .normalize import (
     NormalizationError,
     assert_errors_equal,
+    assert_events_equal,
     assert_out_serialization,
     assert_states_equal,
     assert_values_equal,
@@ -192,3 +195,108 @@ def test_assert_out_serialization_rejects_unsorted_keys_for_pretty() -> None:
 def test_assert_out_serialization_rejects_missing_trailing_newline() -> None:
     with pytest.raises(AssertionError):
         assert_out_serialization('{"a": 1}', pretty=False)
+
+
+def _event(ev: str, path: str | None = None, **extra: object) -> dict:
+    payload: dict[str, object] = {"v": 1, "ev": ev, "ts": "2026-10-09T00:00:00.000Z"}
+    if path is not None:
+        payload["path"] = path
+    payload.update(extra)
+    return payload
+
+
+def _events_text(events: list[dict]) -> str:
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+_RUN_START = _event(
+    "run_start",
+    run_id="11111111-1111-1111-1111-111111111111",
+    pid=1,
+    engine="cof 0.0.0",
+    orchestration="doc.yml",
+)
+_RUN_END = _event("run_end")
+
+
+def test_assert_events_equal_accepts_identical_streams() -> None:
+    events = [
+        _RUN_START,
+        _event("start", path="prime.t"),
+        _event("dispatch", path="prime.t", branches=2, concurrency=1),
+        _event("end", path="prime.t"),
+        _RUN_END,
+    ]
+    text = _events_text(events)
+    assert_events_equal(text, text)
+
+
+def test_assert_events_equal_detects_same_path_reordering() -> None:
+    """A path's own events have exactly one valid order (`start`, then
+    `dispatch`, then `end`) -- a multiset comparison can't tell `dispatch`
+    before `start` from the real order, since the three events are
+    otherwise identical once `ts` is normalized."""
+    expected = _events_text(
+        [
+            _RUN_START,
+            _event("start", path="prime.t"),
+            _event("dispatch", path="prime.t", branches=2, concurrency=1),
+            _event("end", path="prime.t"),
+            _RUN_END,
+        ]
+    )
+    actual = _events_text(
+        [
+            _RUN_START,
+            _event("dispatch", path="prime.t", branches=2, concurrency=1),
+            _event("start", path="prime.t"),
+            _event("end", path="prime.t"),
+            _RUN_END,
+        ]
+    )
+    with pytest.raises(AssertionError):
+        assert_events_equal(actual, expected)
+
+
+def test_assert_events_equal_detects_chain_sibling_reordering() -> None:
+    """A chain's direct children run strictly in document order on both
+    engines -- unlike a tree dynamic's branches, free to interleave with
+    each other, a chain container (no `dispatch` event of its own) whose
+    children started in a different relative order between the two
+    streams is a real divergence."""
+
+    def stream(order: list[str]) -> str:
+        events = [_RUN_START, _event("start", path="prime.outer")]
+        for name in order:
+            events.append(_event("start", path=f"prime.outer.{name}"))
+            events.append(_event("end", path=f"prime.outer.{name}"))
+        events.append(_event("end", path="prime.outer"))
+        events.append(_RUN_END)
+        return _events_text(events)
+
+    expected = stream(["a", "b"])
+    actual = stream(["b", "a"])
+    with pytest.raises(AssertionError):
+        assert_events_equal(actual, expected)
+
+
+def test_assert_events_equal_allows_tree_sibling_interleaving() -> None:
+    """A tree dynamic's own `dispatch` event excludes its children from the
+    chain-sibling-order check -- branches may interleave freely."""
+
+    def stream(order: list[str]) -> str:
+        events = [
+            _RUN_START,
+            _event("start", path="prime.t"),
+            _event("dispatch", path="prime.t", branches=2, concurrency=2),
+        ]
+        for name in order:
+            events.append(_event("start", path=f"prime.t.{name}"))
+            events.append(_event("end", path=f"prime.t.{name}"))
+        events.append(_event("end", path="prime.t"))
+        events.append(_RUN_END)
+        return _events_text(events)
+
+    expected = stream(["a", "b"])
+    actual = stream(["b", "a"])
+    assert_events_equal(actual, expected)

@@ -1,0 +1,16 @@
+name: on-error-tool
+effects:
+  - type: tool
+    name: fail_skip
+    provider: json
+    on_error: skip
+    params: {mode: parse, input: "not json"}
+  - type: tool
+    name: fail_continue
+    provider: json
+    on_error: continue
+    params: {mode: parse, input: "also not json"}
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}

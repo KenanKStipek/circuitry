@@ -501,6 +501,17 @@ fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bo
 /// before this function is ever called) -- exactly where Circuitry's
 /// own `CircuitryGroup.invoke`/CLI-layer checks report them, on stdout
 /// or plain stderr text, never through this JSON-failure path at all.
+///
+/// Known gap (#442): `result.warnings` only ever holds this run's own
+/// `--events`/`--live-state` write-failure warnings -- it never carries
+/// the `WARNING: ...` lines Circuitry's own Python `logging` module
+/// emits mid-run (`core/dynamic.py`'s/`core/conditional.py`'s own
+/// `on_error: skip`/`continue` degradation, a `finally:` that fails
+/// after the body already did), since there is no VM observer hook yet
+/// for them. State, stdout, and `--events`/`--live-state` are all
+/// unaffected -- the conformance suite never compares stderr -- but a
+/// human watching the terminal sees fewer `Warning:` lines from
+/// electricity than from `cof run` for the same document today.
 fn print_stderr_contract(result: &RunResult) {
     for warning in &result.warnings {
         write_stderr(&format!("Warning: {warning}\n"));
