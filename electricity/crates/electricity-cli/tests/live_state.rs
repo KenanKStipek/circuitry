@@ -16,9 +16,10 @@
 #![cfg(feature = "test-tools")]
 
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_electricity"))
@@ -51,11 +52,12 @@ impl Drop for TempHome {
     }
 }
 
-/// Six sequential (chain, the default) `sleep` steps of 0.3s each --
-/// `~1.8s` total, long enough against `LIVE_STATE_INTERVAL`'s `500ms`
+/// Eight sequential (chain, the default) `sleep` steps of 0.3s each --
+/// `~2.4s` total, long enough against `LIVE_STATE_INTERVAL`'s `500ms`
 /// to see several periodic writes land roughly that far apart before
-/// the run ends.
-const SIX_SLEEPS_DOC: &str = "\
+/// the run ends, and long enough that a reader thread briefly stalled
+/// by a loaded runner still sees at least two mid-run versions.
+const EIGHT_SLEEPS_DOC: &str = "\
 effects:
   - name: s1
     type: tool
@@ -78,6 +80,14 @@ effects:
     provider: sleep
     params: {seconds: 0.3}
   - name: s6
+    type: tool
+    provider: sleep
+    params: {seconds: 0.3}
+  - name: s7
+    type: tool
+    provider: sleep
+    params: {seconds: 0.3}
+  - name: s8
     type: tool
     provider: sleep
     params: {seconds: 0.3}
@@ -118,17 +128,32 @@ fn spawn(home: &TempHome, config: &Path, doc: &Path, live: &Path, out: &Path) ->
     }
 }
 
+/// Opens *path*, reads its contents from that handle, then calls
+/// `metadata()` on the *same* handle (an `fstat`, not a path lookup) --
+/// `write_atomic`'s write-then-rename means the content and the mtime
+/// this returns always belong to the same inode, never a race between
+/// this file and whatever version replaced it next.
+fn read_versioned(path: &Path) -> Option<(SystemTime, String)> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    let mtime = file.metadata().ok()?.modified().ok()?;
+    Some((mtime, contents))
+}
+
 /// One mid-run `--live-state` run: polls *live* every ~10ms until the
 /// child exits (plus one read right after, to catch a final `close()`
 /// write that may have landed between the last poll and exit), and
-/// returns every distinct content observed, each timestamped with when
-/// this reader first saw it, plus the process exit status.
-fn observe_live_state(mut child: TestChild, live: &Path) -> (Vec<(Instant, String)>, i32) {
-    let mut observations: Vec<(Instant, String)> = Vec::new();
+/// returns every distinct content observed, each timestamped with its
+/// *own* mtime (not when this reader happened to see it -- a reader
+/// stall can then only make this miss a version, never shrink the gap
+/// between two it did see), plus the process exit status.
+fn observe_live_state(mut child: TestChild, live: &Path) -> (Vec<(SystemTime, String)>, i32) {
+    let mut observations: Vec<(SystemTime, String)> = Vec::new();
     let mut last_content: Option<String> = None;
     let deadline = Instant::now() + Duration::from_secs(30);
     let exit_status = loop {
-        if let Ok(contents) = fs::read_to_string(live) {
+        if let Some((mtime, contents)) = read_versioned(live) {
             assert!(
                 !contents.is_empty(),
                 "live-state file existed but was empty"
@@ -137,7 +162,7 @@ fn observe_live_state(mut child: TestChild, live: &Path) -> (Vec<(Instant, Strin
                 panic!("live-state file did not parse as complete JSON ({e}): {contents:?}")
             });
             if last_content.as_deref() != Some(contents.as_str()) {
-                observations.push((Instant::now(), contents.clone()));
+                observations.push((mtime, contents.clone()));
                 last_content = Some(contents);
             }
         }
@@ -154,9 +179,9 @@ fn observe_live_state(mut child: TestChild, live: &Path) -> (Vec<(Instant, Strin
     // synchronous inside the child before it exits, but may have
     // landed in the gap between this reader's last poll and
     // `try_wait` observing the exit.
-    if let Ok(contents) = fs::read_to_string(live) {
+    if let Some((mtime, contents)) = read_versioned(live) {
         if last_content.as_deref() != Some(contents.as_str()) {
-            observations.push((Instant::now(), contents));
+            observations.push((mtime, contents));
         }
     }
     (observations, exit_status.code().unwrap_or(-1))
@@ -166,7 +191,7 @@ fn observe_live_state(mut child: TestChild, live: &Path) -> (Vec<(Instant, Strin
 fn mid_run_live_state_writes_land_roughly_500ms_apart_and_the_final_write_matches_out() {
     let home = TempHome::new("mid-run");
     let config = home.write("config.json", "{}");
-    let doc = home.write("doc.yml", SIX_SLEEPS_DOC);
+    let doc = home.write("doc.yml", EIGHT_SLEEPS_DOC);
     let live = home.path.join("live.json");
     let out = home.path.join("out.json");
     let child = spawn(&home, &config, &doc, &live, &out);
@@ -184,13 +209,20 @@ fn mid_run_live_state_writes_land_roughly_500ms_apart_and_the_final_write_matche
         observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
     );
 
-    // (b): every gap between consecutive distinct contents *except the
+    // (b): every gap between consecutive distinct versions *except the
     // last* (the final `close()` write, which `LiveStateMirror::close`
     // sends unconditionally and so may land sooner than the periodic
     // interval) must be at least ~0.5s -- a small tolerance down to
-    // 0.45s for reader-thread scheduling.
+    // 0.45s for scheduling -- measured by each write's own mtime
+    // (`read_versioned`'s own doc comment), not by when this reader
+    // happened to observe it, so a stalled reader can only miss a
+    // version (which only makes a measured gap larger) and never
+    // shrink one below the bound.
     for i in 1..observations.len() - 1 {
-        let gap = observations[i].0 - observations[i - 1].0;
+        let gap = observations[i]
+            .0
+            .duration_since(observations[i - 1].0)
+            .unwrap_or(Duration::ZERO);
         assert!(
             gap >= Duration::from_millis(450),
             "mid-run writes {} and {} were only {gap:?} apart, expected >= 0.45s",
