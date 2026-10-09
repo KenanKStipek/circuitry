@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use electricity_bytecode::OnError;
 use serde_json::Value;
 
-use crate::model::{NodeMeta, flatten_state, run_ended, run_error, run_ok, run_totals};
+use crate::model::{NodeMeta, RunModel, flatten_state, run_ended, run_error, run_ok, run_totals};
 use crate::observe::Event;
 use crate::plan::PlanTree;
 
@@ -115,13 +115,22 @@ fn is_container(meta: &Value) -> bool {
 /// unnamed `if`/loop is the only thing that never gets one). The
 /// document root is always one (checked first, needing neither a plan
 /// nor any state at all); the plan answers for everything else when
-/// there is one; with no plan, the latest state `diff` has already
-/// seen for the path is the only other source (same check `diff`'s
-/// own container suppression uses) — missing only a *named* non-root
-/// container's own very first `start`, before any state write has
-/// landed for it yet, with neither a plan nor the root's own blanket
-/// rule to fall back on.
-fn is_container_path(path: &str, plan: &PlanTree, last: &BTreeMap<String, NodeMeta>) -> bool {
+/// there is one; a `dispatch` event (K5) catches a *tree* container's
+/// own `end` even with no plan at all — but, per the real recorded
+/// shape (`dispatch` always comes strictly *after* the container's
+/// own `start`, since a container must have already started to go on
+/// and dispatch its branches), never its *own* `start`. With no plan,
+/// the latest state `diff` has already seen for the path is the last
+/// resort (same check `diff`'s own container suppression uses) —
+/// returning `None` when none of these can say yet, rather than
+/// guessing "leaf", is what lets `diff_event`'s `Start` handling defer
+/// the decision instead of committing to a wrong line immediately.
+fn container_signal(
+    path: &str,
+    plan: &PlanTree,
+    last: &BTreeMap<String, NodeMeta>,
+    model: &RunModel,
+) -> Option<bool> {
     // The document root is always a container (DESIGN.md §1.3: "root:
     // prime, a node with its own meta"; §6.2's own example has no
     // line for it) — the one case this can say for certain with
@@ -129,17 +138,36 @@ fn is_container_path(path: &str, plan: &PlanTree, last: &BTreeMap<String, NodeMe
     // fallback below otherwise has for a root `start` arriving before
     // its first state write (DESIGN.md §1.1: 0.4–0.9s after launch).
     if path == "prime" {
-        return true;
+        return Some(true);
     }
     if let Some(m) = plan.match_path(path) {
         if let Some(entry) = m.entries.first() {
-            return !matches!(
+            return Some(!matches!(
                 entry.kind,
                 crate::plan::PlanEntryKind::Leaf | crate::plan::PlanEntryKind::Use
-            );
+            ));
         }
     }
-    last.get(path).is_some_and(|n| is_container(&n.meta))
+    if model.dispatch_info(path).is_some() {
+        return Some(true);
+    }
+    last.get(path).map(|n| is_container(&n.meta))
+}
+
+/// `container_signal`, with "don't know yet" folded into "not a
+/// container" — the right default once an `end` has arrived: by then,
+/// a tree container's own `dispatch` has already been seen (the one
+/// case `container_signal` can still resolve after `start`), so the
+/// only paths left genuinely unresolved are chain containers with
+/// neither a plan nor any state write yet, the same narrow gap this
+/// whole fallback already had.
+fn is_container_path(
+    path: &str,
+    plan: &PlanTree,
+    last: &BTreeMap<String, NodeMeta>,
+    model: &RunModel,
+) -> bool {
+    container_signal(path, plan, last, model).unwrap_or(false)
 }
 
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
@@ -183,6 +211,17 @@ pub struct Differ {
     /// printing both would duplicate the same transition, once from
     /// each source.
     event_sourced: BTreeSet<String>,
+    /// Paths with a `start` event and no matching `end` yet (K5):
+    /// `diff`'s own `■ run ...` line must never print while one of
+    /// these is still open. State and events are two independently
+    /// polled files; a tick can observe the state's final write (the
+    /// run container itself is done) slightly ahead of the events
+    /// tailer catching up on the very last leaf's own `end` —
+    /// deferring the summary line until every event-sourced path has
+    /// actually closed keeps the last effect's own line from printing
+    /// *after* the run's. Cleared by a `run_end` too: an effect
+    /// interrupted mid-flight never gets its own `end` at all.
+    open_event_paths: BTreeSet<String>,
 }
 
 impl Differ {
@@ -192,6 +231,7 @@ impl Differ {
             run_line_emitted: false,
             unnamed_pass_counts: BTreeMap::new(),
             event_sourced: BTreeSet::new(),
+            open_event_paths: BTreeSet::new(),
         }
     }
 
@@ -203,17 +243,22 @@ impl Differ {
     /// any (events carry no values, DESIGN.md §3); a tree branch or
     /// `use` child that never reaches state before it ends falls back
     /// to a generic line rather than one with nothing to show.
-    pub fn diff_event(&mut self, event: &Event, plan: &PlanTree) -> Vec<LogLine> {
+    pub fn diff_event(&mut self, event: &Event, plan: &PlanTree, model: &RunModel) -> Vec<LogLine> {
         match event {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
+                self.open_event_paths.insert(path.clone());
                 // A named container (the document root included) fires
                 // `start`/`end` the same as a leaf (DESIGN.md §1.4's
                 // probe notes), but gets no ▶/✓/✗ of its own — same
                 // rule `diff` already applies from state (F1 follow-up,
                 // caught once a real plan started compiling and
-                // `--events` started firing for more than leaves).
-                if is_container_path(path, plan, &self.last) {
+                // `--events` started firing for more than leaves). A
+                // tree container's own `dispatch` always comes
+                // strictly *after* its `start` though (it must already
+                // be running to dispatch anything), so this can't catch
+                // it here — only its later `end` (below).
+                if is_container_path(path, plan, &self.last, model) {
                     return Vec::new();
                 }
                 let summary = self
@@ -235,7 +280,8 @@ impl Differ {
                 ..
             } => {
                 self.event_sourced.insert(path.clone());
-                if is_container_path(path, plan, &self.last) {
+                self.open_event_paths.remove(path);
+                if is_container_path(path, plan, &self.last, model) {
                     return Vec::new();
                 }
                 let text = if *ok {
@@ -260,6 +306,14 @@ impl Differ {
                     ts: Some(ts.clone()),
                     text,
                 }]
+            }
+            Event::RunEnd { .. } => {
+                // An effect interrupted mid-flight never gets its own
+                // `end` at all (DESIGN.md §2.1's cancelled rule) —
+                // without this, one open, never-closed path would
+                // defer the run summary line forever.
+                self.open_event_paths.clear();
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -404,7 +458,7 @@ impl Differ {
             }
         }
 
-        if !self.run_line_emitted && run_ended(state) {
+        if !self.run_line_emitted && run_ended(state) && self.open_event_paths.is_empty() {
             self.run_line_emitted = true;
             let ok = run_ok(state);
             let totals = run_totals(state);
@@ -684,6 +738,90 @@ mod tests {
     }
 
     #[test]
+    fn the_run_line_waits_for_an_open_event_sourced_path_to_close_first() {
+        // K5: state and events are two independently polled files; a
+        // tick can see the state's final write (the run container
+        // itself is done) before the events tailer catches up on the
+        // very last leaf's own `end`. The run summary must not print
+        // while any event-sourced path is still open, or it prints
+        // *before* that leaf's own ✓ line instead of after.
+        let mut differ = Differ::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.last_leaf".to_string(),
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            !lines.iter().any(|l| l.text.starts_with("■ run")),
+            "the run line must wait for the open leaf to close: {lines:?}"
+        );
+
+        differ.diff_event(
+            &Event::End {
+                ts: "t9".to_string(),
+                id: Some(1),
+                path: "prime.last_leaf".to_string(),
+                ok: true,
+                ms: Some(5),
+                error: None,
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+        let lines2 = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines2.iter().any(|l| l.text.starts_with("■ run ok")),
+            "{lines2:?}"
+        );
+    }
+
+    #[test]
+    fn a_run_end_event_releases_any_still_open_path_so_the_run_line_is_never_stuck() {
+        // An effect interrupted mid-flight never gets its own `end` at
+        // all; `run_end` must still unblock the summary line.
+        let mut differ = Differ::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.interrupted".to_string(),
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+        differ.diff_event(
+            &Event::RunEnd {
+                ts: "t1".to_string(),
+                ok: false,
+                error: Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+                signal: Some("SIGINT".to_string()),
+            },
+            &PlanTree::empty(),
+            &RunModel::new(),
+        );
+
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": false, "meta": {"completed_at": "t1", "error": "Interrupted (Ctrl-C/SIGINT)"}}
+        });
+        let lines = differ.diff(&state, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text.starts_with("■ run failed")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn run_summary_line_appears_once_the_run_ends() {
         let mut differ = Differ::new();
         let state = json!({
@@ -811,6 +949,7 @@ mod tests {
                 path: "prime".to_string(),
             },
             &plan,
+            &RunModel::new(),
         );
         assert!(start.is_empty(), "{start:?}");
 
@@ -824,6 +963,7 @@ mod tests {
                 error: None,
             },
             &plan,
+            &RunModel::new(),
         );
         assert!(end.is_empty(), "{end:?}");
 
@@ -835,6 +975,7 @@ mod tests {
                 path: "prime.step1".to_string(),
             },
             &plan,
+            &RunModel::new(),
         );
         assert_eq!(leaf_start.len(), 1);
     }
@@ -849,6 +990,7 @@ mod tests {
                 path: "prime.fan.a".to_string(),
             },
             &PlanTree::empty(),
+            &RunModel::new(),
         );
         assert_eq!(start.len(), 1);
         assert!(start[0].text.starts_with("▶ prime.fan.a"));
@@ -864,6 +1006,7 @@ mod tests {
                 error: None,
             },
             &PlanTree::empty(),
+            &RunModel::new(),
         );
         assert_eq!(end.len(), 1);
         assert!(end[0].text.starts_with("✓ prime.fan.a  1.2s"));
@@ -878,6 +1021,7 @@ mod tests {
                 error: Some("boom".to_string()),
             },
             &PlanTree::empty(),
+            &RunModel::new(),
         );
         assert!(failed[0].text.starts_with("✗ prime.fan.b  boom"));
     }
@@ -897,6 +1041,7 @@ mod tests {
                 path: "prime.flaky".to_string(),
             },
             &PlanTree::empty(),
+            &RunModel::new(),
         );
 
         let first = json!({"prime": {"value": null, "meta": {"completed_at": null},
@@ -927,6 +1072,7 @@ mod tests {
                 path: "prime.fan.a".to_string(),
             },
             &PlanTree::empty(),
+            &RunModel::new(),
         );
 
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},

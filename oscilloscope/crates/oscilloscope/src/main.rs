@@ -87,6 +87,17 @@ fn effective_log_mode(explicit: bool) -> bool {
 struct Clock {
     start: Instant,
     anchor_ts: Option<String>,
+    /// The highest elapsed time printed so far (K5): a line's own `ts`
+    /// can legitimately be *earlier* than one already printed (a
+    /// coalesced state write backdating a node's `▶` line to its real
+    /// `created_at`, DESIGN.md §2.4's "new node that is already
+    /// complete" row, or events and state simply landing a tick apart)
+    /// — printing that line's own true elapsed time anyway would make
+    /// the stream's own `mm:ss.s` prefixes visibly run backwards.
+    /// Clamping the *displayed* time to this high-water mark leaves
+    /// sorting (by the real `ts`) and duration math untouched; only the
+    /// elapsed-time prefix never regresses.
+    max_elapsed: f64,
 }
 
 impl Clock {
@@ -94,11 +105,12 @@ impl Clock {
         Clock {
             start: Instant::now(),
             anchor_ts: None,
+            max_elapsed: 0.0,
         }
     }
 
     fn elapsed_for(&mut self, ts: Option<&str>) -> f64 {
-        match (&self.anchor_ts, ts) {
+        let computed = match (&self.anchor_ts, ts) {
             (None, Some(t)) => {
                 self.anchor_ts = Some(t.to_string());
                 0.0
@@ -107,7 +119,9 @@ impl Clock {
                 duration_seconds(anchor, t).unwrap_or_else(|| self.start.elapsed().as_secs_f64())
             }
             _ => self.start.elapsed().as_secs_f64(),
-        }
+        };
+        self.max_elapsed = self.max_elapsed.max(computed);
+        self.max_elapsed
     }
 
     fn format(secs: f64) -> String {
@@ -470,7 +484,7 @@ fn observe_tick(
     for raw_event in events_tailer.poll() {
         if let Some(event) = parse_event(&raw_event) {
             model.observe_event(&event);
-            lines.extend(differ.diff_event(&event, plan));
+            lines.extend(differ.diff_event(&event, plan, model));
         }
     }
     let state = live_poller.poll();
@@ -803,6 +817,24 @@ mod tests {
         assert_eq!(clock.elapsed_for(Some("2026-10-08T19:56:22.000Z")), 0.0);
         let elapsed = clock.elapsed_for(Some("2026-10-08T19:56:24.500Z"));
         assert!((elapsed - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clock_never_prints_an_earlier_elapsed_time_than_it_already_has() {
+        // K5: a backdated line (DESIGN.md §2.4's "new node that is
+        // already complete" row, or events and state simply landing a
+        // tick apart) can carry a `ts` earlier than one the clock has
+        // already shown — the printed mm:ss.s must never visibly run
+        // backwards even then.
+        let mut clock = Clock::new();
+        assert_eq!(clock.elapsed_for(Some("2026-10-08T19:56:25.000Z")), 0.0);
+        let later = clock.elapsed_for(Some("2026-10-08T19:56:28.000Z"));
+        assert!((later - 3.0).abs() < 1e-9);
+        let backdated = clock.elapsed_for(Some("2026-10-08T19:56:22.000Z"));
+        assert_eq!(
+            backdated, later,
+            "a backdated ts must not move the display backwards"
+        );
     }
 
     #[test]

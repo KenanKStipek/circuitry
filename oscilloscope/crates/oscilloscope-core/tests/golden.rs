@@ -153,7 +153,7 @@ fn replay_events(name: &str) -> String {
             continue;
         };
         model.observe_event(&event);
-        lines.extend(differ.diff_event(&event, &plan));
+        lines.extend(differ.diff_event(&event, &plan, &model));
     }
     sort_log_lines(&mut lines);
 

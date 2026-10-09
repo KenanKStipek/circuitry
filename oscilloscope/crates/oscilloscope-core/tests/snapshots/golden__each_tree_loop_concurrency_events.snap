@@ -12,7 +12,6 @@ log:
   ▶ prime.each_tree.iter_3.nap  effect
   ✓ prime.each_tree.iter_3.nap  0.0s  ok
   ✓ prime.each_tree.iter_2.nap  0.0s  ok
-  ✓ prime.each_tree  0.0s  ok
 status:
 prime: Done skip=None retrying=false
 prime.each_tree: Done skip=None retrying=false
