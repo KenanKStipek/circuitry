@@ -436,6 +436,7 @@ dependencies = [
  "electricity-tools",
  "electricity-value",
  "indexmap",
+ "serde_json",
  "tokio",
 ]
 
