@@ -175,6 +175,17 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # #408's acceptance audit: a root key YAML reads as a non-string
+        # (an unquoted `1:`) -- `key_label`'s own "(YAML read the
+        # unquoted key as a <type>)" suffix is otherwise pinned only by
+        # `structural.rs`'s unit tests, never by this golden corpus.
+        "name": "non_string_root_key_warns_with_its_yaml_read_type",
+        "files": {
+            "doc.yml": "1: unexpected\neffects: []\n",
+        },
+        "entry": "doc.yml",
+    },
+    {
         "name": "schema_violation_loop_needs_exactly_one_of_while_or_each",
         "files": {
             "doc.yml": (
@@ -267,6 +278,434 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # Issue #429: the CLI's `-e` inputs reach `check_for_run` --
+        # these cases pass `CheckOptions.inputs`/`RunRequest.initial_
+        # state["input"]` the same text a `-e` flag would carry.
+        # `string` is the one declared type a CLI-shaped text value can
+        # never fail against (`isinstance(str)` always matches once
+        # `_coerce`/the int-float-bool-to-string branch run) -- these
+        # four cases are JSON-sniffable shapes `_parse_env_vars` would
+        # turn into a non-string value first; `5`/`true` recover back
+        # to the same text either way (the int/float/bool-to-string
+        # branch in `check_interface_inputs` already handles that, with
+        # or without `_restore_raw_text_for_string_inputs`), so they
+        # exercise the sniff-then-recover path without the restore
+        # itself mattering; `1e3` recovers to a *different* text
+        # (`"1000.0"`) either way, unobservable here since this corpus
+        # only compares `run_error`, not the resulting state.
+        "name": "interface_input_e_string_value_int_shaped_text_is_recovered",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "5"},
+    },
+    {
+        "name": "interface_input_e_string_value_boolean_shaped_text_is_recovered",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "true"},
+    },
+    {
+        "name": "interface_input_e_string_value_exponent_shaped_text_is_recovered",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1e3"},
+    },
+    {
+        # Without `_restore_raw_text_for_string_inputs`, `-e x=null`
+        # JSON-sniffs to `None` before `check_interface_inputs` ever
+        # sees it, which counts as absent -- same as not passing `-e x`
+        # at all -- and a required, undefaulted input would report
+        # missing. The restore puts the literal text `"null"` back for
+        # a declared `string` input, so it stays present instead: this
+        # case's pass/fail verdict genuinely depends on the restore.
+        "name": "interface_input_e_string_value_null_text_stays_present_via_restore",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "null"},
+    },
+    {
+        # Without the restore, `-e x=[1]` JSON-sniffs to the list `[1]`;
+        # a declared `string` input rejects a list outright (the
+        # int/float/bool-to-string branch doesn't cover it, and a list
+        # is never a `str`). The restore puts the literal text `"[1]"`
+        # back, which satisfies `type: string` directly -- another case
+        # whose verdict genuinely depends on the restore.
+        "name": "interface_input_e_string_value_array_shaped_text_passes_only_via_restore",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1]"},
+    },
+    {
+        # A JSON `null` given to a *non-string* required input counts
+        # as absent, same as the key never being passed at all -- the
+        # restore above only ever applies to a declared `type: string`.
+        "name": "interface_input_e_required_non_string_input_given_null_is_still_missing",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "null"},
+    },
+    {
+        # `-e x=1` JSON-sniffs to the int `1` before `check_interface_
+        # inputs` ever sees it -- `1` is one of `_TRUE_WORDS`, but that
+        # word list is only consulted for text `_coerce` actually
+        # receives, and an int never reaches `_coerce` at all.
+        "name": "interface_input_e_boolean_word_that_json_sniffs_to_an_int",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1"},
+    },
+    {
+        "name": "interface_input_e_number_word_that_json_sniffs_to_a_bool",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "true"},
+    },
+    {
+        "name": "interface_input_e_array_value_that_json_sniffs_to_an_object",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": '{"a": 1}'},
+    },
+    {
+        # `core/state_ns.py::migrate_legacy_state` never lifts a
+        # `_`-prefixed root key under `input` -- a document that
+        # declares `_token` as a required input can't be satisfied by
+        # `-e _token=...` at all.
+        "name": "interface_input_e_underscore_prefixed_key_is_never_lifted",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    _token: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"_token": "x"},
+    },
+    {
+        # `-e input={"name": "W"}` JSON-sniffs to a dict under the
+        # literal key `input` -- `migrate_legacy_state` treats that key
+        # as already namespaced and uses its value directly.
+        "name": "interface_input_e_input_namespace_key_satisfies_required_input",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": '{"name": "W"}'},
+    },
+    {
+        # `-e input=5` JSON-sniffs to a non-dict value; `migrate_legacy_
+        # state` trusts the `input` key as already namespaced and
+        # leaves it alone, so `cli/runtime_shim.py::run`'s own
+        # `if not isinstance(input_ns, dict): input_ns = {}` resets it
+        # to an empty namespace right before `check_interface_inputs`.
+        "name": "interface_input_e_non_dict_input_key_value_becomes_an_empty_namespace",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": "5"},
+    },
+    {
+        # Once an `input` key is present among the `-e` entries, no
+        # other key is lifted under it at all -- `name` here stays a
+        # bare, unused root key, not `state["input"]["name"]`.
+        "name": "interface_input_e_input_key_present_other_e_keys_are_not_lifted",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"input": "{}", "name": "W"},
+    },
+    {
+        # `prime` is a namespace name, so `migrate_legacy_state` never
+        # lifts it under `input` either -- same as an underscore-prefixed
+        # key.
+        "name": "interface_input_e_declared_input_named_prime_cannot_be_satisfied",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    prime: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"prime": "5"},
+    },
+    {
+        "name": "interface_input_e_number_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "5.5"},
+    },
+    {
+        "name": "interface_input_e_number_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: number, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "notanumber"},
+    },
+    {
+        # `int()`'s own underscore digit separator (PEP 515): `1_000`
+        # isn't valid JSON, so it stays raw text through the CLI's own
+        # JSON-sniffing pre-pass and reaches `_coerce` as text either way.
+        "name": "interface_input_e_integer_with_underscores",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "1_000"},
+    },
+    {
+        "name": "interface_input_e_integer_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "abc"},
+    },
+    {
+        # `_TRUE_WORDS`/`_FALSE_WORDS`: `cli/app.py`'s own lenient
+        # boolean words, not just `true`/`false`.
+        "name": "interface_input_e_boolean_word_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "yes"},
+    },
+    {
+        "name": "interface_input_e_boolean_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: boolean, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "nope"},
+    },
+    {
+        "name": "interface_input_e_array_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1,2,3]"},
+    },
+    {
+        # The failure text embeds plain `json.loads`'s own third-party
+        # message (`_coerce`'s `array`/`object` arm) past Circuitry's own
+        # "could not be converted: " -- `error_modes` below only pins
+        # the Circuitry-owned prefix (`location_prefix`'s own location
+        # is text up to the first ": ", which lands exactly there).
+        "name": "interface_input_e_array_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: array, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "[1,2,"},
+        "error_modes": {"run_error": "location_prefix"},
+    },
+    {
+        "name": "interface_input_e_object_valid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: object, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": '{"a": 1}'},
+    },
+    {
+        "name": "interface_input_e_object_invalid",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    x: {type: object, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"x": "notjson"},
+        "error_modes": {"run_error": "location_prefix"},
+    },
+    {
+        "name": "required_interface_input_supplied_via_e_run_succeeds",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"name": "World"},
+    },
+    {
+        # A document's own declared `default:` is checked structurally
+        # (its own, unconditional, static type check -- `interface_inputs_
+        # default_type_mismatch_with_unquote_hint`'s own case) regardless
+        # of whether `-e` ever overrides it, so a *bad* default can never
+        # prove an override took effect: it fails `check_for_run` either
+        # way. A *valid* default (`3`, structurally fine) with an
+        # *invalid* `-e` override instead proves the override replaced
+        # it, not merely coexisted alongside it -- a silently-kept
+        # default would pass, where this fails on the override's own
+        # text.
+        "name": "default_overridden_by_provided_e_value",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    count: {type: integer, default: 3}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"count": "abc"},
+    },
+    {
+        # An input `interface.inputs` never declares stays allowed
+        # (issue #429: "Undeclared extra inputs stay allowed").
+        "name": "undeclared_extra_e_input_is_allowed",
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    name: {type: string, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+        "inputs": {"name": "World", "unrelated": "1"},
+    },
+    {
         "name": "missing_entry_file_with_an_unsupported_suffix",
         # The suffix is checked before any read (F2): `check_for_run`
         # reports the unsupported-format message without ever touching
@@ -312,6 +751,18 @@ CASES: list[dict[str, Any]] = [
                 "  - type: tool\n"
                 f"{_TOOL_YML}"
             ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # #408's acceptance audit: `parse_concurrency_groups`'s own
+        # non-string/empty-group-name branch (`pipeline.rs`'s
+        # "runtime.concurrency_groups has a non-string or empty group
+        # name: ..." message) was ported with no corpus case pinning
+        # it -- YAML reads an unquoted `1:` as the int `1`, not a string.
+        "name": "concurrency_groups_non_string_key_config_error",
+        "files": {
+            "doc.yml": "runtime: {concurrency_groups: {1: 3}}\neffects: []\n",
         },
         "entry": "doc.yml",
     },

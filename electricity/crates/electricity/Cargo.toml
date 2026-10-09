@@ -15,4 +15,5 @@ path = "src/lib.rs"
 electricity-compiler = { path = "../electricity-compiler" }
 electricity-json = { path = "../electricity-json" }
 electricity-value = { path = "../electricity-value" }
+indexmap = "2"
 serde_json = "1"

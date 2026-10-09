@@ -158,3 +158,99 @@ fn help_mentions_dump_ir_is_unstable() {
     assert!(stdout.contains("--dump-ir"));
     assert!(stdout.contains("Unstable"));
 }
+
+/// A document with a required input: `--dump-ir -e` reaches the IR
+/// (issue #429 -- `--dump-ir` is otherwise unusable on any document
+/// that declares one).
+#[test]
+fn dump_ir_with_e_on_a_required_input_exits_zero_with_the_program_json() {
+    let (mut cmd, home) = command("dump-ir-e");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
+    )
+    .unwrap();
+    let output = cmd
+        .args([
+            "config.json",
+            doc.to_str().unwrap(),
+            "--dump-ir",
+            "-e",
+            "name=World",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON on stdout");
+    assert_eq!(value["ir_version"], "unstable");
+    assert!(value["program"].is_object());
+}
+
+/// The same document, without `-e`: the exact `check_for_run` message a
+/// plain `cof run` of it would report, not a generic failure.
+#[test]
+fn dump_ir_without_e_on_a_required_input_fails_with_the_missing_input_message() {
+    let (mut cmd, home) = command("dump-ir-no-e");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
+    )
+    .unwrap();
+    let output = cmd
+        .args(["config.json", doc.to_str().unwrap(), "--dump-ir"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.trim_end(),
+        "missing required input 'name' declared in orchestration interface."
+    );
+}
+
+/// The run path with valid `-e` inputs reaches the same preview
+/// refusal a document with no inputs at all does (issue #429).
+#[test]
+fn run_request_with_valid_e_inputs_reaches_the_preview_refusal() {
+    let (mut cmd, home) = command("run-e-valid");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
+    )
+    .unwrap();
+    let output = cmd
+        .args(["config.json", doc.to_str().unwrap(), "-e", "name=World"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is a preview and cannot run orchestrations yet"),
+        "{stderr}"
+    );
+}
+
+/// A malformed `-e` (no `=`) gets Circuitry's own exact
+/// `cli/app.py::_parse_env_vars` message and this preview's usage-error
+/// exit code.
+#[test]
+fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
+    let (mut cmd, home) = command("run-e-malformed");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["config.json", doc.to_str().unwrap(), "-e", "badtext"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Invalid -e format: 'badtext' (expected KEY=VALUE)"),
+        "{stderr}"
+    );
+}
