@@ -1448,6 +1448,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "crossterm",
+ "electricity-bytecode",
+ "electricity-value",
  "insta",
  "libc",
  "oscilloscope-core",

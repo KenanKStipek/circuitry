@@ -347,3 +347,289 @@ pub fn draw(
         Dialog::None => {}
     }
 }
+
+#[cfg(test)]
+mod golden_tests {
+    use super::*;
+    use electricity_bytecode::{
+        EffectPath, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
+        Program, Region, ToolOp,
+    };
+    use oscilloscope_core::model::{ProcessState, RunModel};
+    use oscilloscope_core::observe::Event;
+    use oscilloscope_core::plan::PlanTree;
+    use oscilloscope_core::render;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use serde_json::{Value, json};
+
+    use crate::keys::App;
+
+    fn tool(path: EffectPath, name: &str, on_error: OnError) -> Op {
+        Op {
+            path,
+            name: Some(name.to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+            }))),
+            on_error,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    /// A plan shared by every golden test below (DESIGN.md §6.3): a
+    /// chain of two leaves (`a` fails the run, `b`'s own failure is
+    /// handled) followed by a named tree loop (`fan`, `max_concurrency
+    /// 2`) with one leaf body (`nap`) -- enough to exercise every
+    /// glyph the issue's acceptance list calls for from one plan.
+    fn sample_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let b_path = root_path.clone().push_name("b");
+        let fan_path = root_path.clone().push_name("fan");
+        let pass_path = fan_path.clone().push_pass(LoopId(0));
+        let nap_path = pass_path.push_name("nap");
+
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool(a_path, "a", OnError::Fail),
+                    tool(b_path, "b", OnError::Continue),
+                    Op {
+                        path: fan_path,
+                        name: Some("fan".to_string()),
+                        kind: NodeKind::Control(Region::Loop {
+                            spec: LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![tool(nap_path, "nap", OnError::Fail)],
+                                overlay: true,
+                            }),
+                            flow: LoopFlow::Tree,
+                            max_concurrency: Some(2),
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+    ) -> String {
+        let rendered = render::build(
+            "do-thing.yml",
+            engine,
+            plan,
+            model,
+            state,
+            process,
+            5.0,
+            &[],
+        );
+        let details = render::details_for(selected, plan, state);
+        let mut app = App::new(engine == "watch");
+        app.selected_path = Some(selected.to_string());
+        let backend = TestBackend::new(70, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, Some(&details), &[], &app))
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn pending_plan() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let text = snapshot(
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn running_chain() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null, "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn running_tree_loop_with_max_concurrency() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Dispatch {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 4,
+            concurrency: Some(2),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "b": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 4, "elapsed_s": 1.0, "eta_s": 3.0}},
+                "iter_0": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+            }
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.fan",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn failed() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": null, "meta": {"completed_at": "t1", "error": "prime.a: /bin/ls failed (exit 1): ls: no"},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1): ls: no", "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited { interrupted: false },
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn failed_and_handled() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}},
+            "b": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1): ls: no", "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited { interrupted: false },
+            "cof",
+            "prime.b",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn cancelled() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited { interrupted: true },
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn aborted_no_final_state() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let text = snapshot(
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Exited { interrupted: false },
+            "cof",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn osp_watch() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "watch",
+            "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+}

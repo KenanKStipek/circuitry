@@ -325,14 +325,8 @@ fn build_header(
 
     let effects_planned = if plan.has_plan() {
         Some(
-            plan.all_paths()
+            plan.leaf_paths()
                 .iter()
-                .filter(|p| !p.split('.').any(|seg| seg == "iter_*"))
-                .filter(|p| {
-                    plan.match_path(p)
-                        .and_then(|m| m.entries.first())
-                        .is_some_and(|e| RowKind::from_plan_entry(&e.kind).is_leaf())
-                })
                 .collect::<std::collections::BTreeSet<_>>()
                 .len() as u64,
         )

@@ -37,3 +37,8 @@ crossterm = "0.29"
 tempfile = "3"
 insta = "1"
 libc = "0.2"
+# Only for the TUI's own golden tests, which build a small plan by
+# hand the same way oscilloscope-core's own plan.rs tests do (K4):
+# no new code path exercises these two outside `#[cfg(test)]`.
+electricity-bytecode = { path = "../../../electricity/crates/electricity-bytecode" }
+electricity-value = { path = "../../../electricity/crates/electricity-value" }

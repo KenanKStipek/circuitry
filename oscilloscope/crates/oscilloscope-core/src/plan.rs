@@ -150,6 +150,16 @@ pub struct PlanTree {
     root: TrieNode,
     has_plan: bool,
     all_paths: Vec<String>,
+    /// Every leaf's own display path (a subset of `all_paths`,
+    /// `iter_*` placeholder included) — the header's own "effects done
+    /// out of planned" (DESIGN.md §6.3) needs exactly these, not a
+    /// container's: `all_paths().iter().filter(...)` can't tell a
+    /// leaf template under a named loop from a container (`match_path`
+    /// doesn't resolve the literal text `"iter_*"` back against a
+    /// `Pass` segment at all, since that's not a real pass index), so
+    /// this is recorded directly from each op's own kind, at the same
+    /// point `all_paths` itself is.
+    leaf_paths: Vec<String>,
     /// Every op's display path to the earlier siblings in the same
     /// `Region::Block` call (declaration order) — DESIGN.md §2.1 rule
     /// 1's "every earlier plan sibling is complete", which needs each
@@ -163,6 +173,7 @@ impl PlanTree {
             root: TrieNode::default(),
             has_plan: false,
             all_paths: Vec::new(),
+            leaf_paths: Vec::new(),
             earlier_siblings: HashMap::new(),
         }
     }
@@ -178,6 +189,13 @@ impl PlanTree {
     /// per-pass rows come from what's observed.
     pub fn all_paths(&self) -> &[String] {
         &self.all_paths
+    }
+
+    /// Every leaf's own display path (`iter_*` placeholder included) —
+    /// the subset of `all_paths` a planned-effects count (DESIGN.md
+    /// §6.3's header) needs.
+    pub fn leaf_paths(&self) -> &[String] {
+        &self.leaf_paths
     }
 
     /// `path`'s earlier siblings in declaration order within its own
@@ -228,6 +246,7 @@ impl PlanTree {
     ) -> Self {
         let mut trie = TrieNode::default();
         let mut all_paths = Vec::new();
+        let mut leaf_paths = Vec::new();
         let base_dir = program
             .document
             .as_ref()
@@ -243,6 +262,7 @@ impl PlanTree {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
             all_paths: &mut all_paths,
+            leaf_paths: &mut leaf_paths,
             earlier_siblings: &mut earlier_siblings,
             loader,
         };
@@ -251,6 +271,7 @@ impl PlanTree {
             root: trie,
             has_plan: true,
             all_paths,
+            leaf_paths,
             earlier_siblings,
         }
     }
@@ -294,6 +315,7 @@ struct WalkCtx<'a> {
     base_dir: Option<&'a Path>,
     cycle_guard: &'a mut Vec<PathBuf>,
     all_paths: &'a mut Vec<String>,
+    leaf_paths: &'a mut Vec<String>,
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
 }
@@ -406,7 +428,11 @@ fn record_op_entry(
         }
     };
 
-    ctx.all_paths.push(display_path(&path));
+    let display = display_path(&path);
+    if matches!(kind, PlanEntryKind::Leaf(_)) {
+        ctx.leaf_paths.push(display.clone());
+    }
+    ctx.all_paths.push(display);
     insert(
         trie,
         &path,
@@ -588,6 +614,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             base_dir: child_base_dir.as_deref(),
             cycle_guard: ctx.cycle_guard,
             all_paths: ctx.all_paths,
+            leaf_paths: ctx.leaf_paths,
             earlier_siblings: ctx.earlier_siblings,
             loader: ctx.loader,
         };
