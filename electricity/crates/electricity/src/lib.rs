@@ -1,7 +1,11 @@
 //! Preview skeleton of the electricity library crate.
 //!
 //! This release ships no VM, tool, or adapter implementation (see
-//! `../../DESIGN.md`). [`run_orchestration`] runs
+//! `../../DESIGN.md`; `../../docs/spec/vm-lanes.md` has the full M0-H
+//! lane ownership map for this crate and its sibling VM-lane crates).
+//! [`run`] reserves [`RunRequest`]/[`RunResult`], the shapes lane D's
+//! own `run_orchestration` (issue #431) will take and return once it
+//! replaces the function below of the same name. [`run_orchestration`] runs
 //! `electricity_compiler::check_for_run` first (issue #408's CLI
 //! section) and only ever reports one of two outcomes --
 //! [`RunOutcome::CheckFailed`] on a check failure, or
@@ -12,6 +16,9 @@
 
 use std::fmt;
 use std::path::Path;
+
+pub mod run;
+pub use run::{RunRequest, RunResult, Signal};
 
 /// The crate's version, taken from the workspace's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

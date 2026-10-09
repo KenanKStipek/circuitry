@@ -367,10 +367,15 @@ def _normalize_paths(obj: Any, root: str) -> Any:
     if isinstance(obj, list):
         return [_normalize_paths(v, root) for v in obj]
     if isinstance(obj, dict):
+        # A `definition` dict can carry a non-`str` key verbatim (a tool's
+        # `params`/a `use`'s `inputs` with a `yes:`/`1:` YAML key,
+        # #431's lane A) -- only a `str` key is ever one of this
+        # function's own bookkeeping fields (`"_root"`), so a non-`str`
+        # key is always kept, never filtered.
         return {
             k: _normalize_paths(v, root)
             for k, v in obj.items()
-            if not k.startswith("_")
+            if not (isinstance(k, str) and k.startswith("_"))
         }
     return obj
 

@@ -19,6 +19,7 @@ electricity-template = { path = "../electricity-template" }
 electricity-cel = { path = "../electricity-cel" }
 electricity-schema = { path = "../electricity-schema" }
 electricity-bytecode = { path = "../electricity-bytecode" }
+electricity-config = { path = "../electricity-config" }
 # Only used by `schema_instance.rs` to build the `serde_json::Value`
 # `electricity-schema` validates (that crate's own public API) --
 # "arbitrary_precision" so a `Value::Int` too large for `i64` still

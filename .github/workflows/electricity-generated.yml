@@ -65,3 +65,12 @@ jobs:
             echo "::endgroup::"
           done
           exit "$failed"
+
+      # Tests next to the generators (scripts/test_*.py) cover the helpers they
+      # share, such as the run-corpus event normalizer. pytest's own testpaths
+      # only collect tests/, so they run here.
+      - name: test the generators' shared helpers
+        working-directory: electricity
+        run: |
+          python3 -m pip install "pytest>=8.0"
+          python3 -m pytest -q scripts/

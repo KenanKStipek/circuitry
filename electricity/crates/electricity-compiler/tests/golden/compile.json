@@ -326,6 +326,125 @@
     }
   },
   {
+    "name": "tool_params_bool_key",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: fetch\n    provider: json\n    params:\n      yes: 1\n      mode: parse\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "fetch",
+          "provider": "json",
+          "params": {
+            "true": 1,
+            "mode": "parse"
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "fetch"
+      ]
+    },
+    "definition_error": null,
+    "digest": "b700ea22cc890df408a8d5e02e422c1839112a2b4ac0eb974f3655cbdbf01733",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tool_params_int_key",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: fetch\n    provider: json\n    params:\n      1: one\n      '2': two\n      mode: parse\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "fetch",
+          "provider": "json",
+          "params": {
+            "1": "one",
+            "2": "two",
+            "mode": "parse"
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "fetch"
+      ]
+    },
+    "definition_error": null,
+    "digest": "a2dd4581c282724472310c9ce56d2a1d5f9355916b48be72fa83840b52e8c0f4",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "use_path_happy_path",
     "files": {
       "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    inputs:\n      topic: '{{input.topic}}'\n    outputs:\n      result: {path: 'prime.sub.value'}\n",

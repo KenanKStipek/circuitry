@@ -245,7 +245,7 @@ fn write_dict(
 /// (`NaN`/`Infinity` included — confirmed against CPython directly).
 /// `Bytes`/`Date`/`DateTime` and `List`/`Dict` keys raise, matching
 /// `json.dumps`'s own `TypeError`s for each.
-fn stringify_key(key: &Value) -> Result<String, WriteError> {
+pub fn stringify_key(key: &Value) -> Result<String, WriteError> {
     match key {
         Value::Str(s) => Ok(s.clone()),
         Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),

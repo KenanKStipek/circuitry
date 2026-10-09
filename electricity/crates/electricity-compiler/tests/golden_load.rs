@@ -254,6 +254,16 @@ fn missing_required_interface_input_is_a_run_only_error() {
 }
 
 #[test]
+fn interface_inputs_non_string_key_required_is_a_run_only_error() {
+    run_case("interface_inputs_non_string_key_required_is_a_run_only_error");
+}
+
+#[test]
+fn interface_inputs_non_string_key_default_type_mismatch_is_a_run_only_error() {
+    run_case("interface_inputs_non_string_key_default_type_mismatch_is_a_run_only_error");
+}
+
+#[test]
 fn interface_input_e_string_value_int_shaped_text_is_recovered() {
     run_case("interface_input_e_string_value_int_shaped_text_is_recovered");
 }
@@ -431,6 +441,8 @@ fn every_case_in_the_corpus_has_a_test() {
         "plugins_not_a_list_is_a_run_only_error",
         "plugins_entry_not_a_string_is_a_run_only_error",
         "missing_required_interface_input_is_a_run_only_error",
+        "interface_inputs_non_string_key_required_is_a_run_only_error",
+        "interface_inputs_non_string_key_default_type_mismatch_is_a_run_only_error",
         "interface_input_e_string_value_int_shaped_text_is_recovered",
         "interface_input_e_string_value_boolean_shaped_text_is_recovered",
         "interface_input_e_string_value_exponent_shaped_text_is_recovered",

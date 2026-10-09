@@ -278,6 +278,45 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        "name": "interface_inputs_non_string_key_required_is_a_run_only_error",
+        # A YAML int key (`1:`) in `interface.inputs`: Python's own
+        # `inputs` dict is always string-keyed (JSON/`-e`/state all
+        # produce string keys), so `1 not in inputs` is always true --
+        # the same "absent" path a string key takes, `required: true`
+        # included (`key` in the message is the int `1`, formatted the
+        # same way an f-string would).
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    1: {type: integer, required: true}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "interface_inputs_non_string_key_default_type_mismatch_is_a_run_only_error",
+        # The same non-string key, this time with a `default:` that
+        # can't convert to its own declared `type` -- `inputs[1] =
+        # deepcopy(default)` falls through to the same type check a
+        # string key's default would, so this still fails even though
+        # the key itself was never "missing" in the schema's own sense.
+        # Distinguishes a correct non-string-key port (which applies and
+        # then type-checks the default, like every string key) from one
+        # that merely skips a non-string key outright (which would see
+        # no default and no error at all, passing where `cof run` fails).
+        "files": {
+            "doc.yml": (
+                "interface:\n"
+                "  inputs:\n"
+                "    1: {type: integer, default: 'not an int'}\n"
+                "effects: []\n"
+            )
+        },
+        "entry": "doc.yml",
+    },
+    {
         # Issue #429: the CLI's `-e` inputs reach `check_for_run` --
         # these cases pass `CheckOptions.inputs`/`RunRequest.initial_
         # state["input"]` the same text a `-e` flag would carry.

@@ -140,7 +140,7 @@ fn build_param_node(
         Value::Dict(dict) => {
             let mut map = IndexMap::new();
             for (key, item) in dict {
-                let key_str = match key {
+                let key_label = match key {
                     Value::Str(s) => s.clone(),
                     other => other.py_str(),
                 };
@@ -148,10 +148,10 @@ fn build_param_node(
                     item,
                     name,
                     effect_path,
-                    &format!("{field}.{key_str}"),
+                    &format!("{field}.{key_label}"),
                     loop_names,
                 )?;
-                map.insert(key_str, child);
+                map.insert(key.clone(), child);
             }
             Ok(ParamNode::Map(map))
         }
@@ -243,10 +243,9 @@ pub(crate) fn build_use_inputs(
 
     let mut map = IndexMap::new();
     for (key, value) in inputs {
-        let key_str = key_str(key);
         if let Some(path) = reference_path_only(value) {
             map.insert(
-                key_str,
+                key.clone(),
                 ParamNode::From {
                     path,
                     default: None,
@@ -256,12 +255,12 @@ pub(crate) fn build_use_inputs(
         }
         if let Value::Str(s) = value {
             map.insert(
-                key_str,
+                key.clone(),
                 ParamNode::Template(TemplateText::new(s.clone(), true, Escape::Html)),
             );
             continue;
         }
-        map.insert(key_str, ParamNode::Literal(value.clone()));
+        map.insert(key.clone(), ParamNode::Literal(value.clone()));
     }
     Ok(ParamNode::Map(map))
 }
@@ -284,9 +283,41 @@ mod tests {
         let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
         match node {
             ParamNode::Map(m) => assert!(matches!(
-                m.get("n"),
+                m.get(&Value::Str("n".to_string())),
                 Some(ParamNode::Literal(Value::Int(_)))
             )),
+            _ => panic!("expected a map"),
+        }
+    }
+
+    #[test]
+    fn non_string_keys_are_kept_as_value_not_stringified() {
+        let mut params = Dict::new();
+        params.insert(Value::Bool(true), Value::Int(1.into()));
+        params.insert(Value::Int(5.into()), Value::Int(2.into()));
+        params.insert(Value::Str("5".to_string()), Value::Int(3.into()));
+        let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
+        match node {
+            ParamNode::Map(m) => {
+                assert!(matches!(
+                    m.get(&Value::Bool(true)),
+                    Some(ParamNode::Literal(Value::Int(_)))
+                ));
+                // `5` (int) and `"5"` (str) must stay distinct entries --
+                // a `py_str`-stringifying compiler would collapse them
+                // into one `"5"` key (Python's own numeric tower only
+                // unifies a bool/int/float that compare equal, e.g.
+                // `True`/`1`, never a number and its string spelling).
+                assert_eq!(m.len(), 3);
+                assert!(matches!(
+                    m.get(&Value::Int(5.into())),
+                    Some(ParamNode::Literal(Value::Int(_)))
+                ));
+                assert!(matches!(
+                    m.get(&Value::Str("5".to_string())),
+                    Some(ParamNode::Literal(Value::Int(_)))
+                ));
+            }
             _ => panic!("expected a map"),
         }
     }
@@ -296,7 +327,7 @@ mod tests {
         let params = dict(vec![("s", Value::Str("hi {{x}}".to_string()))]);
         let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
         match node {
-            ParamNode::Map(m) => match m.get("s") {
+            ParamNode::Map(m) => match m.get(&Value::Str("s".to_string())) {
                 Some(ParamNode::Template(t)) => assert_eq!(t.source, "hi {{x}}"),
                 _ => panic!("expected a template"),
             },
@@ -333,7 +364,7 @@ mod tests {
         let params = dict(vec![("x", Value::Dict(from_dict))]);
         let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
         match node {
-            ParamNode::Map(m) => match m.get("x") {
+            ParamNode::Map(m) => match m.get(&Value::Str("x".to_string())) {
                 Some(ParamNode::From { path, default }) => {
                     assert_eq!(path, "input.x");
                     assert_eq!(default, &Some(Value::Int(1.into())));
@@ -400,7 +431,7 @@ mod tests {
         let node = build_use_inputs(&inputs, "u", "p", &BTreeSet::new()).unwrap();
         match node {
             ParamNode::Map(m) => assert!(matches!(
-                m.get("x"),
+                m.get(&Value::Str("x".to_string())),
                 Some(ParamNode::Literal(Value::Dict(_)))
             )),
             _ => panic!("expected a map"),

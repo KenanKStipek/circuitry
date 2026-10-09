@@ -1,0 +1,11 @@
+[package]
+name = "electricity-redaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Credential-shaped-value redaction for electricity state/meta.raw (electricity-redaction, lane C stub)"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
