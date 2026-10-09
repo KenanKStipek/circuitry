@@ -28,8 +28,11 @@ _RETRYABLE = RetryInfo(retryable=True)
 
 @dataclass
 class FlakyThenFailAdapter:
-    """Pass 0: fails once, then succeeds (uses one retry). Pass 1: always
-    fails, exhausting its retries."""
+    """Pass 0: fails once, then succeeds (uses one retry). Pass 1: fails
+    outright on its own first attempt with a non-retryable error, so it
+    never spends a retry of its own — keeping this test's point (no stale
+    leakage from pass 0) separate from #421's own retries_used-on-failure
+    behaviour, covered elsewhere."""
 
     name: str = "flaky"
     calls: int = 0
@@ -42,7 +45,9 @@ class FlakyThenFailAdapter:
             raise AdapterCallError("transient failure, pass 0 attempt 0", retry_info=_RETRYABLE)
         if self.calls == 2:
             return GenerateResult(text="OK", raw={})
-        raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
+        raise AdapterCallError(
+            "permanent failure, pass 1", retry_info=RetryInfo(retryable=False)
+        )
 
 
 def _unnamed_each_loop_orch(*, on_error: str) -> dict:
@@ -77,12 +82,55 @@ def test_prompt_continue_nulls_value_and_clears_retries_used_from_prior_pass() -
 
     node = state["prime"]["step"]
     # Pass 0 succeeded after one retry.
-    assert adapter.calls == 4
-    # Pass 1 failed outright: the node is reused (unnamed loop), and must not
-    # carry pass 0's value or retries_used next to pass 1's error.
+    assert adapter.calls == 3
+    # Pass 1 failed outright, spending none of its own retries: the node is
+    # reused (unnamed loop), and must not carry pass 0's value or
+    # retries_used next to pass 1's error.
     assert node["value"] is None
     assert node["meta"]["error"] is not None
     assert "retries_used" not in node["meta"]
+
+
+def test_prompt_continue_records_its_own_passs_retries_used_not_the_priors() -> None:
+    """#421: a reused node's own retries_used, on a pass that failed after
+    using its own retry, must be that pass's own count — not stale from the
+    prior pass, and not simply absent because the prior pass's value was
+    cleared (#260). Pass 0 succeeds after one retry (retries_used would
+    read 1 right after it); pass 1 then also retries once before
+    exhausting its own budget and failing — it must show its own 1, not a
+    leftover 1 from pass 0 read as though nothing had been cleared."""
+
+    @dataclass
+    class FlakyBothPassesAdapter:
+        name: str = "flaky"
+        calls: int = 0
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise AdapterCallError(
+                    "transient failure, pass 0 attempt 0", retry_info=_RETRYABLE
+                )
+            if self.calls == 2:
+                return GenerateResult(text="OK", raw={})
+            # Pass 1: fails every attempt, retryable each time, exhausting
+            # its own 2-attempt budget (one retry spent).
+            raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
+
+    orch = _unnamed_each_loop_orch(on_error="continue")
+    root = compile_orchestration(orch=orch, root_name="prime")
+    state = {"input": {"items": ["a", "b"]}}
+
+    DynamicRuntime(root, adapter=FlakyBothPassesAdapter(), model="unit-test").execute(
+        store=Store(state)
+    )
+
+    node = state["prime"]["step"]
+    assert node["value"] is None
+    assert node["meta"]["error"] is not None
+    assert node["meta"]["retries_used"] == 1
 
 
 @dataclass
@@ -119,7 +167,9 @@ def test_prompt_continue_clears_both_retry_meta_and_generation_option_meta() -> 
                 )
             if self.calls == 2:
                 return GenerateResult(text="OK", raw={}, finish_reason="length")
-            raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
+            raise AdapterCallError(
+                "permanent failure, pass 1", retry_info=RetryInfo(retryable=False)
+            )
 
     orch = _unnamed_each_loop_orch(on_error="continue")
     root = compile_orchestration(orch=orch, root_name="prime")

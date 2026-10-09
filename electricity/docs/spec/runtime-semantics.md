@@ -836,6 +836,14 @@ Backoff is exponential with full jitter from `backoff_ms`
 provider's own `Retry-After` header when the failing adapter can supply one
 (litellm-backed adapters only today).
 
+**`created_at`/`retries_used` (#421)**: `meta.created_at` is the start of
+this pass's *first* attempt — never reset by a later attempt within the same
+pass, so a duration computed from it includes every attempt's backoff.
+`meta.retries_used` is set on **both** a successful and a failed outcome, to
+the index of the attempt that decided the outcome (0-based: the number of
+retries actually spent); it is **absent**, not `0`, when the first attempt
+is also the last. Both rules are identical for `tool` (§5.2).
+
 **`provider_fallbacks`**: `_build_attempts()` (`core/prompt.py:1044`) builds
 an ordered `(adapter, model)` list: this effect's own `provider:` (if set)
 first, then the run-default adapter+model, then every `provider_fallbacks`

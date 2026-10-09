@@ -7,6 +7,7 @@ run takes, with a :class:`ScriptedAdapter` injected via ``RunRequest.adapter``
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -150,6 +151,44 @@ def test_not_retryable_error_fails_after_one_attempt(tmp_path: Path) -> None:
     assert node["value"] is None
     assert "retries_used" not in node["meta"]
     assert adapter.leftover_replies() == {"prime.flaky": 1}
+
+
+def test_prompt_exhausting_retries_still_records_created_at_and_retries_used(
+    tmp_path: Path,
+) -> None:
+    """#421: retries_used is set on a failed outcome too, not only a
+    successful one, and created_at still names the first attempt's start."""
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [
+            _prompt("flaky", retries={"max_attempts": 3, "backoff_ms": 1}),
+        ],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path,
+        {
+            "prime.flaky": [
+                {"error": {"kind": "server_error"}},
+                {"error": {"kind": "server_error"}},
+                {"error": {"kind": "server_error"}},
+            ],
+        },
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    before = datetime.now(timezone.utc)
+    result = _run(orch_path, adapter)
+
+    assert not result.ok
+    node = result.state["prime"]["flaky"]
+    assert node["value"] is None
+    assert node["meta"]["error"] is not None
+    assert node["meta"]["retries_used"] == 2
+    created_at = datetime.fromisoformat(node["meta"]["created_at"])
+    assert created_at >= before
+    assert adapter.leftover_replies() == {}
 
 
 def test_expect_model_mode_reask_consumes_in_order(tmp_path: Path) -> None:

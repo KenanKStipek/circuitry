@@ -167,6 +167,121 @@ def test_http_family_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plugin.execute.call_count == 2
 
 
+def test_tool_created_at_is_the_first_attempts_start_not_the_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#421: a retried tool's created_at is the start of its first attempt,
+    not reset by a later attempt within the same pass — unlike retries_used,
+    which does track the attempt that decided the outcome."""
+    from circuitry.core import tool as tool_mod
+
+    timestamps = iter(["T0", "T1", "T2"])
+    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+
+    ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.side_effect = [RuntimeError("transient"), ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["created_at"] == "T0"
+    assert meta["completed_at"] == "T2"
+    assert meta["retries_used"] == 1
+
+
+def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#421: retries_used is set on a failed outcome too, not only on
+    success — and created_at still names the first attempt's start."""
+    from circuitry.core import tool as tool_mod
+
+    timestamps = iter(["T0", "T1", "T2"])
+    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+
+    plugin = MagicMock()
+    plugin.execute.side_effect = RuntimeError("always fails")
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = _make_store()
+    with pytest.raises(RuntimeError, match="always fails"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["created_at"] == "T0"
+    assert meta["completed_at"] == "T2"
+    assert meta["retries_used"] == 1
+
+
+def test_tool_a_single_failed_attempt_leaves_retries_used_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """absent, not 0, when the first attempt is also the last (#421) —
+    the same rule a prompt's failure path follows."""
+    plugin = MagicMock()
+    plugin.execute.side_effect = RuntimeError("boom")
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(name="x", provider="shell", params={})
+    store = _make_store()
+    with pytest.raises(RuntimeError, match="boom"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert "retries_used" not in store.state["x"]["meta"]
+
+
+def test_tool_second_pass_of_a_reused_node_gets_a_fresh_created_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unnamed loop's second pass over the same node must not keep the
+    first pass's created_at (#421) — the same contract #260 already holds
+    for value/retries_used on a reused node."""
+    from circuitry.core import tool as tool_mod
+
+    timestamps = iter(["P0_T0", "P0_T1", "P0_T2", "P1_T0", "P1_T1"])
+    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+
+    ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.side_effect = [RuntimeError("transient"), ok_result, ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = _make_store()
+    runtime = ToolRuntime(defn)
+
+    # Pass 0 needs one retry.
+    runtime.execute(store=store, ctx={})
+    assert store.state["x"]["meta"]["created_at"] == "P0_T0"
+    assert store.state["x"]["meta"]["retries_used"] == 1
+
+    # Pass 1 (the node reused, as an unnamed loop's next pass would) succeeds
+    # on its own first attempt: a fresh created_at, and no stale retries_used.
+    runtime.execute(store=store, ctx={})
+    assert store.state["x"]["meta"]["created_at"] == "P1_T0"
+    assert "retries_used" not in store.state["x"]["meta"]
+
+
 def test_tool_retries_used_is_reset_on_a_reused_node(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
