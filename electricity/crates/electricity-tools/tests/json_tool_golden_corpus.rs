@@ -61,15 +61,11 @@ struct JsonToolCase {
     params: TaggedValue,
     ok: Option<TaggedValue>,
     raw: Option<TaggedValue>,
+    /// Exact expected text, including a wrapped `json.JSONDecodeError`'s
+    /// own tail -- byte-identical here, not just same-position, since
+    /// `electricity_json::ReadError::Syntax`'s Display matches CPython's
+    /// `str(JSONDecodeError)` exactly (issue #442).
     err: Option<String>,
-    /// Circuitry's own exact text in front of a wrapped
-    /// `json.JSONDecodeError` (`None` when [`JsonToolCase::err`] is
-    /// `Some`, i.e. not a decode-error case).
-    err_prefix: Option<String>,
-    /// The matching `json.JSONDecodeError.pos`; electricity's own
-    /// decode error only has to fail at this same character offset
-    /// (DESIGN.md §1/§12), not match the third-party message text.
-    err_char: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -86,16 +82,7 @@ async fn golden_corpus_json_tool() {
 
     let tool = JsonTool;
     let mut failures = Vec::new();
-    for (i, case) in corpus
-        .json_tool_cases
-        .into_iter()
-        .enumerate()
-        // Decode-error cases (`err_prefix` set) are covered separately,
-        // by `golden_corpus_json_tool_decode_error_position` below --
-        // their third-party tail only has to fail at the same position,
-        // never match Circuitry's recorded `err` text exactly.
-        .filter(|(_, case)| case.err_prefix.is_none())
-    {
+    for (i, case) in corpus.json_tool_cases.into_iter().enumerate() {
         let params = Value::from(case.params);
         let result = tool.execute(params.clone(), 30).await;
         match (result, case.ok, case.raw, case.err) {
@@ -121,49 +108,6 @@ async fn golden_corpus_json_tool() {
                 "case {i} ({params:?}): expected ok={expected_ok:?} raw={expected_raw:?} err={expected_err:?}, got {:?}",
                 got.map(|r| (r.value, r.raw))
             )),
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
-/// Cases whose expected failure wraps a `json.JSONDecodeError`: only
-/// Circuitry's own prefix has to match exactly; the third-party tail
-/// only has to fail at the same character offset (DESIGN.md §1/§12),
-/// via electricity-json's own `"{message}: char {pos}"` Display.
-#[tokio::test]
-async fn golden_corpus_json_tool_decode_error_position() {
-    let text = include_str!("golden/json_tool_corpus.json");
-    let corpus: Corpus =
-        serde_json::from_str(text).expect("golden/json_tool_corpus.json is valid JSON");
-    let decode_cases: Vec<_> = corpus
-        .json_tool_cases
-        .into_iter()
-        .filter(|c| c.err_prefix.is_some())
-        .collect();
-    assert!(!decode_cases.is_empty());
-
-    let tool = JsonTool;
-    let mut failures = Vec::new();
-    for (i, case) in decode_cases.into_iter().enumerate() {
-        let params = Value::from(case.params);
-        let prefix = case.err_prefix.expect("filtered above");
-        let expected_char = case.err_char.expect("present alongside err_prefix");
-        let Err(err) = tool.execute(params.clone(), 30).await else {
-            failures.push(format!(
-                "decode case {i} ({params:?}): expected an error, got Ok"
-            ));
-            continue;
-        };
-        let got_char: Option<i64> = err
-            .0
-            .rsplit("char ")
-            .next()
-            .and_then(|tail| tail.parse().ok());
-        if !err.0.starts_with(&prefix) || got_char != Some(expected_char) {
-            failures.push(format!(
-                "decode case {i} ({params:?}): expected prefix {prefix:?} and char {expected_char}, got {:?}",
-                err.0
-            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

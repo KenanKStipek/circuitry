@@ -673,7 +673,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 0
+      "message": "Expecting value: line 1 column 1 (char 0)"
     },
     "text": ""
   },
@@ -681,7 +681,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 3
+      "message": "Expecting value: line 1 column 4 (char 3)"
     },
     "text": "   "
   },
@@ -689,7 +689,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 1
+      "message": "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
     },
     "text": "{"
   },
@@ -697,7 +697,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 1
+      "message": "Expecting value: line 1 column 2 (char 1)"
     },
     "text": "["
   },
@@ -705,7 +705,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 1
+      "message": "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
     },
     "text": "{,}"
   },
@@ -713,7 +713,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 5
+      "message": "Expecting ',' delimiter: line 1 column 6 (char 5)"
     },
     "text": "[1, 2"
   },
@@ -721,7 +721,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 6
+      "message": "Expecting value: line 1 column 7 (char 6)"
     },
     "text": "[1, 2,]"
   },
@@ -729,7 +729,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 8
+      "message": "Expecting property name enclosed in double quotes: line 1 column 9 (char 8)"
     },
     "text": "{\"a\": 1,}"
   },
@@ -737,7 +737,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 5
+      "message": "Expecting ':' delimiter: line 1 column 6 (char 5)"
     },
     "text": "{\"a\" 1}"
   },
@@ -745,7 +745,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 6
+      "message": "Expecting value: line 1 column 7 (char 6)"
     },
     "text": "{\"a\": }"
   },
@@ -753,7 +753,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 8
+      "message": "Expecting ',' delimiter: line 1 column 9 (char 8)"
     },
     "text": "{\"a\": 1 \"b\": 2}"
   },
@@ -761,7 +761,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 3
+      "message": "Expecting ',' delimiter: line 1 column 4 (char 3)"
     },
     "text": "[1 2]"
   },
@@ -769,7 +769,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 0
+      "message": "Unterminated string starting at: line 1 column 1 (char 0)"
     },
     "text": "\"unterminated"
   },
@@ -777,7 +777,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 5
+      "message": "Invalid \\escape: line 1 column 6 (char 5)"
     },
     "text": "\"bad \\x escape\""
   },
@@ -785,7 +785,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 6
+      "message": "Invalid \\uXXXX escape: line 1 column 7 (char 6)"
     },
     "text": "\"bad \\u12 escape\""
   },
@@ -793,7 +793,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 0
+      "message": "Expecting value: line 1 column 1 (char 0)"
     },
     "text": "nul"
   },
@@ -801,7 +801,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 0
+      "message": "Expecting value: line 1 column 1 (char 0)"
     },
     "text": "tru"
   },
@@ -809,7 +809,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 1
+      "message": "Extra data: line 1 column 2 (char 1)"
     },
     "text": "01"
   },
@@ -817,7 +817,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 0
+      "message": "Expecting value: line 1 column 1 (char 0)"
     },
     "text": "--1"
   },
@@ -825,7 +825,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 2
+      "message": "Extra data: line 1 column 3 (char 2)"
     },
     "text": "1 2"
   },
@@ -833,7 +833,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 2
+      "message": "Extra data: line 1 column 3 (char 2)"
     },
     "text": "{}}"
   },
@@ -841,7 +841,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 9
+      "message": "Extra data: line 1 column 10 (char 9)"
     },
     "text": "{\"a\": 1} extra"
   },
@@ -849,7 +849,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 2
+      "message": "Invalid \\uXXXX escape: line 1 column 3 (char 2)"
     },
     "text": "\"\\u+041\""
   },
@@ -857,7 +857,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 2
+      "message": "Invalid \\uXXXX escape: line 1 column 3 (char 2)"
     },
     "text": "\"\\u0041"
   },
@@ -865,7 +865,7 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 8
+      "message": "Invalid \\uXXXX escape: line 1 column 9 (char 8)"
     },
     "text": "\"\\ud800\\udc00"
   },
@@ -873,9 +873,57 @@
     "entry": "both",
     "expect": {
       "kind": "syntax",
-      "pos": 2
+      "message": "Invalid control character at: line 1 column 3 (char 2)"
     },
     "text": "\"a\u0001b\""
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Expecting ',' delimiter: line 3 column 3 (char 13)"
+    },
+    "text": "{\n  \"a\": 1\n  \"b\": 2\n}"
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Expecting ',' delimiter: line 4 column 1 (char 24)"
+    },
+    "text": "{\r\n  \"a\": 1,\r\n  \"b\": 2\r\n"
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Expecting ',' delimiter: line 3 column 2 (char 20)"
+    },
+    "text": "{\"a\": 1,\r\n \"b\": 2\r\n \"c\": 3}"
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Expecting ',' delimiter: line 2 column 5 (char 19)"
+    },
+    "text": "[\"café\", \"中文\",\n  1 2]"
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Invalid control character at: line 1 column 4 (char 3)"
+    },
+    "text": "\"é中\u0001b\""
+  },
+  {
+    "entry": "both",
+    "expect": {
+      "kind": "syntax",
+      "message": "Invalid \\escape: line 1 column 6 (char 5)"
+    },
+    "text": "\"café\\xZ\""
   },
   {
     "entry": "both",

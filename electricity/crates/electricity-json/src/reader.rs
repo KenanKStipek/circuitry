@@ -9,9 +9,13 @@
 //! `Vec<char>`, not raw bytes, specifically so this holds for any input
 //! containing non-ASCII text before the error.
 //!
-//! Syntax-error *messages* here come from mirroring CPython's own
-//! `json.decoder`, not from Circuitry's own code, so (DESIGN.md §1/§12)
-//! they only need to fail at the same position with a non-empty message;
+//! [`ReadError::Syntax`]'s Display is byte-identical to CPython's own
+//! `str(JSONDecodeError)` — `'%s: line %d column %d (char %d)' % (msg,
+//! lineno, colno, pos)`, including `msg` itself, checked against the
+//! C-accelerated `_json` scanner CPython's `json.loads` actually runs by
+//! default (not always the same text or position the pure-Python
+//! fallback's own source would suggest — see [`Parser::parse_string`]'s
+//! own docs for two cases where they disagree, confirmed directly).
 //! [`ReadError::DuplicateKey`]'s message is Circuitry's own and matches
 //! `core/json_load.py` word for word.
 //!
@@ -26,11 +30,20 @@ use std::fmt;
 /// Why [`loads`] failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadError {
-    /// Malformed JSON syntax. `pos` is the Python `str`-index CPython's
-    /// `json.loads` would report for the same input; `message` is
-    /// descriptive but not guaranteed byte-identical to CPython's (that
-    /// text is third-party, not Circuitry's own — DESIGN.md §1/§12).
-    Syntax { message: String, pos: usize },
+    /// Malformed JSON syntax. `message` is CPython's own `JSONDecodeError`
+    /// `msg` (third-party text, not Circuitry's own — DESIGN.md §1/§12,
+    /// but byte-identical here, not just same-position, since it costs
+    /// nothing extra once the position matches); `pos` is the Python
+    /// `str`-index CPython's `json.loads` would report for the same
+    /// input; `lineno`/`colno` are `JSONDecodeError`'s own, computed once
+    /// at the error site (the parser has the full text there) rather
+    /// than recomputed by every caller.
+    Syntax {
+        message: String,
+        pos: usize,
+        lineno: usize,
+        colno: usize,
+    },
     /// A JSON object defines the same key twice — `message` matches
     /// `core/json_load.py`'s `DuplicateKeyError` word for word.
     DuplicateKey { message: String },
@@ -45,7 +58,12 @@ pub enum ReadError {
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReadError::Syntax { message, pos } => write!(f, "{message}: char {pos}"),
+            ReadError::Syntax {
+                message,
+                pos,
+                lineno,
+                colno,
+            } => write!(f, "{message}: line {lineno} column {colno} (char {pos})"),
             ReadError::DuplicateKey { message } => write!(f, "{message}"),
             ReadError::Depth { pos } => write!(
                 f,
@@ -182,10 +200,28 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn syntax(&self, message: &str, pos: usize) -> ReadError {
+        let (lineno, colno) = self.line_col(pos);
         ReadError::Syntax {
             message: message.to_string(),
             pos,
+            lineno,
+            colno,
         }
+    }
+
+    /// `JSONDecodeError.__init__`'s own `lineno`/`colno` computation —
+    /// `doc.count('\n', 0, pos) + 1` and `pos - doc.rfind('\n', 0, pos)`
+    /// (a `rfind` miss, `-1`, gives `pos + 1`) — ported straight from
+    /// `chars` rather than a `str`, since the reader already works in
+    /// Python `str` indices (module docs above).
+    fn line_col(&self, pos: usize) -> (usize, usize) {
+        let before = &self.chars[..pos.min(self.chars.len())];
+        let lineno = before.iter().filter(|&&c| c == '\n').count() + 1;
+        let colno = match before.iter().rposition(|&c| c == '\n') {
+            Some(last_newline) => pos - last_newline,
+            None => pos + 1,
+        };
+        (lineno, colno)
     }
 
     fn skip_ws(&self, mut idx: usize) -> usize {
@@ -357,11 +393,8 @@ impl Parser<'_> {
                             'n' => '\n',
                             'r' => '\r',
                             't' => '\t',
-                            other => {
-                                return Err(self.syntax(
-                                    &format!("Invalid \\escape: {other:?}"),
-                                    backslash_idx,
-                                ));
+                            _ => {
+                                return Err(self.syntax("Invalid \\escape", backslash_idx));
                             }
                         };
                         result.push(mapped);
@@ -369,7 +402,7 @@ impl Parser<'_> {
                     }
                 }
                 Some(&c) if (c as u32) < 0x20 => {
-                    return Err(self.syntax(&format!("Invalid control character {c:?} at"), idx));
+                    return Err(self.syntax("Invalid control character at", idx));
                 }
                 Some(&c) => {
                     result.push(c);

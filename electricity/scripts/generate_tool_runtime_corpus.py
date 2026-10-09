@@ -88,33 +88,16 @@ def json_tool_case(params: dict, *, timeout_seconds: int = 30) -> dict:
     try:
         result = plugin.execute(params=params, timeout_seconds=timeout_seconds)
     except ValueError as exc:
-        # A `json.JSONDecodeError` cause means the tail of `str(exc)` is
-        # third-party text (DESIGN.md §1/§12): electricity only has to
-        # fail at the same character offset, never match it byte for
-        # byte. The corpus records that offset separately from the
-        # (still-exact) Circuitry-authored prefix in front of it, rather
-        # than the third-party message text itself.
-        cause = exc.__cause__
-        if isinstance(cause, json.JSONDecodeError):
-            message = str(exc)
-            third_party = str(cause)
-            assert message.endswith(third_party), (message, third_party)
-            prefix = message[: -len(third_party)]
-            return {
-                "params": encode(params),
-                "ok": None,
-                "raw": None,
-                "err": None,
-                "err_prefix": prefix,
-                "err_char": cause.pos,
-            }
+        # A `json.JSONDecodeError` cause's `str()` is third-party text
+        # (DESIGN.md §1/§12), but byte-identical to electricity_json::
+        # ReadError::Syntax's own Display (issue #442) -- so `str(exc)`
+        # (Circuitry's own prefix plus that text) is a real parity
+        # assertion end to end, not just a position check.
         return {
             "params": encode(params),
             "ok": None,
             "raw": None,
             "err": str(exc),
-            "err_prefix": None,
-            "err_char": None,
         }
     else:
         return {
@@ -122,8 +105,6 @@ def json_tool_case(params: dict, *, timeout_seconds: int = 30) -> dict:
             "ok": encode(result.value),
             "raw": encode(result.raw),
             "err": None,
-            "err_prefix": None,
-            "err_char": None,
         }
 
 

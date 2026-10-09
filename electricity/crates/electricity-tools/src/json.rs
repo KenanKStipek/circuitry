@@ -1,11 +1,12 @@
 //! Lane C: the `json` tool (`plugins/json.py`) -- `parse`/`stringify`/
 //! `extract`, with Circuitry's own exact messages (`JsonPlugin: parse
 //! mode requires params['input'] as a string.`, `json: unknown mode
-//! {mode!r}`) and `raw: {"mode": mode}`. Third-party JSON-decode text
-//! (`json: parse failed: ...`, `json: extract input is a string but not
-//! valid JSON: ...`) only has to fail at the same character offset as
-//! CPython's `json.JSONDecodeError` (DESIGN.md §1/§12) -- it is not
-//! byte-identical to it.
+//! {mode!r}`) and `raw: {"mode": mode}`. The third-party JSON-decode text
+//! wrapped into `json: parse failed: ...`/`json: extract input is a
+//! string but not valid JSON: ...` is byte-identical to CPython's own
+//! `json.JSONDecodeError` text too (issue #442, via `electricity_json::
+//! ReadError::Syntax`'s Display), not merely at the same character
+//! offset.
 
 use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;

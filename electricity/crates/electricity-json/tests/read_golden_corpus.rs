@@ -7,6 +7,11 @@
 //! `core.json_load.load_json` for the duplicate-key cases) and fails the
 //! build if it differs (`.github/workflows/electricity-generated.yml`), so
 //! this test only needs to trust the committed file.
+//!
+//! A `"syntax"` row's `message` is the full, exact text of CPython's own
+//! `str(json.JSONDecodeError)` -- `electricity_json::ReadError::Syntax`'s
+//! own Display is checked word for word against it, not just at the same
+//! character position (issue #442).
 
 use electricity_json::{ReadError, load_json, loads};
 use electricity_value::{Dict, IntValue, Value};
@@ -64,7 +69,7 @@ enum Expect {
     #[serde(rename = "duplicate_key")]
     DuplicateKey { message: String },
     #[serde(rename = "syntax")]
-    Syntax { pos: usize },
+    Syntax { message: String },
 }
 
 /// Which of electricity-json's two reader entry points a row exercises
@@ -128,15 +133,16 @@ fn check(
         (Err(got), Expect::DuplicateKey { message: expected }) => failures.push(format!(
             "{context}: {name} expected duplicate-key error {expected:?}, got {got}"
         )),
-        (Err(ReadError::Syntax { pos, .. }), Expect::Syntax { pos: expected }) => {
-            if pos != *expected {
+        (Err(err @ ReadError::Syntax { .. }), Expect::Syntax { message: expected }) => {
+            let got_message = err.to_string();
+            if got_message != *expected {
                 failures.push(format!(
-                    "{context}: {name} syntax error position mismatch: expected {expected}, got {pos}"
+                    "{context}: {name} syntax error message mismatch: expected {expected:?}, got {got_message:?}"
                 ));
             }
         }
-        (Err(got), Expect::Syntax { pos: expected }) => failures.push(format!(
-            "{context}: {name} expected a syntax error at {expected}, got {got}"
+        (Err(got), Expect::Syntax { message: expected }) => failures.push(format!(
+            "{context}: {name} expected a syntax error {expected:?}, got {got}"
         )),
         (Err(got), Expect::Ok { .. }) => {
             failures.push(format!("{context}: {name} expected success, got {got}"))

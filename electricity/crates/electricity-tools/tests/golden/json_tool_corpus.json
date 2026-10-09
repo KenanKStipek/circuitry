@@ -2,8 +2,6 @@
   "json_tool_cases": [
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "dict",
         "v": [
@@ -62,8 +60,6 @@
     },
     {
       "err": "JsonPlugin: parse mode requires params['input'] as a string.",
-      "err_char": null,
-      "err_prefix": null,
       "ok": null,
       "params": {
         "t": "dict",
@@ -93,9 +89,7 @@
       "raw": null
     },
     {
-      "err": null,
-      "err_char": 0,
-      "err_prefix": "json: parse failed: ",
+      "err": "json: parse failed: Expecting value: line 1 column 1 (char 0)",
       "ok": null,
       "params": {
         "t": "dict",
@@ -126,8 +120,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "none"
       },
@@ -164,8 +156,6 @@
     },
     {
       "err": "json: unknown mode 'none'",
-      "err_char": null,
-      "err_prefix": null,
       "ok": null,
       "params": {
         "t": "dict",
@@ -195,8 +185,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "int",
         "v": "1"
@@ -244,8 +232,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "{\"a\": 1}"
@@ -304,8 +290,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "{\n  \"a\": 1\n}"
@@ -374,8 +358,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "null"
@@ -422,8 +404,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "[1, \"a\", null, true]"
@@ -487,8 +467,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "{\"true\": \"one-value\"}"
@@ -547,8 +525,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "{\"null\": \"none-value\"}"
@@ -606,8 +582,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "{\"1.5\": \"float-key\"}"
@@ -666,8 +640,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "int",
         "v": "2"
@@ -756,8 +728,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "fallback"
@@ -825,8 +795,6 @@
     },
     {
       "err": "JsonPlugin: extract mode requires params['path'].",
-      "err_char": null,
-      "err_prefix": null,
       "ok": null,
       "params": {
         "t": "dict",
@@ -857,8 +825,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "int",
         "v": "1"
@@ -915,9 +881,7 @@
       }
     },
     {
-      "err": null,
-      "err_char": 0,
-      "err_prefix": "json: extract input is a string but not valid JSON: ",
+      "err": "json: extract input is a string but not valid JSON: Expecting value: line 1 column 1 (char 0)",
       "ok": null,
       "params": {
         "t": "dict",
@@ -958,8 +922,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "d"
@@ -1043,8 +1005,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "str",
         "v": "d"
@@ -1128,8 +1088,6 @@
     },
     {
       "err": null,
-      "err_char": null,
-      "err_prefix": null,
       "ok": {
         "t": "int",
         "v": "3"
@@ -1200,8 +1158,6 @@
     },
     {
       "err": "json: unknown mode 'bogus'",
-      "err_char": null,
-      "err_prefix": null,
       "ok": null,
       "params": {
         "t": "dict",
