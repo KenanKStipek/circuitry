@@ -543,6 +543,30 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // `cof`'s own "Orchestration not found" check (`_resolve_orchestration`)
+    // happens in the CLI layer *before* `-e` is ever parsed
+    // (`cli/app.py` resolves the document at ~:1150, `_parse_env_vars`
+    // only at ~:1270) -- checked here, before step 2 below, for the
+    // same reason (PR #441 review finding 5: `-e badtext` plus a
+    // missing document must still exit 1, not 2). Unlike the config-
+    // error check above, `cof` prints this one on *stdout*
+    // (`console.print`, not `err_console.print` -- `app.py:1156`), so
+    // this does too; electricity's own positional orchestration
+    // argument is always a literal path (no library-name resolution,
+    // unlike `cof run <name>`), so this is a plain existence check. The
+    // accompanying `Tip: run cof list ...` line cof also prints is left
+    // out on purpose: electricity has no `list` subcommand of its own
+    // for it to name.
+    let orchestration_path = PathBuf::from(&run_args.orchestration);
+    if !orchestration_path.is_file() {
+        signal_guard.disarm();
+        write_stdout(&format!(
+            "Error: Orchestration not found: {}\n",
+            run_args.orchestration
+        ));
+        return ExitCode::from(1);
+    }
+
     // Step 2: `electricity::parse_inputs`'s own malformed-`-e` text,
     // Circuitry's own `BadParameter` message word for word (issue
     // #429): `parse_flags` only checks that `-e` has *some* value,
@@ -557,23 +581,6 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-
-    // `cof`'s own "Orchestration not found" check (`_resolve_orchestration`)
-    // happens in the CLI layer, before `run()`/its own JSON-output logic
-    // is ever reached, exactly like the config-error check above --
-    // plain text on stderr, no stdout payload, no `--out` (PR #441
-    // review finding 16). electricity's own positional orchestration
-    // argument is always a literal path (no library-name resolution,
-    // unlike `cof run <name>`), so this is a plain existence check.
-    let orchestration_path = PathBuf::from(&run_args.orchestration);
-    if !orchestration_path.is_file() {
-        signal_guard.disarm();
-        write_stderr(&format!(
-            "Error: Orchestration not found: {}\n",
-            run_args.orchestration
-        ));
-        return ExitCode::from(1);
-    }
 
     let out_path = run_args.out.map(PathBuf::from);
 

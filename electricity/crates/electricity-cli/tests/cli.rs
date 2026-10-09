@@ -137,11 +137,11 @@ fn a_missing_config_file_fails_with_circuitrys_own_text_and_writes_no_out() {
     assert!(!out.exists());
 }
 
-/// A missing orchestration file -- unlike every other failure -- prints
-/// no stdout JSON payload at all, matching `cof`'s own "Orchestration
-/// not found" check (which happens in the CLI layer, before `run()`'s
-/// own JSON-output logic is ever reached, same as a config error --
-/// PR #441 review finding 16).
+/// A missing orchestration file prints `cof`'s own "Orchestration not
+/// found" text on *stdout* (not stderr, and not the ordinary `{"ok":
+/// false, ...}` JSON payload either -- `cof` resolves the document in
+/// the CLI layer, before `run()`'s own JSON-output logic is ever
+/// reached, same as a config error -- PR #441 review finding 5).
 #[test]
 fn a_missing_orchestration_file_fails_with_cofs_own_text_and_writes_no_out() {
     let (mut cmd, home) = command("missing-orchestration");
@@ -157,11 +157,33 @@ fn a_missing_orchestration_file_fails_with_cofs_own_text_and_writes_no_out() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.is_empty(), "{stdout}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(stderr, "Error: Orchestration not found: no-such-doc.yml\n");
+    assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
     assert!(!out.exists());
+}
+
+/// The missing-document check runs before `-e` is ever parsed (PR #441
+/// review finding 5): a malformed `-e` alongside a missing document
+/// still exits 1 (the missing-document text), not 2 (the `-e` usage
+/// error) -- matching `cof`'s own order (`_resolve_orchestration`
+/// before `_parse_env_vars`).
+#[test]
+fn a_missing_orchestration_file_wins_over_a_malformed_e_value() {
+    let (mut cmd, home) = command("missing-orchestration-bad-e");
+    let config = home.config("{}");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            "no-such-doc.yml",
+            "-e",
+            "badtext",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
 }
 
 #[test]
