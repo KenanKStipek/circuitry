@@ -2,9 +2,12 @@
 //! the same document, recorded against both `cof` and `electricity`
 //! (`PARITY_CASES` in `oscilloscope/scripts/record_fixtures.py`,
 //! `--parity-only`), must produce the same osp `--log` lines once
-//! their own event streams are replayed through `Differ`/`RunModel`
-//! -- apart from timing (each effect's own duration, normalized away
-//! below before comparing).
+//! their own event streams *and* final state snapshot are replayed
+//! through `Differ`/`RunModel`, the same two sources `main.rs`'s own
+//! `observe_tick` polls each tick (events for every leaf's ▶/✓/✗, the
+//! snapshot for a container's own ◆ branch line and the final ■ run
+//! summary) -- apart from timing (each effect's own duration,
+//! normalized away below before comparing).
 //!
 //! Unlike `golden.rs`'s own `insta` snapshots, this file asserts the
 //! two engines' own outputs *against each other* directly: nothing
@@ -34,6 +37,27 @@ fn load_events(dir_name: &str) -> Vec<Value> {
         .collect()
 }
 
+/// *dir_name*'s own last recorded `snapshots.jsonl` line, unwrapped
+/// (`{"state": ...}`, same shape `golden.rs`'s own `load_fixture`
+/// reads) -- the one state `Differ::diff`/`Differ::finish` need
+/// alongside the pure event stream above: a named `if`'s own branch
+/// annotation (`◆ path → branch`) and the final `■ run ...` summary
+/// both come from a state snapshot, never from `--events` alone
+/// (`main.rs`'s own `observe_tick` polls both for exactly this
+/// reason), so a pure `diff_event` replay — this file's own original
+/// shape — can't ever catch two engines disagreeing on either one.
+fn load_final_snapshot(dir_name: &str) -> Value {
+    let dir = fixtures_dir().join(dir_name);
+    let text = std::fs::read_to_string(dir.join("snapshots.jsonl"))
+        .unwrap_or_else(|e| panic!("{dir_name}: couldn't read snapshots.jsonl: {e}"));
+    let last_line = text
+        .lines()
+        .rfind(|l| !l.is_empty())
+        .unwrap_or_else(|| panic!("{dir_name}: snapshots.jsonl has no lines"));
+    let wrapper: Value = serde_json::from_str(last_line).expect("valid JSON line");
+    wrapper["state"].clone()
+}
+
 /// Every log line `diff_event` produces for *dir_name*'s own recorded
 /// events, each with its own duration token normalized away (the one
 /// part of this text real elapsed time can touch) -- the no-plan
@@ -51,6 +75,16 @@ fn normalized_log_lines(dir_name: &str) -> Vec<String> {
         };
         model.observe_event(&event);
         lines.extend(differ.diff_event(&event, &plan, &model));
+    }
+    // The same two state-sourced calls `observe_tick` makes after
+    // draining events each tick (`main.rs`): every leaf path above is
+    // already `event_sourced` by now, so `diff` contributes only a
+    // container's own branch/progress line here, never a duplicate
+    // leaf one; `finish` contributes the final `■ run ...` summary.
+    let final_state = load_final_snapshot(dir_name);
+    lines.extend(differ.diff(&final_state, &plan));
+    if let Some(summary) = differ.finish(&final_state, None) {
+        lines.push(summary);
     }
     sort_log_lines(&mut lines);
     lines
@@ -108,8 +142,24 @@ macro_rules! parity_test {
     ($test_name:ident, $case:literal) => {
         #[test]
         fn $test_name() {
-            let cof_lines = normalized_log_lines(concat!($case, "_cof"));
-            let electricity_lines = normalized_log_lines(concat!($case, "_electricity"));
+            // Sorted, not compared in `sort_log_lines`'s own chronological
+            // order: once a container's own ◆ line joins the comparison
+            // (`normalized_log_lines`'s own final `diff`/`finish` calls),
+            // its relative position next to an adjacent leaf's ✓/✗ can
+            // tip either way under real, sub-millisecond timing jitter
+            // alone -- these fixtures' own `json`/`fail` effects complete
+            // fast enough that two engines' real, equally-valid timings
+            // land on either side of the same event-timestamp's own
+            // millisecond rounding (verified against the recorded
+            // fixtures directly: same content, tied order). A lexical
+            // sort keeps this assertion about *content* -- the same
+            // lines, the same annotations, the same summary -- without
+            // also asserting an ordering neither engine actually commits
+            // to at this granularity.
+            let mut cof_lines = normalized_log_lines(concat!($case, "_cof"));
+            let mut electricity_lines = normalized_log_lines(concat!($case, "_electricity"));
+            cof_lines.sort();
+            electricity_lines.sort();
             assert_eq!(
                 cof_lines, electricity_lines,
                 "cof and electricity produced different --log lines for {}",
