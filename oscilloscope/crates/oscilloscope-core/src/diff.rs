@@ -170,6 +170,19 @@ fn is_container_path(
     container_signal(path, plan, last, model).unwrap_or(false)
 }
 
+/// Whether any node strictly under `path` already carries its own
+/// `meta.error` (P2-6): the signal that a container's own failure is
+/// really just a descendant's failure bubbling up, which already got
+/// its own ✗ line, rather than something genuinely invisible
+/// otherwise (an `each` over a path that never resolved, a CEL error
+/// evaluating an `if`'s condition, neither of which ever starts a
+/// child at all).
+fn any_descendant_failed(path: &str, flat: &BTreeMap<String, NodeMeta>) -> bool {
+    let prefix = format!("{path}.");
+    flat.iter()
+        .any(|(other, node)| other.starts_with(&prefix) && node.error.is_some())
+}
+
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
     match plan
         .match_path(path)
@@ -282,6 +295,17 @@ impl Differ {
                 self.event_sourced.insert(path.clone());
                 self.open_event_paths.remove(path);
                 if is_container_path(path, plan, &self.last, model) {
+                    // P2-6: the container's own failure, when it has
+                    // one, still needs a line if nothing under it
+                    // already printed one -- the events path has the
+                    // exact same gap state's `diff` does.
+                    if !*ok && !any_descendant_failed(path, &self.last) {
+                        let message = error.as_deref().unwrap_or("");
+                        return vec![LogLine {
+                            ts: Some(ts.clone()),
+                            text: format!("✗ {path}  {}", truncate_chars(message, 120)),
+                        }];
+                    }
                     return Vec::new();
                 }
                 let text = if *ok {
@@ -453,6 +477,31 @@ impl Differ {
                                 text: format!("⟳ {path} pass {done}/{total}  ETA {eta}"),
                             });
                         }
+                    }
+
+                    // P2-6: a container's own failure (an each loop
+                    // over a path that doesn't resolve, a CEL error in
+                    // an if) is otherwise never logged at all --
+                    // containers get no check/cross mark of their own,
+                    // and under on_error: continue no child ever even
+                    // starts to print one in its place. Only a
+                    // container whose failure is really just a
+                    // child's failure bubbling up (the far more common
+                    // case) is left alone, since that child's own
+                    // cross-mark line already said so.
+                    if is_container
+                        && prev.is_running()
+                        && !node.is_running()
+                        && node.error.is_some()
+                        && !any_descendant_failed(path, &flat)
+                    {
+                        lines.push(LogLine {
+                            ts: node.completed_at.clone(),
+                            text: format!(
+                                "✗ {path}  {}",
+                                truncate_chars(node.error.as_deref().unwrap_or(""), 120)
+                            ),
+                        });
                     }
                 }
             }
@@ -690,6 +739,59 @@ mod tests {
             .find(|l| l.text.starts_with("✗ prime.flaky"))
             .expect("end line");
         assert!(end.text.contains("(on_error: skip)"), "{end:?}");
+    }
+
+    #[test]
+    fn a_containers_own_failure_with_no_failed_child_gets_a_cross_mark() {
+        // P2-6: an each loop over a path that never resolves fails
+        // the container itself without ever starting a single pass --
+        // no child ever gets its own ✗, so without this the failure
+        // is entirely invisible.
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "each": {"value": null, "meta": {"completed_at": null, "mode": "each"}}
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let failed = json!({"prime": {"value": false, "meta": {"completed_at": "t1", "error": "each: path.that.never.resolved"},
+            "each": {"value": null, "meta": {"completed_at": "t1", "mode": "each", "error": "path.that.never.resolved"}}
+        }});
+        let lines = differ.diff(&failed, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text.starts_with("✗ prime.each")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_containers_failure_from_a_failed_child_gets_no_extra_cross_mark() {
+        // The far more common case: the container's own error is just
+        // its child's failure bubbling up. That child's own ✗ line
+        // already said so -- the container doesn't need a second one.
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "guarded": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+                "g_fail": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+            }
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let failed = json!({"prime": {"value": false, "meta": {"completed_at": "t1", "error": "guarded.g_fail: boom"},
+            "guarded": {"value": null, "meta": {"completed_at": "t1", "flow": "chain", "error": "g_fail: boom"},
+                "g_fail": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom"}}
+            }
+        }});
+        let lines = differ.diff(&failed, &PlanTree::empty());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.text.starts_with("✗ prime.guarded.g_fail"))
+        );
+        assert!(
+            !lines.iter().any(|l| l.text.starts_with("✗ prime.guarded ")
+                || l.text.starts_with("✗ prime.guarded  ")),
+            "the container itself should get no extra cross mark: {lines:?}"
+        );
     }
 
     #[test]
