@@ -87,17 +87,25 @@ non-TTY stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 | `f` | follow the running row |
 | `e` | errors only |
 | `/` | filter |
-| `v` | show the full value |
-| `c` | cancel, with a confirm (the same as Ctrl-C) |
-| `q` | quit — asks first if a run is going; in `osp watch`, detaches at once |
+| `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
+| `c` | cancel, with a confirm (the same as a confirmed `q`) |
+| `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osp watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
+| Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osp watch` always just detaches |
 | `?` | help |
+
+The engine exiting does not, on its own, end the TUI: the header, every
+row's final status and the details pane stay live on whatever the run
+ended with until the user leaves with a confirmed `q`, a Ctrl-C cancel, or
+an external `INT`/`TERM`/`HUP` to osp itself (a `SIGHUP` never waits for a
+key — the terminal is gone by definition). Short of one of those three, a
+run that finishes on its own stays up for `q`/Ctrl-C to leave.
 
 A `TestBackend` capture (`insta`, `crates/oscilloscope/src/tui.rs`'s own
 golden tests) of a running tree loop, at 70×20:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│do-thing.yml  cof  running  5.0s  effects 3/3  ↑0 ↓0  ETA 3.0s      │
+│do-thing.yml  cof  running  5.0s  effects 3/6  ↑0 ↓0  ETA 3.0s      │
 └────────────────────────────────────────────────────────────────────┘
 ┌ plan ──────────────────────────────────┐┌ details ─────────────────┐
 │◐ prime                                 ││path   prime.fan          │
@@ -120,10 +128,10 @@ golden tests) of a running tree loop, at 70×20:
 
 Raw mode and the alternate screen are entered once and restored on every
 exit path — a normal end, osp's own error, a panic (a panic hook), and a
-forwarded `SIGINT`/`SIGTERM`/`SIGHUP` — the same `SIGKILL` exception as the
-supervision section below. Quitting while osp is running the engine cancels
-the run first (the confirmed `q`/`c` dialog): osp never leaves the engine
-running.
+forwarded `SIGINT`/`SIGTERM`/`SIGHUP`, forwarded to the engine as the same
+signal it was — the same `SIGKILL` exception as the supervision section
+below. Quitting while osp is running the engine cancels the run first (the
+confirmed `q`/`c` dialog, or Ctrl-C): osp never leaves the engine running.
 
 `oscilloscope/` is its own Cargo workspace, versioned in lockstep with the
 rest of this repository (`pyproject.toml`, `electricity/Cargo.toml`). It
