@@ -20,9 +20,9 @@ use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::execute;
-use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 #[cfg(not(test))]
-use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
+use crossterm::terminal::LeaveAlternateScreen;
+use crossterm::terminal::{EnterAlternateScreen, disable_raw_mode, enable_raw_mode};
 
 static ENTERED: AtomicBool = AtomicBool::new(false);
 
@@ -83,7 +83,17 @@ pub struct TerminalGuard;
 impl TerminalGuard {
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        // Finding 14: raw mode is already on at this point — if
+        // entering the alternate screen fails, it must come back off
+        // again before returning `Err`, or the caller's own fallback
+        // (a plain wait, or the plain supervise loop) runs with the
+        // terminal left half in raw mode and `ENTERED` still false
+        // (nothing would ever call `restore()` for a guard that was
+        // never actually constructed).
+        if let Err(err) = execute!(io::stdout(), EnterAlternateScreen) {
+            let _ = disable_raw_mode();
+            return Err(err);
+        }
         ENTERED.store(true, Ordering::SeqCst);
         install_panic_hook();
         Ok(TerminalGuard)

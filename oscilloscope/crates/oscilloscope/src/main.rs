@@ -242,6 +242,66 @@ fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
     }
 }
 
+/// `do_run`'s own plain supervise loop, shared with `run_tui`'s own
+/// TUI-unavailable fallback (review finding 14): forwards every
+/// signal osp receives to the engine's process group, escalates to
+/// `SIGKILL` 10s after a second one, drains its stderr and
+/// observations every tick, and returns once it has exited. Before
+/// this was shared, that fallback just blocked on `child.wait()` with
+/// no signal forwarding at all — a SIGINT/TERM/HUP to osp did nothing
+/// until the engine ended on its own.
+#[allow(clippy::too_many_arguments)]
+fn supervise_plain(
+    out: &mut impl Write,
+    clock: &mut Clock,
+    child: &mut SupervisedChild,
+    stderr_rx: &std::sync::mpsc::Receiver<String>,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+    signals: &mut Option<SignalWatcher>,
+) -> std::process::ExitStatus {
+    let mut signal_count: u32 = 0;
+    let mut kill_deadline: Option<Instant> = None;
+    loop {
+        if let Some(watcher) = signals.as_mut() {
+            for sig in watcher.pending() {
+                signal_count += 1;
+                child.forward(sig);
+                if signal_count == 1 {
+                    print_line(out, clock, None, "cancelling, finally running...");
+                } else if signal_count == 2 {
+                    kill_deadline = Some(Instant::now() + std::time::Duration::from_secs(10));
+                }
+            }
+        }
+        if let Some(deadline) = kill_deadline {
+            if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
+                print_line(
+                    out,
+                    clock,
+                    None,
+                    "engine still running 10s after the second signal; sending SIGKILL",
+                );
+                child.kill_group();
+                kill_deadline = None;
+            }
+        }
+
+        for line in stderr_rx.try_iter() {
+            print_line(out, clock, None, &format!("engine: {line}"));
+        }
+        drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
+
+        if let Ok(Some(status)) = child.try_wait() {
+            return status;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 fn do_run(args: RunArgs) -> ExitCode {
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
@@ -411,52 +471,18 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut differ = Differ::new();
     let mut model = RunModel::new();
 
-    let mut signal_count: u32 = 0;
-    let mut kill_deadline: Option<Instant> = None;
-
-    let exit_status = loop {
-        if let Some(watcher) = signals.as_mut() {
-            for sig in watcher.pending() {
-                signal_count += 1;
-                child.forward(sig);
-                if signal_count == 1 {
-                    print_line(&mut out, &mut clock, None, "cancelling, finally running...");
-                } else if signal_count == 2 {
-                    kill_deadline = Some(Instant::now() + std::time::Duration::from_secs(10));
-                }
-            }
-        }
-        if let Some(deadline) = kill_deadline {
-            if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
-                print_line(
-                    &mut out,
-                    &mut clock,
-                    None,
-                    "engine still running 10s after the second signal; sending SIGKILL",
-                );
-                child.kill_group();
-                kill_deadline = None;
-            }
-        }
-
-        for line in stderr_rx.try_iter() {
-            print_line(&mut out, &mut clock, None, &format!("engine: {line}"));
-        }
-        drain_observations(
-            &mut out,
-            &mut clock,
-            &mut live_poller,
-            &mut events_tailer,
-            &mut differ,
-            &mut model,
-            &plan,
-        );
-
-        if let Ok(Some(status)) = child.try_wait() {
-            break status;
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    };
+    let exit_status = supervise_plain(
+        &mut out,
+        &mut clock,
+        &mut child,
+        &stderr_rx,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+        &mut signals,
+    );
 
     // Join the tee threads before draining anything further (F6): the
     // engine already exited (`try_wait` above returned `Some`), so this
@@ -684,12 +710,25 @@ fn run_tui(
             // DESIGN.md's own TTY check (`effective_log_mode`) said
             // this should be a real terminal; if it still isn't one
             // underneath (an exotic CI pty, a stdout swapped out from
-            // under osp), fall back to a quiet wait rather than a
-            // broken half-raw-mode session.
-            eprintln!("osp: couldn't start the TUI ({err}); waiting for the engine to finish");
-            let exit_status = child.wait().expect("waiting on a freshly spawned child");
+            // under osp), fall back to the plain supervise loop
+            // (finding 14) rather than a broken half-raw-mode session
+            // — a bare `child.wait()` here left SIGINT/TERM/HUP to osp
+            // doing nothing at all until the engine ended on its own.
+            eprintln!("osp: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
+            let exit_status = supervise_plain(
+                &mut out,
+                &mut clock,
+                &mut child,
+                &stderr_rx,
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+                &mut signals,
+            );
             let code = finish_run(
                 &mut out,
                 &mut clock,
@@ -1067,6 +1106,82 @@ fn drain_observations(
     state
 }
 
+/// `do_watch`'s own plain stop-condition loop, shared with `run_tui_
+/// watch`'s own TUI-unavailable fallback (review finding 14): the
+/// same three ways a watched run ends (DESIGN.md §6.3, F4) — a
+/// completed live-state write, an events `run_end`, or the engine's
+/// own pid (from a `run_start` event) going away — plus a local
+/// signal (P2-7). Before this was shared, that fallback reported the
+/// run aborted at once, with no actual watching at all.
+#[allow(clippy::too_many_arguments)]
+fn supervise_plain_watch(
+    out: &mut impl Write,
+    clock: &mut Clock,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+    run_dir: &Path,
+    signals: &mut Option<SignalWatcher>,
+) -> (Option<serde_json::Value>, Option<ForwardSignal>) {
+    let mut last_state: Option<serde_json::Value> = None;
+    let mut warned_no_events = false;
+    let events_path = run_dir.join("events.jsonl");
+    let mut local_signal: Option<ForwardSignal> = None;
+    loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                local_signal = Some(sig);
+                break;
+            }
+        }
+        if let Some(state) =
+            drain_observations(out, clock, live_poller, events_tailer, differ, model, plan)
+        {
+            last_state = Some(state);
+        }
+        if last_state
+            .as_ref()
+            .is_some_and(oscilloscope_core::model::run_ended)
+        {
+            break;
+        }
+        if !warned_no_events
+            && last_state.is_some()
+            && model.run_start_pid().is_none()
+            && !model.run_ended_by_events()
+            && !events_path.exists()
+        {
+            eprintln!(
+                "osp: this run has no --events stream; an aborted run can't be \
+                 detected without one. Ctrl-C stops this watch."
+            );
+            warned_no_events = true;
+        }
+        if model.run_ended_by_events() {
+            // DESIGN.md §3's own ordering guarantee: the final
+            // live-state write already landed before `run_end` did, so
+            // one more poll picks it up for the exit-code check below
+            // even if this tick's `drain_observations` read the events
+            // file first.
+            if let Some(state) =
+                drain_observations(out, clock, live_poller, events_tailer, differ, model, plan)
+            {
+                last_state = Some(state);
+            }
+            break;
+        }
+        if let Some(pid) = model.run_start_pid() {
+            if !oscilloscope_core::supervise::process_alive(pid) {
+                break;
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    (last_state, local_signal)
+}
+
 fn do_watch(args: WatchArgs) -> ExitCode {
     let target = PathBuf::from(&args.target);
     // P2-4: a typo'd path used to be silently treated as a direct
@@ -1143,93 +1258,22 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let mut model = RunModel::new();
     let mut signals = SignalWatcher::new().ok();
 
-    // F4: `osp watch` owns no `Child` for a run it didn't start, so it
-    // cannot simply wait on it — and the one state-only stop condition
-    // this loop used to have, a completed live-state write, never
-    // happens for a run that aborts (a second signal, SIGKILL, a
-    // crash: DESIGN.md §1.1's "no final write and no --out"), which
-    // made watch loop forever. It now also stops on an events `run_end`
-    // (DESIGN.md §3: the final live-state write is already on disk by
-    // then) and, failing both, once the engine's own pid — from a
-    // `run_start` event, when the stream has one — is confirmed dead.
-    let mut last_state: Option<serde_json::Value> = None;
-    // N3: a run supervised by a bare `cof run --live-state ... --out
-    // ...` (no `--events`) never gives this loop a pid to check, and
-    // an aborted run (a second signal, SIGKILL, a crash) never writes
-    // a completed state either, so neither of this loop's other two
-    // stop conditions can ever fire for it. The orchestrator's own
-    // decision on this finding: no staleness timeout (a quiet run can
-    // legitimately stay quiet for a long time) — just tell the user,
-    // once, what watch is relying on instead: Ctrl-C.
-    let mut warned_no_events = false;
-    let events_path = run_dir.join("events.jsonl");
-    // P2-7: a local Ctrl-C is recorded rather than returned on the
-    // spot, so watch still reaches the same ending every other stop
-    // condition does — draining whatever's left, then the same
-    // summary and `exit` lines `osp`'s own run prints.
-    let mut local_signal: Option<ForwardSignal> = None;
-    loop {
-        if let Some(watcher) = signals.as_mut() {
-            if let Some(sig) = watcher.pending().into_iter().next() {
-                local_signal = Some(sig);
-                break;
-            }
-        }
-        if let Some(state) = drain_observations(
-            &mut out,
-            &mut clock,
-            &mut live_poller,
-            &mut events_tailer,
-            &mut differ,
-            &mut model,
-            &plan,
-        ) {
-            last_state = Some(state);
-        }
-        if last_state
-            .as_ref()
-            .is_some_and(oscilloscope_core::model::run_ended)
-        {
-            break;
-        }
-        if !warned_no_events
-            && last_state.is_some()
-            && model.run_start_pid().is_none()
-            && !model.run_ended_by_events()
-            && !events_path.exists()
-        {
-            eprintln!(
-                "osp: this run has no --events stream; an aborted run can't be \
-                 detected without one. Ctrl-C stops this watch."
-            );
-            warned_no_events = true;
-        }
-        if model.run_ended_by_events() {
-            // DESIGN.md §3's own ordering guarantee: the final
-            // live-state write already landed before `run_end` did, so
-            // one more poll picks it up for the exit-code check below
-            // even if this tick's `drain_observations` read the events
-            // file first.
-            if let Some(state) = drain_observations(
-                &mut out,
-                &mut clock,
-                &mut live_poller,
-                &mut events_tailer,
-                &mut differ,
-                &mut model,
-                &plan,
-            ) {
-                last_state = Some(state);
-            }
-            break;
-        }
-        if let Some(pid) = model.run_start_pid() {
-            if !oscilloscope_core::supervise::process_alive(pid) {
-                break;
-            }
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
+    // F4/N3: `osp watch` owns no `Child` for a run it didn't start,
+    // so `supervise_plain_watch` stops on a completed live-state
+    // write, an events `run_end`, the engine's own pid (from a
+    // `run_start` event) going away, or a local signal (P2-7) —
+    // whichever comes first.
+    let (mut last_state, local_signal) = supervise_plain_watch(
+        &mut out,
+        &mut clock,
+        &mut live_poller,
+        &mut events_tailer,
+        &mut differ,
+        &mut model,
+        &plan,
+        &run_dir,
+        &mut signals,
+    );
 
     let code = finish_watch(
         &mut out,
@@ -1289,9 +1333,23 @@ fn run_tui_watch(
     let (_guard, mut terminal) = match guard_and_terminal {
         Ok(pair) => pair,
         Err(err) => {
-            eprintln!("osp: couldn't start the TUI ({err}); falling back to waiting quietly");
+            // Finding 14: actually watches via the same stop-
+            // condition loop `do_watch` uses, rather than reporting
+            // the run aborted at once with no watching at all.
+            eprintln!("osp: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
+            let (mut last_state, local_signal) = supervise_plain_watch(
+                &mut out,
+                &mut clock,
+                &mut live_poller,
+                &mut events_tailer,
+                &mut differ,
+                &mut model,
+                &plan,
+                &run_dir,
+                &mut signals,
+            );
             let code = finish_watch(
                 &mut out,
                 &mut clock,
@@ -1302,7 +1360,7 @@ fn run_tui_watch(
                 &plan,
                 &run_dir,
                 &mut last_state,
-                None,
+                local_signal,
                 false,
             );
             let _ = writeln!(out, "exit {code}");
