@@ -41,9 +41,20 @@ impl Limiter {
     }
 
     /// Acquires a slot for *group* (`None` for the global-only limit) --
-    /// lane B's own implementation blocks (reporting `waiting_for` to the
-    /// [`crate::observer::RunObserver`] while it does) until a slot is
-    /// free, in both the named group's own semaphore and the global one.
+    /// lane B's own implementation blocks until a slot is free, in both
+    /// the named group's own semaphore and the global one.
+    ///
+    /// Python reports `waiting_for` by writing it straight into `meta`
+    /// on the store (`core/concurrency.py::RunConcurrencyLimiter`), not
+    /// through a callback -- [`crate::observer::RunObserver`] has no
+    /// `waiting_for` hook of its own, and this method takes none either.
+    /// Lane B's real implementation is expected to add an *additive*
+    /// `try_acquire` beside this method (never blocking; `Ok(Some(_))`/
+    /// `Ok(None)`/`Err`) so its own caller in `exec::dynamic`/`exec::
+    /// tool` can try first, write `waiting_for` into the store itself on
+    /// a miss, then fall back to this blocking `acquire` -- rather than
+    /// this method growing an observer parameter or a write-the-store
+    /// side effect of its own.
     ///
     /// Lane A stub: always `Err`.
     pub async fn acquire(&self, group: Option<&str>) -> Result<SlotGuard, LimiterError> {

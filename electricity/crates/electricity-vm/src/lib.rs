@@ -1,8 +1,17 @@
-//! electricity-vm: the M0-H VM (issue #431's Scope section) -- `store`
-//! (lane B), `exec::{dynamic, conditional}` (lane B) plus `exec::tool`
-//! (lane A, real), `limiter`/`cancel` (lane B), `observer` (lane A,
-//! real). [`execute_root`] is lane A's one remaining stub: the actual
-//! tree-walking interpreter loop lane B builds.
+//! electricity-vm: the M0-H VM (issue #431's Scope section) -- `store`,
+//! `exec::{mod,dynamic,conditional}` and `limiter` (lane B); `exec::
+//! tool::execute_tool` and `electricity-tools`'s `json` (lane C, params
+//! rendering/retries/redaction); `exec::tool::run_tool` and `cancel`
+//! (lane A, real, final). [`execute_root`] is lane A's one remaining
+//! stub: the actual tree-walking interpreter loop lane B builds.
+//!
+//! `execute_root` takes every argument by reference, so lane B's own
+//! tree branches can't each be a `tokio::task::spawn_local` (which
+//! needs `'static`, DESIGN.md §6.1-6.2's own phrasing notwithstanding)
+//! -- running them as a set of futures inside one `FuturesUnordered`,
+//! gated by [`Limiter`] for `max_concurrency`, polled from the same
+//! single `LocalSet` task, gets the same cooperative-concurrency
+//! behavior without the `'static` bound.
 //!
 //! See `electricity/docs/spec/vm-lanes.md` for which lane owns which
 //! file and function in this crate (and its sibling VM-lane crates).
