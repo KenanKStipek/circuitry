@@ -1,0 +1,19 @@
+name: tree-max-concurrency
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 2
+    effects:
+      - type: tool
+        name: a
+        provider: json
+        params: {mode: stringify, input: {x: 1}}
+      - type: tool
+        name: b
+        provider: json
+        params: {mode: stringify, input: {x: 2}}
+      - type: tool
+        name: c
+        provider: json
+        params: {mode: stringify, input: {x: 3}}

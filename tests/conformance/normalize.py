@@ -31,6 +31,7 @@ checkout path or OS temp directory is committed.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -271,8 +272,6 @@ def assert_out_serialization(raw_text: str, *, pretty: bool) -> None:
     assert it round-trips (C23, §3.4.1): plain is insertion-order, no
     indent; `--pretty` is alphabetically sorted, 2-space indent. Both always
     `ensure_ascii=True` and end with exactly one trailing newline."""
-    import json
-
     data = json.loads(raw_text)
     if pretty:
         expected_text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
@@ -283,4 +282,224 @@ def assert_out_serialization(raw_text: str, *, pretty: bool) -> None:
             f"--out{' --pretty' if pretty else ''} is not the expected serialization "
             f"(insertion order + no indent for plain; sorted keys + 2-space indent for "
             f"--pretty; both ensure_ascii) — see electricity/DESIGN.md §3.4.1"
+        )
+
+
+_EVENT_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+EVENT_TS_PLACEHOLDER = "<EVENT_TS>"
+EVENT_MS_PLACEHOLDER = "<MS>"
+EVENT_PID_PLACEHOLDER = "<PID>"
+EVENT_ENGINE_PLACEHOLDER = "<ENGINE>"
+
+#: `--events` fields normalized like any other volatile field (runtime-
+#: semantics §8.7, issue #431's events-conformance acceptance criterion):
+#: shape-checked, then replaced with a fixed placeholder. `run_id` reuses
+#: the same UUID check/placeholder `normalize()` uses for state's own
+#: `run_id`/`_run_id`.
+_EVENT_FIELD_RULES = ("ts", "ms", "run_id", "pid", "engine")
+
+
+def _normalize_event_field(key: str, value: Any) -> Any:
+    if key == "ts":
+        if not isinstance(value, str) or not _EVENT_TS_RE.match(value):
+            raise NormalizationError(f"event {key!r}: not a millisecond UTC timestamp: {value!r}")
+        return EVENT_TS_PLACEHOLDER
+    if key == "ms":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise NormalizationError(f"event {key!r}: expected a non-negative int, got {value!r}")
+        return EVENT_MS_PLACEHOLDER
+    if key == "run_id":
+        if not isinstance(value, str) or not _UUID_RE.match(value):
+            raise NormalizationError(f"event {key!r}: expected a UUID string, got {value!r}")
+        return UUID_PLACEHOLDER
+    if key == "pid":
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise NormalizationError(f"event {key!r}: expected a positive int, got {value!r}")
+        return EVENT_PID_PLACEHOLDER
+    if key == "engine":
+        if not isinstance(value, str) or not value:
+            raise NormalizationError(f"event {key!r}: expected a non-empty string, got {value!r}")
+        return EVENT_ENGINE_PLACEHOLDER
+    raise AssertionError(f"unreachable event field {key!r}")  # pragma: no cover
+
+
+def _comparable_event(event: dict[str, Any]) -> dict[str, Any]:
+    """One event line, ready to compare across engines: `ts`/`ms`/
+    `run_id`/`pid`/`engine` shape-checked and replaced with a fixed
+    placeholder (`_normalize_event_field`); `seq` and the per-instance
+    `id` dropped outright rather than normalized — both are assigned from
+    one counter in *dispatch* order, and a tree dynamic's branches are
+    free to start/finish in a different wall-clock order on the two
+    engines (cof's real OS threads vs. electricity's single-threaded
+    cooperative scheduler); comparing their absolute values would assert
+    an implementation detail neither engine commits to. Every other key
+    (`v`, `ev`, `path`, `ok`, `error`, `branches`, `concurrency`,
+    `orchestration`, `signal`) is compared as-is."""
+    comparable = {k: v for k, v in event.items() if k not in ("seq", "id")}
+    for key in _EVENT_FIELD_RULES:
+        if key in comparable:
+            comparable[key] = _normalize_event_field(key, comparable[key])
+    return comparable
+
+
+def parse_event_lines(text: str) -> list[dict[str, Any]]:
+    """One JSON object per non-empty line, in file order (`--events`'
+    JSONL format, runtime-semantics §8.7)."""
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _split_and_check_order(
+    events: list[dict[str, Any]], *, label: str
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Checks the structural ordering rule runtime-semantics §8.7
+    specifies (`run_start` first, `run_end` last, every container's own
+    `start` before any child's `start` and every child's `end` before its
+    container's `end`), then splits off the two bracket events. Applied to
+    *one* engine's own stream at a time — this is an internal-consistency
+    check on that stream, not a cross-engine comparison; `assert_events_equal`
+    calls it once per side precisely so a stream that is internally
+    consistent but differs from the other engine's is still caught by the
+    per-path comparison below, not mistaken for an ordering bug."""
+    if not events:
+        raise AssertionError(f"{label}: event stream is empty")
+    if events[0].get("ev") != "run_start":
+        raise AssertionError(f"{label}: event stream's first line is not run_start: {events[0]!r}")
+    if events[-1].get("ev") != "run_end":
+        raise AssertionError(f"{label}: event stream's last line is not run_end: {events[-1]!r}")
+
+    starts: dict[str, int] = {}
+    ends: dict[str, int] = {}
+    for i, event in enumerate(events):
+        path = event.get("path")
+        if path is None:
+            continue
+        if event.get("ev") == "start":
+            starts.setdefault(path, i)
+        elif event.get("ev") == "end":
+            ends[path] = i
+
+    for child_path, child_start in starts.items():
+        for parent_path, parent_start in starts.items():
+            if parent_path == child_path or not child_path.startswith(f"{parent_path}."):
+                continue
+            if not parent_start < child_start:
+                raise AssertionError(
+                    f"{label}: {parent_path!r}'s start does not precede its child "
+                    f"{child_path!r}'s start"
+                )
+            parent_end = ends.get(parent_path)
+            child_end = ends.get(child_path)
+            if parent_end is not None and child_end is not None and not child_end < parent_end:
+                raise AssertionError(
+                    f"{label}: {child_path!r}'s end does not precede its container "
+                    f"{parent_path!r}'s end"
+                )
+
+    return events[0], events[1:-1], events[-1]
+
+
+def _group_events_by_path(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Every event that carries a `path`, in stream order, grouped by that
+    path. A path's own events have a fixed internal order in M0-H --
+    `start`, then (a tree container only) `dispatch`, then `end` -- so
+    comparing each path's own list *as a list*, not a multiset, catches an
+    end-before-start or a dispatch-after-end on the same path, which a
+    `collections.Counter` comparison cannot: distinct `ev` values compare
+    equal as a set regardless of which order they came in."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        path = event.get("path")
+        if path is None:
+            continue
+        groups.setdefault(path, []).append(_comparable_event(event))
+    return groups
+
+
+def _chain_sibling_order(events: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """For every container path whose own stream carries no `dispatch`
+    event (a chain, never a tree -- `fire_concurrent_dispatch` only ever
+    fires for a tree-flow dynamic), the order its own *direct* children's
+    `start` events occurred in, keyed by the container's path. A chain's
+    children run strictly one after another, in document order, on both
+    engines -- unlike a tree dynamic's branches, which are free to
+    interleave with each other on either engine (cof's real OS threads vs.
+    electricity's single-threaded cooperative scheduler) and are
+    deliberately excluded here by the `dispatch`-event check."""
+    dispatch_paths = {
+        event["path"]
+        for event in events
+        if event.get("ev") == "dispatch" and event.get("path") is not None
+    }
+    order: dict[str, list[str]] = {}
+    for event in events:
+        if event.get("ev") != "start":
+            continue
+        path = event.get("path")
+        if path is None or "." not in path:
+            continue
+        parent = path.rsplit(".", 1)[0]
+        if parent in dispatch_paths:
+            continue
+        order.setdefault(parent, []).append(path)
+    return order
+
+
+def assert_events_equal(actual_text: str, expected_text: str) -> None:
+    """Compare two `--events` JSONL streams (runtime-semantics §8.7,
+    issue #431's events-conformance acceptance criterion): `run_start`
+    and `run_end` are compared directly after normalization; both streams
+    are independently checked against the start-before-child / child-end-
+    before-container ordering rule (`_split_and_check_order`); every other
+    event is grouped by its own `path` and compared *as an ordered list*
+    (`_group_events_by_path`) -- a path's own events have exactly one
+    valid order (`start`, optionally `dispatch`, then `end`), so this
+    catches a same-path reordering a multiset comparison would miss; and a
+    chain container's own direct children are compared for the order their
+    `start` events occurred in (`_chain_sibling_order`) -- a tree
+    dynamic's branches are excluded from that check and may interleave
+    freely with each other on either engine, since only the nesting order
+    between a container and its descendants (not sibling interleaving) is
+    asserted for one of those."""
+    actual = parse_event_lines(actual_text)
+    expected = parse_event_lines(expected_text)
+    actual_start, actual_middle, actual_end = _split_and_check_order(actual, label="actual")
+    expected_start, expected_middle, expected_end = _split_and_check_order(
+        expected, label="expected"
+    )
+
+    actual_start_c = _comparable_event(actual_start)
+    expected_start_c = _comparable_event(expected_start)
+    if actual_start_c != expected_start_c:
+        raise AssertionError(
+            f"run_start differs:\n  actual:   {actual_start_c!r}\n"
+            f"  expected: {expected_start_c!r}"
+        )
+    actual_end_c = _comparable_event(actual_end)
+    expected_end_c = _comparable_event(expected_end)
+    if actual_end_c != expected_end_c:
+        raise AssertionError(
+            f"run_end differs:\n  actual:   {actual_end_c!r}\n  expected: {expected_end_c!r}"
+        )
+
+    actual_groups = _group_events_by_path(actual_middle)
+    expected_groups = _group_events_by_path(expected_middle)
+    if set(actual_groups) != set(expected_groups):
+        raise AssertionError(
+            f"event paths differ:\n  actual:   {sorted(actual_groups)}\n"
+            f"  expected: {sorted(expected_groups)}"
+        )
+    for path in actual_groups:
+        if actual_groups[path] != expected_groups[path]:
+            raise AssertionError(
+                f"{path}: events differ:\n  actual:   {actual_groups[path]!r}\n"
+                f"  expected: {expected_groups[path]!r}"
+            )
+
+    actual_siblings = _chain_sibling_order(actual)
+    expected_siblings = _chain_sibling_order(expected)
+    if actual_siblings != expected_siblings:
+        raise AssertionError(
+            f"chain sibling start order differs:\n  actual:   {actual_siblings!r}\n"
+            f"  expected: {expected_siblings!r}"
         )

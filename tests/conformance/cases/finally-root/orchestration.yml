@@ -1,0 +1,11 @@
+name: finally-root
+effects:
+  - type: tool
+    name: body
+    provider: json
+    params: {mode: stringify, input: {step: "body"}}
+finally:
+  - type: tool
+    name: cleanup
+    provider: json
+    params: {mode: stringify, input: {step: "cleanup"}}

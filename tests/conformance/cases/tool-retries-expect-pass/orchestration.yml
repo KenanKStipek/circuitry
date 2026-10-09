@@ -1,0 +1,8 @@
+name: tool-retries-expect-pass
+effects:
+  - type: tool
+    name: always_passes
+    provider: json
+    retries: {max_attempts: 2, backoff_ms: 1}
+    expect: "true"
+    params: {mode: stringify, input: {x: 1}}

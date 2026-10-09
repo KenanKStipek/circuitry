@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §7.2",
+  "description": "A tool's `group: gpu` names a concurrency group `runtime.concurrency_groups` never defines -- a structural check (run-wiring step 14), later than a YAML/schema failure: `--out` therefore carries the full `effective_settings` the earlier c2/c3 failure cases never reach (electricity/docs/spec/runtime-semantics.md §7.2, core/compiler.py::unknown_concurrency_group_errors).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

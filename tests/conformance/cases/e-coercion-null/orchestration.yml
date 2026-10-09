@@ -1,0 +1,9 @@
+name: e-coercion-null
+interface:
+  inputs:
+    count: {type: number, default: 7}
+effects:
+  - type: tool
+    name: echo_count
+    provider: json
+    params: {mode: stringify, input: {from: input.count}}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §1.5-1.6",
+  "description": "`-e code=null` JSON-sniffs to Python None, but `interface.inputs.code.type: string` makes `_restore_raw_text_for_string_inputs` substitute the original unparsed text back in regardless of what it sniffed to -- `input.code` ends up the literal string `\"null\"`, not the absent-input default-filling path `e-coercion-null` (`type: number`) exercises (electricity/docs/spec/runtime-semantics.md §1.5-1.6).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "code=null"]
+}

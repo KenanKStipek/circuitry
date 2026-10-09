@@ -3,6 +3,5 @@
   "description": "`--out` and `--out --pretty` of the same document: plain is insertion order with no indent, --pretty is alphabetically sorted keys with 2-space indent; both ensure_ascii-escaped (electricity/docs/spec/runtime-semantics.md §10 C23, DESIGN.md §3.4.1, Q9). The document's input includes a non-ASCII string and a float in exponent form so `ensure_ascii`/float-repr layout are actually exercised, not just key order. Generated as two separate `cof run` invocations of the same document rather than literally one run writing both files (the CLI writes one --out path per invocation) — run id/timestamps differ between the two and are normalized away; every other byte is identical.",
   "engines": ["python", "electricity"],
   "expect": "success",
-  "also_pretty": true,
-  "known_divergence": "electricity's CLI has no --pretty flag yet (electricity/crates/electricity-cli's usage text); the electricity runner checks only the plain --out half of this case until it does."
+  "also_pretty": true
 }

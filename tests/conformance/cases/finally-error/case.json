@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §6.4",
+  "description": "A dynamic's body fails and its own `finally:` also fails: the original (body) error still propagates as the run's own error, and the finally's own failure is recorded separately on `meta.finally_error` -- never hiding or replacing the original (electricity/docs/spec/runtime-semantics.md §6.4, orchestration-reference.md '`dynamic`' `finally` row).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

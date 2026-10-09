@@ -1,0 +1,18 @@
+name: non-string-param-keys
+effects:
+  - type: tool
+    name: bool_key
+    provider: json
+    params:
+      mode: stringify
+      input:
+        yes: "affirmed"
+        other: 1
+  - type: tool
+    name: int_key
+    provider: json
+    params:
+      mode: stringify
+      input:
+        1: "one"
+        2: "two"

@@ -1,0 +1,9 @@
+name: e-coercion-string-numeric
+interface:
+  inputs:
+    code: {type: string}
+effects:
+  - type: tool
+    name: echo_code
+    provider: json
+    params: {mode: stringify, input: {from: input.code}}

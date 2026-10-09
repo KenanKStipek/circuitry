@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §6.1",
+  "description": "A dynamic's own `on_error: skip` and `on_error: continue` both swallow a failure anywhere inside it on itself (meta.error set) and let the enclosing chain continue to the next effect -- the same degradation for both (electricity/docs/spec/runtime-semantics.md §6.1 on_error matrix, orchestration-reference.md '`dynamic`' on_error row).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

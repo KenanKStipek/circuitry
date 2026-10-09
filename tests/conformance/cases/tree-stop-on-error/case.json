@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §5.5 (C19-like, dynamic instead of loop)",
+  "description": "A `flow: tree` dynamic with `stop_on_error: true` and `max_concurrency: 1`: branch 'a' fails first (the limiter serializes dispatch to index order, so this is deterministic, not a race), which cancels the still-queued 'b'/'c' before either ever starts. The final state's 'fan' node has only 'a' -- a cancelled child leaves no node at all (electricity/docs/spec/runtime-semantics.md §5.5, DESIGN.md §6.5).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

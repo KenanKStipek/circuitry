@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §4.4",
+  "description": "An if's own condition raises (a strict absent-path read); on_error: skip records a null result (result/branch null, no branch run); on_error: continue forces the else branch instead -- the two on_error values differ for an if's own condition failure, unlike a leaf tool or a dynamic's own on_error (electricity/docs/spec/runtime-semantics.md §4.4, core/conditional.py).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
