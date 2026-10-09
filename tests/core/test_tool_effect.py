@@ -343,8 +343,8 @@ def test_tool_runtime_meta_exit_code_is_the_process_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A process-backed plugin's exit_code lands verbatim on meta.exit_code —
-    the owner's orchestrations read state.prime.probe.meta.exit_code on
-    shell tools and that must keep working."""
+    documents read state.prime.<name>.meta.exit_code on shell tools, and
+    that must keep working."""
     fake_result = ToolResult(value="out", raw={}, exit_code=2)
     mock_plugin = MagicMock()
     mock_plugin.execute.return_value = fake_result

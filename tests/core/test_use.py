@@ -575,10 +575,10 @@ def test_use_inline_shell_tool_literal_allowed_commands_runs() -> None:
     ``uname`` is outside the shell plugin's default allowlist
     (``ls cat head tail wc echo pwd date``), so this only passes if the
     plan's literal ``allowed_commands`` is actually honoured — unlike
-    ``echo``, which the default list would run anyway. The plan is rendered
-    from ``prime.plan.value`` via Mustache, the same shape the film
-    reflector's generated plans use (``inline: "{{{prime.plan.value}}}"``),
-    not passed as a fixed string."""
+    ``echo``, which the default list would run anyway. The plan is
+    rendered from ``prime.plan.value`` via Mustache
+    (``inline: "{{{prime.plan.value}}}"``), the usual shape for a
+    generated plan, not passed as a fixed string."""
     plan_yaml = yaml.dump({
         "effects": [
             {
