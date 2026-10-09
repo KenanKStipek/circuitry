@@ -14,7 +14,7 @@ crate docs).
 Every case's config file is written into a fresh temporary directory;
 every text field is checked for -- and has -- that directory's own path
 replaced with the literal ``<root>`` before being written out, so the
-committed corpus carries no local path (``LANE-CONTRACT.md``).
+committed corpus carries no local path.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI, same as every other generator in this directory). Usage:
@@ -117,15 +117,30 @@ def resolve_config_case(
     root: Path,
     file_text: str | None,
     is_directory: bool = False,
+    path_through_file: bool = False,
+    invalid_utf8: bool = False,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One `resolve_config` case: *file_text* (`None` -> no file at all)
     written to a fresh `config.json` inside its own case directory (so
     one case's file can never collide with another's), then resolved
-    with *env* as the only `CIRCUITRY_*` variables set."""
+    with *env* as the only `CIRCUITRY_*` variables set. *path_through_file*
+    puts a plain file (not a directory) where `config.json`'s own parent
+    directory should be, so the path walk itself fails with ENOTDIR --
+    an `OSError` that is neither `FileNotFoundError` nor
+    `IsADirectoryError` (`read_config_bytes`'s generic `OSError` branch,
+    `cli/config.py:276`). *invalid_utf8* writes a byte sequence that is
+    not valid UTF-8 text."""
     case_dir = root / name
     case_dir.mkdir(parents=True)
-    if is_directory:
+    if path_through_file:
+        not_a_dir = case_dir / "not_a_directory"
+        not_a_dir.write_text("", encoding="utf-8")
+        path = not_a_dir / "config.json"
+    elif invalid_utf8:
+        path = case_dir / "config.json"
+        path.write_bytes(b'{"default_model": "\xff\xfe"}')
+    elif is_directory:
         path = case_dir / "config.json"
         path.mkdir()
     elif file_text is not None:
@@ -137,6 +152,8 @@ def resolve_config_case(
     input_ = {
         "file_text": file_text,
         "is_directory": is_directory,
+        "path_through_file": path_through_file,
+        "invalid_utf8": invalid_utf8,
         "env": env or {},
     }
     with _clean_env(env):
@@ -162,6 +179,7 @@ def effective_settings_case(
     *,
     config: dict[str, Any],
     orch: dict[str, Any],
+    document_name: str | None = None,
 ) -> dict[str, Any]:
     """One `resolve_effective_settings` case -- *config* is a raw dict
     turned into a `CircuitryConfig` directly (bypassing `resolve_config`:
@@ -169,21 +187,26 @@ def effective_settings_case(
     already-resolved config, same as `electricity_config::
     effective_settings`'s own signature takes one already-resolved).
     `trust_document=True` always -- electricity's own narrowing (every
-    document it runs is named by path, see that crate's doc comment)."""
+    document it runs is named by path, see that crate's doc comment).
+    *document_name* mirrors `cli/runtime_shim.py:527`'s own
+    `orchestration_path.name`, which labels the "Applied host settings"
+    notice."""
     cfg = CircuitryConfig.from_dict(config)
     try:
-        settings = resolve_effective_settings(cfg=cfg, orch=orch, trust_document=True)
+        settings = resolve_effective_settings(
+            cfg=cfg, orch=orch, trust_document=True, document_name=document_name
+        )
     except (ValueError, ComplexityConfigError) as exc:
         return {
             "name": name,
             "kind": "effective_settings",
-            "input": {"config": config, "orch": orch},
+            "input": {"config": config, "orch": orch, "document_name": document_name},
             "expect": {"ok": False, "error": str(exc)},
         }
     return {
         "name": name,
         "kind": "effective_settings",
-        "input": {"config": config, "orch": orch},
+        "input": {"config": config, "orch": orch, "document_name": document_name},
         "expect": {
             "ok": True,
             "model": settings.model,
@@ -274,7 +297,23 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
     )
     cases.append(resolve_config_case("missing_file", root=root, file_text=None))
     cases.append(resolve_config_case("config_path_is_a_directory", root=root, file_text=None, is_directory=True))
+    cases.append(
+        resolve_config_case(
+            "config_path_is_not_a_directory_nor_not_found",
+            root=root,
+            file_text=None,
+            path_through_file=True,
+        )
+    )
     cases.append(resolve_config_case("invalid_json_syntax", root=root, file_text="{\n  \"a\": ,\n}\n"))
+    cases.append(
+        resolve_config_case(
+            "config_file_is_not_valid_utf8",
+            root=root,
+            file_text=None,
+            invalid_utf8=True,
+        )
+    )
     for label, text in [
         ("non_object_root_array", "[1, 2, 3]"),
         ("non_object_root_string", '"hello"'),
@@ -328,6 +367,14 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             "applied_host_settings_notice_names_dotted_runtime_paths",
             config={},
             orch={"runtime": {"max_concurrency": 2}},
+        )
+    )
+    cases.append(
+        effective_settings_case(
+            "applied_host_settings_notice_names_the_document_when_given_one",
+            config={},
+            orch={"runtime": {"max_concurrency": 2}},
+            document_name="doc.yml",
         )
     )
     cases.append(
@@ -430,6 +477,110 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             runtime={"complexity": {"scoring": {"weights": {"bogus_signal": 1.0}}}},
         )
     )
+    cases.append(
+        complexity_case(
+            "complexity_block_must_be_an_object",
+            runtime={"complexity": "not-an-object"},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_enabled_explicit_null_is_rejected",
+            runtime={"complexity": {"scoring": {"enabled": None}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_weight_value_must_be_a_number",
+            runtime={"complexity": {"scoring": {"weights": {"prompt_size": "heavy"}}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_max_depth_must_be_a_whole_number",
+            runtime={"complexity": {"decomposition": {"max_depth": 2.5}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_max_chunks_must_be_n_or_greater",
+            runtime={"complexity": {"decomposition": {"max_chunks": 0}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_band_model_must_be_a_non_empty_string",
+            runtime={
+                "complexity": {
+                    "scoring": {"enabled": True},
+                    "routing": {"enabled": True, "bands": [{"model": "   "}]},
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_band_missing_model_is_rejected",
+            runtime={
+                "complexity": {
+                    "scoring": {"enabled": True},
+                    "routing": {"enabled": True, "bands": [{"max": 10}]},
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_bands_must_be_an_array",
+            runtime={
+                "complexity": {
+                    "scoring": {"enabled": True},
+                    "routing": {"enabled": True, "bands": {"model": "gpt-4"}},
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_bands_must_not_be_empty",
+            runtime={
+                "complexity": {
+                    "scoring": {"enabled": True},
+                    "routing": {"enabled": True, "bands": []},
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_bands_must_be_in_ascending_order",
+            runtime={
+                "complexity": {
+                    "scoring": {"enabled": True},
+                    "routing": {
+                        "enabled": True,
+                        "bands": [
+                            {"model": "a", "max": 10},
+                            {"model": "b", "max": 5},
+                            {"model": "c"},
+                        ],
+                    },
+                }
+            },
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_on_failure_must_be_a_valid_choice",
+            runtime={"complexity": {"decomposition": {"on_failure": "bogus"}}},
+        )
+    )
+    cases.append(
+        complexity_case(
+            "complexity_decomposition_without_scoring_is_a_prerequisite_error",
+            runtime={"complexity": {"decomposition": {"enabled": True}}},
+        )
+    )
 
     # --- build_persistence_backend: the alias lookup and per-backend validation ---
     cases.append(persistence_case("persistence_disabled_is_never_validated", runtime={"persistence": {"backend": "nonsense"}}))
@@ -467,6 +618,45 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
                     "backend": "sqlite",
                     "db_path": "a.db",
                     "table": "bad table!",
+                }
+            },
+        )
+    )
+    cases.append(
+        persistence_case(
+            "persistence_whitespace_only_table_is_rejected",
+            runtime={
+                "persistence": {
+                    "enabled": True,
+                    "backend": "sqlite",
+                    "db_path": "a.db",
+                    "table": "   ",
+                }
+            },
+        )
+    )
+    cases.append(
+        persistence_case(
+            "persistence_whitespace_only_database_is_rejected",
+            runtime={
+                "persistence": {
+                    "enabled": True,
+                    "backend": "mongodb",
+                    "uri": "mongodb://localhost",
+                    "database": "   ",
+                }
+            },
+        )
+    )
+    cases.append(
+        persistence_case(
+            "persistence_whitespace_only_collection_is_rejected",
+            runtime={
+                "persistence": {
+                    "enabled": True,
+                    "backend": "mongodb",
+                    "uri": "mongodb://localhost",
+                    "collection": "   ",
                 }
             },
         )

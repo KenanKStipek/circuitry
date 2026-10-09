@@ -83,17 +83,33 @@ fn run_resolve_config_case(case: &Dict, root: &Path) {
 
     let case_dir = root.join(&name);
     fs::create_dir_all(&case_dir).unwrap();
-    let config_path = case_dir.join("config.json");
 
     let is_directory = get(input, "is_directory")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let path_through_file = get(input, "path_through_file")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let invalid_utf8 = get(input, "invalid_utf8")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let file_text = get(input, "file_text").and_then(Value::as_str);
-    if is_directory {
-        fs::create_dir_all(&config_path).unwrap();
-    } else if let Some(text) = file_text {
-        fs::write(&config_path, text).unwrap();
-    }
+
+    let config_path = if path_through_file {
+        let not_a_dir = case_dir.join("not_a_directory");
+        fs::write(&not_a_dir, "").unwrap();
+        not_a_dir.join("config.json")
+    } else {
+        let config_path = case_dir.join("config.json");
+        if invalid_utf8 {
+            fs::write(&config_path, [b'{', b'"', 0xff, 0xfe, b'"', b'}']).unwrap();
+        } else if is_directory {
+            fs::create_dir_all(&config_path).unwrap();
+        } else if let Some(text) = file_text {
+            fs::write(&config_path, text).unwrap();
+        }
+        config_path
+    };
 
     let env = string_map(get(input, "env"));
 
@@ -196,8 +212,9 @@ fn run_effective_settings_case(case: &Dict) {
 
     let config = config_from_corpus(get(input, "config").unwrap());
     let orch = get(input, "orch").unwrap().clone();
+    let document_name = get(input, "document_name").and_then(Value::as_str);
 
-    let result = electricity_config::effective_settings(&config, &orch);
+    let result = electricity_config::effective_settings(&config, &orch, document_name);
     let expect_ok = get(expect, "ok").and_then(Value::as_bool).unwrap();
 
     match (result, expect_ok) {

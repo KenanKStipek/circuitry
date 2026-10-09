@@ -5,6 +5,8 @@
     "input": {
       "file_text": "{}",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -38,6 +40,8 @@
     "input": {
       "file_text": "{\"default_model\": \"gpt-4\", \"runtime\": {\"adapters\": {\"openai\": {\"base_url\": \"https://api.openai.com\"}}}}",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -74,6 +78,8 @@
     "input": {
       "file_text": "{\"default_model\": \"gpt-4\"}",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {
         "CIRCUITRY_MODEL": "llama3.3",
         "CIRCUITRY_ENABLED_TOOLS": "json, shell"
@@ -113,6 +119,8 @@
     "input": {
       "file_text": "{\"default_adapter\": \"openai\"}",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {
         "CIRCUITRY_ADAPTER_URL": "https://example.test"
       }
@@ -151,6 +159,8 @@
     "input": {
       "file_text": "{\"environment\": \"staging\"}",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -184,6 +194,8 @@
     "input": {
       "file_text": null,
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -197,6 +209,8 @@
     "input": {
       "file_text": null,
       "is_directory": true,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -205,11 +219,28 @@
     }
   },
   {
+    "name": "config_path_is_not_a_directory_nor_not_found",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": false,
+      "path_through_file": true,
+      "invalid_utf8": false,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file could not be read: <root>/config_path_is_not_a_directory_nor_not_found/not_a_directory/config.json (Not a directory)"
+    }
+  },
+  {
     "name": "invalid_json_syntax",
     "kind": "resolve_config",
     "input": {
       "file_text": "{\n  \"a\": ,\n}\n",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -218,11 +249,28 @@
     }
   },
   {
+    "name": "config_file_is_not_valid_utf8",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": null,
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": true,
+      "env": {}
+    },
+    "expect": {
+      "ok": false,
+      "error": "Config file is not valid UTF-8 text: <root>/config_file_is_not_valid_utf8/config.json"
+    }
+  },
+  {
     "name": "non_object_root_array",
     "kind": "resolve_config",
     "input": {
       "file_text": "[1, 2, 3]",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -236,6 +284,8 @@
     "input": {
       "file_text": "\"hello\"",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -249,6 +299,8 @@
     "input": {
       "file_text": "true",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -262,6 +314,8 @@
     "input": {
       "file_text": "5",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -275,6 +329,8 @@
     "input": {
       "file_text": "null",
       "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
       "env": {}
     },
     "expect": {
@@ -310,7 +366,8 @@
             }
           }
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -404,7 +461,8 @@
         "runtime": {
           "adapters": {}
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -488,7 +546,8 @@
         "default_model": "llama3.1:8b",
         "default_adapter": "ollama"
       },
-      "orch": {}
+      "orch": {},
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -566,7 +625,8 @@
       },
       "orch": {
         "model": "gpt-4"
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -640,7 +700,8 @@
         "runtime": {
           "max_concurrency": 2
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -710,6 +771,85 @@
     }
   },
   {
+    "name": "applied_host_settings_notice_names_the_document_when_given_one",
+    "kind": "effective_settings",
+    "input": {
+      "config": {},
+      "orch": {
+        "runtime": {
+          "max_concurrency": 2
+        }
+      },
+      "document_name": "doc.yml"
+    },
+    "expect": {
+      "ok": true,
+      "model": null,
+      "adapter": null,
+      "plugins": [],
+      "runtime": {
+        "max_concurrency": 2
+      },
+      "sources": [
+        [
+          "model",
+          "default"
+        ],
+        [
+          "adapter",
+          "default"
+        ],
+        [
+          "out",
+          "default"
+        ],
+        [
+          "plugins",
+          "default"
+        ],
+        [
+          "runtime",
+          "orchestration"
+        ],
+        [
+          "complexity",
+          "default"
+        ],
+        [
+          "complexity.scoring",
+          "default"
+        ],
+        [
+          "complexity.routing",
+          "default"
+        ],
+        [
+          "complexity.decomposition",
+          "default"
+        ],
+        [
+          "complexity.routing.bands",
+          "default"
+        ],
+        [
+          "complexity.decomposition.threshold",
+          "default"
+        ],
+        [
+          "complexity.decomposition.max_depth",
+          "default"
+        ],
+        [
+          "complexity.decomposition.on_failure",
+          "default"
+        ]
+      ],
+      "warnings": [
+        "Applied host settings from doc.yml: runtime.max_concurrency"
+      ]
+    }
+  },
+  {
     "name": "persistence_source_is_orchestration_when_the_document_configures_it",
     "kind": "effective_settings",
     "input": {
@@ -722,7 +862,8 @@
             "db_path": "a.db"
           }
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -808,7 +949,8 @@
         "plugins": [
           1
         ]
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": false,
@@ -828,7 +970,8 @@
             }
           }
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": false,
@@ -856,7 +999,8 @@
             }
           }
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -950,7 +1094,8 @@
             }
           }
         }
-      }
+      },
+      "document_name": null
     },
     "expect": {
       "ok": true,
@@ -1154,6 +1299,250 @@
     }
   },
   {
+    "name": "complexity_block_must_be_an_object",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": "not-an-object"
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity must be an object; found a string."
+    }
+  },
+  {
+    "name": "complexity_enabled_explicit_null_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": null
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.scoring.enabled must be true or false; found null."
+    }
+  },
+  {
+    "name": "complexity_weight_value_must_be_a_number",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "weights": {
+              "prompt_size": "heavy"
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.scoring.weights.prompt_size must be a number; found a string."
+    }
+  },
+  {
+    "name": "complexity_max_depth_must_be_a_whole_number",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "max_depth": 2.5
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.max_depth must be a whole number; found a number."
+    }
+  },
+  {
+    "name": "complexity_max_chunks_must_be_n_or_greater",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "max_chunks": 0
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.max_chunks must be 1 or greater; found 0."
+    }
+  },
+  {
+    "name": "complexity_band_model_must_be_a_non_empty_string",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "   "
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands[0].model must be a non-empty string; found a string."
+    }
+  },
+  {
+    "name": "complexity_band_missing_model_is_rejected",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "max": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands[0] is missing required field 'model'."
+    }
+  },
+  {
+    "name": "complexity_bands_must_be_an_array",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": {
+              "model": "gpt-4"
+            }
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must be an array of band objects; found an object."
+    }
+  },
+  {
+    "name": "complexity_bands_must_not_be_empty",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": []
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must not be empty — a band table needs at least a catch-all band (one with no 'max')."
+    }
+  },
+  {
+    "name": "complexity_bands_must_be_in_ascending_order",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "scoring": {
+            "enabled": true
+          },
+          "routing": {
+            "enabled": true,
+            "bands": [
+              {
+                "model": "a",
+                "max": 10
+              },
+              {
+                "model": "b",
+                "max": 5
+              },
+              {
+                "model": "c"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.routing.bands must be ordered by ascending 'max' with no overlap: runtime.complexity.routing.bands[1] has max 5, which is not greater than the preceding band's max 10."
+    }
+  },
+  {
+    "name": "complexity_on_failure_must_be_a_valid_choice",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "on_failure": "bogus"
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.on_failure must be one of route_up, fail; found 'bogus'."
+    }
+  },
+  {
+    "name": "complexity_decomposition_without_scoring_is_a_prerequisite_error",
+    "kind": "complexity",
+    "input": {
+      "runtime": {
+        "complexity": {
+          "decomposition": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity.decomposition.enabled is true but runtime.complexity.scoring.enabled is false. Decomposition consumes complexity scores, so it requires the scorer — set runtime.complexity.scoring.enabled to true or turn decomposition off."
+    }
+  },
+  {
     "name": "persistence_disabled_is_never_validated",
     "kind": "persistence",
     "input": {
@@ -1233,6 +1622,60 @@
     "expect": {
       "ok": false,
       "error": "runtime.persistence.table must match [A-Za-z_][A-Za-z0-9_]{0,62}"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_table_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "sqlite",
+          "db_path": "a.db",
+          "table": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.table must be a non-empty string"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_database_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "mongodb",
+          "uri": "mongodb://localhost",
+          "database": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.database must be a non-empty string"
+    }
+  },
+  {
+    "name": "persistence_whitespace_only_collection_is_rejected",
+    "kind": "persistence",
+    "input": {
+      "runtime": {
+        "persistence": {
+          "enabled": true,
+          "backend": "mongodb",
+          "uri": "mongodb://localhost",
+          "collection": "   "
+        }
+      }
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.persistence.collection must be a non-empty string"
     }
   },
   {
