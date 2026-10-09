@@ -48,6 +48,7 @@ pub use complexity::{
 pub use config::{CircuitryConfig, ConfigError, resolve_config};
 pub use effective_settings::{EffectiveSettings, effective_settings};
 pub use merge::merge_runtime;
+pub use persistence::persistence_enabled;
 
 use electricity_value::Value;
 

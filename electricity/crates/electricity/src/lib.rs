@@ -229,32 +229,17 @@ fn format_refusal(refusal: &Refusal) -> String {
     )
 }
 
-/// Python's own truthiness (`bool(value)`) on a `runtime.persistence.
-/// enabled`-shaped leaf -- just the two variants that ever matter for
-/// it (`True`/`False`, or absent): never pulled in from `electricity_
-/// config::util::is_truthy`, which is `pub(crate)` there (that crate's
-/// own "final" row in `vm-lanes.md"), so this stays a small, local
-/// duplicate rather than widening another lane's crate.
-fn is_truthy_bool(value: Option<&Value>) -> bool {
-    matches!(value, Some(Value::Bool(true)))
-}
-
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
-/// configures persistence -- `runtime.persistence.enabled` is `true`
-/// (`electricity_config::validate_persistence`, called inside `pre_
-/// state_checks`, has already rejected anything malformed by the time
-/// a caller ever reaches this; this only asks whether the now-valid
-/// block actually turns the backend on, Circuitry's own `build_
-/// persistence_backend`'s one truthy gate).
+/// configures persistence -- `runtime.persistence.enabled` is Python-
+/// truthy (`electricity_config::persistence_enabled`, PR #441 review
+/// finding 2: `1`/`"yes"` turn persistence on just as `true` does, not
+/// only a literal boolean). `electricity_config::validate_persistence`,
+/// called inside `pre_state_checks`, has already rejected anything
+/// malformed by the time a caller ever reaches this; this only asks
+/// whether the now-valid block actually turns the backend on,
+/// Circuitry's own `build_persistence_backend`'s one truthy gate.
 fn persistence_is_configured(runtime: Option<&Value>) -> bool {
-    let Some(persistence) = runtime
-        .and_then(Value::as_dict)
-        .and_then(|r| r.get(&Value::Str("persistence".to_string())))
-        .and_then(Value::as_dict)
-    else {
-        return false;
-    };
-    is_truthy_bool(persistence.get(&Value::Str("enabled".to_string())))
+    electricity_config::persistence_enabled(runtime)
 }
 
 /// The preview-marker refusal for a document/config that configures

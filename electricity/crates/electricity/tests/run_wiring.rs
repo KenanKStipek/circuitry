@@ -345,6 +345,29 @@ async fn a_configured_persistence_backend_is_refused_with_no_state_written() {
     assert!(error.contains("runtime.persistence"));
 }
 
+/// PR #441 review finding 2: `enabled: 1` (or any other Python-truthy
+/// non-`true` value) must refuse exactly like `enabled: true` -- a
+/// literal-`true`-only check would let this run and silently ignore
+/// the persistence block, where `cof run` would write snapshots.
+#[tokio::test]
+async fn a_persistence_block_enabled_with_a_truthy_non_boolean_is_still_refused() {
+    let dir = temp_dir("persistence-truthy-enabled");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "runtime:\n  persistence:\n    enabled: 1\n    backend: jsonl-file\n    path: runs.jsonl\neffects: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    let error = result.error.unwrap();
+    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains("runtime.persistence"));
+}
+
 /// A malformed persistence block still fails the ordinary way (the
 /// validation itself, not the refusal) -- `pre_state_checks` catches
 /// it before the refusal check this lane added ever runs.
