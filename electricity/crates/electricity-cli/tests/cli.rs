@@ -235,6 +235,47 @@ fn run_request_with_valid_e_inputs_reaches_the_preview_refusal() {
     );
 }
 
+/// `--out`/`--pretty`/`--events`/`--live-state` all parse (issue #431's
+/// gate lane, item 7) but none of them changes this release's own
+/// behavior yet: a run request with every one of them set still reaches
+/// the same preview refusal (exit 1, the preview marker on stderr, no
+/// file written to any of the four paths) that a plain `electricity
+/// <config> <doc>` does -- the conformance runner's "refusal keeps the
+/// preview marker" skip rule depends on this staying true until lane D
+/// wires the real output contract in.
+#[test]
+fn run_request_with_every_new_flag_still_reaches_the_preview_refusal() {
+    let (mut cmd, home) = command("run-new-flags");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            "config.json",
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--pretty",
+            "--events",
+            events.to_str().unwrap(),
+            "--live-state",
+            live_state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is a preview and cannot run orchestrations yet"),
+        "{stderr}"
+    );
+    assert!(!out.exists());
+    assert!(!events.exists());
+    assert!(!live_state.exists());
+}
+
 /// A malformed `-e` (no `=`) gets Circuitry's own exact
 /// `cli/app.py::_parse_env_vars` message and this preview's usage-error
 /// exit code.
