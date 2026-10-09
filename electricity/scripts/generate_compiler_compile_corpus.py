@@ -128,21 +128,19 @@ add({
     "entry": "doc.yml",
 })
 
-# This case's own `definition.params` can't, by itself, prove `1` (int)
-# and `'1'` (str) stayed distinct keys: both this golden JSON file and
-# the Rust-side projection stringify a param key the same way
-# (`electricity_json::stringify_key`) before putting it in a JSON
-# object, so two keys that stringify alike collapse to one -- keeping
-# only the last value -- on *both* sides, the same way `json.dumps`
-# itself collapses them when Circuitry's own corpus helper serializes
-# `_dump_definition`'s raw dict. A compiler that incorrectly
-# `py_str`-collapsed the two keys at compile time, before this corpus
-# ever stringifies anything, would still pass this comparison. The
-# actual regression test for that collapse is a Rust-only unit test
-# (`compile::params::tests::non_string_keys_are_kept_as_value_not_
-# stringified`), which inspects the compiled `IndexMap<Value, _>`
-# directly, before either side's JSON stringification throws the
-# distinction away.
+# An int key (`1`) alongside an unrelated string key (`'2'`) that
+# stringifies differently -- unlike an int key next to its own string
+# spelling (`1` and `'1'`, which `electricity_json::stringify_key`
+# always stringifies to the same `"1"` on both the golden JSON and the
+# Rust-side projection, collapsing to one entry on *both* sides alike
+# and so unable to tell a correct `Value`-keyed compiler from one that
+# `py_str`-collapsed the two keys at compile time), `1`/`'2'` keep
+# distinct stringified forms (`"1"`/`"2"`), so a `py_str`-collapsing
+# compiler that mishandled the int key (e.g. rendering it as a float's
+# `py_str`, or dropping it) still shows up as a `definition.params`
+# mismatch here. `compile::params::tests::non_string_keys_are_kept_as_
+# value_not_stringified` is the complementary Rust-only unit test for
+# the same-stringified-form collision this golden case can't exercise.
 add({
     "name": "tool_params_int_key",
     "files": {"doc.yml": (
@@ -152,7 +150,7 @@ add({
         "    provider: json\n"
         "    params:\n"
         "      1: one\n"
-        "      '1': also one but a different key\n"
+        "      '2': two\n"
         "      mode: parse\n"
     )},
     "entry": "doc.yml",

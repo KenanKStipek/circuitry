@@ -387,7 +387,7 @@
   {
     "name": "tool_params_int_key",
     "files": {
-      "doc.yml": "effects:\n  - type: tool\n    name: fetch\n    provider: json\n    params:\n      1: one\n      '1': also one but a different key\n      mode: parse\n"
+      "doc.yml": "effects:\n  - type: tool\n    name: fetch\n    provider: json\n    params:\n      1: one\n      '2': two\n      mode: parse\n"
     },
     "entry": "doc.yml",
     "options": {
@@ -410,7 +410,7 @@
           "provider": "json",
           "params": {
             "1": "one",
-            "1": "also one but a different key",
+            "2": "two",
             "mode": "parse"
           },
           "params_json": null,
@@ -438,7 +438,7 @@
       ]
     },
     "definition_error": null,
-    "digest": "03b92a48ea8524df431a199cbffa7084d901307d682958d6bb4a7fe7ae42f590",
+    "digest": "a2dd4581c282724472310c9ce56d2a1d5f9355916b48be72fa83840b52e8c0f4",
     "comparison": {
       "validate_errors": [],
       "run_error": null
