@@ -136,6 +136,130 @@ def test_use_exhausts_retries_and_fails(tmp_path, monkeypatch: pytest.MonkeyPatc
         UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
 
     assert store.state["run_child"]["meta"]["error"] is not None
+    assert store.state["run_child"]["meta"]["retries_used"] == 1
+
+
+def test_use_created_at_is_the_first_attempts_start_not_the_last(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#421: a retried use's created_at is the start of its first attempt,
+    not reset by a later attempt within the same pass -- unlike
+    retries_used, which does track the attempt that decided the outcome."""
+    from circuitry.core import use as use_mod
+
+    timestamps = iter(["T_outer", "T0", "T1"])
+    monkeypatch.setattr(use_mod, "_now_iso", lambda: next(timestamps))
+
+    counter_file = tmp_path / "attempts.txt"
+    child_path = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "bump",
+                    "provider": "shell",
+                    "params": {
+                        "command": "bash",
+                        "allowed_commands": ["bash"],
+                        "args": [
+                            "-c",
+                            (
+                                f'n=$(cat "{counter_file}" 2>/dev/null || echo 0); '
+                                f'n=$((n+1)); echo -n "$n" > "{counter_file}"; '
+                                f'if [ "$n" -lt 2 ]; then exit 1; fi; echo ok'
+                            ),
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+    _patch_sleep(monkeypatch, lambda s: None)
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(child_path),
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = Store({})
+    UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    meta = store.state["run_child"]["meta"]
+    assert meta["created_at"] == "T0"
+    assert meta["completed_at"] == "T1"
+    assert meta["retries_used"] == 1
+
+
+def test_use_exhausting_retries_still_records_created_at_and_retries_used(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#421: retries_used is set on a failed outcome too, not only on
+    success -- and created_at still names the first attempt's start."""
+    from circuitry.core import use as use_mod
+
+    timestamps = iter(["T_outer", "T0", "T1"])
+    monkeypatch.setattr(use_mod, "_now_iso", lambda: next(timestamps))
+
+    child_path = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "fail",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    _patch_sleep(monkeypatch, lambda s: None)
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(child_path),
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = Store({})
+    with pytest.raises(Exception, match="fail"):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    meta = store.state["run_child"]["meta"]
+    assert meta["created_at"] == "T0"
+    assert meta["completed_at"] == "T1"
+    assert meta["retries_used"] == 1
+
+
+def test_use_a_single_failed_attempt_leaves_retries_used_absent(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """absent, not 0, when the first attempt is also the last (#421) --
+    the same rule a tool's and a prompt's failure path follow."""
+    child_path = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "fail",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    _patch_sleep(monkeypatch, lambda s: None)
+
+    defn = UseDefinition(name="run_child", path=str(child_path))
+    store = Store({})
+    with pytest.raises(Exception, match="fail"):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    assert "retries_used" not in store.state["run_child"]["meta"]
 
 
 def test_use_missing_path_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

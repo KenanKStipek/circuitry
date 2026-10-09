@@ -63,7 +63,7 @@ Every node has the shape `{value, meta}`. Every `meta` has `created_at`, `comple
 
 These values were measured but were not what a reader would expect:
 
-- **Retry visibility differs between tools and prompts.** *(as measured against `cof` 0.1.0; fixed upstream by issue #421 in this repository — see Q9 — so a `cof` built after that lands no longer matches this row. electricity's own tool retry loop still matches it until issue #448 ports the same fix.)*
+- **Retry visibility differs between tools and prompts.** *(as measured against `cof` 0.1.0; fixed upstream by issue #421 in this repository — see Q9 — so a `cof` build or an electricity build after that lands no longer matches this row.)*
   - A retried tool resets `created_at` to the start of its *last* attempt, and on failure it carries **no `retries_used`**.
   - A retried prompt keeps the start of its *first* attempt. `retries_used: 2` appears only on success, and `fallback_attempts` lists only the final attempt.
 - **`on_error: skip` and `on_error: continue` give identical nodes** (`value: null` plus `error`). The plan is the only way to tell them apart.
@@ -92,7 +92,7 @@ These values were measured but were not what a reader would expect:
 | A running branch or pass in **tree** flow (dynamic or `each`) | **Never.** Branches run in isolated stores. A leaf appears only when it completes, and a nested container inside a branch (`prime.fan.inner`) appears only when the whole container completes. The loop node's `progress.done` is the only live sign. |
 | A running child of a `use` | **Never in-flight.** The `use` node shows `completed_at: null`, and its children appear afterwards. |
 | A queued branch (under `max_concurrency`) | No. Nothing tells a queued branch from a running one. |
-| A retry in progress | Tool: only indirectly, when `created_at` on a running node changes between snapshots. Prompt: no. *(as measured against `cof` 0.1.0 — issue #421 fixed `created_at` upstream in this repository so a tool's no longer moves either; see §2.1 rule 6.)* |
+| A retry in progress | Tool: yes, from state alone — `completed_at` going back to `null` (running again) with the same `created_at` as the attempt that just failed (§2.1 rule 6, §2.4). A leaf that *completes* again with the same `created_at` as an earlier failure, with no running sighting in between, gets the same `↻` retroactively alongside its own end line. Prompt: no. |
 | A prompt in flight | Only as a chain-flow node with `completed_at: null`, and `prompt_sent` is already set. Model, adapter and the rendered prompt are visible. Elapsed time is not. |
 | A branch cancelled by `stop_on_error`, or an effect after a failure | No node at all. Hooks do not fire for it either. |
 | An effect interrupted by SIGINT/SIGTERM | **It stays `completed_at: null`, `error: null` in the final state.** Its enclosing loop also stays `completed_at: null`. `prime.meta.error` is `"Interrupted (Ctrl-C/SIGINT)"` or `"Interrupted (SIGTERM)"`, and `finally` effects run and appear. |
@@ -175,7 +175,7 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
    - The completed count comes from `meta.progress.done`.
    - **With events:** the container's own `dispatch` event gives an exact bound instead of this estimate — `branches` is the true total (so progress reads "`done` of `branches`" instead of the plan's own, possibly data-dependent, count), and `concurrency`, when the stream has it, is the exact running ceiling in place of the `max_concurrency`/`cpu`-guess above.
 5. A running `use`: its plan children (from compiling a `path` child) follow rule 1. An `inline` child has no static plan, so its children are discovered from the observations.
-6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)**. A prompt retry cannot be detected from state. *(As measured against `cof` 0.1.0. Issue #421 fixed `created_at` upstream in this repository so a tool's own no longer moves between attempts either — a retry in progress cannot be detected from state alone for either kind any more. The mechanism below still applies as written, to whichever engine/version a future case actually moves `created_at` between attempts.)*
+6. A retry: a running tool node whose `created_at` moved forward is **retrying (attempt ≥ 2)** — kept for whichever engine/version still moves `created_at` between attempts, though neither cof nor electricity do since issue #421. The current rule: a tool node that was non-running with an error and is running again with the *same* `created_at`, or that completes again with the same `created_at` as an earlier failure, is **retrying** too (§2.4's table). A prompt retry cannot be detected from state either way.
 7. Run status (one function, shared by the TUI header, the plain `--log` summary and `osp watch`):
    - `runtime.last_run.completed_at` set means the run **ended**: **ok** if `prime.meta.error` is `null`, **cancelled** if it starts with `"Interrupted"` (a confirmed `q`, a Ctrl-C cancel, or a forwarded SIGINT/SIGTERM/SIGHUP always reach this branch, §4.1), otherwise **failed**.
    - The process exited with no ended state: **failed** only when the exit code is exactly 1 *and* there is a pre-execution failure reason (`cof`'s own stdout JSON, or a `run_end` event's error) -- the shape of a document invalid enough that nothing ever ran (§4.1). Otherwise **aborted** (a second signal, SIGKILL, a crash: no final write). `osp watch`, which owns no process of its own, reads `--events`' own `run_end.ok == false` in place of the exit code.
@@ -205,6 +205,8 @@ Two inputs feed these rules: the plan (§5), and a sequence of observations. An 
 | named `if` gets `meta.branch` | `◆ <path> → then` |
 | `meta.progress.done` changed | `⟳ <loop> pass d/total  ETA eta_s` |
 | a running node's `created_at` moved | `↻ <path> retry` |
+| a non-running, failed node restarts running with the same `created_at` | `↻ <path> retry` |
+| a complete node completes again with the same `created_at` | `↻ <path> retry` for the earlier failure, then its own `✓`/`✗` |
 | a complete unnamed-loop node's `created_at` moved | `▶`/`✓` lines for the new pass, numbered `#k` |
 | `last_run.completed_at` set | `■ run ok / failed: <prime.meta.error>  <totals>` |
 
@@ -605,7 +607,7 @@ questions. None of them are waiting on a decision.
 | Q6 | Where do run files go by default? | **A temp dir**, printed at the end. `--out-dir` keeps it. |
 | Q7 | How much prompt and reply text to show? | **None in the log** beyond a 60-character preview. Full text only in the details pane, on request. |
 | Q8 | Should `cof` make interrupted effects explicit in state (e.g. `meta.error: "cancelled"`) instead of leaving `completed_at: null`? | **Yes, upstream, both engines.** Today a reader cannot tell "cancelled" from "still running" without the run-level error. |
-| Q9 | Make tool retries record `retries_used` on failure, and settle on one `created_at` rule (first attempt or last) for tools and prompts? | **Yes, upstream.** Pick the first attempt for both, so durations include backoff. **Done for `cof` (issue #421); electricity's own tool retry loop still follows the old per-attempt rule until issue #448 ports the same fix.** |
+| Q9 | Make tool retries record `retries_used` on failure, and settle on one `created_at` rule (first attempt or last) for tools and prompts? | **Yes, upstream.** Pick the first attempt for both, so durations include backoff. **Done for `cof` and for electricity's own tool retry loop (issue #421).** |
 | Q10 | Windows? | **Not in v1:** process groups and signal forwarding are POSIX. |
 
 The probes, the runner and the raw measurements are not part of this issue. They were run once from a scratch directory and can be recreated from §1's description.

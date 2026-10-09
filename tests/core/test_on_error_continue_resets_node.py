@@ -50,7 +50,7 @@ class FlakyThenFailAdapter:
         )
 
 
-def _unnamed_each_loop_orch(*, on_error: str) -> dict:
+def _unnamed_each_loop_orch(*, on_error: str, max_attempts: int = 2) -> dict:
     return {
         "effects": [
             {
@@ -61,7 +61,7 @@ def _unnamed_each_loop_orch(*, on_error: str) -> dict:
                         "type": "prompt",
                         "name": "step",
                         "template": "{{item}}",
-                        "retries": {"max_attempts": 2, "backoff_ms": 0},
+                        "retries": {"max_attempts": max_attempts, "backoff_ms": 0},
                         "on_error": on_error,
                     }
                 ],
@@ -95,10 +95,13 @@ def test_prompt_continue_records_its_own_passs_retries_used_not_the_priors() -> 
     """#421: a reused node's own retries_used, on a pass that failed after
     using its own retry, must be that pass's own count — not stale from the
     prior pass, and not simply absent because the prior pass's value was
-    cleared (#260). Pass 0 succeeds after one retry (retries_used would
-    read 1 right after it); pass 1 then also retries once before
-    exhausting its own budget and failing — it must show its own 1, not a
-    leftover 1 from pass 0 read as though nothing had been cleared."""
+    cleared (#260). Pass 0 fails once, then succeeds on its second attempt
+    (retries_used would read 1 right after it); pass 1 fails on all three
+    of its own attempts, exhausting a 3-attempt budget with 2 retries spent
+    — a stale 1 left over from pass 0 would pass the weaker 'spends exactly
+    1 retry on both passes' version of this test just as well, so pass 1
+    must spend a *different* count to actually tell a fresh value from a
+    stale one."""
 
     @dataclass
     class FlakyBothPassesAdapter:
@@ -116,10 +119,10 @@ def test_prompt_continue_records_its_own_passs_retries_used_not_the_priors() -> 
             if self.calls == 2:
                 return GenerateResult(text="OK", raw={})
             # Pass 1: fails every attempt, retryable each time, exhausting
-            # its own 2-attempt budget (one retry spent).
+            # its own 3-attempt budget (two retries spent).
             raise AdapterCallError("permanent failure, pass 1", retry_info=_RETRYABLE)
 
-    orch = _unnamed_each_loop_orch(on_error="continue")
+    orch = _unnamed_each_loop_orch(on_error="continue", max_attempts=3)
     root = compile_orchestration(orch=orch, root_name="prime")
     state = {"input": {"items": ["a", "b"]}}
 
@@ -130,7 +133,7 @@ def test_prompt_continue_records_its_own_passs_retries_used_not_the_priors() -> 
     node = state["prime"]["step"]
     assert node["value"] is None
     assert node["meta"]["error"] is not None
-    assert node["meta"]["retries_used"] == 1
+    assert node["meta"]["retries_used"] == 2
 
 
 @dataclass

@@ -565,6 +565,19 @@ impl Differ {
                                     ),
                                 });
                                 lines.push(end_line_numbered(path, node, plan, *pass));
+                            } else if prev.completed_at != node.completed_at {
+                                // Same created_at, a different completion: the
+                                // previous sighting was a failed attempt that
+                                // got retried, not this pass's own end (#421 —
+                                // created_at no longer moves between a pass's
+                                // own attempts, so the earlier ✗ this crate
+                                // already printed for that sighting needs a
+                                // retroactive ↻ alongside this pass's real end).
+                                lines.push(LogLine {
+                                    ts: prev.completed_at.clone(),
+                                    text: format!("↻ {path} retry"),
+                                });
+                                lines.push(end_line(path, node, plan));
                             }
                         }
                     }
@@ -587,6 +600,21 @@ impl Differ {
                     {
                         lines.push(LogLine {
                             ts: node.created_at.clone(),
+                            text: format!("↻ {path} retry"),
+                        });
+                    }
+                    // The current rule (#421): created_at never moves between
+                    // a pass's own attempts, so a failed attempt that is about
+                    // to retry looks like completed_at going back to running
+                    // (null) with created_at unchanged, not a moved created_at.
+                    if !is_container
+                        && !prev.is_running()
+                        && prev.error.is_some()
+                        && node.is_running()
+                        && prev.created_at == node.created_at
+                    {
+                        lines.push(LogLine {
+                            ts: prev.completed_at.clone(),
                             text: format!("↻ {path} retry"),
                         });
                     }
@@ -1533,6 +1561,118 @@ mod tests {
             lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_leaf_that_restarts_with_the_same_created_at_gets_a_retry_line_before_running() {
+        // #421: created_at no longer moves between a pass's own
+        // attempts, so the transition back to running (completed_at
+        // null, created_at unchanged) after a failed attempt is now
+        // the only state-only signal that attempt is a retry, not a
+        // moved created_at (the test above, kept for whichever
+        // engine/version still moves it).
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let failed = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        let failed_lines = differ.diff(&failed, &PlanTree::empty());
+        assert!(
+            failed_lines
+                .iter()
+                .any(|l| l.text.starts_with("✗ prime.flaky")),
+            "{failed_lines:?}"
+        );
+
+        let retrying = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        let lines = differ.diff(&retrying, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
+            "{lines:?}"
+        );
+
+        let succeeded = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t2", "error": null, "provider": "shell"}}
+        }});
+        let final_lines = differ.diff(&succeeded, &PlanTree::empty());
+        assert!(
+            final_lines
+                .iter()
+                .any(|l| l.text.starts_with("✓ prime.flaky")),
+            "{final_lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_leaf_that_succeeds_with_the_same_created_at_as_an_earlier_failure_gets_a_retroactive_retry_line()
+     {
+        // No snapshot landed during the retried attempt itself -- the
+        // only two sightings are the first failure and the eventual
+        // success, both with the same created_at (#421). The ✗ this
+        // crate already printed for the failure stands; the success
+        // still needs its own ✓ plus a ↻ marking that failure as a
+        // retry rather than this pass's own end.
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let failed = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        differ.diff(&failed, &PlanTree::empty());
+
+        let succeeded = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t2", "error": null, "provider": "shell"}}
+        }});
+        let lines = differ.diff(&succeeded, &PlanTree::empty());
+        assert!(
+            lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.text.starts_with("✓ prime.flaky")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_leaf_already_failed_for_good_gets_no_duplicate_end_line_on_a_repeat_poll() {
+        // Exhausted retries: the same terminal failure polled twice in
+        // a row (completed_at unchanged) must not be mistaken for a
+        // hidden retry-then-end -- there was no hidden attempt, just a
+        // repeat snapshot of the same already-reported end.
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let failed = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        let first_fail_lines = differ.diff(&failed, &PlanTree::empty());
+        assert_eq!(
+            first_fail_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.flaky"))
+                .count(),
+            1,
+            "{first_fail_lines:?}"
+        );
+
+        let repeat_poll = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        let lines = differ.diff(&repeat_poll, &PlanTree::empty());
+        assert!(lines.is_empty(), "{lines:?}");
     }
 
     #[test]
