@@ -11,6 +11,41 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+/// A path's own text exactly as Python's `str(pathlib.PurePosixPath(...))`
+/// would render it (PR #441 review finding 15): every `.`-only
+/// segment and every doubled/trailing separator dropped, `..`
+/// segments kept literally (never resolved -- this is string
+/// normalization only, not `realpath`), collapsing to `.` for an
+/// empty relative path or `/` for an empty absolute one. `Path::
+/// display()` on a plain Rust `PathBuf` keeps a leading `./` or a
+/// doubled `//` verbatim; every field this crate's own `--out`/stdout
+/// renders from a path the CLI was given as-is -- never one this
+/// crate resolved itself -- goes through this first instead, so a
+/// user who wrote `./orchestration.yml` sees `orchestration.yml` in
+/// `runtime.last_run.orchestration_path`, `state_out` and
+/// `effective_settings.out`, exactly as a real `cof run` of the same
+/// argument would.
+pub fn python_path_str(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let absolute = text.starts_with('/');
+    let segments: Vec<&str> = text
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    if segments.is_empty() {
+        return if absolute {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    if absolute {
+        format!("/{}", segments.join("/"))
+    } else {
+        segments.join("/")
+    }
+}
+
 /// *state*'s saved-form JSON text, plus a trailing newline -- the exact
 /// bytes `--out`/`--live-state` write (`core/saved_state.py::
 /// dumps_saved_state`'s own `ensure_ascii=True` default, kept for a
@@ -96,7 +131,7 @@ pub fn failure_payload(error: &str, warnings: &[String], state_out: Option<&Path
     payload.insert(
         Value::Str("state_out".to_string()),
         match state_out {
-            Some(path) => Value::Str(path.display().to_string()),
+            Some(path) => Value::Str(python_path_str(path)),
             None => Value::None,
         },
     );
@@ -162,6 +197,31 @@ mod tests {
         assert_eq!(
             payload,
             "{\n  \"ok\": false,\n  \"error\": \"boom\",\n  \"warnings\": [],\n  \"state_out\": null\n}\n"
+        );
+    }
+
+    #[test]
+    fn failure_payload_normalizes_a_leading_dot_slash_in_state_out() {
+        // PR #441 review finding 15: `str(Path("./x"))` is `"x"` in
+        // Python; `Path::display()` on a plain Rust `PathBuf` would
+        // keep the `./` instead.
+        let payload = failure_payload("boom", &[], Some(Path::new("./out.json")));
+        assert!(payload.contains("\"state_out\": \"out.json\""), "{payload}");
+    }
+
+    #[test]
+    fn python_path_str_matches_pythons_own_normalization() {
+        assert_eq!(python_path_str(Path::new("./x")), "x");
+        assert_eq!(python_path_str(Path::new("a/./b")), "a/b");
+        assert_eq!(python_path_str(Path::new("a//b")), "a/b");
+        assert_eq!(python_path_str(Path::new("./a/../b")), "a/../b");
+        assert_eq!(python_path_str(Path::new(".")), ".");
+        assert_eq!(python_path_str(Path::new("a/")), "a");
+        assert_eq!(python_path_str(Path::new("/a/./b")), "/a/b");
+        assert_eq!(python_path_str(Path::new("")), ".");
+        assert_eq!(
+            python_path_str(Path::new("orchestration.yml")),
+            "orchestration.yml"
         );
     }
 }

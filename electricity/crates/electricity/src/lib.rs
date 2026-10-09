@@ -834,7 +834,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     store.set_leaf(
         &last_run_node,
         Value::Str("orchestration_path".to_string()),
-        Value::Str(req.orchestration_path.display().to_string()),
+        Value::Str(out::python_path_str(&req.orchestration_path)),
     );
     store.set_leaf(
         &last_run_node,
@@ -899,7 +899,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         Value::Str("out".to_string()),
         req.out_path
             .as_ref()
-            .map(|p| Value::Str(p.display().to_string()))
+            .map(|p| Value::Str(out::python_path_str(p)))
             .unwrap_or(Value::None),
     );
     effective_settings_dict.insert(

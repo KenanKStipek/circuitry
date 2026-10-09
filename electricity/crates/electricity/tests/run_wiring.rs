@@ -427,6 +427,54 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     assert!(lines.last().unwrap().contains("\"run_end\""));
 }
 
+/// PR #441 review finding 17's own "missing test": a token already
+/// cancelled *before* `execute_root` ever starts -- possible today
+/// against the real interpreter (lane B2 has landed), unlike when this
+/// finding was first written against the stub. The interrupt text,
+/// `RunResult::signal`, and `--events`' own `run_end.signal` all come
+/// from the same place (finding 13: keyed off `VmError::Cancelled`
+/// specifically).
+#[tokio::test]
+async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
+    let dir = temp_dir("pre-cancelled");
+    let config = write(&dir, "config.json", "{}");
+    // At least one real effect: an empty chain has nothing to dispatch
+    // at all, so there would be no per-effect cancellation check for
+    // an already-cancelled token to ever hit, and the run would
+    // succeed regardless.
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: json\n    params: {mode: stringify, input: {}}\n",
+    );
+    let events_path = dir.join("events.jsonl");
+    let req = RunRequest {
+        config_path: config,
+        orchestration_path: doc,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: None,
+        events_path: Some(events_path.clone()),
+    };
+
+    let token = CancellationToken::new();
+    assert!(token.request(2)); // SIGINT -- stable POSIX number, no libc dep needed here
+    let result = electricity::run_orchestration(&req, &token).await;
+
+    assert!(!result.ok);
+    assert_eq!(result.signal, Some(Signal::Sigint));
+    assert_eq!(
+        result.error.as_deref(),
+        Some(Signal::Sigint.interrupt_text())
+    );
+
+    let events_text = fs::read_to_string(&events_path).unwrap();
+    let run_end = events_text.lines().last().unwrap();
+    assert!(run_end.contains("\"run_end\""));
+    assert!(run_end.contains("\"SIGINT\""));
+}
+
 #[tokio::test]
 async fn signal_is_none_for_an_uncancelled_failure() {
     let dir = temp_dir("no-signal");
