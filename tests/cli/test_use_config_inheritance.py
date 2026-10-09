@@ -1,13 +1,13 @@
 """Repro for issue #199: does a `use:` child see the parent's resolved config?
 
-wheeld injects a runtime-only MCP server into the *user-level*
-``~/.config/circuitry/config.json`` (never the project file, which must stay
-credential-free). The hypothesis was that a composed child re-resolves its
-own config from disk/cwd rather than reusing the parent run's already-merged
-``CircuitryConfig``, so the user-level server would be invisible and every
-composed MCP call would fail with "Unknown MCP server" — silently swallowed
-by the child effect's own ``on_error: continue`` and indistinguishable from
-a legitimate "no".
+A host application can inject a runtime-only MCP server into the
+*user-level* ``~/.config/circuitry/config.json`` (never the project file,
+which must stay credential-free). The hypothesis was that a composed
+child re-resolves its own config from disk/cwd rather than reusing the
+parent run's already-merged ``CircuitryConfig``, so the user-level server
+would be invisible and every composed MCP call would fail with "Unknown
+MCP server" — silently swallowed by the child effect's own
+``on_error: continue`` and indistinguishable from a legitimate "no".
 
 No network involved: the injected server points at an address nothing
 listens on (``http://127.0.0.1:1``), which lets a real connection attempt
@@ -35,7 +35,7 @@ def _write(path: Path, content: str) -> Path:
 def _repro_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Project config with an empty MCP server map; global config injects one.
 
-    Mirrors wheeld's split: project-level ``circuitry.config.json`` must not
+    Mirrors that split: project-level ``circuitry.config.json`` must not
     carry credentials, so the real server only exists in the user-level file.
     """
     global_dir = tmp_path / "home" / ".config" / "circuitry"
