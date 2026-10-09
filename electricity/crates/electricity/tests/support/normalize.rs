@@ -25,12 +25,13 @@
 //!   against its own `cwd`; `run_orchestration` has no `cwd` of its
 //!   own to vary -- changing the test process's real one would race
 //!   every other parallel test in this binary) and
-//!   `effective_settings.out` (only ever set when a real `--out` CLI
-//!   flag was given, which a direct `run_orchestration` call never
-//!   threads through the same way stdout/`--out`-file writing does).
-//!   [`strip_invocation_shape_fields`] blanks exactly these three to a
-//!   shared sentinel on both sides before comparing, so a real content
-//!   difference elsewhere still fails loudly.
+//!   `effective_settings.out`/`effective_settings.sources.out` (only
+//!   ever set/`"cli"` when a real `--out` CLI flag was given, which a
+//!   direct `run_orchestration` call never threads through the same
+//!   way stdout/`--out`-file writing does). [`strip_invocation_shape_fields`]
+//!   blanks exactly these four to a shared sentinel on both sides
+//!   before comparing, so a real content difference elsewhere still
+//!   fails loudly.
 
 // This module is compiled fresh into each integration-test binary that
 // declares `mod support;` -- `#[allow(dead_code)]` throughout since not
@@ -258,6 +259,11 @@ pub fn strip_invocation_shape_fields(state: &Value) -> Value {
         {
             if effective.contains_key("out") {
                 effective.insert("out".to_string(), Value::String(SENTINEL.to_string()));
+            }
+            if let Some(sources) = effective.get_mut("sources").and_then(Value::as_object_mut) {
+                if sources.contains_key("out") {
+                    sources.insert("out".to_string(), Value::String(SENTINEL.to_string()));
+                }
             }
             if let Some(inner) = effective.get_mut("runtime").and_then(Value::as_object_mut) {
                 if inner.contains_key("_orchestration_dir") {
