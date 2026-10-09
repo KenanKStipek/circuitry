@@ -572,10 +572,34 @@ fn build_input_namespace(
             continue;
         };
         let key_str = key.py_str();
-        // A non-string `interface.inputs` key can never equal a
-        // (always-string) namespace key -- the same no-op Python's own
-        // `key not in inputs` dict-membership check produces for it.
+        // A non-string `interface.inputs` key (`1:`, `yes:`) can never
+        // equal a (always-string) namespace key, so Python's own `key
+        // not in inputs` dict-membership check is always true for it --
+        // the same "absent" path every string key takes below, except
+        // Python then writes the applied default back under the
+        // *literal* int/bool key (`inputs[key] = ...`), which this
+        // `IndexMap<String, _>` namespace has no slot for; only the
+        // required/default/type validation below is reproduced for it,
+        // never the write.
         let Value::Str(key_as_str) = key else {
+            let value = if let Some(default) = spec_dict.get(&Value::Str("default".to_string())) {
+                default.clone()
+            } else if is_truthy(spec_dict.get(&Value::Str("required".to_string()))) {
+                return Err(format!(
+                    "missing required input '{key_str}' declared in orchestration interface."
+                ));
+            } else {
+                continue;
+            };
+            let declared_type = match spec_dict.get(&Value::Str("type".to_string())) {
+                Some(Value::Str(s))
+                    if crate::structural::INTERFACE_TYPE_NAMES.contains(&s.as_str()) =>
+                {
+                    s.clone()
+                }
+                _ => continue,
+            };
+            declared_type_outcome(&value, &key_str, &declared_type)?;
             continue;
         };
         let current = namespace.get(key_as_str).cloned();
@@ -604,44 +628,61 @@ fn build_input_namespace(
             .get(key_as_str)
             .cloned()
             .expect("present: either matched above or just inserted");
-        if crate::structural::matches_type(&value, &declared_type) {
-            continue;
+        if let Some(coerced) = declared_type_outcome(&value, &key_str, &declared_type)? {
+            namespace.insert(key_as_str.clone(), coerced);
         }
-        if declared_type == "string"
-            && matches!(value, Value::Int(_) | Value::Float(_) | Value::Bool(_))
-        {
-            let json_text = electricity_json::dumps(&value, electricity_json::WriteMode::COMPACT)
-                .unwrap_or_else(|_| value.py_str());
-            namespace.insert(key_as_str.clone(), Value::Str(json_text));
-            continue;
-        }
-        if let Value::Str(raw) = &value {
-            match coerce_interface_value(raw, &declared_type) {
-                Ok(coerced) => {
-                    if crate::structural::matches_type(&coerced, &declared_type) {
-                        namespace.insert(key_as_str.clone(), coerced);
-                        continue;
-                    }
-                    return Err(format!(
-                        "input '{key_str}' declared type '{declared_type}' but got {}.",
-                        crate::structural::py_class_name(&coerced)
-                    ));
-                }
-                Err(message) => {
-                    return Err(format!(
-                        "input '{key_str}' declared type '{declared_type}' but {} could not be \
-                         converted: {message}",
-                        python_repr_str(raw)
-                    ));
-                }
-            }
-        }
-        return Err(format!(
-            "input '{key_str}' declared type '{declared_type}' but got {}.",
-            crate::structural::py_class_name(&value)
-        ));
     }
     Ok(namespace)
+}
+
+/// Checks *value* (an existing namespace entry, or a just-applied
+/// `default:` that Python falls through to this same check rather than
+/// trusting outright) against *declared_type*, matching `core/
+/// interface_inputs.py::check_interface_inputs`'s own type-check/coerce
+/// tail exactly. `Ok(None)` if *value* already matches; `Ok(Some(_))`
+/// the replacement value a caller with somewhere to store it should
+/// write back (a `string`-typed input that arrived as a number/bool, or
+/// a string value [`coerce_interface_value`] converts); `Err` the first
+/// mismatch, unconvertible value, exactly as Python's own `raise` would
+/// word it.
+fn declared_type_outcome(
+    value: &Value,
+    key_str: &str,
+    declared_type: &str,
+) -> Result<Option<Value>, String> {
+    if crate::structural::matches_type(value, declared_type) {
+        return Ok(None);
+    }
+    if declared_type == "string"
+        && matches!(value, Value::Int(_) | Value::Float(_) | Value::Bool(_))
+    {
+        let json_text = electricity_json::dumps(value, electricity_json::WriteMode::COMPACT)
+            .unwrap_or_else(|_| value.py_str());
+        return Ok(Some(Value::Str(json_text)));
+    }
+    if let Value::Str(raw) = value {
+        return match coerce_interface_value(raw, declared_type) {
+            Ok(coerced) => {
+                if crate::structural::matches_type(&coerced, declared_type) {
+                    Ok(Some(coerced))
+                } else {
+                    Err(format!(
+                        "input '{key_str}' declared type '{declared_type}' but got {}.",
+                        crate::structural::py_class_name(&coerced)
+                    ))
+                }
+            }
+            Err(message) => Err(format!(
+                "input '{key_str}' declared type '{declared_type}' but {} could not be \
+                 converted: {message}",
+                python_repr_str(raw)
+            )),
+        };
+    }
+    Err(format!(
+        "input '{key_str}' declared type '{declared_type}' but got {}.",
+        crate::structural::py_class_name(value)
+    ))
 }
 
 /// Matches `runtime_shim.validate(path, config=None, skip_preflight=...,
@@ -758,44 +799,6 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
     }
 }
 
-/// The exact error text a `cof run` of *path* reports, matching
-/// `runtime_shim.run(RunRequest(..., validate_only=True,
-/// skip_preflight=..., trust_document=...))`.
-///
-/// **Known divergence** (crate docs' own "Known divergences" list has the
-/// full rationale): `run()` also raises, before any of the checks below,
-/// from `resolve_complexity_settings`'s validation of a malformed
-/// `runtime.complexity` block (inside `resolve_effective_settings`, before
-/// the concurrency limiter) and, between the concurrency limiter and
-/// `check_interface_inputs`, from `build_persistence_backend`'s validation
-/// of a malformed `runtime.persistence` block. Neither is ported here --
-/// complexity routing/decomposition and persistence backends have no IR
-/// representation in this crate at all -- so a document whose only fault
-/// is one of those two blocks passes this function where `cof run` would
-/// fail.
-///
-/// Order: [`load_document`]; [`concurrency_config_errors`] against the
-/// merged runtime config -- confirmed directly against
-/// `cli/runtime_shim.py::run`: `RunConcurrencyLimiter.from_runtime_config`
-/// runs *before* the document's structural checks even start, raising
-/// its own `"Invalid runtime concurrency configuration:\n  - ..."`
-/// message the instant the config itself is malformed, regardless of
-/// whether the document would otherwise be structurally valid; then
-/// [`structural_errors`] (as [`RunCheckError::Structural`]); then
-/// [`compile_document`] (lane C, as [`RunCheckError::Compile`] --
-/// already in final display form, including a composition-error
-/// message's own `"Prompt composition errors:\n  - ..."` prefix, which
-/// `compile_orchestration` bakes in itself); then
-/// [`groups::unknown_group_errors`] (lane C, as
-/// [`RunCheckError::Structural`], matching `run()`'s own
-/// `"Orchestration validation failed:"`-prefixed `raise`) against the
-/// same merged config's group names; then [`cycles::detect_cycles`]
-/// (lane C, as [`RunCheckError::Cycle`]). `Program.document`
-/// ([`electricity_bytecode::DocumentInfo`]) is filled in here, not by
-/// `compile_document` itself -- this function has *path*'s raw bytes
-/// (via [`digest::document_content_digest`]), which `compile_document`
-/// never sees; a digest failure (lane D is still a stub) is tolerated
-/// rather than failing the check (issue #408's lane B section).
 /// A loaded, not-yet-checked document -- [`prepare_document`]'s own
 /// result, and [`pre_state_checks`]/[`post_state_checks`]'s shared input.
 /// Bundles [`document_origin`]'s result (infallible, and depending only
@@ -854,10 +857,15 @@ pub fn prepare_document(path: &Path, options: &CheckOptions) -> Result<Loaded, R
 /// block`] as the thing that produces it.
 ///
 /// Order, exactly `check_for_run`'s own: [`effective_settings_shape_error`];
-/// [`concurrency_config_errors`]; [`electricity_config::
-/// validate_complexity_and_persistence`] (lane D's own hook -- a no-op
-/// today, [`electricity_config`]'s own crate docs have the resulting,
-/// already-documented divergence); [`build_input_namespace`].
+/// [`electricity_config::validate_complexity`] (lane D's own hook -- a
+/// no-op today, [`electricity_config`]'s own crate docs have the
+/// resulting, already-documented divergence), matching `resolve_
+/// complexity_settings`'s own position *inside* `resolve_effective_
+/// settings`, which `cli/runtime_shim.py::run` calls before building the
+/// concurrency limiter; [`concurrency_config_errors`]; [`electricity_
+/// config::validate_persistence`] (lane D's own hook, same no-op today),
+/// matching `build_persistence_backend`'s own position *after* the
+/// limiter; [`build_input_namespace`].
 pub fn pre_state_checks(
     loaded: &Loaded,
     options: &CheckOptions,
@@ -866,6 +874,9 @@ pub fn pre_state_checks(
     if let Some(message) = effective_settings_shape_error(&loaded.document) {
         return Err(RunCheckError::Compile(message));
     }
+
+    electricity_config::validate_complexity(&loaded.document, effective_runtime)
+        .map_err(|err| RunCheckError::Compile(err.0))?;
 
     let config_errors = concurrency_config_errors(effective_runtime);
     if !config_errors.is_empty() {
@@ -876,7 +887,7 @@ pub fn pre_state_checks(
         )));
     }
 
-    electricity_config::validate_complexity_and_persistence(&loaded.document, effective_runtime)
+    electricity_config::validate_persistence(&loaded.document, effective_runtime)
         .map_err(|err| RunCheckError::Compile(err.0))?;
 
     build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)

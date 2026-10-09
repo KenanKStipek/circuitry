@@ -18,16 +18,18 @@
 //! - [`effective_settings`]: `resolve_effective_settings` -- model/
 //!   adapter/out/plugins/runtime and `sources` (`_record_complexity_
 //!   sources` included).
-//! - [`validate_complexity_and_persistence`][]: `resolve_complexity_
-//!   settings` (`cli/complexity_config.py`) and `build_persistence_
-//!   backend` (`core/store/persistence.py`)'s own validation --
-//!   `electricity-compiler`'s `pipeline::pre_state_checks` calls this as
-//!   its own documented hook (run-wiring steps 6/9, issue #431's Scope
-//!   section); a lane A stub always succeeds, which is exactly
-//!   `electricity-compiler`'s own already-documented "Known divergences"
-//!   gap (a malformed `runtime.complexity`/`runtime.persistence` block
-//!   passes `check_for_run` here where `cof run` would fail) --
-//!   unchanged by this crate's existence until lane D fills it in.
+//! - [`validate_complexity`]/[`validate_persistence`]: `resolve_
+//!   complexity_settings` (`cli/complexity_config.py`) and `build_
+//!   persistence_backend` (`core/store/persistence.py`)'s own
+//!   validation, in their own Circuitry positions -- `electricity-
+//!   compiler`'s `pipeline::pre_state_checks` calls the first before its
+//!   own concurrency-configuration check and the second after it (run-
+//!   wiring steps 6 and 9, issue #431's Scope section); a lane A stub
+//!   always succeeds, which is exactly `electricity-compiler`'s own
+//!   already-documented "Known divergences" gap (a malformed `runtime.
+//!   complexity`/`runtime.persistence` block passes `check_for_run` here
+//!   where `cof run` would fail) -- unchanged by this crate's existence
+//!   until lane D fills both in.
 
 use electricity_value::Value;
 use std::collections::HashMap;
@@ -49,7 +51,7 @@ pub struct CircuitryConfig {
 
 /// `resolve_config`'s own error text (`cli/config.py::ConfigError`) --
 /// a missing, unreadable, or unparseable config file. Also
-/// [`validate_complexity_and_persistence`]'s own error shape (a
+/// [`validate_complexity`]/[`validate_persistence`]'s own error shape (a
 /// malformed `runtime.complexity`/`runtime.persistence` block raises the
 /// same way a bad config file does: a run-ending, un-wrapped message).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,23 +152,44 @@ pub fn effective_settings(config: &CircuitryConfig, document: &Value) -> Effecti
     EffectiveSettings::default()
 }
 
-/// Lane D's own hook (issue #431's run-wiring steps 6/9): validates a
-/// document/config's `runtime.complexity` (`cli/complexity_config.py::
-/// resolve_complexity_settings`) and `runtime.persistence`
-/// (`core/store/persistence.py::build_persistence_backend`) blocks,
-/// raising Circuitry's own text for a malformed one -- called from
-/// `electricity_compiler::pipeline::pre_state_checks`, between the
-/// concurrency-configuration check and `check_interface_inputs`, the same
-/// position `cof run` validates both in (steps 6 and 9 of issue #431's
-/// run-wiring table).
+/// Lane D's own hook (issue #431's run-wiring step 6): validates a
+/// document/config's `runtime.complexity` block
+/// (`cli/complexity_config.py::resolve_complexity_settings`), raising
+/// Circuitry's own text for a malformed one -- called from
+/// `electricity_compiler::pipeline::pre_state_checks` *before* the
+/// concurrency-configuration check, the same position `resolve_
+/// complexity_settings` runs in inside `resolve_effective_settings`,
+/// itself called before `RunConcurrencyLimiter.from_runtime_config`
+/// (`cli/runtime_shim.py::run`, ~:519 into ~:539).
 ///
 /// Lane A stub: always `Ok(())` -- `electricity-compiler`'s own already-
-/// documented divergence (a malformed `runtime.complexity`/`runtime.
-/// persistence` block passes `check_for_run` where `cof run` would fail)
-/// stays exactly as it is today; this function only gives lane D a single
-/// place to remove that gap from, instead of two new checks threaded
-/// into `electricity-compiler` itself.
-pub fn validate_complexity_and_persistence(
+/// documented divergence (a malformed `runtime.complexity` block passes
+/// `check_for_run` where `cof run` would fail) stays exactly as it is
+/// today; this function only gives lane D a single place to remove that
+/// gap from, instead of a new check threaded into `electricity-compiler`
+/// itself.
+pub fn validate_complexity(
+    document: &Value,
+    effective_runtime: Option<&Value>,
+) -> Result<(), ConfigError> {
+    let _ = (document, effective_runtime);
+    Ok(())
+}
+
+/// Lane D's own hook (issue #431's run-wiring step 9): validates a
+/// document/config's `runtime.persistence` block
+/// (`core/store/persistence.py::build_persistence_backend`), raising
+/// Circuitry's own text for a malformed one -- called from
+/// `electricity_compiler::pipeline::pre_state_checks` *after* the
+/// concurrency-configuration check and before `check_interface_inputs`'s
+/// own namespace build, the same position `build_persistence_backend`
+/// runs in (`cli/runtime_shim.py::run`, ~:595, after the limiter at
+/// ~:539 and before ~:640).
+///
+/// Lane A stub: always `Ok(())`, for the same reason [`validate_
+/// complexity`] is -- `runtime.persistence` has no IR representation in
+/// this crate either.
+pub fn validate_persistence(
     document: &Value,
     effective_runtime: Option<&Value>,
 ) -> Result<(), ConfigError> {
@@ -214,12 +237,22 @@ mod tests {
     }
 
     #[test]
-    fn validate_complexity_and_persistence_is_a_no_op_for_now() {
+    fn validate_complexity_is_a_no_op_for_now() {
         let mut document = Dict::new();
         document.insert(
             Value::Str("runtime".to_string()),
             Value::Str("not even an object".to_string()),
         );
-        assert!(validate_complexity_and_persistence(&Value::Dict(document), None).is_ok());
+        assert!(validate_complexity(&Value::Dict(document), None).is_ok());
+    }
+
+    #[test]
+    fn validate_persistence_is_a_no_op_for_now() {
+        let mut document = Dict::new();
+        document.insert(
+            Value::Str("runtime".to_string()),
+            Value::Str("not even an object".to_string()),
+        );
+        assert!(validate_persistence(&Value::Dict(document), None).is_ok());
     }
 }
