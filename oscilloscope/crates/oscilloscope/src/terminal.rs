@@ -61,6 +61,23 @@ pub fn restore() {
     }
 }
 
+/// Wraps whatever panic hook was already installed (std's default,
+/// ordinarily) rather than replacing it outright, so the panic
+/// message itself is never swallowed — only delayed until the
+/// terminal it would otherwise have printed into is gone. Split out
+/// from `enter()` (review finding 8) so a test can prove the
+/// restore-on-panic behaviour itself without a real terminal:
+/// `enter()`'s own `enable_raw_mode`/`EnterAlternateScreen` need one,
+/// which `cargo test` never has, but installing and exercising the
+/// hook doesn't.
+fn install_panic_hook() {
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        restore();
+        previous(info);
+    }));
+}
+
 pub struct TerminalGuard;
 
 impl TerminalGuard {
@@ -68,17 +85,7 @@ impl TerminalGuard {
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen)?;
         ENTERED.store(true, Ordering::SeqCst);
-
-        // Wraps whatever hook was already installed (std's default,
-        // ordinarily) rather than replacing it outright, so the panic
-        // message itself is never swallowed — only delayed until the
-        // terminal it would otherwise have printed into is gone.
-        let previous = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            restore();
-            previous(info);
-        }));
-
+        install_panic_hook();
         Ok(TerminalGuard)
     }
 }
@@ -92,6 +99,13 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Every test here reads or writes the shared `ENTERED` static
+    /// (and, for the panic-hook one, the process-wide panic hook
+    /// too) — serialised so `cargo test`'s own parallel threads can't
+    /// race each other on either (review finding 8).
+    static LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn restore_clears_the_entered_flag_even_with_no_real_terminal() {
@@ -101,6 +115,7 @@ mod tests {
         // `restore`'s own bookkeeping half in isolation. Setting
         // `ENTERED` directly, rather than going through `enter()`,
         // keeps this test from ever touching the real terminal.
+        let _guard = LOCK.lock().unwrap();
         ENTERED.store(true, Ordering::SeqCst);
         assert!(is_entered());
         restore();
@@ -109,8 +124,28 @@ mod tests {
 
     #[test]
     fn restore_with_nothing_entered_is_a_no_op() {
+        let _guard = LOCK.lock().unwrap();
         ENTERED.store(false, Ordering::SeqCst);
         restore();
         assert!(!is_entered());
+    }
+
+    #[test]
+    fn a_panic_after_entering_is_still_restored_by_the_installed_hook() {
+        // Review finding 8: #434 asks for a test proving restore on
+        // panic; the installed hook (not a direct `restore()` call)
+        // is what has to run here, the same way it would for a real
+        // panic during `run_tui`/`run_tui_watch`'s own loop.
+        let _guard = LOCK.lock().unwrap();
+        ENTERED.store(true, Ordering::SeqCst);
+        install_panic_hook();
+        let result = std::panic::catch_unwind(|| {
+            panic!("deliberate panic to exercise the installed panic hook");
+        });
+        assert!(result.is_err());
+        assert!(
+            !is_entered(),
+            "the panic hook should have called restore() before unwinding"
+        );
     }
 }

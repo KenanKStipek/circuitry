@@ -323,16 +323,20 @@ pub fn visible_rows<'a>(rows: &'a [Row], app: &App) -> Vec<&'a Row> {
     };
 
     let mut out = Vec::new();
-    let mut hidden_prefix: Option<&str> = None;
+    // Finding 10: a trailing `.` so collapsing `prime.fetch` doesn't
+    // also hide an unrelated sibling that merely shares its prefix,
+    // like `prime.fetch_all` — `starts_with` alone can't tell "is a
+    // descendant of" from "happens to start with the same letters".
+    let mut hidden_prefix: Option<String> = None;
     for row in rows {
-        if let Some(prefix) = hidden_prefix {
-            if row.path.starts_with(prefix) {
+        if let Some(prefix) = &hidden_prefix {
+            if row.path.starts_with(prefix.as_str()) {
                 continue;
             }
             hidden_prefix = None;
         }
         if app.collapsed.contains(&row.path) {
-            hidden_prefix = Some(&row.path);
+            hidden_prefix = Some(format!("{}.", row.path));
         }
         if !keep(&row) {
             continue;
@@ -436,6 +440,21 @@ mod tests {
         let visible = visible_rows(&rows, &app);
         let paths: Vec<&str> = visible.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(paths, vec!["prime.loop", "prime.after"]);
+    }
+
+    #[test]
+    fn collapsing_a_row_does_not_hide_an_unrelated_sibling_with_the_same_prefix() {
+        // Finding 10: `prime.fetch_all` merely starts with the same
+        // letters as `prime.fetch`, not a descendant of it.
+        let rows = [
+            row("prime.fetch", 1, StatusKind::Done),
+            row("prime.fetch_all", 1, StatusKind::Pending),
+        ];
+        let mut app = App::new(false);
+        app.collapsed.insert("prime.fetch".to_string());
+        let visible = visible_rows(&rows, &app);
+        let paths: Vec<&str> = visible.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, vec!["prime.fetch", "prime.fetch_all"]);
     }
 
     #[test]
