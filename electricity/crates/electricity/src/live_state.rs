@@ -30,7 +30,8 @@ use crate::out::render_state;
 use electricity_value::Value;
 use std::cell::Cell;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -40,15 +41,69 @@ pub const LIVE_STATE_INTERVAL: Duration = Duration::from_millis(500);
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// How many candidate temp names [`create_temp_file`] tries before
+/// giving up -- each collision (another writer's own live temp file,
+/// or an attacker's planted symlink, see that function's own doc
+/// comment) just means "pick another name", so this should never need
+/// more than a handful of attempts in practice; the ceiling only turns
+/// a pathological case (a directory an attacker has filled with every
+/// name this could ever generate) into an `io::Error` instead of an
+/// infinite loop.
+const MAX_TEMP_NAME_ATTEMPTS: u32 = 1000;
+
+/// Opens a fresh, exclusively-created temp file for *path*'s own
+/// atomic write, alongside it in the same directory -- `tempfile::
+/// mkstemp`'s own two defenses, ported directly rather than `fs::
+/// write`'s plain "truncate or create" (PR #441 review finding 3):
+///
+/// - `O_CREAT | O_EXCL` (`create_new(true)`): fails outright if
+///   *anything* already exists at the candidate path, symlink
+///   included -- `fs::write`'s plain open follows a symlink there and
+///   happily writes through it to whatever it points at. A
+///   predictable name (pid plus a process-local counter) is exactly
+///   what makes that attack possible: another local user able to
+///   predict this run's own next temp name could plant a symlink at
+///   it ahead of time and have this process overwrite -- or, since
+///   the file was previously world-readable, read the contents of --
+///   whatever that symlink points to. `O_EXCL` closes that window: a
+///   pre-placed symlink (or file) at the exact name this call tries
+///   makes this `Err(AlreadyExists)`, never followed, so
+///   [`write_atomic`] just retries under a new name instead.
+/// - mode `0600` (`cli/live_state.py::_replace_file`'s own final live
+///   file is `0600` too): nobody but this process's own user can even
+///   read the --live-state mirror while a run is in progress, not
+///   just once it lands at *path* via the rename below.
+fn create_temp_file(parent: &Path, file_name: &str) -> io::Result<(PathBuf, fs::File)> {
+    let pid = std::process::id();
+    for _ in 0..MAX_TEMP_NAME_ATTEMPTS {
+        let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{file_name}.{pid}.{counter}.tmp"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "could not create a unique temp file alongside {}",
+            parent.display()
+        ),
+    ))
+}
+
 /// Writes *payload* to *path* atomically: a sibling temp file, written
 /// in full, then renamed into place in the same directory (so the
 /// rename stays on one filesystem) -- `cli/live_state.py::_replace_file`'s
-/// own tmp-file-plus-rename shape, with a process-id-and-counter
-/// temp name rather than `tempfile.mkstemp`'s `O_CREAT | O_EXCL`: this
-/// crate has no local-attacker threat model of its own to defend
-/// against (every path it ever writes to is one the same CLI invocation
-/// was given directly), so a predictable-but-unique name is enough to
-/// avoid colliding with a concurrent write to the very same path.
+/// own tmp-file-plus-rename shape, with [`create_temp_file`]'s own
+/// `mkstemp`-equivalent exclusive create standing in for Python's own
+/// `tempfile.mkstemp` call.
 fn write_atomic(path: &Path, payload: &str) -> io::Result<()> {
     let parent = path
         .parent()
@@ -60,9 +115,11 @@ fn write_atomic(path: &Path, payload: &str) -> io::Result<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("live-state");
-    let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
-    let result = fs::write(&tmp_path, payload).and_then(|()| fs::rename(&tmp_path, path));
+    let (tmp_path, mut file) = create_temp_file(&parent, file_name)?;
+    let result = file
+        .write_all(payload.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| fs::rename(&tmp_path, path));
     if result.is_err() {
         let _ = fs::remove_file(&tmp_path);
     }
@@ -246,6 +303,58 @@ mod tests {
         let had_failure = mirror.close(&Value::Dict(dict));
         assert!(!had_failure);
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"done\": true}\n");
+        fs::remove_file(&path).unwrap();
+    }
+
+    // PR #441 review finding 3.
+    #[test]
+    fn the_final_file_is_mode_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = temp_path("mode");
+        let mirror = LiveStateMirror::new(path.clone());
+        mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_planted_at_the_predictable_temp_name_is_never_followed() {
+        // Reproduces the attack directly: predict `create_temp_file`'s
+        // very first candidate name for this `path`/pid and plant a
+        // symlink there ahead of time, pointed at a file this test
+        // owns outside the live-state directory entirely. If
+        // `write_atomic` ever followed it (the pre-fix `fs::write`
+        // behaviour), the target's contents would become the state
+        // payload; with `O_EXCL` the create fails instead and a later
+        // counter value is used, leaving the target untouched.
+        let path = temp_path("symlink-attack");
+        let parent = path.parent().unwrap();
+        fs::create_dir_all(parent).unwrap();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        let pid = std::process::id();
+        let next_counter = TMP_COUNTER.load(Ordering::Relaxed);
+        let predicted = parent.join(format!(".{file_name}.{pid}.{next_counter}.tmp"));
+        let target = temp_path("symlink-attack-target");
+        fs::write(&target, "attacker-controlled").unwrap();
+        std::os::unix::fs::symlink(&target, &predicted).unwrap();
+
+        let mirror = LiveStateMirror::new(path.clone());
+        mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "attacker-controlled",
+            "the planted symlink's target must never be written through"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+        // The planted symlink itself is left alone (never consumed by
+        // `fs::rename`, which only ever targets the real temp file this
+        // call actually created under a different name).
+        assert!(predicted.symlink_metadata().is_ok());
+
+        fs::remove_file(&predicted).unwrap();
+        fs::remove_file(&target).unwrap();
         fs::remove_file(&path).unwrap();
     }
 
