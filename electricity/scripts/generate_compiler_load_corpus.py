@@ -175,6 +175,17 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
+        # #408's acceptance audit: a root key YAML reads as a non-string
+        # (an unquoted `1:`) -- `key_label`'s own "(YAML read the
+        # unquoted key as a <type>)" suffix is otherwise pinned only by
+        # `structural.rs`'s unit tests, never by this golden corpus.
+        "name": "non_string_root_key_warns_with_its_yaml_read_type",
+        "files": {
+            "doc.yml": "1: unexpected\neffects: []\n",
+        },
+        "entry": "doc.yml",
+    },
+    {
         "name": "schema_violation_loop_needs_exactly_one_of_while_or_each",
         "files": {
             "doc.yml": (
@@ -740,6 +751,18 @@ CASES: list[dict[str, Any]] = [
                 "  - type: tool\n"
                 f"{_TOOL_YML}"
             ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # #408's acceptance audit: `parse_concurrency_groups`'s own
+        # non-string/empty-group-name branch (`pipeline.rs`'s
+        # "runtime.concurrency_groups has a non-string or empty group
+        # name: ..." message) was ported with no corpus case pinning
+        # it -- YAML reads an unquoted `1:` as the int `1`, not a string.
+        "name": "concurrency_groups_non_string_key_config_error",
+        "files": {
+            "doc.yml": "runtime: {concurrency_groups: {1: 3}}\neffects: []\n",
         },
         "entry": "doc.yml",
     },

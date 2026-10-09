@@ -179,6 +179,11 @@ fn near_miss_key_error_and_unrelated_key_warning() {
 }
 
 #[test]
+fn non_string_root_key_warns_with_its_yaml_read_type() {
+    run_case("non_string_root_key_warns_with_its_yaml_read_type");
+}
+
+#[test]
 fn schema_violation_loop_needs_exactly_one_of_while_or_each() {
     run_case("schema_violation_loop_needs_exactly_one_of_while_or_each");
 }
@@ -206,6 +211,11 @@ fn negative_max_concurrency_config_error() {
 #[test]
 fn invalid_concurrency_groups_config_error() {
     run_case("invalid_concurrency_groups_config_error");
+}
+
+#[test]
+fn concurrency_groups_non_string_key_config_error() {
+    run_case("concurrency_groups_non_string_key_config_error");
 }
 
 #[test]
@@ -406,12 +416,14 @@ fn every_case_in_the_corpus_has_a_test() {
         "duplicate_key_json",
         "lone_cr_near_miss_key",
         "near_miss_key_error_and_unrelated_key_warning",
+        "non_string_root_key_warns_with_its_yaml_read_type",
         "schema_violation_loop_needs_exactly_one_of_while_or_each",
         "group_field_on_a_container_effect",
         "interface_inputs_unknown_type",
         "interface_inputs_default_type_mismatch_with_unquote_hint",
         "negative_max_concurrency_config_error",
         "invalid_concurrency_groups_config_error",
+        "concurrency_groups_non_string_key_config_error",
         "if_threshold_huge_int_is_a_maximum_error",
         "tree_loop_max_concurrency_huge_negative_int_is_a_minimum_error",
         "prompt_timeout_ms_huge_int_is_valid",
