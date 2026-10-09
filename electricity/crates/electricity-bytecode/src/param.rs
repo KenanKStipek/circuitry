@@ -107,3 +107,65 @@ impl Serialize for StringKeyedMap<'_> {
         map.end()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use electricity_value::Value;
+
+    fn single_key_map(key: Value) -> ParamNode {
+        let mut entries = IndexMap::new();
+        entries.insert(key, ParamNode::Literal(Value::from(1i64)));
+        ParamNode::Map(entries)
+    }
+
+    /// *node*'s own `Map` entry, serialized then re-parsed as a plain
+    /// `serde_json::Map` -- the shape [`StringKeyedMap`] actually
+    /// produces, keys included, not just "it didn't panic".
+    fn serialized_map_keys(node: &ParamNode) -> Vec<String> {
+        let json = serde_json::to_value(node).expect("serializes");
+        json.get("Map")
+            .and_then(|map| map.as_object())
+            .expect("a Map variant with an object payload")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_null_key_serializes_as_the_literal_text_null() {
+        assert_eq!(serialized_map_keys(&single_key_map(Value::None)), ["null"]);
+    }
+
+    #[test]
+    fn a_bool_key_serializes_lowercase_not_pythons_capitalized_repr() {
+        assert_eq!(
+            serialized_map_keys(&single_key_map(Value::Bool(true))),
+            ["true"]
+        );
+        assert_eq!(
+            serialized_map_keys(&single_key_map(Value::Bool(false))),
+            ["false"]
+        );
+    }
+
+    #[test]
+    fn a_nan_key_serializes_as_the_json_dumps_nan_token() {
+        assert_eq!(
+            serialized_map_keys(&single_key_map(Value::Float(f64::NAN))),
+            ["NaN"]
+        );
+    }
+
+    #[test]
+    fn a_bytes_key_fails_to_serialize_matching_json_dumps_own_typeerror() {
+        // `json.dumps` raises `TypeError` for a `bytes` dict key -- this
+        // crate's own `stringify_key` does the same (`WriteError::
+        // KeyNotStrIntFloatBoolNone`), so `--dump-ir` fails the same way
+        // on a document a non-`--dump-ir` run would also refuse to
+        // serialize through the `json` tool, rather than crashing or
+        // silently dropping the key.
+        let node = single_key_map(Value::Bytes(vec![1, 2, 3]));
+        assert!(serde_json::to_value(&node).is_err());
+    }
+}

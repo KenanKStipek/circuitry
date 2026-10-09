@@ -241,6 +241,44 @@ mod tests {
         }
     }
 
+    /// A `dynamic` (chain-flow, like [`root_block`], but *not* the
+    /// document root) nested as a sibling in some other region's own
+    /// `ops`/`body` -- a non-overlay `Block` named *name*, same as the
+    /// root but reachable only by [`walk_region`] actually recursing
+    /// into a child `Op`'s own `Control` region.
+    fn nested_dynamic(name: &str, path: EffectPath, ops: Vec<Op>) -> Op {
+        Op {
+            path,
+            name: Some(name.to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    /// An unsupported `use` leaf at *path* -- the shortest effect
+    /// [`first_unsupported`] refuses, used throughout this module's own
+    /// tests as a plain "something the walker must still find here"
+    /// marker.
+    fn use_leaf(path: EffectPath) -> Op {
+        leaf_op(
+            path,
+            LeafKind::Use(crate::effects::UseOp {
+                source: crate::effects::UseSource::Path("child.yml".to_string()),
+                inputs: None,
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy::default(),
+                expect: None,
+                description: None,
+            }),
+        )
+    }
+
     fn program_with_root(root: Op) -> Program {
         Program {
             root,
@@ -411,6 +449,86 @@ mod tests {
             enabled: true,
         };
         let program = program_with_root(root_block(vec![if_op]));
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::Use);
+        assert_eq!(refusal.path, use_path);
+    }
+
+    #[test]
+    fn an_unsupported_effect_in_an_else_branch_is_found() {
+        let use_path = EffectPath::root().push_name("gate").push_name("sub");
+        let if_op = Op {
+            path: EffectPath::root().push_name("gate"),
+            name: Some("gate".to_string()),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                },
+                then_: Box::new(Region::Block {
+                    ops: Vec::new(),
+                    overlay: true,
+                }),
+                else_: Some(Box::new(Region::Block {
+                    ops: vec![use_leaf(use_path.clone())],
+                    overlay: true,
+                })),
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = program_with_root(root_block(vec![if_op]));
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::Use);
+        assert_eq!(refusal.path, use_path);
+    }
+
+    #[test]
+    fn an_unsupported_effect_inside_a_nested_chain_dynamic_is_found() {
+        // The root is itself a chain `dynamic`; one of its own children
+        // is a *second*, nested `dynamic` (also chain-flow) with the
+        // unsupported effect inside *that* one, not the root's own
+        // `ops` directly -- proves `walk_region`'s `Block` arm actually
+        // recurses into a child `Op`'s own `Control` region rather than
+        // only ever walking one level of `ops`.
+        let use_path = EffectPath::root().push_name("inner").push_name("sub");
+        let inner = nested_dynamic(
+            "inner",
+            EffectPath::root().push_name("inner"),
+            vec![use_leaf(use_path.clone())],
+        );
+        let program = program_with_root(root_block(vec![inner]));
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::Use);
+        assert_eq!(refusal.path, use_path);
+    }
+
+    #[test]
+    fn an_unsupported_effect_in_a_nested_dynamics_own_finally_is_found() {
+        // A nested `dynamic` (not the root) with a `finally:` whose own
+        // unsupported effect is reachable only through `walk_region`'s
+        // `TryFinally` arm -- `body` fully supported, `finally` isn't.
+        let use_path = EffectPath::root().push_name("inner").push_name("cleanup");
+        let inner = Op {
+            path: EffectPath::root().push_name("inner"),
+            name: Some("inner".to_string()),
+            kind: NodeKind::Control(Region::TryFinally {
+                body: Box::new(Region::Block {
+                    ops: Vec::new(),
+                    overlay: false,
+                }),
+                finally: Box::new(Region::Block {
+                    ops: vec![use_leaf(use_path.clone())],
+                    overlay: false,
+                }),
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = program_with_root(root_block(vec![inner]));
         let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);

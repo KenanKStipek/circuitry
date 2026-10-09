@@ -1112,12 +1112,21 @@ mod tests {
     }
 
     fn interface_doc_named(key: &str, spec_pairs: Vec<(&str, Value)>) -> Value {
+        interface_doc_with_key(Value::Str(key.to_string()), spec_pairs)
+    }
+
+    /// Like [`interface_doc_named`], but *key* is the declared
+    /// `interface.inputs` key's own [`Value`] directly -- a YAML/JSON
+    /// mapping key need not be a string (`1:`/`yes:` parse as
+    /// `Value::Int`/`Value::Bool`), and [`build_input_namespace`] keys
+    /// its returned namespace by `Value` for exactly that reason.
+    fn interface_doc_with_key(key: Value, spec_pairs: Vec<(&str, Value)>) -> Value {
         let mut spec = Dict::new();
         for (k, v) in spec_pairs {
             spec.insert(Value::Str(k.to_string()), v);
         }
         let mut inputs = Dict::new();
-        inputs.insert(Value::Str(key.to_string()), Value::Dict(spec));
+        inputs.insert(key, Value::Dict(spec));
         let mut interface = Dict::new();
         interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
         let mut dict = Dict::new();
@@ -1539,6 +1548,27 @@ mod tests {
         let doc = interface_doc(vec![("type", Value::Str("integer".to_string()))]);
         let namespace = build_input_namespace(&doc, &with_inputs(vec![("x", "5")])).unwrap();
         assert_eq!(namespace.get(&vkey("x")), Some(&Value::Int(5.into())));
+    }
+
+    #[test]
+    fn build_input_namespace_defaults_a_non_string_declared_key_under_its_own_literal_value() {
+        // `1:` parses as `Value::Int(1)`, not the string `"1"` -- its
+        // own `default:` must land under that exact literal key, the
+        // same key Python's own `inputs[key] = default` would write to
+        // (issue #432's review, finding 7).
+        let doc = interface_doc_with_key(
+            Value::Int(1.into()),
+            vec![
+                ("type", Value::Str("integer".to_string())),
+                ("default", Value::from(3i64)),
+            ],
+        );
+        let namespace = build_input_namespace(&doc, &no_inputs()).unwrap();
+        assert_eq!(
+            namespace.get(&Value::Int(1.into())),
+            Some(&Value::Int(3.into()))
+        );
+        assert!(!namespace.contains_key(&vkey("1")));
     }
 
     #[test]
