@@ -143,6 +143,15 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// unrolled: see this module's own doc comment above), with every
 /// [`CtxSource::Live`] entry's own [`Store::snapshot`] taken fresh right
 /// here, not at whatever earlier moment that entry joined the chain.
+///
+/// Known limitation (issue #431 review, PR #440): [`Store::snapshot`]
+/// deep-copies the *entire* subtree under a `Live` entry's own node, so
+/// a call here is O(the live state reachable from that node), not
+/// Python's O(1) live-reference read -- paid again on every `tool`
+/// render and every `if` condition eval, for every enclosing `Live`
+/// entry in the chain. Quadratic in state size over a long chain of
+/// deeply nested containers. Acceptable at M0-H scale; worth revisiting
+/// if a later milestone's documents grow large root state.
 pub(crate) fn live_ctx(chain: &CtxChain, store: &Store) -> Value {
     let mut merged: IndexMap<Value, Value> = IndexMap::new();
     for source in chain {
