@@ -98,7 +98,17 @@ impl App {
     /// subtrees and the errors-only/filter views already applied,
     /// `visible_rows` below) — navigation and collapse/expand act on
     /// exactly what the user can see, in the order they see it.
-    pub fn handle_key(&mut self, key: KeyEvent, rows: &[&Row], running: bool) -> Action {
+    /// `has_prompt_sent` is whether the currently selected row's own
+    /// details carry a `prompt_sent` (review finding 5): `v` opens
+    /// that first when there is one, since it's usually the more
+    /// useful of the two to read in full, and the value otherwise.
+    pub fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        rows: &[&Row],
+        running: bool,
+        has_prompt_sent: bool,
+    ) -> Action {
         // Finding K3: raw mode turns a real Ctrl-C into `Char('c')`
         // with the CONTROL modifier, not a distinct key code — caught
         // here, before any dialog gets a look at it, so it's never
@@ -133,8 +143,23 @@ impl App {
                     }
                 }
             }
-            Dialog::Help | Dialog::FullValue(_) => {
+            Dialog::Help => {
                 self.dialog = Dialog::None;
+                Action::None
+            }
+            // Finding 5: `v` again, while this overlay is already
+            // open, cycles between the prompt and the value instead
+            // of closing it — any other key still closes it, same as
+            // every other overlay.
+            Dialog::FullValue(field) => {
+                if key.code == KeyCode::Char('v') {
+                    *field = match field {
+                        FullValueField::Value => FullValueField::PromptSent,
+                        FullValueField::PromptSent => FullValueField::Value,
+                    };
+                } else {
+                    self.dialog = Dialog::None;
+                }
                 Action::None
             }
             Dialog::FilterInput(buf) => {
@@ -157,11 +182,17 @@ impl App {
                 }
                 Action::None
             }
-            Dialog::None => self.handle_key_normal(key, rows, running),
+            Dialog::None => self.handle_key_normal(key, rows, running, has_prompt_sent),
         }
     }
 
-    fn handle_key_normal(&mut self, key: KeyEvent, rows: &[&Row], running: bool) -> Action {
+    fn handle_key_normal(
+        &mut self,
+        key: KeyEvent,
+        rows: &[&Row],
+        running: bool,
+        has_prompt_sent: bool,
+    ) -> Action {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_selection(rows, -1);
@@ -193,7 +224,11 @@ impl App {
                 self.dialog = Dialog::FilterInput(self.filter.clone().unwrap_or_default());
             }
             KeyCode::Char('v') => {
-                self.dialog = Dialog::FullValue(FullValueField::Value);
+                self.dialog = Dialog::FullValue(if has_prompt_sent {
+                    FullValueField::PromptSent
+                } else {
+                    FullValueField::Value
+                });
             }
             KeyCode::Char('?') => self.dialog = Dialog::Help,
             KeyCode::Char('c') => {
@@ -366,14 +401,14 @@ mod tests {
         ];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Down), &visible, true);
+        app.handle_key(key(KeyCode::Down), &visible, true, false);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
-        app.handle_key(key(KeyCode::Down), &visible, true);
+        app.handle_key(key(KeyCode::Down), &visible, true, false);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         // Already at the end: another Down must not go out of bounds.
-        app.handle_key(key(KeyCode::Down), &visible, true);
+        app.handle_key(key(KeyCode::Down), &visible, true, false);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
-        app.handle_key(key(KeyCode::Up), &visible, true);
+        app.handle_key(key(KeyCode::Up), &visible, true, false);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
     }
 
@@ -383,9 +418,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.selected_path = Some("prime.loop".to_string());
-        app.handle_key(key(KeyCode::Left), &visible, true);
+        app.handle_key(key(KeyCode::Left), &visible, true, false);
         assert!(app.collapsed.contains("prime.loop"));
-        app.handle_key(key(KeyCode::Right), &visible, true);
+        app.handle_key(key(KeyCode::Right), &visible, true, false);
         assert!(!app.collapsed.contains("prime.loop"));
     }
 
@@ -425,9 +460,9 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         assert!(!app.follow);
-        app.handle_key(key(KeyCode::Char('f')), &visible, true);
+        app.handle_key(key(KeyCode::Char('f')), &visible, true, false);
         assert!(app.follow);
-        app.handle_key(key(KeyCode::Char('f')), &visible, true);
+        app.handle_key(key(KeyCode::Char('f')), &visible, true, false);
         assert!(!app.follow);
     }
 
@@ -450,10 +485,10 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('/')), &visible, true);
+        app.handle_key(key(KeyCode::Char('/')), &visible, true, false);
         assert!(matches!(app.dialog, Dialog::FilterInput(_)));
-        app.handle_key(key(KeyCode::Char('a')), &visible, true);
-        app.handle_key(key(KeyCode::Enter), &visible, true);
+        app.handle_key(key(KeyCode::Char('a')), &visible, true, false);
+        app.handle_key(key(KeyCode::Enter), &visible, true, false);
         assert_eq!(app.filter.as_deref(), Some("a"));
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -476,13 +511,13 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('c')), &visible, true);
+        let action = app.handle_key(key(KeyCode::Char('c')), &visible, true, false);
         assert_eq!(action, Action::None);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: false }
         ));
-        let action = app.handle_key(key(KeyCode::Char('y')), &visible, true);
+        let action = app.handle_key(key(KeyCode::Char('y')), &visible, true, false);
         assert_eq!(action, Action::Cancel);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -492,8 +527,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, true);
-        let action = app.handle_key(key(KeyCode::Char('n')), &visible, true);
+        app.handle_key(key(KeyCode::Char('c')), &visible, true, false);
+        let action = app.handle_key(key(KeyCode::Char('n')), &visible, true, false);
         assert_eq!(action, Action::None);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -503,13 +538,13 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, true);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, true, false);
         assert_eq!(action, Action::None);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: true }
         ));
-        let action = app.handle_key(key(KeyCode::Char('y')), &visible, true);
+        let action = app.handle_key(key(KeyCode::Char('y')), &visible, true, false);
         assert_eq!(action, Action::Cancel);
         assert!(app.quit_when_finished);
     }
@@ -519,8 +554,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, true);
-        app.handle_key(key(KeyCode::Char('y')), &visible, true);
+        app.handle_key(key(KeyCode::Char('c')), &visible, true, false);
+        app.handle_key(key(KeyCode::Char('y')), &visible, true, false);
         assert!(!app.quit_when_finished);
     }
 
@@ -529,7 +564,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, false);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, false, false);
         assert_eq!(action, Action::Quit);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -539,7 +574,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(true);
-        let action = app.handle_key(key(KeyCode::Char('q')), &visible, true);
+        let action = app.handle_key(key(KeyCode::Char('q')), &visible, true, false);
         assert_eq!(action, Action::Quit);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -549,7 +584,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true);
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true, false);
         assert_eq!(action, Action::CtrlC);
         assert_eq!(app.dialog, Dialog::None, "Ctrl-C never opens a confirm");
     }
@@ -559,7 +594,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, false);
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, false, false);
         assert_eq!(action, Action::CtrlC);
     }
 
@@ -568,12 +603,12 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Running)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('c')), &visible, true);
+        app.handle_key(key(KeyCode::Char('c')), &visible, true, false);
         assert!(matches!(
             app.dialog,
             Dialog::ConfirmCancel { quit_after: false }
         ));
-        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true);
+        let action = app.handle_key(ctrl_key(KeyCode::Char('c')), &visible, true, false);
         assert_eq!(action, Action::CtrlC);
         assert_eq!(app.dialog, Dialog::None);
     }
@@ -583,8 +618,8 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('/')), &visible, false);
-        let action = app.handle_key(key(KeyCode::Char('c')), &visible, false);
+        app.handle_key(key(KeyCode::Char('/')), &visible, false, false);
+        let action = app.handle_key(key(KeyCode::Char('c')), &visible, false, false);
         assert_eq!(action, Action::None);
         assert_eq!(app.dialog, Dialog::FilterInput("c".to_string()));
     }
@@ -594,9 +629,9 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('?')), &visible, false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, false, false);
         assert_eq!(app.dialog, Dialog::Help);
-        app.handle_key(key(KeyCode::Char('x')), &visible, false);
+        app.handle_key(key(KeyCode::Char('x')), &visible, false, false);
         assert_eq!(app.dialog, Dialog::None);
     }
 
@@ -605,9 +640,45 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
-        app.handle_key(key(KeyCode::Char('v')), &visible, false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, false);
         assert!(matches!(app.dialog, Dialog::FullValue(_)));
-        app.handle_key(key(KeyCode::Esc), &visible, false);
+        app.handle_key(key(KeyCode::Esc), &visible, false, false);
+        assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
+    fn v_opens_the_value_when_the_row_has_no_prompt_sent() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, false);
+        assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
+    }
+
+    #[test]
+    fn v_opens_prompt_sent_first_when_the_row_has_one() {
+        // Finding 5: a prompt leaf's own sent text is usually the
+        // more useful of the two to read in full.
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, true);
+        assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
+    }
+
+    #[test]
+    fn pressing_v_again_while_open_cycles_the_field_instead_of_closing() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, true);
+        assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, true);
+        assert_eq!(app.dialog, Dialog::FullValue(FullValueField::Value));
+        app.handle_key(key(KeyCode::Char('v')), &visible, false, true);
+        assert_eq!(app.dialog, Dialog::FullValue(FullValueField::PromptSent));
+        // A key other than `v` still closes it, same as any overlay.
+        app.handle_key(key(KeyCode::Esc), &visible, false, true);
         assert_eq!(app.dialog, Dialog::None);
     }
 
@@ -617,7 +688,7 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         assert_eq!(app.pane, Pane::Tree);
-        app.handle_key(key(KeyCode::Tab), &visible, false);
+        app.handle_key(key(KeyCode::Tab), &visible, false, false);
         assert_eq!(app.pane, Pane::Details);
     }
 }

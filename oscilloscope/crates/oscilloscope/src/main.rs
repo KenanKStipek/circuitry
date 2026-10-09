@@ -841,7 +841,15 @@ fn run_tui(
                 match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
                         let running = exit_status.is_none();
-                        match app.handle_key(key, &visible, running) {
+                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                            oscilloscope_core::render::full_value(
+                                p,
+                                oscilloscope_core::render::FullValueField::PromptSent,
+                                current_state.as_ref(),
+                            )
+                            .is_some()
+                        });
+                        match app.handle_key(key, &visible, running, has_prompt_sent) {
                             keys::Action::Cancel => {
                                 cancel_once(
                                     &child,
@@ -892,7 +900,14 @@ fn run_tui(
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
             let _ = terminal.draw(|f| {
-                tui::draw(f, &render_state, details.as_ref(), &log_lines, &app);
+                tui::draw(
+                    f,
+                    &render_state,
+                    details.as_ref(),
+                    &log_lines,
+                    &app,
+                    current_state.as_ref(),
+                );
             });
             last_draw = Instant::now();
             dirty = false;
@@ -1429,7 +1444,15 @@ fn run_tui_watch(
                         // `c` does nothing, and `q` detaches at once,
                         // with no confirm, whether the watched run is
                         // still going or not.
-                        match app.handle_key(key, &visible, false) {
+                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                            oscilloscope_core::render::full_value(
+                                p,
+                                oscilloscope_core::render::FullValueField::PromptSent,
+                                last_state.as_ref(),
+                            )
+                            .is_some()
+                        });
+                        match app.handle_key(key, &visible, false, has_prompt_sent) {
                             keys::Action::Quit => break 'tui,
                             // K3: Ctrl-C in `osp watch` always just
                             // detaches too, same as `q` — but reports
@@ -1455,7 +1478,14 @@ fn run_tui_watch(
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
             let _ = terminal.draw(|f| {
-                tui::draw(f, &render_state, details.as_ref(), &log_lines, &app);
+                tui::draw(
+                    f,
+                    &render_state,
+                    details.as_ref(),
+                    &log_lines,
+                    &app,
+                    last_state.as_ref(),
+                );
             });
             last_draw = Instant::now();
             dirty = false;

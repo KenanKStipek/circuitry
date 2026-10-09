@@ -271,13 +271,17 @@ const HELP_TEXT: &[&str] = &[
 
 /// One redraw (DESIGN.md §6.3): the header, the plan tree and its
 /// selected row's details, the log pane, and whichever overlay the
-/// current dialog calls for.
+/// current dialog calls for. `raw_state` is the engine's own last
+/// snapshot, untruncated — `details`' own `prompt_sent`/`value` are
+/// already cut to `DETAILS_PREVIEW_CHARS` for the details pane, which
+/// `v`'s own full-value overlay (finding 5) must not be.
 pub fn draw(
     frame: &mut Frame,
     state: &oscilloscope_core::render::RenderState,
     details: Option<&Details>,
     log_lines: &[String],
     app: &App,
+    raw_state: Option<&serde_json::Value>,
 ) {
     let area = frame.area();
     let rows = Layout::default()
@@ -321,12 +325,13 @@ pub fn draw(
             draw_overlay(frame, area, " confirm ", text, 36, 5);
         }
         Dialog::FullValue(field) => {
-            let full = app.selected_path.as_deref().and_then(|_| {
-                details.and_then(|d| match field {
-                    oscilloscope_core::render::FullValueField::PromptSent => d.prompt_sent.clone(),
-                    oscilloscope_core::render::FullValueField::Value => d.value.clone(),
-                })
-            });
+            // Finding 5: reads straight from `raw_state`, bypassing
+            // `details`' own truncated preview entirely — that's the
+            // whole point of asking to see it in full.
+            let full = app
+                .selected_path
+                .as_deref()
+                .and_then(|p| oscilloscope_core::render::full_value(p, *field, raw_state));
             let text = vec![Line::from(full.unwrap_or_default())];
             draw_overlay(
                 frame,
@@ -475,7 +480,7 @@ mod golden_tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &app))
+            .draw(|f| draw(f, &rendered, Some(&details), &[], &app, state))
             .unwrap();
         terminal.backend().to_string()
     }
