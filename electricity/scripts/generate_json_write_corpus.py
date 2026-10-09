@@ -37,12 +37,19 @@ OUTPUT = (
 # §8.3) plus `ensure_ascii=False` on its own (both values of the flag are
 # load-bearing, DESIGN.md §3.4) and the generic `default=str` style used
 # by `core/tool.py`'s redacted-`raw` size-cap path (`_capped_raw`) and
-# several other callers (DESIGN.md §3.4).
+# several other callers (DESIGN.md §3.4). `compact_separators` pins
+# `--events`'s own `separators=(",", ":")` (`cli/events.py::EventLog.
+# _write_line`, runtime-semantics.md §8.7); `compact_separators_sorted`
+# additionally covers `sort_keys=True` combined with that override, a
+# combination no other mode here exercises (`pretty` only ever pairs
+# `sort_keys=True` with `indent=2`).
 MODES: list[dict] = [
-    {"name": "compact", "indent": None, "sort_keys": False, "ensure_ascii": True, "default_str": False},
-    {"name": "pretty", "indent": 2, "sort_keys": True, "ensure_ascii": True, "default_str": False},
-    {"name": "ascii_false", "indent": None, "sort_keys": False, "ensure_ascii": False, "default_str": False},
-    {"name": "default_str", "indent": None, "sort_keys": False, "ensure_ascii": False, "default_str": True},
+    {"name": "compact", "indent": None, "sort_keys": False, "ensure_ascii": True, "default_str": False, "separators": None},
+    {"name": "pretty", "indent": 2, "sort_keys": True, "ensure_ascii": True, "default_str": False, "separators": None},
+    {"name": "ascii_false", "indent": None, "sort_keys": False, "ensure_ascii": False, "default_str": False, "separators": None},
+    {"name": "default_str", "indent": None, "sort_keys": False, "ensure_ascii": False, "default_str": True, "separators": None},
+    {"name": "compact_separators", "indent": None, "sort_keys": False, "ensure_ascii": True, "default_str": False, "separators": (",", ":")},
+    {"name": "compact_separators_sorted", "indent": None, "sort_keys": True, "ensure_ascii": True, "default_str": False, "separators": (",", ":")},
 ]
 
 
@@ -86,6 +93,8 @@ def run_mode(value: object, mode: dict) -> dict:
         kwargs["sort_keys"] = True
     if mode["default_str"]:
         kwargs["default"] = str
+    if mode["separators"] is not None:
+        kwargs["separators"] = mode["separators"]
     try:
         text = json.dumps(value, **kwargs)
     except TypeError:

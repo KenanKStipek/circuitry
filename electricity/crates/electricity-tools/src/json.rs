@@ -10,7 +10,7 @@
 
 use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
-use electricity_json::{WriteMode, dumps_default_str, loads};
+use electricity_json::{Separators, WriteMode, dumps_default_str, loads};
 use electricity_value::{Dict, Value};
 
 /// `plugins/json.py::JsonPlugin` -- `mode: parse|stringify|extract`.
@@ -180,6 +180,7 @@ impl ToolPlugin for JsonTool {
                         indent,
                         sort_keys: false,
                         ensure_ascii: false,
+                        separators: Separators::Default,
                     },
                 )
                 .map_err(|err| ToolError(err.to_string()))?;

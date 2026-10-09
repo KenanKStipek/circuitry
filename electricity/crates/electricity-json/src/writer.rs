@@ -12,15 +12,33 @@ use electricity_value::{Dict, Value};
 use std::cmp::Ordering;
 use std::fmt;
 
+/// `separators=` as `json.dumps` itself accepts it: `None` (CPython's own
+/// default, which depends on `indent` -- `(", ", ": ")` with no indent,
+/// `(",", ": ")` with indent) or an explicit override. The only override
+/// any caller in this workspace asks for is `(",", ":")` -- `cli/events.py`'s
+/// `_write_line`'s own `separators=(",", ":")` (runtime-semantics.md §8.7)
+/// -- so this only has the one named variant, not a general `(&str, &str)`
+/// pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Separators {
+    /// CPython's own default: `(", ", ": ")` with no indent, `(",", ": ")`
+    /// with indent.
+    Default,
+    /// `separators=(",", ":")`: no space after either separator, indent
+    /// or not.
+    Compact,
+}
+
 /// How a plain `json.dumps` call is parametrized: `indent=None` vs.
-/// `indent=2`, `sort_keys`, `ensure_ascii`. Deliberately independent
-/// knobs (DESIGN.md §3.4.1): a future `--out` variant can combine them
-/// without electricity-json inferring one from another.
+/// `indent=2`, `sort_keys`, `ensure_ascii`, `separators`. Deliberately
+/// independent knobs (DESIGN.md §3.4.1): a future `--out` variant can
+/// combine them without electricity-json inferring one from another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMode {
     pub indent: Option<u8>,
     pub sort_keys: bool,
     pub ensure_ascii: bool,
+    pub separators: Separators,
 }
 
 impl WriteMode {
@@ -29,6 +47,7 @@ impl WriteMode {
         indent: None,
         sort_keys: false,
         ensure_ascii: true,
+        separators: Separators::Default,
     };
 
     /// `--out --pretty`: `json.dumps(saved, indent=2, sort_keys=True)`.
@@ -36,6 +55,16 @@ impl WriteMode {
         indent: Some(2),
         sort_keys: true,
         ensure_ascii: true,
+        separators: Separators::Default,
+    };
+
+    /// `--events`: `json.dumps(payload, separators=(",", ":"))`
+    /// (`cli/events.py::EventLog._write_line`; runtime-semantics.md §8.7).
+    pub const EVENTS: WriteMode = WriteMode {
+        indent: None,
+        sort_keys: false,
+        ensure_ascii: true,
+        separators: Separators::Compact,
     };
 }
 
@@ -230,7 +259,7 @@ fn write_dict(
             newline_indent(mode, level + 1, out);
             let key_text = stringify_key(key)?;
             write_json_string(&key_text, mode.ensure_ascii, out);
-            out.push_str(": ");
+            out.push_str(key_separator(mode));
             write_value(value, mode, level + 1, on_unsupported, out)?;
         }
         newline_indent(mode, level, out);
@@ -504,7 +533,23 @@ fn sort_with_nan_last(items: &mut [(&Value, &Value)]) {
 }
 
 fn item_separator(mode: WriteMode) -> &'static str {
-    if mode.indent.is_some() { "," } else { ", " }
+    match mode.separators {
+        Separators::Compact => ",",
+        Separators::Default => {
+            if mode.indent.is_some() {
+                ","
+            } else {
+                ", "
+            }
+        }
+    }
+}
+
+fn key_separator(mode: WriteMode) -> &'static str {
+    match mode.separators {
+        Separators::Compact => ":",
+        Separators::Default => ": ",
+    }
 }
 
 fn newline_indent(mode: WriteMode, level: usize, out: &mut String) {
