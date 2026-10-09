@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-09T13:39:09.431Z","ev":"run_start","run_id":"70c558fe-8e4f-41dc-848f-2451f0cf1d54","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":87357}
+{"v":1,"seq":1,"ts":"2026-10-09T13:39:09.434Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-09T13:39:09.434Z","ev":"start","id":1,"path":"prime.fail_skip"}
+{"v":1,"seq":3,"ts":"2026-10-09T13:39:09.434Z","ev":"end","id":1,"path":"prime.fail_skip","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":4,"ts":"2026-10-09T13:39:09.434Z","ev":"start","id":2,"path":"prime.fail_continue"}
+{"v":1,"seq":5,"ts":"2026-10-09T13:39:09.434Z","ev":"end","id":2,"path":"prime.fail_continue","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":6,"ts":"2026-10-09T13:39:09.434Z","ev":"start","id":3,"path":"prime.marker"}
+{"v":1,"seq":7,"ts":"2026-10-09T13:39:09.435Z","ev":"end","id":3,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-09T13:39:09.435Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-09T13:39:09.435Z","ev":"run_end","ok":true}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "DESIGN.md §6.4",
+  "description": "A `flow: tree` dynamic with `max_concurrency: 2` and 3 branches: every branch runs to completion, the final state has all three (order-independent of actual dispatch order), and the `dispatch` event records branches=3, concurrency=2 (issue #431's dynamic/tree acceptance criterion).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

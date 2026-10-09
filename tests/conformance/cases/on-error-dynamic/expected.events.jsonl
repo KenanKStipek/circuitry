@@ -1,0 +1,14 @@
+{"v":1,"seq":0,"ts":"2026-10-09T13:39:08.677Z","ev":"run_start","run_id":"95633fe6-81bd-4957-9111-c6aef5911044","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":87352}
+{"v":1,"seq":1,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":1,"path":"prime.fail_skip"}
+{"v":1,"seq":3,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":2,"path":"prime.fail_skip.body"}
+{"v":1,"seq":4,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":2,"path":"prime.fail_skip.body","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":5,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":1,"path":"prime.fail_skip","ok":false,"ms":0,"error":"fail_skip.body: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":6,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":3,"path":"prime.fail_continue"}
+{"v":1,"seq":7,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":4,"path":"prime.fail_continue.body"}
+{"v":1,"seq":8,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":4,"path":"prime.fail_continue.body","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":9,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":3,"path":"prime.fail_continue","ok":false,"ms":0,"error":"fail_continue.body: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":10,"ts":"2026-10-09T13:39:08.680Z","ev":"start","id":5,"path":"prime.marker"}
+{"v":1,"seq":11,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":5,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-10-09T13:39:08.680Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":13,"ts":"2026-10-09T13:39:08.680Z","ev":"run_end","ok":true}

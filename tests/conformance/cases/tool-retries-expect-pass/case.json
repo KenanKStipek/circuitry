@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'tool-retries'/'tool-expect'",
+  "description": "A tool whose CEL `expect:` is always true passes on the first attempt despite `retries:` being configured -- `meta.retries_used` is therefore absent (it is only set once an attempt succeeds after at least one prior failure), the companion of tool-retries-expect-fail (electricity/docs/spec/runtime-semantics.md §7.3, orchestration-reference.md 'tool-expect').",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
