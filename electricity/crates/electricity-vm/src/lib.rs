@@ -19,6 +19,7 @@
 //! file and function in this crate (and its sibling VM-lane crates).
 
 pub mod adapter;
+pub mod compose;
 pub mod exec;
 pub mod limiter;
 pub mod observer;

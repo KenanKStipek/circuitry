@@ -8,9 +8,16 @@
 //! conventions) -- shared, rather than duplicated, between
 //! `dynamic.rs` and `conditional.rs`.
 
+pub mod condition_model;
 pub mod conditional;
+pub mod disabled;
 pub mod dynamic;
+pub mod loop_;
+pub mod prompt;
+pub mod reflector;
 pub mod tool;
+pub mod use_;
+pub mod yield_;
 
 use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
 use electricity_bytecode::{LeafKind, NodeKind, Op, Region};
@@ -261,10 +268,37 @@ pub(crate) fn execute_op<'a>(
                     tool::execute_tool(op, tool_op, store, parent, &ctx, run_ctx, observer, token)
                         .await
                 }
-                _ => Err(VmError::NotImplemented(format!(
-                    "{}: unsupported effect type in the M0-H interpreter",
-                    op.path
-                ))),
+                LeafKind::Prompt(prompt_op) => {
+                    prompt::execute_prompt(
+                        op, prompt_op, store, parent, ctx_chain, run_ctx, observer, token,
+                    )
+                    .await
+                }
+                LeafKind::Use(use_op) => {
+                    use_::execute_use(
+                        op, use_op, store, parent, ctx_chain, run_ctx, observer, token,
+                    )
+                    .await
+                }
+                LeafKind::Reflector(reflector_op) => {
+                    reflector::execute_reflector(
+                        op,
+                        reflector_op,
+                        store,
+                        parent,
+                        ctx_chain,
+                        run_ctx,
+                        observer,
+                        token,
+                    )
+                    .await
+                }
+                LeafKind::Yield(yield_op) => {
+                    yield_::execute_yield(
+                        op, yield_op, store, parent, ctx_chain, run_ctx, observer, token,
+                    )
+                    .await
+                }
             },
             NodeKind::Control(region) => match region {
                 Region::If { .. } => {
@@ -277,10 +311,33 @@ pub(crate) fn execute_op<'a>(
                     dynamic::execute_dynamic(op, store, parent, ctx_chain, run_ctx, observer, token)
                         .await
                 }
-                Region::Loop { .. } => Err(VmError::NotImplemented(format!(
-                    "{}: `loop` is not supported by the M0-H interpreter",
-                    op.path
-                ))),
+                Region::Loop {
+                    spec,
+                    body,
+                    flow,
+                    max_concurrency,
+                    max_iterations,
+                    min_iterations,
+                    collect,
+                } => {
+                    loop_::execute_loop(
+                        op,
+                        spec,
+                        body,
+                        *flow,
+                        *max_concurrency,
+                        *max_iterations,
+                        *min_iterations,
+                        collect.as_deref(),
+                        store,
+                        parent,
+                        ctx_chain,
+                        run_ctx,
+                        observer,
+                        token,
+                    )
+                    .await
+                }
             },
         }
     })
