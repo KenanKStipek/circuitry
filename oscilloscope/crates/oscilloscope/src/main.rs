@@ -137,6 +137,14 @@ fn print_line(out: &mut impl Write, clock: &mut Clock, ts: Option<&str>, text: &
     let _ = writeln!(out, "{} {text}", Clock::format(elapsed));
 }
 
+/// Prints the `exit <code>` line every path through `do_run` ends
+/// with (P2-1) — including a usage-style failure before the engine
+/// was ever spawned, which used to print nothing on stdout at all.
+fn exit_early(code: u8) -> ExitCode {
+    println!("exit {code}");
+    ExitCode::from(code)
+}
+
 fn unique_run_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -226,33 +234,12 @@ fn do_run(args: RunArgs) -> ExitCode {
 
     let is_default_dir = args.out_dir.is_none();
     let run_dir = args.out_dir.clone().unwrap_or_else(unique_run_dir);
-    if let Err(err) = create_run_dir(&run_dir, is_default_dir) {
-        eprintln!(
-            "osp: couldn't create run directory {}: {err}",
-            run_dir.display()
-        );
-        return ExitCode::from(1);
-    }
-
     let spec = RunSpec {
         orchestration: orchestration.clone(),
         config,
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
     };
-
-    // A reused `--out-dir` can hold `state.live.json`/`state.json`/
-    // `events.jsonl` from an earlier run: left alone, the first poll
-    // right after spawn would read *that* run's old final state —
-    // printing its whole log (including its own `■ run` line) before
-    // this run has written anything, and suppressing this run's own
-    // summary line since the differ would already think it had seen
-    // one (F3). osp made this directory (or it's the default, always
-    // fresh), so clearing stale observation files here can't lose
-    // anything the caller put there on purpose.
-    for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
-        let _ = std::fs::remove_file(&stale);
-    }
 
     let engine = build_engine(args.engine);
     if engine.name() == "cof" && !engine.caps().events {
@@ -263,7 +250,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         Ok(cmd) => cmd,
         Err(EngineError::MissingConfig(message)) => {
             eprintln!("osp: {message}");
-            return ExitCode::from(2);
+            return exit_early(2);
         }
     };
 
@@ -279,12 +266,46 @@ fn do_run(args: RunArgs) -> ExitCode {
     // every run prints the same plain-text stream today regardless.
     let _log_mode = effective_log_mode(args.log);
 
+    // The run directory is created only right here, immediately before
+    // the spawn it exists for (P2-1): every check above (the config,
+    // the plan compile) can fail without ever needing it on disk at
+    // all, and a failure there used to leave a freshly made, empty
+    // directory behind with no "exit" line printed either.
+    if let Err(err) = create_run_dir(&run_dir, is_default_dir) {
+        eprintln!(
+            "osp: couldn't create run directory {}: {err}",
+            run_dir.display()
+        );
+        return exit_early(1);
+    }
+
+    // A reused `--out-dir` can hold `state.live.json`/`state.json`/
+    // `events.jsonl` from an earlier run: left alone, the first poll
+    // right after spawn would read *that* run's old final state —
+    // printing its whole log (including its own `■ run` line) before
+    // this run has written anything, and suppressing this run's own
+    // summary line since the differ would already think it had seen
+    // one (F3). osp made this directory (or it's the default, always
+    // fresh), so clearing stale observation files here can't lose
+    // anything the caller put there on purpose.
+    for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
+        let _ = std::fs::remove_file(&stale);
+    }
+
     let (mut child, stderr_rx) =
         match SupervisedChild::spawn(cmd, &spec.stdout_path(), &spec.stderr_path()) {
             Ok(pair) => pair,
             Err(err) => {
                 eprintln!("osp: couldn't launch {}: {err}", engine.name());
-                return ExitCode::from(1);
+                // The directory was just created for this spawn alone
+                // (P2-1): the engine never started, so a default one
+                // shouldn't be left behind empty. A caller's own
+                // `--out-dir` is never removed, same as every other
+                // path through this function.
+                if is_default_dir {
+                    let _ = std::fs::remove_dir_all(&run_dir);
+                }
+                return exit_early(1);
             }
         };
 
@@ -737,7 +758,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let doc = dir.path().join("do.yml");
         std::fs::write(&doc, "effects: []\n").unwrap();
-        let code = run(args(&[doc.to_str().unwrap(), "--engine", "electricity"]));
+        // P2-1: an explicit --out-dir in this test's own TempDir, not
+        // the default temp directory -- this error path returns
+        // before the run directory is ever created (P2-1), but every
+        // test that reaches do_run uses its own --out-dir regardless,
+        // so a future change along this path can't start leaking
+        // osp-* directories into a shared /tmp on every cargo test.
+        let out_dir = dir.path().join("out");
+        let code = run(args(&[
+            doc.to_str().unwrap(),
+            "--engine",
+            "electricity",
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ]));
         assert_eq!(code, ExitCode::from(2));
     }
 

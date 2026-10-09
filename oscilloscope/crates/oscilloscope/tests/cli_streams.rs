@@ -65,18 +65,24 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     // didn't create it, and chmod'ing a directory outside its own run
     // directory is an unrequested, possibly even EPERM-failing,
     // change) -- it only warns on stderr. `--engine electricity` with
-    // no config is a convenient way to reach the exit-2 usage error
-    // right after `create_run_dir` has already run, with no `cof`
-    // needed at all.
+    // a config but with the `electricity` binary itself not on PATH
+    // (true in this environment, and never assumed otherwise) reaches
+    // the launch-failure path (exit 1) only *after* `create_run_dir`
+    // has already run (P2-1 moved it to immediately before the
+    // spawn) -- with no `cof` needed at all, so this never touches the
+    // owner's own real `cof`/HOME either (F11).
     let work = tempfile::tempdir().unwrap();
     let doc = work.path().join("do.yml");
     std::fs::write(&doc, "effects: []\n").unwrap();
+    let config = work.path().join("config.json");
+    std::fs::write(&config, "{}").unwrap();
     let out_dir = work.path().join("out");
     std::fs::create_dir(&out_dir).unwrap();
     std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_osp"))
         .arg(&doc)
+        .arg(&config)
         .arg("--engine")
         .arg("electricity")
         .arg("--out-dir")
