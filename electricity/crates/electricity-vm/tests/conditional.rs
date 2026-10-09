@@ -8,8 +8,8 @@ use electricity_tools::ToolRegistry;
 use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
-    CancelOnStart, Event, RecordingObserver, TOOL_STUB_TEXT, cel_if, chain_dynamic, run_ctx,
-    tool_leaf, tree_dynamic,
+    CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic, json_registry,
+    run_ctx, tool_leaf, tree_dynamic,
 };
 
 fn root_path() -> EffectPath {
@@ -30,7 +30,7 @@ fn as_dict(value: &Value) -> &indexmap::IndexMap<Value, Value> {
 async fn run(root_op: electricity_bytecode::Op) -> (Store, RecordingObserver, Result<(), VmError>) {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -133,13 +133,14 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
     // contributes no path segment of its own, is just "prime" (the
     // chain's own name) -- exactly as Python's `_effect_path` falls
     // back to `container_name` for an unnamed effect.
-    assert_eq!(text, format!("prime: inner: {TOOL_STUB_TEXT}"));
+    assert_eq!(text, format!("prime: inner: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
     let prime = as_dict(get(root_dict, "prime").unwrap());
-    // No node for the transparent `if` itself, and no `inner` node
-    // either -- the tool stub fails before ever writing to the store.
+    // No node for the transparent `if` itself -- but `inner` is a real
+    // tool node now, created (and left behind, failed) before
+    // `execute_tool` ever reports the failure back up.
     let prime_keys: Vec<&str> = prime
         .keys()
         .map(|k| match k {
@@ -147,22 +148,27 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
             _ => panic!("expected string keys"),
         })
         .collect();
-    assert_eq!(prime_keys, vec!["value", "meta"]);
+    assert_eq!(prime_keys, vec!["value", "meta", "inner"]);
 
     let events = observer.events();
-    // Only the enclosing root dynamic's own balanced pair fires -- the
-    // transparent `if` contributes no hook of its own (lane C's still-
-    // stubbed `execute_tool` never reaches far enough to fire one for
-    // `inner` either). The `Write` in between is prime's own chain loop
-    // calling it once, after its one step, success or failure alike.
+    // The transparent `if` itself contributes no hook of its own, but
+    // `inner` (a real, named tool effect) fires its own balanced start/
+    // write/complete/write around the one retry attempt it gets --
+    // nested inside prime's own start/.../complete, with prime's own
+    // chain-level write (one per step, success or failure alike) after
+    // `inner`'s own pair settles.
     assert_eq!(
         events,
         vec![
             Event::Start("prime".to_string()),
+            Event::Start("prime.inner".to_string()),
+            Event::Write,
+            Event::Complete("prime.inner".to_string(), Some(TOOL_FAIL_TEXT.to_string())),
+            Event::Write,
             Event::Write,
             Event::Complete(
                 "prime".to_string(),
-                Some(format!("prime: inner: {TOOL_STUB_TEXT}"))
+                Some(format!("prime: inner: {TOOL_FAIL_TEXT}"))
             ),
         ]
     );

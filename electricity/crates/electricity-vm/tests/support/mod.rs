@@ -8,22 +8,25 @@
 //! `Op`/`Region` fixtures a hand-written test document needs, plus a
 //! [`RecordingObserver`] that remembers every hook call in order.
 //!
-//! `exec::tool::execute_tool` (lane C) is still a stub that always
-//! returns `Err(VmError::NotImplemented(..))` regardless of what's in
-//! the [`ToolRegistry`] -- so every `tool` leaf built here fails the
-//! exact same deterministic way. That is actually useful, not a
-//! limitation: it lets these tests exercise chain/tree
-//! ordering, wrapping, `on_error`, `finally`, dispatch and cancellation
-//! without depending on lane C (or lane D's own `test-tools` feature)
-//! landing first. A leaf that must *succeed* uses an empty nested
-//! `dynamic` instead (trivially `Ok(())` -- `execute_root_runs_an_
-//! empty_document_to_completion` in `electricity-vm`'s own `lib.rs`
-//! proves that).
+//! `exec::tool::execute_tool` (lane C, now final) runs the real `json`
+//! tool from [`json_registry`] -- every `tool` leaf built here
+//! ([`tool_leaf`]) is `mode: parse` against a fixed, deterministically
+//! malformed `input:`, so it always fails the same way
+//! ([`TOOL_FAIL_TEXT`]), real tool dispatch (its own `effect_start`/
+//! `effect_complete`/`write` hooks included) and all. That lets these
+//! tests exercise chain/tree ordering, wrapping, `on_error`, `finally`,
+//! dispatch and cancellation without depending on anything lane C's
+//! `json` tool doesn't itself need (a network call, `use`, a real
+//! model). A leaf that must *succeed* uses an empty nested `dynamic`
+//! instead (trivially `Ok(())` -- `execute_root_runs_an_empty_
+//! document_to_completion` in `electricity-vm`'s own `lib.rs` proves
+//! that).
 
 use electricity_bytecode::{
     Condition, DocumentInfo, EffectPath, LeafKind, NodeKind, OnError, Op, Program, Region,
     RetryPolicy, ToolOp,
 };
+use electricity_tools::ToolRegistry;
 use electricity_value::Value;
 use electricity_vm::{Limiter, RunContext, RunObserver};
 use indexmap::IndexMap;
@@ -52,18 +55,42 @@ pub fn program(root: Op) -> Program {
     }
 }
 
-pub const TOOL_STUB_TEXT: &str =
-    "electricity_vm::exec::tool::execute_tool is not implemented yet (lane C, issue #431)";
+/// A fresh [`ToolRegistry`] with the real `json` tool registered --
+/// every test that runs a [`tool_leaf`] (or any other real `tool`
+/// effect) needs one of these, not a bare `ToolRegistry::new()`.
+pub fn json_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register(Box::new(electricity_tools::json::JsonTool));
+    registry
+}
 
-/// A `tool` leaf -- always fails with [`TOOL_STUB_TEXT`] through lane
-/// C's still-stubbed `execute_tool`.
+/// `json`'s own `"json: parse failed: {err}"` wrap (`plugins/json.py`)
+/// around [`tool_leaf`]'s fixed malformed `input:` (`"not json"`) --
+/// third-party JSON-decoder text (DESIGN.md §1/§12: only has to fail at
+/// the same point CPython's own decoder would, not match it verbatim),
+/// but deterministic for this one fixed string, which is all any test
+/// here needs.
+pub const TOOL_FAIL_TEXT: &str = "json: parse failed: Expecting value: char 0";
+
+/// A `tool` leaf -- real `json`-tool dispatch (through [`json_registry`]),
+/// `mode: parse` against the fixed malformed `input:` that always fails
+/// with [`TOOL_FAIL_TEXT`].
 pub fn tool_leaf(path: EffectPath, name: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        Value::Str("mode".to_string()),
+        electricity_bytecode::ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        Value::Str("input".to_string()),
+        electricity_bytecode::ParamNode::Literal(Value::Str("not json".to_string())),
+    );
     Op {
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
             provider: "json".to_string(),
-            params: electricity_bytecode::ParamNode::Map(IndexMap::new()),
+            params: electricity_bytecode::ParamNode::Map(params),
             params_json: None,
             prompt: None,
             model: None,

@@ -10,8 +10,8 @@ use electricity_tools::ToolRegistry;
 use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
-    CancelOnStart, Event, RecordingObserver, TOOL_STUB_TEXT, cel_if, chain_dynamic,
-    dynamic_with_finally, run_ctx, tool_leaf, tree_dynamic,
+    CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic,
+    dynamic_with_finally, json_registry, run_ctx, tool_leaf, tree_dynamic,
 };
 
 fn root_path() -> EffectPath {
@@ -33,7 +33,7 @@ fn as_dict(value: &Value) -> &indexmap::IndexMap<Value, Value> {
 async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -63,7 +63,7 @@ async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
     let VmError::Message(text) = err else {
         panic!("expected a wrapped Message error, got {err:?}");
     };
-    assert_eq!(text, format!("prime.b: {TOOL_STUB_TEXT}"));
+    assert_eq!(text, format!("prime.b: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
@@ -76,7 +76,7 @@ async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
 async fn an_absorbed_failure_lets_the_parent_continue_and_records_meta_error() {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -125,7 +125,7 @@ async fn an_absorbed_failure_lets_the_parent_continue_and_records_meta_error() {
     // path `prime.d`).
     assert_eq!(
         get(meta, "error"),
-        Some(&Value::Str(format!("d.b: {TOOL_STUB_TEXT}")))
+        Some(&Value::Str(format!("d.b: {TOOL_FAIL_TEXT}")))
     );
     assert!(
         get(prime, "after").is_some(),
@@ -261,7 +261,7 @@ async fn tree_dispatch_fires_before_any_branch_and_merges_every_child_in_order()
 async fn tree_stop_on_error_never_starts_a_queued_branch() {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -310,7 +310,7 @@ async fn tree_stop_on_error_never_starts_a_queued_branch() {
 async fn finally_runs_after_a_body_failure_and_reports_finally_error_too() {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -337,23 +337,25 @@ async fn finally_runs_after_a_body_failure_and_reports_finally_error_too() {
     let VmError::Message(text) = err else {
         panic!("expected a wrapped Message error, got {err:?}");
     };
-    assert_eq!(text, format!("prime.body_tool: {TOOL_STUB_TEXT}"));
+    assert_eq!(text, format!("prime.body_tool: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
     let prime = as_dict(get(root_dict, "prime").unwrap());
-    assert!(
-        get(prime, "cleanup").is_none(),
-        "the finally tool leaf also fails through the stub before writing anything"
-    );
+    // `cleanup` runs (a real tool node now, unlike the old stub) and
+    // fails too -- its own `value` stays `None`, the default
+    // `execute_tool` sets before dispatch (`on_error: fail` never
+    // writes a null placeholder the way `skip`/`continue` would).
+    let cleanup = as_dict(get(prime, "cleanup").unwrap());
+    assert_eq!(get(cleanup, "value"), Some(&Value::None));
     let meta = as_dict(get(prime, "meta").unwrap());
     assert_eq!(
         get(meta, "error"),
-        Some(&Value::Str(format!("prime.body_tool: {TOOL_STUB_TEXT}")))
+        Some(&Value::Str(format!("prime.body_tool: {TOOL_FAIL_TEXT}")))
     );
     assert_eq!(
         get(meta, "finally_error"),
-        Some(&Value::Str(format!("prime.cleanup: {TOOL_STUB_TEXT}")))
+        Some(&Value::Str(format!("prime.cleanup: {TOOL_FAIL_TEXT}")))
     );
 }
 
@@ -576,7 +578,7 @@ async fn a_signal_during_an_otherwise_successful_finally_is_reported_as_interrup
 async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message() {
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -631,8 +633,8 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
     // _effect_path`'s `container_name` is always a bare name, not a
     // path (see `an_absorbed_failure_lets_the_parent_continue_and_
     // records_meta_error`'s own identical fix for one level of this).
-    assert!(text.contains(&format!("[1] prime.x0: x0.b: {TOOL_STUB_TEXT}")));
-    assert!(text.contains(&format!("[2] prime.x1: x1.b: {TOOL_STUB_TEXT}")));
+    assert!(text.contains(&format!("[1] prime.x0: x0.b: {TOOL_FAIL_TEXT}")));
+    assert!(text.contains(&format!("[2] prime.x1: x1.b: {TOOL_FAIL_TEXT}")));
 
     // Both branches still ran (and failed) and both are merged in.
     let snapshot = store.snapshot(&store.root);
@@ -655,7 +657,7 @@ async fn stop_on_error_records_only_the_first_of_two_simultaneous_failures() {
     // error is never even inspected).
     let store = Store::new();
     let token = CancellationToken::new();
-    let registry = ToolRegistry::new();
+    let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
     let observer = RecordingObserver::new();
@@ -706,8 +708,8 @@ async fn stop_on_error_records_only_the_first_of_two_simultaneous_failures() {
         "stop_on_error must record only the triggering failure, got {text:?}"
     );
     assert!(
-        text == &format!("prime.x0: x0.b: {TOOL_STUB_TEXT}")
-            || text == &format!("prime.x1: x1.b: {TOOL_STUB_TEXT}"),
+        text == &format!("prime.x0: x0.b: {TOOL_FAIL_TEXT}")
+            || text == &format!("prime.x1: x1.b: {TOOL_FAIL_TEXT}"),
         "got {text:?}"
     );
 }
