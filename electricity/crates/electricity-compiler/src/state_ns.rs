@@ -14,7 +14,7 @@
 //! `validate_cel_expr` immediately beside it in `core/compiler.py`).
 
 use crate::CompileError;
-use electricity_value::Value;
+use electricity_value::{Dict, Value};
 use std::collections::BTreeSet;
 
 /// `core/state_ns.py`'s `NAMESPACES` -- the only legal root namespaces.
@@ -41,23 +41,55 @@ fn is_namespace(root: &str) -> bool {
 pub fn migrate_legacy_input_namespace(
     inline: &indexmap::IndexMap<String, Value>,
 ) -> indexmap::IndexMap<String, Value> {
-    if let Some(value) = inline.get("input") {
-        return match value {
-            Value::Dict(dict) => dict
-                .iter()
-                .filter_map(|(k, v)| match k {
-                    Value::Str(s) => Some((s.clone(), v.clone())),
-                    _ => None,
-                })
-                .collect(),
-            _ => indexmap::IndexMap::new(),
-        };
+    let state = migrate_legacy_state(inline.clone());
+    match state.get("input") {
+        Some(Value::Dict(dict)) => dict
+            .iter()
+            .filter_map(|(k, v)| match k {
+                Value::Str(s) => Some((s.clone(), v.clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => indexmap::IndexMap::new(),
     }
-    inline
-        .iter()
-        .filter(|(key, _)| !is_namespace(key) && !key.starts_with('_'))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
+}
+
+/// `core/state_ns.py::migrate_legacy_state`, in full -- the whole root,
+/// not just [`migrate_legacy_input_namespace`]'s own `input`-only
+/// projection of it (PR #441 review finding 1d: a root key `-e`
+/// supplies that is itself a namespace name (`prime`/`runtime`) or
+/// `_`-prefixed must survive at the root, not be silently dropped just
+/// because it was never going to be lifted under `input`).
+///
+/// *inline* already present under its own `input` key wins outright and
+/// is returned completely untouched, same other keys included --
+/// Python's own `if INPUT_NS in state: return state` returns the *whole*
+/// dict, not just its `input` entry, so `-e input={...} -e extra=2`
+/// keeps `extra` at the root exactly as `-e extra=2` alone would lift
+/// it there if `input` were absent. Otherwise, every key that is
+/// neither a namespace name nor `_`-prefixed is popped off the root (in
+/// its own original order) and reinserted, in that same order, under a
+/// fresh `input` key appended at the very end -- Python's own
+/// `state.pop(key)` loop followed by `state[INPUT_NS] = input_ns`; a
+/// namespace-named or `_`-prefixed key is left exactly where it already
+/// was, never lifted, never reordered.
+pub fn migrate_legacy_state(
+    inline: indexmap::IndexMap<String, Value>,
+) -> indexmap::IndexMap<String, Value> {
+    if inline.contains_key("input") {
+        return inline;
+    }
+    let mut state = indexmap::IndexMap::new();
+    let mut input_ns: Dict = Dict::new();
+    for (key, value) in inline {
+        if is_namespace(&key) || key.starts_with('_') {
+            state.insert(key, value);
+        } else {
+            input_ns.insert(Value::Str(key), value);
+        }
+    }
+    state.insert("input".to_string(), Value::Dict(input_ns));
+    state
 }
 
 /// Hard-errors unless a by-reference `{from: <path>}` leaf has a legal

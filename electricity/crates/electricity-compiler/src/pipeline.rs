@@ -543,7 +543,7 @@ fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<S
 /// Python's own `inputs[key] = ...` writes a missing key's `default:`
 /// under that exact literal key -- a `String`-keyed namespace would
 /// have nowhere to put it, silently dropping the write Python makes.
-fn build_input_namespace(
+pub fn build_input_namespace(
     document: &Value,
     options: &CheckOptions,
 ) -> Result<IndexMap<Value, Value>, String> {
@@ -561,7 +561,15 @@ fn build_input_namespace(
 /// declares none) -- [`build_input_namespace`]'s own preamble, shared
 /// with [`build_input_namespace_best_effort`] so the two functions'
 /// starting point can never drift apart.
-fn seeded_input_namespace<'a>(
+/// Public (PR #441 review finding 1c): `electricity`'s own run wiring
+/// re-seeds `state["input"]` with this exact namespace -- never
+/// `apply_declared_inputs`'d, so still just the sniffed-and-string-
+/// restored `-e` values -- as soon as the real document is loaded, so
+/// every failure from that point on (allowlist, effective settings,
+/// ...) reports the same raw-text restoration a `check_interface_
+/// inputs` call later in the same run would've started from, not only
+/// the failures that happen to reach [`build_input_namespace`] itself.
+pub fn seeded_input_namespace<'a>(
     document: &'a Value,
     options: &CheckOptions,
 ) -> (IndexMap<Value, Value>, Option<&'a Dict>) {
@@ -902,6 +910,26 @@ pub fn pre_state_checks(
     options: &CheckOptions,
     effective_runtime: Option<&Value>,
 ) -> Result<IndexMap<Value, Value>, RunCheckError> {
+    pre_input_checks(loaded, effective_runtime)?;
+    build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)
+}
+
+/// [`pre_state_checks`]'s own steps 6 (part 2)/7/9 -- everything it
+/// runs *before* [`build_input_namespace`] (step 10) -- split out on
+/// its own so a caller can tell the two kinds of failure apart (PR
+/// #441 review finding 1b): a failure here means `build_input_
+/// namespace`/[`build_input_namespace_best_effort`] never ran at all,
+/// so `state["input"]` must stay exactly whatever it already was
+/// (lane D2's run wiring), not get the partial, best-effort coercion
+/// pass that's only ever correct for a step-10 failure. [`pre_state_
+/// checks`] itself is still the right call for any caller that only
+/// wants the combined verdict (`check_for_run`, this crate's own
+/// tests) -- this function exists for the one caller that needs to
+/// know which half failed.
+pub fn pre_input_checks(
+    loaded: &Loaded,
+    effective_runtime: Option<&Value>,
+) -> Result<(), RunCheckError> {
     if let Some(message) = effective_settings_shape_error(&loaded.document) {
         return Err(RunCheckError::Compile(message));
     }
@@ -921,7 +949,7 @@ pub fn pre_state_checks(
     electricity_config::validate_persistence(&loaded.document, effective_runtime)
         .map_err(|err| RunCheckError::Compile(err.0))?;
 
-    build_input_namespace(&loaded.document, options).map_err(RunCheckError::Compile)
+    Ok(())
 }
 
 /// Phase 3 of [`check_for_run`]'s own order: structural checks, compile,

@@ -205,31 +205,84 @@ pub fn strip_third_party_parse_detail(value: &Value) -> Value {
     }
 }
 
-/// Blanks `meta.expect.error`'s own detail text, recursively -- a
-/// raising CEL `expect:`'s own underlying exception, formatted by two
-/// entirely different CEL implementations (`cel-python`'s own
+/// `core/cel_eval.py`'s own `f"CEL evaluation failed for {expr!r}: {exc}"`
+/// prefix, kept verbatim -- only `{exc}` itself (everything after the
+/// closing quote's own `": "`) is third-party text (`cel-python`'s own
 /// stringified exception tuple vs. this crate's `electricity-cel`'s
-/// own `Display`), the same "third-party text only has to fail at the
-/// same place" rule as [`strip_third_party_parse_detail`] -- found by
-/// shape (an object with both an `expr` and an `error` key), not by
-/// path, since this can nest under any effect's own `meta.expect`.
+/// own `Display`), so only that part is blanked (PR #441 review
+/// finding 7: the pre-fix version blanked Circuitry's own prefix too,
+/// and matched by shape -- any object with both an `expr` and an
+/// `error` key -- rather than this field's one real location). Falls
+/// back to blanking the whole string if it doesn't start with the
+/// expected `CEL evaluation failed for <repr>: ` shape at all (a
+/// genuinely different error this helper was never meant to touch),
+/// so a real divergence there still fails loudly rather than silently
+/// matching.
+fn blanked_cel_detail(s: &str) -> String {
+    const PREFIX: &str = "CEL evaluation failed for ";
+    let Some(after_marker) = s.strip_prefix(PREFIX) else {
+        return "<DETAIL>".to_string();
+    };
+    let Some(quote) = after_marker.chars().next() else {
+        return "<DETAIL>".to_string();
+    };
+    if quote != '\'' && quote != '"' {
+        return "<DETAIL>".to_string();
+    }
+    let Some(close_rel) = after_marker[1..].find(quote) else {
+        return "<DETAIL>".to_string();
+    };
+    let close_at = PREFIX.len() + 1 + close_rel + 1;
+    if !s[close_at..].starts_with(": ") {
+        return "<DETAIL>".to_string();
+    }
+    let keep_until = close_at + 2;
+    format!("{}<DETAIL>", &s[..keep_until])
+}
+
+/// Blanks `meta.expect.error`'s own detail text, recursively -- never
+/// anywhere else an `error` key happens to appear (PR #441 review
+/// finding 7), by walking with the last two keys in hand rather than
+/// matching on shape: only a key named `error` whose immediate parent
+/// dict's own key (in whatever dict holds it) is `expect`, and *that*
+/// dict's own parent key is `meta`, is ever touched.
 pub fn strip_expect_error_detail(value: &Value) -> Value {
+    strip_expect_error_detail_at(value, None, None)
+}
+
+fn strip_expect_error_detail_at(
+    value: &Value,
+    parent_key: Option<&str>,
+    grandparent_key: Option<&str>,
+) -> Value {
     match value {
         Value::Object(map) => {
-            let is_expect_shaped = map.contains_key("expr") && map.contains_key("error");
+            let is_meta_expect = parent_key == Some("expect") && grandparent_key == Some("meta");
             Value::Object(
                 map.iter()
                     .map(|(k, v)| {
-                        if is_expect_shaped && k == "error" {
-                            (k.clone(), Value::String("<DETAIL>".to_string()))
+                        if is_meta_expect && k == "error" {
+                            let blanked = match v {
+                                Value::String(s) => blanked_cel_detail(s),
+                                _ => "<DETAIL>".to_string(),
+                            };
+                            (k.clone(), Value::String(blanked))
                         } else {
-                            (k.clone(), strip_expect_error_detail(v))
+                            (
+                                k.clone(),
+                                strip_expect_error_detail_at(v, Some(k.as_str()), parent_key),
+                            )
                         }
                     })
                     .collect(),
             )
         }
-        Value::Array(items) => Value::Array(items.iter().map(strip_expect_error_detail).collect()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| strip_expect_error_detail_at(v, parent_key, grandparent_key))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }

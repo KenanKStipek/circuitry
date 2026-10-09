@@ -3,8 +3,14 @@
 //! every one of `electricity::run_orchestration`'s own pre-execution
 //! failure paths (load, effective-settings shape, complexity,
 //! concurrency, persistence validation, a missing required input,
-//! structural, compile, an unknown concurrency group), each compared
-//! against a real `cof run`'s own normalized `--out` state and stdout.
+//! structural, compile, an unknown concurrency group, two of PR #441
+//! review finding 1's own -e-seeding corner cases), each compared
+//! against a real `cof run`'s own normalized `--out` state and full
+//! stdout bytes. Every case's own document (and config/`-e` inputs,
+//! for the two that have one) lives in the golden file itself
+//! (`CorpusCase::orchestration`/`config`/`inputs`) -- not copy-pasted
+//! into this file too, the one place either could ever drift from
+//! what `cof` actually ran.
 
 mod support;
 
@@ -22,71 +28,6 @@ const GOLDEN: &str = concat!(
     "/tests/golden/run_failures.json"
 );
 
-// ---------------------------------------------------------------------
-// Every case's own document, copied verbatim from
-// `electricity/scripts/generate_vm_run_failures.py` -- the golden
-// corpus itself doesn't carry the document text, only `cof run`'s own
-// result.
-// ---------------------------------------------------------------------
-
-const LOAD_ERROR_DOC: &str = "effects: []\neffects: []\n";
-
-const EFFECTIVE_SETTINGS_SHAPE_ERROR_DOC: &str = "runtime: \"not an object\"\neffects: []\n";
-
-const COMPLEXITY_ERROR_DOC: &str = "\
-runtime:
-  complexity:
-    routing:
-      enabled: true
-effects: []
-";
-
-const CONCURRENCY_ERROR_DOC: &str = "\
-runtime:
-  max_concurrency: -1
-effects: []
-";
-
-const PERSISTENCE_VALIDATION_ERROR_DOC: &str = "\
-runtime:
-  persistence:
-    enabled: true
-    backend: sqlite
-effects: []
-";
-
-const MISSING_REQUIRED_INPUT_DOC: &str = "\
-interface:
-  inputs:
-    name:
-      type: string
-      required: true
-effects: []
-";
-
-const STRUCTURAL_ERROR_DOC: &str = "{}\n";
-
-const DUPLICATE_EFFECT_NAME_DOC: &str = "\
-effects:
-  - name: dup
-    type: tool
-    provider: json
-    params: {mode: stringify, input: {}}
-  - name: dup
-    type: tool
-    provider: json
-    params: {mode: stringify, input: {}}
-";
-
-const UNKNOWN_GROUP_DOC: &str = "\
-effects:
-  - name: a
-    type: tool
-    provider: json
-    group: no-such-group
-    params: {mode: stringify, input: {}}
-";
-
 static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -102,35 +43,59 @@ fn temp_dir(name: &str) -> PathBuf {
 
 struct Ran {
     state: Json,
-    /// With *this test's own* temporary directory (plus the trailing
-    /// path separator) stripped from the front of any occurrence --
-    /// `run_orchestration`'s own error text embeds `RunRequest::
-    /// orchestration_path` exactly as given, which this test always
-    /// builds as an absolute path (changing the process's own `cwd` to
-    /// get a relative one instead, the way `cof run orchestration.yml`
-    /// itself does, would race every other test in this same binary);
-    /// `cof`'s own text embeds the bare relative name it was actually
-    /// invoked with, so this is the one piece of `--out`-shaped
-    /// invocation-specific text [`support::normalize`]'s own root
-    /// replacement can't reach (that one substitutes `<root>` back in;
-    /// the golden has no such placeholder to match here at all, since
-    /// `cof`'s own text never contained an absolute path to begin
-    /// with).
-    error: Option<String>,
+    /// The full stdout payload (`{"ok": false, "error": ..., "warnings":
+    /// [...], "state_out": ...}`), with *this test's own* temporary
+    /// directory replaced by `<root>` -- the same placeholder the
+    /// golden corpus's own normalizer used, so `state_out`'s own path
+    /// compares byte for byte too (both sides write to a file named
+    /// `expected.out.json`, directly alongside the document).
+    stdout: Json,
 }
 
-async fn run_case(name: &str, orchestration: &str) -> Ran {
-    let dir = temp_dir(name);
-    let config_path = dir.join("config.json");
-    fs::write(&config_path, "{}").unwrap();
+/// Runs *case*'s own document (and config/`-e` inputs, if it has one)
+/// through `electricity::run_orchestration` directly, writing `--out`
+/// and building the stdout failure payload exactly as `electricity-cli`'s
+/// own `run_action` does, so this test can compare both against a real
+/// `cof run`'s own normalized output.
+async fn run_case(case: &CorpusCase) -> Ran {
+    let dir = temp_dir(&case.name);
+    let orchestration = case
+        .orchestration
+        .as_deref()
+        .unwrap_or_else(|| panic!("{}: corpus case has no 'orchestration' text", case.name));
     let doc_path = dir.join("orchestration.yml");
     fs::write(&doc_path, orchestration).unwrap();
 
+    let config_path = dir.join("config.json");
+    let config_text = match &case.config {
+        Some(config) => serde_json::to_string(config).unwrap(),
+        None => "{}".to_string(),
+    };
+    fs::write(&config_path, config_text).unwrap();
+
+    let inputs: IndexMap<String, String> = case
+        .inputs
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.as_str()
+                            .unwrap_or_else(|| panic!("{}: -e input {k} isn't a string", case.name))
+                            .to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let out_path = dir.join("expected.out.json");
     let req = RunRequest {
         config_path,
         orchestration_path: doc_path,
-        inputs: IndexMap::new(),
-        out_path: None,
+        inputs,
+        out_path: Some(out_path.clone()),
         pretty: false,
         live_state_path: None,
         events_path: None,
@@ -140,6 +105,7 @@ async fn run_case(name: &str, orchestration: &str) -> Ran {
     let state = result
         .state
         .expect("every case in this corpus still writes state");
+    electricity::out::write_out(&out_path, &state, false).unwrap();
     let state_text = electricity::out::render_state(&state, false);
 
     let root = dir.to_str().unwrap();
@@ -147,13 +113,32 @@ async fn run_case(name: &str, orchestration: &str) -> Ran {
     let state_json = normalize(None, &state_json, root);
     let state_json = strip_invocation_shape_fields(&state_json);
 
-    let error = result
-        .error
-        .map(|text| text.replace(&format!("{root}/"), ""));
+    let stdout_text = electricity::out::failure_payload(
+        result.error.as_deref().unwrap_or(""),
+        &result.warnings,
+        Some(&out_path),
+    );
+    let stdout_json: Json = serde_json::from_str(&stdout_text).unwrap();
+    let mut stdout_json = normalize(None, &stdout_json, root);
+    // `run_orchestration`'s own error text embeds `RunRequest::
+    // orchestration_path` exactly as given, which this test always
+    // builds as an absolute path (changing the process's own `cwd` to
+    // get a relative one instead, the way `cof run orchestration.yml`
+    // itself does, would race every other test in this same binary);
+    // `cof`'s own text embeds the bare relative name it was actually
+    // invoked with. `normalize`'s own root substitution above already
+    // turned the absolute prefix into `<root>/`; strip that one
+    // remaining `<root>/` the golden has no placeholder for at all,
+    // leaving every other occurrence (there is none in this corpus)
+    // alone.
+    if let Some(error) = stdout_json.get("error").and_then(Json::as_str) {
+        let stripped = error.replace("<root>/", "");
+        stdout_json["error"] = Json::String(stripped);
+    }
 
     Ran {
         state: state_json,
-        error,
+        stdout: stdout_json,
     }
 }
 
@@ -164,13 +149,9 @@ fn corpus_case<'a>(cases: &'a [CorpusCase], name: &str) -> &'a CorpusCase {
         .unwrap_or_else(|| panic!("{name}: no such case"))
 }
 
-fn expected_error(case: &CorpusCase) -> String {
-    let payload: Json = serde_json::from_str(&case.result.stdout)
-        .unwrap_or_else(|err| panic!("{}: stdout isn't JSON: {err}", case.name));
-    payload["error"]
-        .as_str()
-        .unwrap_or_else(|| panic!("{}: stdout has no string 'error'", case.name))
-        .to_string()
+fn expected_stdout(case: &CorpusCase) -> Json {
+    serde_json::from_str(&case.result.stdout)
+        .unwrap_or_else(|err| panic!("{}: stdout isn't JSON: {err}", case.name))
 }
 
 fn expected_state(case: &CorpusCase) -> Json {
@@ -182,11 +163,21 @@ fn expected_state(case: &CorpusCase) -> Json {
     strip_invocation_shape_fields(&state)
 }
 
+/// Normalizes ASCII double quotes to single quotes -- the one
+/// difference between the Rust `jsonschema` crate's own missing-
+/// property message and Python `jsonschema`'s (DESIGN.md §1/§12:
+/// third-party text only has to fail at the same place, never match
+/// word for word) -- so [`ErrorCompare::LocationPrefix`] can still
+/// assert full equality rather than merely a shared prefix (PR #441
+/// review finding 7).
+fn normalize_quotes(s: &str) -> String {
+    s.replace('"', "'")
+}
+
 /// Whether a case's own error text is Circuitry's own (compared byte
-/// for byte) or a third-party library's (compared only up to and
-/// including the location prefix, DESIGN.md §1/§12 -- the Rust
-/// `jsonschema` crate quotes a missing-property name in double quotes,
-/// Python's own in single quotes, for `structural_error` here).
+/// for byte) or a third-party library's (compared after normalizing
+/// quote style, and asserting there is exactly one error line --
+/// `structural_error` here, DESIGN.md §1/§12).
 enum ErrorCompare {
     Exact,
     LocationPrefix(&'static str),
@@ -195,62 +186,74 @@ enum ErrorCompare {
 #[tokio::test]
 async fn electricity_matches_the_golden_run_failures_corpus() {
     let cases = load_corpus_at(GOLDEN);
-    for (name, doc, compare) in [
-        ("load_error", LOAD_ERROR_DOC, ErrorCompare::Exact),
-        (
-            "effective_settings_shape_error",
-            EFFECTIVE_SETTINGS_SHAPE_ERROR_DOC,
-            ErrorCompare::Exact,
-        ),
-        (
-            "complexity_error",
-            COMPLEXITY_ERROR_DOC,
-            ErrorCompare::Exact,
-        ),
-        (
-            "concurrency_error",
-            CONCURRENCY_ERROR_DOC,
-            ErrorCompare::Exact,
-        ),
-        (
-            "persistence_validation_error",
-            PERSISTENCE_VALIDATION_ERROR_DOC,
-            ErrorCompare::Exact,
-        ),
-        (
-            "missing_required_input",
-            MISSING_REQUIRED_INPUT_DOC,
-            ErrorCompare::Exact,
-        ),
+    for (name, compare) in [
+        ("load_error", ErrorCompare::Exact),
+        ("effective_settings_shape_error", ErrorCompare::Exact),
+        ("complexity_error", ErrorCompare::Exact),
+        ("concurrency_error", ErrorCompare::Exact),
+        ("persistence_validation_error", ErrorCompare::Exact),
+        ("missing_required_input", ErrorCompare::Exact),
         (
             "structural_error",
-            STRUCTURAL_ERROR_DOC,
             ErrorCompare::LocationPrefix("Orchestration validation failed:\n  - top level: "),
         ),
+        ("duplicate_effect_name", ErrorCompare::Exact),
+        ("unknown_group", ErrorCompare::Exact),
+        ("best_effort_stops_before_step_10", ErrorCompare::Exact),
         (
-            "duplicate_effect_name",
-            DUPLICATE_EFFECT_NAME_DOC,
+            "allowlist_failure_restores_raw_text_input",
             ErrorCompare::Exact,
         ),
-        ("unknown_group", UNKNOWN_GROUP_DOC, ErrorCompare::Exact),
     ] {
         let case = corpus_case(&cases, name);
-        let ran = run_case(name, doc).await;
-        let expected = expected_error(case);
+        let ran = run_case(case).await;
+        let mut expected_stdout = expected_stdout(case);
+        let mut actual_stdout = ran.stdout.clone();
+        let expected_error = expected_stdout["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name}: golden stdout has no string 'error'"))
+            .to_string();
+        let actual_error = actual_stdout["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name}: actual stdout has no string 'error'"))
+            .to_string();
         match compare {
             ErrorCompare::Exact => assert_eq!(
-                ran.error.as_deref(),
-                Some(expected.as_str()),
+                actual_error, expected_error,
                 "{name}: error text diverges from the golden corpus"
             ),
             ErrorCompare::LocationPrefix(prefix) => {
-                let actual = ran.error.as_deref().unwrap_or("");
                 assert!(
-                    actual.starts_with(prefix) && expected.starts_with(prefix),
-                    "{name}: expected both to start with {prefix:?}\n  actual:   {actual:?}\n  expected: {expected:?}"
+                    actual_error.starts_with(prefix) && expected_error.starts_with(prefix),
+                    "{name}: expected both to start with {prefix:?}\n  actual:   {actual_error:?}\n  expected: {expected_error:?}"
                 );
+                assert_eq!(
+                    actual_error.lines().count(),
+                    2,
+                    "{name}: expected exactly one error line after the prefix, got {actual_error:?}"
+                );
+                assert_eq!(
+                    expected_error.lines().count(),
+                    2,
+                    "{name}: expected exactly one golden error line after the prefix, got {expected_error:?}"
+                );
+                assert_eq!(
+                    normalize_quotes(&actual_error),
+                    normalize_quotes(&expected_error),
+                    "{name}: error text diverges beyond quote style\n  actual:   {actual_error:?}\n  expected: {expected_error:?}"
+                );
+                // Quote style is the one difference this case tolerates
+                // -- blank both sides' own `error` field the same way
+                // before comparing the rest of the stdout payload byte
+                // for byte below.
+                expected_stdout["error"] = Json::String("<ERROR>".to_string());
+                actual_stdout["error"] = Json::String("<ERROR>".to_string());
             }
         }
+        assert_eq!(
+            actual_stdout, expected_stdout,
+            "{name}: stdout diverges from the golden corpus"
+        );
         assert_eq!(
             ran.state,
             expected_state(case),

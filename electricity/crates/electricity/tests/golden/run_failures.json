@@ -1,6 +1,9 @@
 [
   {
     "name": "load_error",
+    "orchestration": "effects: []\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"orchestration.yml: duplicate key 'effects' at line 2, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -31,6 +34,9 @@
   },
   {
     "name": "effective_settings_shape_error",
+    "orchestration": "runtime: \"not an object\"\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Orchestration 'runtime' must be an object if provided.\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -61,6 +67,9 @@
   },
   {
     "name": "complexity_error",
+    "orchestration": "runtime:\n  complexity:\n    routing:\n      enabled: true\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"runtime.complexity.routing.enabled is true but no bands are defined. Add runtime.complexity.routing.bands with at least a catch-all band (one with no 'max').\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -91,6 +100,9 @@
   },
   {
     "name": "concurrency_error",
+    "orchestration": "runtime:\n  max_concurrency: -1\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Invalid runtime concurrency configuration:\\n  - runtime.max_concurrency must be a positive integer, got -1.\",\n  \"warnings\": [\n    \"Applied host settings from orchestration.yml: runtime.max_concurrency\"\n  ],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -121,6 +133,9 @@
   },
   {
     "name": "persistence_validation_error",
+    "orchestration": "runtime:\n  persistence:\n    enabled: true\n    backend: sqlite\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Persistence backend 'sqlite' requires runtime.persistence.db_path\",\n  \"warnings\": [\n    \"Applied host settings from orchestration.yml: runtime.persistence.enabled, runtime.persistence.backend\"\n  ],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -151,6 +166,9 @@
   },
   {
     "name": "missing_required_input",
+    "orchestration": "interface:\n  inputs:\n    name:\n      type: string\n      required: true\neffects: []\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"missing required input 'name' declared in orchestration interface.\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -181,6 +199,9 @@
   },
   {
     "name": "structural_error",
+    "orchestration": "{}\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Orchestration validation failed:\\n  - top level: 'effects' is a required property\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -261,6 +282,9 @@
   },
   {
     "name": "duplicate_effect_name",
+    "orchestration": "effects:\n  - name: dup\n    type: tool\n    provider: json\n    params: {mode: stringify, input: {}}\n  - name: dup\n    type: tool\n    provider: json\n    params: {mode: stringify, input: {}}\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Duplicate effect name 'dup' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -341,6 +365,9 @@
   },
   {
     "name": "unknown_group",
+    "orchestration": "effects:\n  - name: a\n    type: tool\n    provider: json\n    group: no-such-group\n    params: {mode: stringify, input: {}}\n",
+    "config": null,
+    "inputs": {},
     "result": {
       "returncode": 1,
       "stdout": "{\n  \"ok\": false,\n  \"error\": \"Orchestration validation failed:\\n  - group 'no-such-group' is not defined in runtime.concurrency_groups — known groups: (none configured).\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
@@ -414,6 +441,78 @@
         },
         "_run_id": "<RUN_ID>",
         "_timestamp": "<TIMESTAMP>"
+      },
+      "events": [],
+      "live_state": null
+    }
+  },
+  {
+    "name": "best_effort_stops_before_step_10",
+    "orchestration": "interface:\n  inputs:\n    n:\n      type: integer\n      default: 3\nruntime:\n  max_concurrency: -1\neffects: []\n",
+    "config": null,
+    "inputs": {},
+    "result": {
+      "returncode": 1,
+      "stdout": "{\n  \"ok\": false,\n  \"error\": \"Invalid runtime concurrency configuration:\\n  - runtime.max_concurrency must be a positive integer, got -1.\",\n  \"warnings\": [\n    \"Applied host settings from orchestration.yml: runtime.max_concurrency\"\n  ],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
+      "stderr": "Warning: Applied host settings from orchestration.yml: runtime.max_concurrency\n",
+      "state": {
+        "input": {},
+        "runtime": {
+          "last_run": {
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 0,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "plugins": {
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        }
+      },
+      "events": [],
+      "live_state": null
+    }
+  },
+  {
+    "name": "allowlist_failure_restores_raw_text_input",
+    "orchestration": "interface:\n  inputs:\n    code:\n      type: string\neffects:\n  - type: tool\n    name: use_code\n    provider: json\n    params: {mode: stringify, input: {}}\n",
+    "config": {
+      "enabled_tools": []
+    },
+    "inputs": {
+      "code": "5"
+    },
+    "result": {
+      "returncode": 1,
+      "stdout": "{\n  \"ok\": false,\n  \"error\": \"Allowlist enforcement failed: tool 'json' not in enabled_tools allowlist (enabled: [])\",\n  \"warnings\": [],\n  \"state_out\": \"<root>/expected.out.json\"\n}\n",
+      "stderr": "",
+      "state": {
+        "input": {
+          "code": "5"
+        },
+        "runtime": {
+          "last_run": {
+            "completed_at": "<TIMESTAMP>",
+            "totals": {
+              "wall_time_s": "<DURATION>",
+              "effects_run": 0,
+              "tokens_sent": 0,
+              "tokens_received": 0,
+              "cost_usd": null
+            }
+          },
+          "plugins": {
+            "configured": [],
+            "loaded": [],
+            "events": []
+          }
+        }
       },
       "events": [],
       "live_state": null

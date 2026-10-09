@@ -105,17 +105,66 @@ effects:
     params: {mode: stringify, input: {}}
 """
 
+# PR #441 review finding 1b: a pre-execution failure at step 6/7/9 (here,
+# step 7's own concurrency-config check) must never run step 10's
+# `check_interface_inputs` at all -- `state["input"]` must stay exactly
+# what step 4 seeded, not the defaulted/coerced value step 10 would have
+# produced had it ever run.
+BEST_EFFORT_STOPS_BEFORE_STEP_10_DOC = """\
+interface:
+  inputs:
+    n:
+      type: integer
+      default: 3
+runtime:
+  max_concurrency: -1
+effects: []
+"""
 
-def build_case(*, name: str, orchestration: str, home_root: Path) -> dict:
+# PR #441 review finding 1c: a declared `type: string` input's own raw
+# `-e` text must be restored into `state["input"]` even when the run
+# fails *before* step 10 ever runs -- here, at the allowlist check
+# (`enabled_tools: []` refuses the one `json` tool effect below).
+ALLOWLIST_FAILURE_DOC = """\
+interface:
+  inputs:
+    code:
+      type: string
+effects:
+  - type: tool
+    name: use_code
+    provider: json
+    params: {mode: stringify, input: {}}
+"""
+
+
+def build_case(
+    *,
+    name: str,
+    orchestration: str,
+    home_root: Path,
+    config: dict | None = None,
+    inputs: dict[str, str] | None = None,
+) -> dict:
     case_dir = home_root / name
     case_dir.mkdir(parents=True)
     home_dir = case_dir / "home"
     home_dir.mkdir()
     (case_dir / "orchestration.yml").write_text(orchestration, encoding="utf-8")
 
-    result = run_cof(case_dir, home_dir=home_dir)
+    result = run_cof(case_dir, config=config, inputs=inputs, home_dir=home_dir)
     normalized = normalize_result(result, str(case_dir.resolve()))
-    return {"name": name, "result": normalized}
+    # PR #441 review finding 9: the case's own document (and config,
+    # when it ran with one) lives in the golden file itself, not
+    # copy-pasted into `run_failures.rs` too -- the one place either
+    # could ever drift from what `cof` actually ran.
+    return {
+        "name": name,
+        "orchestration": orchestration,
+        "config": config,
+        "inputs": inputs or {},
+        "result": normalized,
+    }
 
 
 def main() -> int:
@@ -156,6 +205,18 @@ def main() -> int:
             ),
             build_case(
                 name="unknown_group", orchestration=UNKNOWN_GROUP_DOC, home_root=root
+            ),
+            build_case(
+                name="best_effort_stops_before_step_10",
+                orchestration=BEST_EFFORT_STOPS_BEFORE_STEP_10_DOC,
+                home_root=root,
+            ),
+            build_case(
+                name="allowlist_failure_restores_raw_text_input",
+                orchestration=ALLOWLIST_FAILURE_DOC,
+                home_root=root,
+                config={"enabled_tools": []},
+                inputs={"code": "5"},
             ),
         ]
 

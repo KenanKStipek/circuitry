@@ -27,6 +27,18 @@ use std::path::Path;
 pub struct CorpusCase {
     pub name: String,
     pub inputs: Value,
+    /// The case's own orchestration document text, when the generator
+    /// recorded one (PR #441 review finding 9: a case's document lives
+    /// in the golden file itself, not copy-pasted into the Rust test
+    /// too) -- `None` for an older golden file whose generator never
+    /// wrote this field at all, so every existing corpus stays
+    /// loadable without a regeneration of its own.
+    pub orchestration: Option<String>,
+    /// The case's own `config.json` contents, when the generator ran
+    /// `cof` with one (`_run_corpus.py::run_cof`'s own *config*
+    /// parameter) -- `None` for a case that ran with no config file at
+    /// all, same backward-compatibility rule as [`Self::orchestration`].
+    pub config: Option<Value>,
     pub result: CorpusResult,
 }
 
@@ -93,6 +105,11 @@ pub fn load_corpus_at(path: &str) -> Vec<CorpusCase> {
                 .unwrap_or_else(|| panic!("case missing a string 'name': {case}"))
                 .to_string();
             let inputs = case.get("inputs").cloned().unwrap_or(Value::Null);
+            let orchestration = case
+                .get("orchestration")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let config = case.get("config").filter(|v| !v.is_null()).cloned();
             let result = &case["result"];
             let returncode = result["returncode"]
                 .as_i64()
@@ -120,6 +137,8 @@ pub fn load_corpus_at(path: &str) -> Vec<CorpusCase> {
             CorpusCase {
                 name,
                 inputs,
+                orchestration,
+                config,
                 result: CorpusResult {
                     returncode,
                     stdout,

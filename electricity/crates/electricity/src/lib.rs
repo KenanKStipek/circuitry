@@ -659,6 +659,20 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
             Err(err) => fail!(err.to_string()),
         };
 
+    // PR #441 review finding 1c: re-seed `state["input"]` now that the
+    // real document is loaded, restoring a declared `type: string`
+    // input's own raw `-e` text the same way `cli/app.py::
+    // _restore_raw_text_for_string_inputs` does before `run()` is ever
+    // called -- every failure from here on (allowlist, effective
+    // settings, complexity, concurrency, persistence) must report that
+    // restoration too, not only a failure that happens to reach
+    // `build_input_namespace` (step 10) itself. Never `apply_declared_
+    // inputs`'d yet (that's step 10's own job, below) -- this is still
+    // just the sniffed-and-string-restored seed.
+    let (restored_input, _) =
+        electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+    state::replace_input_namespace(&store, restored_input);
+
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
     // same position `runtime_shim.run` checks it in.
@@ -682,49 +696,32 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         };
     warnings.extend(effective.warnings.clone());
 
-    // Step 6 (part 2)/7/9/10: complexity validation (before the
-    // limiter), the concurrency-config-error check, persistence
-    // validation (after the limiter), then check_interface_inputs --
-    // `pre_state_checks` is this exact composition (its own doc
-    // comment), returning the coerced/defaulted `input` namespace this
-    // function still has to write into *store* itself.
-    let input_namespace = match electricity_compiler::pre_state_checks(
-        &loaded,
-        &check_options,
-        effective.runtime.as_ref(),
-    ) {
-        Ok(namespace) => namespace,
-        Err(err) => {
-            // PR #441 review finding 3: a failure at or before step 10
-            // (`check_interface_inputs`) still mirrors Python's own
-            // in-place mutation of `state["input"]` as far as it got
-            // before the first violation -- `build_input_namespace_
-            // best_effort`'s own doc comment. A failure *before*
-            // `build_input_namespace` is ever reached (steps 6/7/9)
-            // leaves this identical to the seed step 4 already wrote.
-            let partial = electricity_compiler::build_input_namespace_best_effort(
-                &loaded.document,
-                &check_options,
-            );
-            let input_node = store
-                .ensure_dict(&store.root, Value::Str("input".to_string()))
-                .expect("Store::ensure_dict never fails");
-            for (key, value) in partial {
-                store.set_leaf(&input_node, key, value);
-            }
-            fail!(err.to_string())
-        }
-    };
+    // Step 6 (part 2)/7/9: complexity validation (before the limiter),
+    // the concurrency-config-error check, persistence validation
+    // (after the limiter) -- everything `build_input_namespace` (step
+    // 10) itself needs to *not* have run yet (PR #441 review finding
+    // 1b): a failure here means `check_interface_inputs` never got a
+    // chance to touch `state["input"]` at all, so it must stay exactly
+    // what the step-5 reseed above just left it as -- never the
+    // partial, best-effort coercion pass that's only ever correct for
+    // a step-10 failure itself.
+    if let Err(err) =
+        electricity_compiler::pre_input_checks(&loaded, effective.runtime.as_ref())
+    {
+        fail!(err.to_string());
+    }
 
     // After step 9's own validation: a document/config that actually
     // *configures* persistence or runtime plugins is refused with the
     // preview marker, exactly like any other unsupported content --
     // `validate_persistence`/`validate_persistence_block` (already run
-    // inside `pre_state_checks`) only ever rejects a malformed block,
+    // inside `pre_input_checks`) only ever rejects a malformed block,
     // never a well-formed one, since M0-H has no real backend/loader
     // of its own to refuse through *that* path (issue #431's "Out of
     // scope" section; PR #441 review finding 4). No state at all is
-    // written for this refusal, same as [`first_unsupported`]'s own.
+    // written for this refusal, same as [`first_unsupported`]'s own --
+    // and, now that this runs *before* step 10, `build_input_namespace`
+    // is never even called for a run this refuses.
     if persistence_is_configured(effective.runtime.as_ref()) {
         return RunResult {
             ok: false,
@@ -750,11 +747,26 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         };
     }
 
-    let input_node = store
-        .ensure_dict(&store.root, Value::Str("input".to_string()))
-        .expect("Store::ensure_dict never fails");
-    for (key, value) in input_namespace {
-        store.set_leaf(&input_node, key, value);
+    // Step 10: check_interface_inputs -- replaces `state["input"]`
+    // wholesale with the coerced/defaulted namespace (PR #441 review
+    // finding 1a: a key the final namespace doesn't carry forward,
+    // e.g. an optional input whose seed was `null`, must not survive
+    // from the step-5 reseed above).
+    match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
+        Ok(namespace) => state::replace_input_namespace(&store, namespace),
+        Err(err) => {
+            // PR #441 review finding 3: step 10 itself failed partway
+            // through -- mirror Python's own in-place mutation of
+            // `state["input"]` as far as it got before the first
+            // violation (`build_input_namespace_best_effort`'s own doc
+            // comment), replacing wholesale same as the success arm.
+            let partial = electricity_compiler::build_input_namespace_best_effort(
+                &loaded.document,
+                &check_options,
+            );
+            state::replace_input_namespace(&store, partial);
+            fail!(err)
+        }
     }
 
     // Step 5 (limiter build): already-validated counts straight into
