@@ -56,6 +56,12 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   stops the watch.
 - A document that fails to compile (or an engine whose compiler is still a
   stub) falls back to a plan-free run: rows come only from what's observed.
+- `osp watch <dir>` without `--plan` cannot yet tell an `if`/loop container
+  from a leaf by its own `meta` shape the instant its *first* observation
+  arrives, so a container can briefly print its own `▶`/`✓` the way a live
+  `osp <doc>` run of the same document never does (it already has a
+  compiled plan from the start). Pass `--plan do-thing.yml` to `osp watch`
+  for the same output a live run gives.
 - The first Ctrl-C forwards `SIGINT` to the engine's process group and logs
   a cancelling notice; a second forwards it again; still running 10s later,
   `osp` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osp`
