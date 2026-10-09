@@ -165,6 +165,17 @@ pub struct PlanTree {
     /// 1's "every earlier plan sibling is complete", which needs each
     /// chain op's own direct siblings, not its whole subtree.
     earlier_siblings: HashMap<String, Vec<String>>,
+    /// A transparent `if`'s own two branches (#433/review finding 9):
+    /// every real path a `then`/`else` branch contributes, mapped to
+    /// every real path the *other* side contributes. Only one side
+    /// ever actually runs, and the untaken side's own paths stay
+    /// absent from state forever — with no node of its own to report
+    /// `Skipped(UntakenBranch)` the way a *named* if's own node can,
+    /// `sibling_is_complete` uses this instead: once any path on one
+    /// side is observed, every path on the other is known, definitely,
+    /// to belong to the branch that didn't run, not merely one that
+    /// "hasn't been reached yet".
+    branch_alternates: HashMap<String, Vec<String>>,
 }
 
 impl PlanTree {
@@ -175,6 +186,7 @@ impl PlanTree {
             all_paths: Vec::new(),
             leaf_paths: Vec::new(),
             earlier_siblings: HashMap::new(),
+            branch_alternates: HashMap::new(),
         }
     }
 
@@ -204,6 +216,16 @@ impl PlanTree {
     /// branch, or anything with no plan at all).
     pub fn earlier_siblings(&self, path: &str) -> &[String] {
         self.earlier_siblings
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Every real path belonging to the *other* side of `path`'s own
+    /// `if`/`else`, when it's inside one (finding 9) — empty for
+    /// anything else, including an `if` with no `else` at all.
+    pub fn branch_alternates(&self, path: &str) -> &[String] {
+        self.branch_alternates
             .get(path)
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -258,12 +280,14 @@ impl PlanTree {
             }
         }
         let mut earlier_siblings = HashMap::new();
+        let mut branch_alternates = HashMap::new();
         let mut ctx = WalkCtx {
             base_dir: base_dir.as_deref(),
             cycle_guard: &mut cycle_guard,
             all_paths: &mut all_paths,
             leaf_paths: &mut leaf_paths,
             earlier_siblings: &mut earlier_siblings,
+            branch_alternates: &mut branch_alternates,
             loader,
         };
         walk_op(&program.root, None, None, &mut trie, &mut ctx);
@@ -273,6 +297,7 @@ impl PlanTree {
             all_paths,
             leaf_paths,
             earlier_siblings,
+            branch_alternates,
         }
     }
 
@@ -317,6 +342,7 @@ struct WalkCtx<'a> {
     all_paths: &'a mut Vec<String>,
     leaf_paths: &'a mut Vec<String>,
     earlier_siblings: &'a mut HashMap<String, Vec<String>>,
+    branch_alternates: &'a mut HashMap<String, Vec<String>>,
     loader: &'a dyn Fn(&Path) -> Result<Program, RunCheckError>,
 }
 
@@ -529,6 +555,22 @@ fn walk_region(
 /// sibling — both threw off the "every earlier sibling is complete"
 /// heuristic (DESIGN.md §2.1 rule 1) for anything near an unnamed
 /// `if`/loop.
+///
+/// Review finding 9: an `if`'s own two branches are each walked from
+/// their own copy of `earlier` as it stood before the `if`, not
+/// threaded one into the other, since only one side ever actually
+/// runs; threading `then_`'s own result into `else_`'s walk made an
+/// `else` child's earlier siblings include `then` children that never
+/// run when `else` is the side taken, and an absent sibling that never
+/// runs never resolves to anything but `LikelyRunning` — which
+/// blocked both that `else` child and everything after the `if` from
+/// ever reaching `LikelyRunning` themselves. Both sides' own new paths
+/// still fold into `earlier` afterwards, same as a single-branch `if`,
+/// so a later chain sibling still waits on whichever side actually
+/// ran; `ctx.branch_alternates` records, for every path either side
+/// contributed, every path the other side did, so
+/// `RunModel::sibling_is_complete` can tell "the other branch ran
+/// instead" from "hasn't run yet" for an absent one.
 fn walk_block(
     ops: &[Op],
     graft: Option<&EffectPath>,
@@ -541,9 +583,30 @@ fn walk_block(
             record_op_entry(op, graft, Some(Flow::Chain), trie, ctx);
             match &op.kind {
                 NodeKind::Control(Region::If { then_, else_, .. }) => {
-                    walk_transparent_branch(then_, graft, earlier, trie, ctx);
+                    let before = earlier.clone();
+                    let mut then_earlier = before.clone();
+                    walk_transparent_branch(then_, graft, &mut then_earlier, trie, ctx);
                     if let Some(else_) = else_ {
-                        walk_transparent_branch(else_, graft, earlier, trie, ctx);
+                        let mut else_earlier = before.clone();
+                        walk_transparent_branch(else_, graft, &mut else_earlier, trie, ctx);
+                        let then_new = then_earlier[before.len()..].to_vec();
+                        let else_new = else_earlier[before.len()..].to_vec();
+                        for path in &then_new {
+                            ctx.branch_alternates
+                                .entry(path.clone())
+                                .or_default()
+                                .extend(else_new.iter().cloned());
+                        }
+                        for path in &else_new {
+                            ctx.branch_alternates
+                                .entry(path.clone())
+                                .or_default()
+                                .extend(then_new.iter().cloned());
+                        }
+                        *earlier = then_earlier;
+                        earlier.extend(else_new);
+                    } else {
+                        *earlier = then_earlier;
                     }
                 }
                 NodeKind::Control(Region::Loop { body, .. }) => {
@@ -616,6 +679,7 @@ fn try_graft_use(child_rel: &str, use_path: &EffectPath, trie: &mut TrieNode, ct
             all_paths: ctx.all_paths,
             leaf_paths: ctx.leaf_paths,
             earlier_siblings: ctx.earlier_siblings,
+            branch_alternates: ctx.branch_alternates,
             loader: ctx.loader,
         };
         if let NodeKind::Control(region) = &child_program.root.kind {
@@ -1168,6 +1232,99 @@ mod tests {
             plan.earlier_siblings("prime.b"),
             &["prime.a".to_string(), "prime.flat_branch".to_string()]
         );
+    }
+
+    /// Review finding 9: an unnamed `if` *with* an `else` must not
+    /// thread one branch's own new paths into the other's walk —
+    /// each branch's earlier siblings are exactly what came before the
+    /// `if` itself, never the other side's children, and each side's
+    /// paths are recorded as the other's `branch_alternates`.
+    #[test]
+    fn an_unnamed_if_elses_two_branches_do_not_pollute_each_others_earlier_siblings() {
+        let root_path = EffectPath::root();
+        let a_path = root_path.clone().push_name("a");
+        let if_path = root_path.clone();
+        let then_child = if_path.clone().push_name("then_branch");
+        let else_child = if_path.clone().push_name("else_branch");
+        let b_path = root_path.clone().push_name("b");
+        let root = Op {
+            path: root_path.clone(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![
+                    tool_op(a_path, "a"),
+                    Op {
+                        path: if_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::If {
+                            cond: electricity_bytecode::Condition::Cel {
+                                expr: "true".to_string(),
+                                strict: false,
+                            },
+                            then_: Box::new(Region::Block {
+                                ops: vec![tool_op(then_child, "then_branch")],
+                                overlay: true,
+                            }),
+                            else_: Some(Box::new(Region::Block {
+                                ops: vec![tool_op(else_child, "else_branch")],
+                                overlay: true,
+                            })),
+                            threshold: 0.5,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    },
+                    tool_op(b_path, "b"),
+                ],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        let plan = PlanTree::from_program(&program);
+
+        // Neither branch's own earlier siblings include the other's
+        // children — both start from exactly what came before the `if`.
+        assert_eq!(
+            plan.earlier_siblings("prime.then_branch"),
+            &["prime.a".to_string()]
+        );
+        assert_eq!(
+            plan.earlier_siblings("prime.else_branch"),
+            &["prime.a".to_string()]
+        );
+        // A sibling after the `if` waits on both sides, in declaration
+        // order — whichever one actually ran.
+        assert_eq!(
+            plan.earlier_siblings("prime.b"),
+            &[
+                "prime.a".to_string(),
+                "prime.then_branch".to_string(),
+                "prime.else_branch".to_string()
+            ]
+        );
+        // Each side names the other as its alternate.
+        assert_eq!(
+            plan.branch_alternates("prime.then_branch"),
+            &["prime.else_branch".to_string()]
+        );
+        assert_eq!(
+            plan.branch_alternates("prime.else_branch"),
+            &["prime.then_branch".to_string()]
+        );
+        assert_eq!(plan.branch_alternates("prime.a"), &[] as &[String]);
     }
 
     /// Same bug as above (#433), for an unnamed loop: its body's own

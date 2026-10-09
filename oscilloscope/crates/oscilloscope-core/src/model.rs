@@ -599,6 +599,20 @@ impl RunModel {
             return RowStatus::skipped(SkipReason::Disabled);
         }
 
+        // Finding 9: an unnamed `if`'s own branches have no node to
+        // report `meta.branch` from the way a *named* if's own does —
+        // but once any path on the *other* side has a real node, this
+        // one, still absent, is definitely the branch that didn't run,
+        // not merely one the chain-flow heuristic below hasn't caught
+        // up to yet.
+        if plan
+            .branch_alternates(path)
+            .iter()
+            .any(|alt| flat.contains_key(alt))
+        {
+            return RowStatus::skipped(SkipReason::UntakenBranch);
+        }
+
         // An ancestor is complete and this path never appeared: skipped,
         // with a reason taken from the nearest complete ancestor
         // (DESIGN.md §2.2). A parent with no node yet either defers to
@@ -1043,6 +1057,122 @@ mod tests {
         // step3's own earlier sibling, step2, is still absent/incomplete,
         // so step3 itself stays Pending even though step1 is done.
         assert_eq!(rows["prime.step3"].kind, StatusKind::Pending);
+    }
+
+    fn chain_with_an_unnamed_if_else_program() -> electricity_bytecode::Program {
+        use electricity_bytecode::{
+            Condition, EffectPath, LeafKind, NodeKind, OnError, Op, Region, ToolOp,
+        };
+
+        let root_path = EffectPath::root();
+        let tool = |path: EffectPath| Op {
+            path,
+            name: None,
+            kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                provider: "shell".to_string(),
+                params: electricity_bytecode::ParamNode::Literal(electricity_value::Value::None),
+                params_json: None,
+                prompt: None,
+                model: None,
+                timeout_ms: None,
+                retries: Default::default(),
+                expect: None,
+                description: None,
+                group: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let named = |path: EffectPath, name: &str| {
+            let mut op = tool(path);
+            op.name = Some(name.to_string());
+            op
+        };
+        electricity_bytecode::Program {
+            root: Op {
+                path: root_path.clone(),
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![
+                        named(root_path.clone().push_name("a"), "a"),
+                        Op {
+                            path: root_path.clone(),
+                            name: None,
+                            kind: NodeKind::Control(Region::If {
+                                cond: Condition::Cel {
+                                    expr: "true".to_string(),
+                                    strict: false,
+                                },
+                                then_: Box::new(Region::Block {
+                                    ops: vec![named(
+                                        root_path.clone().push_name("then_branch"),
+                                        "then_branch",
+                                    )],
+                                    overlay: true,
+                                }),
+                                else_: Some(Box::new(Region::Block {
+                                    ops: vec![named(
+                                        root_path.clone().push_name("else_branch"),
+                                        "else_branch",
+                                    )],
+                                    overlay: true,
+                                })),
+                                threshold: 0.5,
+                            }),
+                            on_error: OnError::Fail,
+                            labels: None,
+                            enabled: true,
+                        },
+                        named(root_path.push_name("b"), "b"),
+                    ],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn an_untaken_if_else_branch_never_blocks_the_chain_sibling_that_follows_it() {
+        // Review finding 9: once the taken branch (`else_branch` here)
+        // is actually observed, the untaken one (`then_branch`) must
+        // resolve to something `sibling_is_complete` counts as settled
+        // — not get stuck forever at `LikelyRunning`, which would also
+        // keep `b`, after the `if`, Pending forever.
+        let plan = PlanTree::from_program(&chain_with_an_unnamed_if_else_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}},
+            "else_branch": {"value": "", "meta": {"created_at": "t1", "completed_at": "t2", "error": null}}
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(rows["prime.then_branch"].kind, StatusKind::Skipped);
+        assert_eq!(rows["prime.b"].kind, StatusKind::LikelyRunning);
+    }
+
+    #[test]
+    fn with_neither_if_else_branch_observed_yet_the_chain_sibling_after_stays_pending() {
+        // Before either side has run, both are equally plausible, and
+        // DESIGN.md §2.1 rule 1 still requires every earlier sibling —
+        // the whole `if`, here — to be complete before `b` can even be
+        // a *guess* at running.
+        let plan = PlanTree::from_program(&chain_with_an_unnamed_if_else_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1", "error": null}}
+        }});
+        let rows = model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(rows["prime.b"].kind, StatusKind::Pending);
     }
 
     #[test]
