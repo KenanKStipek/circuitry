@@ -626,21 +626,27 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     let store = Store::new();
     state::seed_state(&store, &req.inputs);
 
+    // A pre-execution check failure (every `fail!` call site below)
+    // never consults *token* at all, even when a signal has already
+    // arrived: Circuitry's own cancellation is a VM-execution concept
+    // (DESIGN §6.5/§6.9, `core/cancellation.py`'s `RunCancelledBySignal`)
+    // -- nothing before `execute_root` ever starts ever looks at it, so
+    // a SIGINT during, say, a structural check that was going to fail
+    // anyway still reports that check's own real error, exit 1, not
+    // the interrupt text (PR #441 review finding 13, applied
+    // symmetrically to every failure the signal's own target was
+    // never watching).
     macro_rules! fail {
         ($message:expr) => {{
             let totals = Totals::new();
             finalize_last_run(&store, &totals, run_t0.elapsed().as_secs_f64());
             finalize_plugins_meta(&store);
-            let signal = signal_from_token(token);
-            let error = signal
-                .map(|s| s.interrupt_text().to_string())
-                .unwrap_or($message);
             return RunResult {
                 ok: false,
                 state: Some(store.saved(&store.root)),
-                error: Some(error),
+                error: Some($message),
                 warnings,
-                signal,
+                signal: None,
             };
         }};
     }
@@ -1002,7 +1008,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     .await;
 
     let wall_time_s = run_t0.elapsed().as_secs_f64();
-    let (ok, error) = match exec_result {
+    let (ok, error, signal) = match exec_result {
         Ok(()) => {
             let last_run_node = store
                 .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
@@ -1017,19 +1023,32 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
                 Value::Str("totals".to_string()),
                 totals.value(wall_time_s),
             );
-            (true, None)
+            (true, None, None)
         }
-        Err(err) => {
+        // Only `VmError::Cancelled` -- the VM's own cancellation signal,
+        // not merely "the token happens to be set" -- ever becomes the
+        // interrupt text or a non-`None` `RunResult.signal` (PR #441
+        // review finding 13): that variant's own doc comment names
+        // this exact caller as the one place its token/signum gets
+        // turned into `RunResult`'s own wording. Any other `VmError`
+        // keeps its own real message, exit 1, even if a signal arrived
+        // during this run (DESIGN §6.5's cancellation never masks an
+        // unrelated failure).
+        Err(err @ electricity_vm::VmError::Cancelled) => {
             finalize_last_run(&store, &totals, wall_time_s);
             finalize_plugins_meta(&store);
             let signal = signal_from_token(token);
             let message = signal
                 .map(|s| s.interrupt_text().to_string())
                 .unwrap_or_else(|| err.to_string());
-            (false, Some(message))
+            (false, Some(message), signal)
+        }
+        Err(err) => {
+            finalize_last_run(&store, &totals, wall_time_s);
+            finalize_plugins_meta(&store);
+            (false, Some(err.to_string()), None)
         }
     };
-    let signal = if ok { None } else { signal_from_token(token) };
 
     // Step 19: live-state final write, then run_end (with signal),
     // then close -- a failed write to either folds into one warning,

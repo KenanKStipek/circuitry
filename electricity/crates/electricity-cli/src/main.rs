@@ -294,64 +294,110 @@ fn sighup_is_already_ignored() -> bool {
     }
 }
 
-/// Arms *token* for the run: the first SIGINT/SIGTERM/SIGHUP calls
-/// [`CancellationToken::request`]; a second SIGINT/SIGTERM exits the
-/// whole process immediately with its own conventional code (no
-/// `--out`, no `run_end` -- issue #431's Signals section). SIGHUP is
-/// never treated as that second signal, and is never even watched for
-/// at all when [`sighup_is_already_ignored`] says it already is.
-/// Returns the `JoinHandle` so the caller can stop watching once the
-/// run itself is over ("signals armed for the run only") -- once
-/// `tokio`'s own signal machinery has claimed a signal number for this
-/// process, dropping every listener for it only stops *this* task from
-/// reacting; it can never hand the OS's own default (process-killing)
-/// disposition back, so there is no further cleanup needed here.
-fn arm_signals(token: CancellationToken) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigint =
-            signal(SignalKind::interrupt()).expect("could not install a SIGINT handler");
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("could not install a SIGTERM handler");
-        let mut sighup = if sighup_is_already_ignored() {
-            None
-        } else {
-            Some(signal(SignalKind::hangup()).expect("could not install a SIGHUP handler"))
-        };
-        loop {
-            let signum = match sighup.as_mut() {
-                Some(sighup) => {
-                    tokio::select! {
-                        _ = sigint.recv() => SIGINT,
-                        _ = sigterm.recv() => SIGTERM,
-                        _ = sighup.recv() => SIGHUP,
-                    }
-                }
-                None => {
-                    tokio::select! {
-                        _ = sigint.recv() => SIGINT,
-                        _ = sigterm.recv() => SIGTERM,
-                    }
-                }
-            };
-            let first = token.request(signum);
-            if !first {
-                if signum == SIGHUP {
-                    // Never a second signal (issue #431's Signals
-                    // section) -- a closed terminal can deliver SIGHUP
-                    // twice in quick succession, and the second must
-                    // not race whichever signal actually cancelled this
-                    // run to `std::process::exit`.
-                    continue;
-                }
-                std::process::exit(match signum {
-                    SIGINT => Signal::Sigint.exit_code(),
-                    SIGTERM => Signal::Sigterm.exit_code(),
-                    _ => unreachable!("only SIGINT/SIGTERM reach this branch"),
-                });
-            }
+/// A dedicated OS thread, with its own minimal Tokio runtime, watching
+/// SIGINT/SIGTERM/SIGHUP from the moment it's installed (PR #441 review
+/// finding 5) -- installed *before* config load, so this stays
+/// responsive even while the main thread is deep in synchronous work
+/// (config/document load, every pre-execution check) with no `await`
+/// point of its own for a signal to be noticed at.
+///
+/// The first SIGINT/SIGTERM/SIGHUP calls [`CancellationToken::request`];
+/// a second SIGINT/SIGTERM exits the whole process immediately with its
+/// own conventional code (no `--out`, no `run_end` -- issue #431's
+/// Signals section). SIGHUP is never treated as that second signal, and
+/// is never even watched for at all when [`sighup_is_already_ignored`]
+/// says it already is -- both rules live in
+/// [`CancellationToken::request`]'s own "first signal wins" semantics
+/// (any later call, same or different signum, returns `false`) plus
+/// this function's own `continue` on a not-first SIGHUP, so a SIGHUP
+/// arriving after an earlier signal already cancelled the run --
+/// including one arriving after `execute_root` returns, while `--out`
+/// is still being written -- is ignored the same way, with no separate
+/// "are we past `--out` yet" check needed.
+struct SignalGuard {
+    stop: std::sync::Arc<tokio::sync::Notify>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SignalGuard {
+    /// Stops watching ("signals armed for the run only") and waits for
+    /// the thread to actually exit, so a caller that's about to print
+    /// this run's own result never races a signal thread still capable
+    /// of calling `std::process::exit` out from under it. Called once
+    /// `--out` has been written -- not merely once `run_orchestration`
+    /// returns -- so a SIGHUP during that write is still ignored,
+    /// matching [`arm_signals`]'s own doc comment.
+    fn disarm(mut self) {
+        self.stop.notify_one();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
-    })
+    }
+}
+
+fn arm_signals(token: CancellationToken) -> SignalGuard {
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let stop_for_thread = stop.clone();
+    let thread = std::thread::Builder::new()
+        .name("electricity-signals".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("could not start the signal-handling thread's own runtime");
+            runtime.block_on(async move {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut sigint =
+                    signal(SignalKind::interrupt()).expect("could not install a SIGINT handler");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("could not install a SIGTERM handler");
+                let mut sighup = if sighup_is_already_ignored() {
+                    None
+                } else {
+                    Some(signal(SignalKind::hangup()).expect("could not install a SIGHUP handler"))
+                };
+                loop {
+                    let signum = match sighup.as_mut() {
+                        Some(sighup) => {
+                            tokio::select! {
+                                _ = stop_for_thread.notified() => return,
+                                _ = sigint.recv() => SIGINT,
+                                _ = sigterm.recv() => SIGTERM,
+                                _ = sighup.recv() => SIGHUP,
+                            }
+                        }
+                        None => {
+                            tokio::select! {
+                                _ = stop_for_thread.notified() => return,
+                                _ = sigint.recv() => SIGINT,
+                                _ = sigterm.recv() => SIGTERM,
+                            }
+                        }
+                    };
+                    let first = token.request(signum);
+                    if !first {
+                        if signum == SIGHUP {
+                            // Never a second signal (issue #431's Signals
+                            // section) -- a closed terminal can deliver SIGHUP
+                            // twice in quick succession, and the second must
+                            // not race whichever signal actually cancelled this
+                            // run to `std::process::exit`.
+                            continue;
+                        }
+                        std::process::exit(match signum {
+                            SIGINT => Signal::Sigint.exit_code(),
+                            SIGTERM => Signal::Sigterm.exit_code(),
+                            _ => unreachable!("only SIGINT/SIGTERM reach this branch"),
+                        });
+                    }
+                }
+            });
+        })
+        .expect("could not start the signal-handling thread");
+    SignalGuard {
+        stop,
+        thread: Some(thread),
+    }
 }
 
 /// The preview marker refusal for a flag this preview doesn't support
@@ -451,6 +497,15 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
 }
 
 fn run_action(run_args: RunArgs) -> ExitCode {
+    // PR #441 review finding 5: armed *before* config load (issue
+    // #431's own step 1), on a dedicated OS thread with its own Tokio
+    // runtime -- responsive to a signal even while this thread is deep
+    // in the synchronous config/document load and every pre-execution
+    // check that follows, none of which ever awaits anything of its
+    // own. Disarmed only once `--out` has actually been written, below.
+    let token = CancellationToken::new();
+    let signal_guard = arm_signals(token.clone());
+
     // Step 1 of issue #431's run-wiring table: a config error exits 1
     // with Circuitry's own text, on stderr alone -- Circuitry's
     // `CircuitryGroup.invoke` catches a `ConfigError` *around* the
@@ -459,6 +514,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // stdout payload at all, `--out` or not (PR #441 review finding 8).
     let config_path = PathBuf::from(&run_args.config);
     if let Some(message) = electricity::config_error(&config_path) {
+        signal_guard.disarm();
         write_stderr(&format!("Error: {message}\n"));
         return ExitCode::from(1);
     }
@@ -472,6 +528,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     let inputs = match electricity::parse_inputs(&run_args.inputs) {
         Ok(inputs) => inputs,
         Err(message) => {
+            signal_guard.disarm();
             write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
             return ExitCode::from(2);
         }
@@ -497,22 +554,13 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             .enable_all()
             .build()
             .expect("could not start the electricity async runtime");
-        runtime.block_on(async {
-            let token = CancellationToken::new();
-            let signal_task = arm_signals(token.clone());
-            let result = electricity::run_orchestration(&req, &token).await;
-            // "Signals armed for the run only" (issue #431's Signals
-            // section): this task's own first/second-signal bookkeeping
-            // stops reacting the moment the run itself is over, not
-            // while `--out` is still being written below.
-            signal_task.abort();
-            result
-        })
+        runtime.block_on(electricity::run_orchestration(&req, &token))
     };
 
     if let Some(path) = &out_path {
         if let Some(state) = &result.state {
             if let Err(err) = electricity::out::write_out(path, state, run_args.pretty) {
+                signal_guard.disarm();
                 write_stderr(&format!(
                     "electricity: could not write --out {}: {err}\n",
                     path.display()
@@ -521,6 +569,13 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             }
         }
     }
+
+    // "Signals armed for the run only" (issue #431's Signals section):
+    // stopped only now, after `--out` has actually been written, so a
+    // SIGHUP during that write is still ignored rather than hitting
+    // the OS's own default disposition (`arm_signals`'s own doc
+    // comment).
+    signal_guard.disarm();
 
     print_stdout_contract(&result, out_path.as_deref(), run_args.pretty);
     print_stderr_contract(&result);
