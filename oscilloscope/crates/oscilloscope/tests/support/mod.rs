@@ -192,6 +192,42 @@ pub fn wait_with_timeout_capturing_stdout_and_stderr(
     (status, stdout, stderr)
 }
 
+/// Polls *events_path* (an `events.jsonl`, possibly not created yet)
+/// until it carries a `start` event for *step_path*, bounded at
+/// *timeout*, panicking with a clear message if it never does -- a
+/// signal test must send its signal only once the long-running step
+/// it means to interrupt has actually started. In CI a signal sent
+/// after only a fixed delay could still land before the engine had
+/// produced any state at all, making the test's own assertions (e.g.
+/// `✗ prime` appearing exactly once) a coin flip rather than
+/// deterministic.
+pub fn wait_for_step_start(events_path: &Path, step_path: &str, timeout: Duration) {
+    let start = Instant::now();
+    loop {
+        if let Ok(text) = std::fs::read_to_string(events_path) {
+            for line in text.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                if value.get("ev").and_then(|v| v.as_str()) == Some("start")
+                    && value.get("path").and_then(|v| v.as_str()) == Some(step_path)
+                {
+                    return;
+                }
+            }
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "{events_path:?} never carried a start event for {step_path:?} within {timeout:?}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// The last non-empty line of *path* (an `events.jsonl`), parsed as
 /// JSON -- every electricity signal e2e test uses this to check the
 /// stream's own final `run_end` line carries the signal that actually

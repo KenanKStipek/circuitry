@@ -23,8 +23,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::{
-    ELECTRICITY_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_electricity_enabled, last_event, osp_electricity_command, wait_with_timeout,
+    ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, e2e_electricity_enabled, last_event,
+    osp_electricity_command, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
@@ -258,7 +258,11 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -313,7 +317,11 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -354,7 +362,11 @@ fn sigterm_forwards_and_osp_exits_143() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
@@ -398,7 +410,11 @@ fn sighup_forwards_and_osp_exits_129() {
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGHUP);
     }

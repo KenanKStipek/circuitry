@@ -15,8 +15,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
-    wait_with_timeout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
+    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
+    wait_for_step_start, wait_with_timeout, wait_with_timeout_capturing_stdout_and_stderr,
+    write_doc,
 };
 
 #[test]
@@ -194,16 +195,27 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    // A signal sent after only a fixed delay can still land before
+    // cof has produced any state at all under load (CI's own repro of
+    // this), making the `✗ prime` count below a coin flip -- wait for
+    // real proof the long-running step has started first.
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -242,16 +254,23 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -294,16 +313,23 @@ fn sigterm_forwards_and_osp_exits_143() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
     let pid = child.id() as i32;
 
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
