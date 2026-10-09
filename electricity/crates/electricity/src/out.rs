@@ -87,6 +87,7 @@ fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
         indent: Some(2),
         sort_keys,
         ensure_ascii: false,
+        separators: electricity_json::Separators::Default,
     }
 }
 

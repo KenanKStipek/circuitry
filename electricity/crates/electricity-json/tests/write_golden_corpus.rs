@@ -8,7 +8,7 @@
 //! only needs to trust the committed file.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
-use electricity_json::{WriteMode, dumps, dumps_default_str};
+use electricity_json::{Separators, WriteMode, dumps, dumps_default_str};
 use electricity_value::{Dict, IntValue, Value};
 use serde::Deserialize;
 
@@ -112,6 +112,7 @@ fn run(value: &Value, mode_name: &str) -> Result<String, String> {
                 indent: None,
                 sort_keys: false,
                 ensure_ascii: false,
+                separators: Separators::Default,
             },
         ),
         "default_str" => dumps_default_str(
@@ -120,6 +121,25 @@ fn run(value: &Value, mode_name: &str) -> Result<String, String> {
                 indent: None,
                 sort_keys: false,
                 ensure_ascii: false,
+                separators: Separators::Default,
+            },
+        ),
+        "compact_separators" => dumps(
+            value,
+            WriteMode {
+                indent: None,
+                sort_keys: false,
+                ensure_ascii: true,
+                separators: Separators::Compact,
+            },
+        ),
+        "compact_separators_sorted" => dumps(
+            value,
+            WriteMode {
+                indent: None,
+                sort_keys: true,
+                ensure_ascii: true,
+                separators: Separators::Compact,
             },
         ),
         other => panic!("unknown mode {other:?} in write_corpus.json"),
