@@ -272,12 +272,14 @@ pub fn resolve_config(
         ))
     })?;
     let raw = electricity_json::loads(&text).map_err(|err| match err {
-        ReadError::Syntax { message, pos } => {
-            let (lineno, colno) = line_col(&text, pos);
-            ConfigError(format!(
-                "Config file {display_path} is not valid JSON: {message} (line {lineno}, column {colno})"
-            ))
-        }
+        ReadError::Syntax {
+            message,
+            lineno,
+            colno,
+            ..
+        } => ConfigError(format!(
+            "Config file {display_path} is not valid JSON: {message} (line {lineno}, column {colno})"
+        )),
         ReadError::DuplicateKey { message } => ConfigError(message),
         ReadError::Depth { pos } => {
             let (lineno, colno) = line_col(&text, pos);
