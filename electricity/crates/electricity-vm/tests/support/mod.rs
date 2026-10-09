@@ -180,6 +180,7 @@ pub enum Event {
     Start(String),
     Complete(String, Option<String>),
     Dispatch(String, usize, usize),
+    Write,
 }
 
 #[derive(Default)]
@@ -214,6 +215,10 @@ impl RunObserver for RecordingObserver {
         self.events
             .borrow_mut()
             .push(Event::Dispatch(path.to_string(), branches, concurrency));
+    }
+
+    fn write(&self) {
+        self.events.borrow_mut().push(Event::Write);
     }
 }
 

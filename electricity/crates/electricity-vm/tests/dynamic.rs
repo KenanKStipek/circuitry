@@ -831,14 +831,20 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
     // `execute_tool` returns `VmError::Cancelled` -- the *same* variant
     // this crate's own containers use -- when the token cancels it
     // mid-attempt (blocked on a concurrency slot or a retry backoff),
-    // not caught by this chain's own `token.is_set()` pre-check (which
+    // not caught by a chain's own `token.is_set()` pre-check (which
     // only ever runs *before* dispatching a step, not while one is
-    // already in flight). `x`'s own tree-flow branch dispatch plays the
-    // same role here as a blocked tool leaf would: it notices the
-    // cancellation on its own, independent of `x`'s enclosing chain.
-    // `x`'s own `on_error: continue` must not matter -- a `Cancelled`
-    // is never an ordinary failure `on_error` degrades, so the run must
-    // still stop.
+    // already in flight). The cancel fires on `y`'s own `effect_start`
+    // -- *after* `x`'s own chain pre-check already let `y` through, but
+    // *before* `y`'s own tree dispatch launches `z` -- so it is `y`'s
+    // own per-branch `token.is_set()` check in `execute_tree`'s own
+    // `launch` closure that notices it (`z` is queued, never started),
+    // not `x`'s. `x`'s own `on_error: continue` must not matter either
+    // way -- a `Cancelled` is never an ordinary failure `on_error`
+    // degrades, so the run must still stop (issue #431 review finding
+    // on PR #440: an earlier version of this test cancelled on `x`'s
+    // own start instead, so `x`'s own chain pre-check caught it before
+    // `y` ever ran, and the comment describing `y`'s own tree noticing
+    // it was wrong).
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = ToolRegistry::new();
@@ -847,7 +853,7 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
     let observer = CancelOnStart {
         inner: RecordingObserver::new(),
         token: &token,
-        target: "prime.x",
+        target: "prime.x.y",
     };
 
     let leaf_like = tree_dynamic(
@@ -889,5 +895,60 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
         get(prime, "value"),
         Some(&Value::Bool(false)),
         "`on_error: continue` must never absorb a cancellation"
+    );
+}
+
+#[tokio::test]
+async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after_the_merge() {
+    // Finding 4 (P2) on PR #440's second review: nothing exercised
+    // `RunObserver::write()` at all -- `core/dynamic.py`'s own
+    // `store.on_write` call sites are a chain's own per-step `finally:`
+    // (`_execute_chain`), a tree branch's own per-branch `finally:`
+    // (`_execute_branch`), and the tree merge loop's own trailing call.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = ToolRegistry::new();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let branch = |n: &'static str| {
+        chain_dynamic(
+            root_path().push_name("y").push_name(n),
+            n,
+            OnError::Fail,
+            vec![],
+        )
+    };
+    let x = chain_dynamic(root_path().push_name("x"), "x", OnError::Fail, vec![]);
+    let y = tree_dynamic(
+        root_path().push_name("y"),
+        "y",
+        OnError::Fail,
+        None,
+        false,
+        vec![branch("b0"), branch("b1"), branch("b2")],
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![x, y]);
+
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let writes = observer
+        .events()
+        .iter()
+        .filter(|e| matches!(e, Event::Write))
+        .count();
+    assert_eq!(
+        writes, 6,
+        "2 chain steps (x, y) in prime's own body + 3 tree branches + 1 post-merge write"
     );
 }
