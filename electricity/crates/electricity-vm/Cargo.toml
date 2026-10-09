@@ -14,18 +14,23 @@ electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
+# `exec::conditional`'s own CEL `if` evaluation (`evaluate_condition`).
 electricity-cel = { path = "../electricity-cel" }
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros", "time"] }
+# `exec::dynamic`'s own tree-flow dispatch: a bounded set of concurrent,
+# non-`'static` branch futures polled from one task (issue #431's Lane B
+# section: "FuturesUnordered", not `tokio::task::spawn_local`).
+futures = { version = "0.3", default-features = false, features = ["std"] }
 # Full-jitter retry backoff (`core/tool.py`'s own `next_backoff_delay_ms`,
 # `adapters/_retry.py`) -- a timing jitter, not a security-sensitive value,
 # so no particular distribution fidelity with Python's own `random.uniform`
 # is required, only "a random delay up to the computed ceiling".
 rand = "0.8"
-# `exec::tool`'s own `created_at`/`completed_at` (`datetime.now(timezone.
-# utc).isoformat()`) -- the conformance/golden-corpus normalizer only ever
-# matches the `YYYY-MM-DDTHH:MM:SS` prefix (`_ISO_TS_RE`), so exact
-# microsecond/offset formatting fidelity beyond that isn't required either.
+# `created_at`/`completed_at` timestamps, Python `isoformat()`-compatible --
+# the conformance/golden-corpus normalizer only ever matches the
+# `YYYY-MM-DDTHH:MM:SS` prefix (`_ISO_TS_RE`), so exact microsecond/offset
+# formatting fidelity beyond that isn't required either.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
