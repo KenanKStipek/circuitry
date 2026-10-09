@@ -225,6 +225,49 @@ fn format_refusal(refusal: &Refusal) -> String {
     )
 }
 
+/// Python's own truthiness (`bool(value)`) on a `runtime.persistence.
+/// enabled`-shaped leaf -- just the two variants that ever matter for
+/// it (`True`/`False`, or absent): never pulled in from `electricity_
+/// config::util::is_truthy`, which is `pub(crate)` there (that crate's
+/// own "final" row in `vm-lanes.md"), so this stays a small, local
+/// duplicate rather than widening another lane's crate.
+fn is_truthy_bool(value: Option<&Value>) -> bool {
+    matches!(value, Some(Value::Bool(true)))
+}
+
+/// Whether *runtime* (the already-merged, effective `runtime:` block)
+/// configures persistence -- `runtime.persistence.enabled` is `true`
+/// (`electricity_config::validate_persistence`, called inside `pre_
+/// state_checks`, has already rejected anything malformed by the time
+/// a caller ever reaches this; this only asks whether the now-valid
+/// block actually turns the backend on, Circuitry's own `build_
+/// persistence_backend`'s one truthy gate).
+fn persistence_is_configured(runtime: Option<&Value>) -> bool {
+    let Some(persistence) = runtime
+        .and_then(Value::as_dict)
+        .and_then(|r| r.get(&Value::Str("persistence".to_string())))
+        .and_then(Value::as_dict)
+    else {
+        return false;
+    };
+    is_truthy_bool(persistence.get(&Value::Str("enabled".to_string())))
+}
+
+/// The preview-marker refusal for a document/config that configures
+/// persistence or runtime plugins (issue #431's "Out of scope"
+/// section: "refused with the preview marker, after the step-6/9
+/// validation" -- PR #441 review finding 4) -- *reason* names what was
+/// configured ("runtime.persistence"/"runtime plugins (...)"). No
+/// `EffectPath` to report, unlike [`format_refusal`]'s own per-effect
+/// refusals: this is a run-level setting, not a node in the compiled
+/// tree.
+fn format_config_refusal(reason: &str) -> String {
+    format!(
+        "electricity {VERSION} is a preview and cannot run orchestrations yet: {reason} is not \
+         supported until a later milestone; use `cof run` instead"
+    )
+}
+
 /// *runtime*'s own `max_concurrency`/`concurrency_groups`, already
 /// validated (the caller only ever reaches this after `electricity_
 /// compiler::pre_state_checks` -- which runs the same parse internally
@@ -576,10 +619,12 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         }
     };
 
-    // Step 4: seed state (`input` namespace) -- every failure from here
-    // on reports *some* state, even if sparse.
+    // Step 4: seed state (`input` namespace, from the CLI's own `-e`
+    // entries) -- every failure from here on reports *some* state,
+    // even if sparse, and carries the same `input` a `cof run` of the
+    // same `-e` values would (PR #441 review finding 3).
     let store = Store::new();
-    state::seed_state(&store);
+    state::seed_state(&store, &req.inputs);
 
     macro_rules! fail {
         ($message:expr) => {{
@@ -648,8 +693,62 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         effective.runtime.as_ref(),
     ) {
         Ok(namespace) => namespace,
-        Err(err) => fail!(err.to_string()),
+        Err(err) => {
+            // PR #441 review finding 3: a failure at or before step 10
+            // (`check_interface_inputs`) still mirrors Python's own
+            // in-place mutation of `state["input"]` as far as it got
+            // before the first violation -- `build_input_namespace_
+            // best_effort`'s own doc comment. A failure *before*
+            // `build_input_namespace` is ever reached (steps 6/7/9)
+            // leaves this identical to the seed step 4 already wrote.
+            let partial = electricity_compiler::build_input_namespace_best_effort(
+                &loaded.document,
+                &check_options,
+            );
+            let input_node = store
+                .ensure_dict(&store.root, Value::Str("input".to_string()))
+                .expect("Store::ensure_dict never fails");
+            for (key, value) in partial {
+                store.set_leaf(&input_node, key, value);
+            }
+            fail!(err.to_string())
+        }
     };
+
+    // After step 9's own validation: a document/config that actually
+    // *configures* persistence or runtime plugins is refused with the
+    // preview marker, exactly like any other unsupported content --
+    // `validate_persistence`/`validate_persistence_block` (already run
+    // inside `pre_state_checks`) only ever rejects a malformed block,
+    // never a well-formed one, since M0-H has no real backend/loader
+    // of its own to refuse through *that* path (issue #431's "Out of
+    // scope" section; PR #441 review finding 4). No state at all is
+    // written for this refusal, same as [`first_unsupported`]'s own.
+    if persistence_is_configured(effective.runtime.as_ref()) {
+        return RunResult {
+            ok: false,
+            state: None,
+            error: Some(format_config_refusal("runtime.persistence")),
+            warnings,
+            signal: None,
+        };
+    }
+    if !effective.plugins.is_empty() {
+        let names = effective
+            .plugins
+            .iter()
+            .map(Value::py_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return RunResult {
+            ok: false,
+            state: None,
+            error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
+            warnings,
+            signal: None,
+        };
+    }
+
     let input_node = store
         .ensure_dict(&store.root, Value::Str("input".to_string()))
         .expect("Store::ensure_dict never fails");

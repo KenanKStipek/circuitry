@@ -38,7 +38,7 @@ fn is_namespace(root: &str) -> bool {
 /// never lifted and so can never satisfy a declared `interface.inputs`
 /// entry of the same name via `-e` (`core/state_ns.py`'s own
 /// `key not in NAMESPACES and not key.startswith("_")`).
-pub(crate) fn migrate_legacy_input_namespace(
+pub fn migrate_legacy_input_namespace(
     inline: &indexmap::IndexMap<String, Value>,
 ) -> indexmap::IndexMap<String, Value> {
     if let Some(value) = inline.get("input") {

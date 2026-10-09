@@ -175,7 +175,8 @@ pub use compile::compile_document;
 pub use digest::document_content_digest;
 pub use load::load_document;
 pub use pipeline::{
-    Loaded, check_for_run, check_report, post_state_checks, pre_state_checks, prepare_document,
+    Loaded, build_input_namespace_best_effort, check_for_run, check_report, post_state_checks,
+    pre_state_checks, prepare_document,
 };
 pub use structural::{structural_errors, unknown_key_warnings};
 

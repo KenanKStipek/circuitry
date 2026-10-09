@@ -66,6 +66,79 @@ async fn a_missing_config_file_writes_no_state_at_all() {
 }
 
 #[tokio::test]
+async fn a_structural_check_failure_still_seeds_input_from_e_values() {
+    // PR #441 review finding 3: `-e` values reach `state["input"]`
+    // at the seed step (run-wiring step 4), *before* the document is
+    // even loaded -- so a structural failure (step 14, long after)
+    // still carries them, exactly as `cof run`'s own `_load_state`
+    // does.
+    let dir = temp_dir("structural-failure-with-e");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", "{}\n");
+    let mut req = request(config, doc);
+    req.inputs.insert("name".to_string(), "World".to_string());
+    req.inputs.insert("count".to_string(), "5".to_string());
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    let state = result
+        .state
+        .expect("a structural failure still writes state");
+    let input = state
+        .as_dict()
+        .unwrap()
+        .get(&electricity_value::Value::Str("input".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        input.get(&electricity_value::Value::Str("name".to_string())),
+        Some(&electricity_value::Value::Str("World".to_string()))
+    );
+    assert_eq!(
+        input.get(&electricity_value::Value::Str("count".to_string())),
+        Some(&electricity_value::Value::Int(5.into()))
+    );
+}
+
+#[tokio::test]
+async fn a_missing_required_input_keeps_an_earlier_input_keys_own_default() {
+    // PR #441 review finding 3's second half: a failure *inside*
+    // `check_interface_inputs` itself still mirrors Python's own
+    // in-place mutation of `state["input"]` as far as it got.
+    let dir = temp_dir("partial-interface-failure");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "interface:\n  inputs:\n    a:\n      type: integer\n      default: 3\n    b:\n      type: string\n      required: true\neffects: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert_eq!(
+        result.error.as_deref(),
+        Some("missing required input 'b' declared in orchestration interface.")
+    );
+    let state = result.state.expect("a step-10 failure still writes state");
+    let input = state
+        .as_dict()
+        .unwrap()
+        .get(&electricity_value::Value::Str("input".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        input.get(&electricity_value::Value::Str("a".to_string())),
+        Some(&electricity_value::Value::Int(3.into()))
+    );
+    assert!(!input.contains_key(&electricity_value::Value::Str("b".to_string())));
+}
+
+#[tokio::test]
 async fn a_structural_check_failure_still_writes_out_state() {
     let dir = temp_dir("structural-failure");
     let config = write(&dir, "config.json", "{}");
@@ -199,11 +272,42 @@ async fn a_config_default_model_is_recorded_as_its_own_source() {
 
     let result = run(&req).await;
     assert!(!result.ok);
-    // The model/source isn't recorded until `runtime.effective_settings`
-    // is written (step 13), which a pre-step-14 failure never reaches --
-    // this at least proves the config file was read and merged with
-    // `SANE_DEFAULTS` rather than erroring as a bad config.
     assert!(!result.error.unwrap().starts_with("Config file"));
+    // `runtime.effective_settings`/`sources` are written at step 13,
+    // strictly *before* the structural check this document fails at
+    // (step 14) -- so this structural failure's own state already
+    // carries the config file's `default_model`, not just proves the
+    // file parsed (PR #441 review finding 9: this test's own former
+    // comment, claiming the opposite order, was stale).
+    let state = result
+        .state
+        .expect("a pre-step-14 failure still writes state");
+    let dict = state.as_dict().unwrap();
+    let runtime = dict
+        .get(&electricity_value::Value::Str("runtime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let effective_settings = runtime
+        .get(&electricity_value::Value::Str(
+            "effective_settings".to_string(),
+        ))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        effective_settings.get(&electricity_value::Value::Str("model".to_string())),
+        Some(&electricity_value::Value::Str("custom-model".to_string()))
+    );
+    let sources = effective_settings
+        .get(&electricity_value::Value::Str("sources".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        sources.get(&electricity_value::Value::Str("model".to_string())),
+        Some(&electricity_value::Value::Str("config".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -221,6 +325,71 @@ async fn an_unknown_tool_provider_is_refused_before_a_structural_error_elsewhere
     assert!(!result.ok);
     assert!(result.state.is_none());
     assert!(result.error.unwrap().contains("shell"));
+}
+
+/// PR #441 review finding 4: a document that turns a (valid) `runtime.
+/// persistence` block on is refused with the preview marker right
+/// after that block's own validation, no state written -- a malformed
+/// one still fails the ordinary way (`validate_persistence`'s own job,
+/// inside `pre_state_checks`, run first).
+#[tokio::test]
+async fn a_configured_persistence_backend_is_refused_with_no_state_written() {
+    let dir = temp_dir("persistence-refusal");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "runtime:\n  persistence:\n    enabled: true\n    backend: sqlite\n    db_path: a.db\neffects: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    let error = result.error.unwrap();
+    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains("runtime.persistence"));
+}
+
+/// A malformed persistence block still fails the ordinary way (the
+/// validation itself, not the refusal) -- `pre_state_checks` catches
+/// it before the refusal check this lane added ever runs.
+#[tokio::test]
+async fn a_malformed_persistence_backend_fails_validation_not_the_refusal() {
+    let dir = temp_dir("persistence-malformed");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "runtime:\n  persistence:\n    enabled: true\n    backend: sqlite\neffects: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    let error = result.error.unwrap();
+    assert!(!error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains("requires runtime.persistence.db_path"));
+    // A validation failure (unlike the refusal) still writes state --
+    // it's an ordinary pre_state_checks error.
+    assert!(result.state.is_some());
+}
+
+/// A document that declares a runtime plugin by name is refused the
+/// same way, naming it in the refusal text.
+#[tokio::test]
+async fn a_declared_runtime_plugin_is_refused_with_no_state_written() {
+    let dir = temp_dir("plugins-refusal");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", "plugins: [my-plugin]\neffects: []\n");
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    let error = result.error.unwrap();
+    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains("my-plugin"));
 }
 
 /// `execute_root` is lane B's own stub (`NotImplemented`) as of this
