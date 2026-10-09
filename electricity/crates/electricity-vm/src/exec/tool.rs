@@ -534,7 +534,19 @@ pub async fn execute_tool(
                                 observer.write();
                             }
                         });
+                // Biased: a free slot must be taken even if the token
+                // is already cancelled, never raced against it -- Python's
+                // own `_acquire_one` (`core/concurrency.py`) takes a free
+                // slot with a non-blocking `sem.acquire(blocking=False)`
+                // and returns before ever looking at the cancellation
+                // token, which is only checked once this call actually
+                // has to block. Listing the work branch first only
+                // matters because of `biased;`: tokio polls branches in
+                // source order and takes the first *ready* one, instead
+                // of picking at random among every branch that happens to
+                // be ready on the same poll.
                 let acquired = tokio::select! {
+                    biased;
                     result = acquire_future => Some(result),
                     () = token.cancelled() => None,
                 };
@@ -554,7 +566,17 @@ pub async fn execute_tool(
                         // function, is `VmError::Cancelled` and bypasses
                         // `on_error` entirely, never folded into an
                         // ordinary `VmError::Tool` failure.
+                        // Biased, for the same reason as the acquire
+                        // `select!` above: a `run_tool` future that is
+                        // already finished at the first poll (an
+                        // instantly-completed json tool, say) must keep
+                        // its result, never race a concurrent
+                        // cancellation to a coin flip -- Python's own
+                        // `ToolRuntime.execute` (`core/tool.py`) has no
+                        // cancellation check once a dispatched call has
+                        // actually returned, only before the next attempt.
                         let dispatch = tokio::select! {
+                            biased;
                             result = run_tool(
                                 run_ctx.registry,
                                 &tool.provider,
@@ -1937,5 +1959,198 @@ mod tests {
         token.request(2);
         let err = run.await.unwrap_err();
         assert_eq!(err, VmError::Cancelled);
+    }
+
+    #[tokio::test]
+    // The race `biased;` fixes: with a token already cancelled *before*
+    // `execute_tool` is even called, a free global slot and an
+    // instantly-finished json tool call are both ready works the very
+    // first time either `select!` above is polled, same as the
+    // concurrent `token.cancelled()` branch -- without `biased;`, tokio
+    // picks one of two ready branches at random, so the very same call
+    // would sometimes run the tool (matching Python's own
+    // `_acquire_one`: a free slot is just taken, never checked against
+    // the token) and sometimes return `VmError::Cancelled` instead,
+    // depending on nothing but scheduler luck. Run 20 times: every one
+    // of them must run the tool, never flip to `Cancelled`.
+    async fn a_cancelled_token_before_the_call_still_runs_a_ready_slot_and_tool() {
+        for _ in 0..20 {
+            let mut params = IndexMap::new();
+            params.insert(Value::from("mode"), template("parse"));
+            params.insert(Value::from("input"), template("1"));
+            let tool = tool_op(params);
+            let op = Op {
+                kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                    electricity_bytecode::LeafKind::Tool(tool.clone()),
+                )),
+                ..tool_node(OnError::Fail)
+            };
+            let store = crate::Store::new();
+            let registry = json_registry();
+            let limiter = crate::Limiter::new();
+            let runtime_config = Value::None;
+            let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+            let token = CancellationToken::new();
+            token.request(2);
+
+            execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            )
+            .await
+            .unwrap();
+
+            let snapshot = store.snapshot(&store.root);
+            let node = snapshot
+                .as_dict()
+                .unwrap()
+                .get(&Value::from("fetch"))
+                .unwrap()
+                .as_dict()
+                .unwrap();
+            assert_eq!(node.get(&Value::from("value")), Some(&Value::from(1i64)));
+            let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+            assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+        }
+    }
+
+    #[tokio::test]
+    // The same race's other ready branch: with the slot held elsewhere,
+    // `acquire_reporting`'s own future is genuinely pending (not ready)
+    // at the select's first poll, so `token.cancelled()` is the only
+    // ready branch here -- no race, `biased;` only decides *which* ready
+    // branch wins when more than one is. This is the deterministic half
+    // of the pair, run 20 times for the same reason as its sibling above:
+    // a regression that made the acquire select non-biased again would
+    // not show up here, only there.
+    async fn a_cancelled_token_before_the_call_with_the_slot_held_cancels_after_waiting_for() {
+        for _ in 0..20 {
+            let mut params = IndexMap::new();
+            params.insert(Value::from("mode"), template("parse"));
+            params.insert(Value::from("input"), template("1"));
+            let mut tool = tool_op(params);
+            tool.group = Some("io".to_string());
+            let op = Op {
+                kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                    electricity_bytecode::LeafKind::Tool(tool.clone()),
+                )),
+                ..tool_node(OnError::Fail)
+            };
+            let store = crate::Store::new();
+            let registry = json_registry();
+            let limiter = crate::Limiter::with_limits(None, [("io".to_string(), 1)]);
+            let runtime_config = Value::None;
+            let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+            let token = CancellationToken::new();
+
+            // Held for the whole attempt -- never dropped before the
+            // call below returns, so the group slot is never actually
+            // free for it to take.
+            let _holder = limiter.acquire(Some("io")).await.unwrap();
+            token.request(2);
+
+            let err = execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err, VmError::Cancelled);
+
+            let snapshot = store.snapshot(&store.root);
+            let node = snapshot
+                .as_dict()
+                .unwrap()
+                .get(&Value::from("fetch"))
+                .unwrap()
+                .as_dict()
+                .unwrap();
+            let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+            assert_eq!(
+                meta.get(&Value::from("waiting_for")),
+                Some(&Value::from("io"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    // The fast path a prior fix pass declined to test in isolation (see
+    // this module's own cancellation-points doc comment above the first
+    // of the three `a_cancelled_token_stops_a_queued_*` tests): the
+    // synchronous `token.is_set()` guard in front of a *due* retry's own
+    // backoff sleep. Before `biased;`, a token cancelled ahead of the
+    // whole call also raced the first attempt's own acquire/dispatch
+    // selects, so a test built that way was flaky rather than reaching
+    // this guard deterministically. With both of those biased, a
+    // pre-cancelled token's first attempt still runs to its own
+    // ordinary (non-cancellation) failure, so the second attempt's
+    // `is_set()` check is reached every time, before that attempt's own
+    // meta reset ever runs -- the stored `meta.error` stays the first
+    // attempt's own text, and `retries_used` (only ever set by a
+    // *successful* later attempt) is never set at all.
+    async fn a_token_cancelled_before_the_call_stops_a_due_retry_before_its_own_backoff() {
+        for _ in 0..20 {
+            let mut params = IndexMap::new();
+            params.insert(Value::from("mode"), template("bogus"));
+            let mut tool = tool_op(params);
+            tool.retries = electricity_bytecode::RetryPolicy {
+                max_attempts: 2,
+                backoff_ms: 60_000,
+            };
+            let op = Op {
+                kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                    electricity_bytecode::LeafKind::Tool(tool.clone()),
+                )),
+                ..tool_node(OnError::Fail)
+            };
+            let store = crate::Store::new();
+            let registry = json_registry();
+            let limiter = crate::Limiter::new();
+            let runtime_config = Value::None;
+            let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+            let token = CancellationToken::new();
+            token.request(2);
+
+            let err = execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err, VmError::Cancelled);
+
+            let snapshot = store.snapshot(&store.root);
+            let node = snapshot
+                .as_dict()
+                .unwrap()
+                .get(&Value::from("fetch"))
+                .unwrap()
+                .as_dict()
+                .unwrap();
+            let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+            assert_eq!(
+                meta.get(&Value::from("error")),
+                Some(&Value::from("json: unknown mode 'bogus'"))
+            );
+            assert!(!meta.contains_key(&Value::from("retries_used")));
+        }
     }
 }
