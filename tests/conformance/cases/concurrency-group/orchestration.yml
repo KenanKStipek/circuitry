@@ -1,0 +1,19 @@
+name: concurrency-group
+runtime:
+  concurrency_groups:
+    gpu: 1
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: tool
+        name: a
+        provider: json
+        group: gpu
+        params: {mode: stringify, input: {x: 1}}
+      - type: tool
+        name: b
+        provider: json
+        group: gpu
+        params: {mode: stringify, input: {x: 2}}

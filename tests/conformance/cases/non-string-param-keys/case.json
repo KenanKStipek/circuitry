@@ -1,0 +1,6 @@
+{
+  "spec_case": "DESIGN.md §3.4",
+  "description": "A bare `yes:`/`1:` YAML mapping key resolves to a Python `bool`/`int`, not a string (YAML 1.1 scalar resolution, same rule as C2's values but applied to a key); it survives params rendering unchanged and the json tool's own stringify reproduces Python's `json.dumps` non-string-key rule exactly (`True` -> `\"true\"`, `1` -> `\"1\"`) -- exercising the bytecode's own `ParamNode::Map` keyed by `Value`, not just `String` (electricity/DESIGN.md §3.4, §5.1).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
