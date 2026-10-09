@@ -27,11 +27,18 @@ pub const RAW_META_MAX_BYTES: usize = 64 * 1024;
 /// matched against the whole key, same as Python's `re.match` anchored
 /// by this pattern's own leading `^`/trailing `$`) whose *value* is
 /// redacted outright, regardless of what that value looks like.
+///
+/// Python builds this without `re.MULTILINE`, so its own `$` matches
+/// either at the very end of the string *or* just before one trailing
+/// `\n` -- `re.match(r"a$", "a\n")` is truthy, `re.match(r"a$", "a\n\n")`
+/// is not. The `regex` crate's `$` (no `(?m)` flag set here either) only
+/// ever matches end-of-haystack, so every pattern below spells that same
+/// one-trailing-newline allowance out explicitly as `(?:\n)?$`.
 fn sensitive_key_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)^(.*[_\-.])?(api[_-]?key|access[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token|bearer[_-]?token|id[_-]?token|refresh[_-]?token|session[_-]?token|csrf[_-]?token|authorization|password|passphrase|client[_-]?secret|set[_-]?cookie|cookie|secret|token|credentials?)$",
+            r"(?i)^(.*[_\-.])?(api[_-]?key|access[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token|bearer[_-]?token|id[_-]?token|refresh[_-]?token|session[_-]?token|csrf[_-]?token|authorization|password|passphrase|client[_-]?secret|set[_-]?cookie|cookie|secret|token|credentials?)(?:\n)?$",
         )
         .expect("a fixed, hand-checked pattern")
     })
@@ -39,23 +46,27 @@ fn sensitive_key_re() -> &'static Regex {
 
 /// `cli/redaction.py::_JWT_RE` -- a standalone JWT (three base64url
 /// segments separated by dots, header-prefixed `eyJ` so a dotted
-/// hostname/path/version string never matches it by accident).
+/// hostname/path/version string never matches it by accident). See
+/// [`sensitive_key_re`]'s own doc comment for why `(?:\n)?$` replaces a
+/// bare trailing `$`.
 fn jwt_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+        Regex::new(r"^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\n)?$")
             .expect("a fixed, hand-checked pattern")
     })
 }
 
 /// `cli/redaction.py::_KEYISH_RE` -- common API-key shapes (a vendor
 /// prefix plus a long base64url-ish/hex run, or a `Bearer <token>`
-/// string), case-sensitive like Python's own pattern (no `(?i)`).
+/// string), case-sensitive like Python's own pattern (no `(?i)`). See
+/// [`sensitive_key_re`]'s own doc comment for why `(?:\n)?$` replaces
+/// every bare trailing `$`.
 fn keyish_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?:^sk-[A-Za-z0-9_-]{20,}$)|(?:^xox[abposr]-[A-Za-z0-9-]{20,}$)|(?:^ghp_[A-Za-z0-9]{30,}$)|(?:^Bearer\s+[A-Za-z0-9_.=-]{16,}$)",
+            r"(?:^sk-[A-Za-z0-9_-]{20,}(?:\n)?$)|(?:^xox[abposr]-[A-Za-z0-9-]{20,}(?:\n)?$)|(?:^ghp_[A-Za-z0-9]{30,}(?:\n)?$)|(?:^Bearer\s+[A-Za-z0-9_.=-]{16,}(?:\n)?$)",
         )
         .expect("a fixed, hand-checked pattern")
     })
@@ -67,30 +78,56 @@ fn is_sensitive_key(key: &str) -> bool {
 
 /// `cli/redaction.py::_redact_url` -- strips `user[:pass]@` userinfo
 /// from a URL's netloc, keeping the scheme, host:port, path, query and
-/// fragment untouched. A hand-rolled, narrow parser rather than a full
-/// `url`-crate split: this is only ever reached from
-/// [`redact_string`]'s own `"://" in value and "@" in value` gate, so it
-/// only has to recognize the one shape that gate already promises --
-/// same as Python's own `_redact_url`, which returns *value* unchanged
-/// on anything [`urllib.parse.urlsplit`] can't make sense of (no scheme,
-/// no netloc, or no `@` in the netloc once split out).
+/// fragment untouched. Ports the subset of CPython 3.11's
+/// `urllib.parse.urlsplit`/`urlunsplit` that `_redact_url` itself
+/// depends on (leading-control/space stripping, embedded `\t`/`\r`/`\n`
+/// removal, lowercase scheme, and `urlunsplit`'s own empty-`?`/`#`
+/// rules) rather than a full `url`-crate split: this is only ever
+/// reached from [`redact_string`]'s own `"://" in value and "@" in
+/// value` gate, so it only has to recognize the one shape that gate
+/// already promises.
+///
+/// Two of `urlsplit`'s own checks are deliberately not ported:
+/// `_checknetloc`'s Unicode-NFKC homograph check, and
+/// `_check_bracketed_netloc`'s deeper IPv6-literal validation (both are
+/// rare, and both only *narrow* what Python redacts -- a netloc that
+/// fails either raises `ValueError` in Python, which `_redact_url`
+/// catches by returning *value* unchanged, so skipping them here can
+/// only make this redact a URL Python would have left alone, never the
+/// reverse). The bracket-*presence* check (`'[' in netloc` XOR `']' in
+/// netloc`) is ported, since getting that wrong could under-redact.
 fn redact_url(value: &str) -> String {
-    let Some(scheme_end) = value.find(':') else {
+    // `url.lstrip(_WHATWG_C0_CONTROL_OR_SPACE)` -- C0 controls (0x00-0x1f)
+    // and space (0x20).
+    let lstripped = value.trim_start_matches(|c: char| (c as u32) <= 0x20);
+    // `for b in ("\t", "\r", "\n"): url = url.replace(b, "")` -- applied
+    // to the whole (already-lstripped) string, not just its prefix.
+    let cleaned: String = lstripped
+        .chars()
+        .filter(|&c| c != '\t' && c != '\r' && c != '\n')
+        .collect();
+
+    let Some(colon) = cleaned.find(':') else {
         return value.to_string();
     };
-    let scheme = &value[..scheme_end];
-    let scheme_is_valid = !scheme.is_empty()
-        && scheme
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
+    let starts_alpha = cleaned
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic());
+    if colon == 0 || !starts_alpha {
+        return value.to_string();
+    }
+    let candidate = &cleaned[..colon];
+    let scheme_is_valid = candidate
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
     if !scheme_is_valid {
         return value.to_string();
     }
-    let rest = &value[scheme_end + 1..];
+    // `scheme, url = url[:i].lower(), url[i+1:]`
+    let scheme = candidate.to_lowercase();
+    let rest = &cleaned[colon + 1..];
+
     let Some(after_slashes) = rest.strip_prefix("//") else {
         return value.to_string();
     };
@@ -98,12 +135,54 @@ fn redact_url(value: &str) -> String {
         .find(['/', '?', '#'])
         .unwrap_or(after_slashes.len());
     let netloc = &after_slashes[..netloc_end];
-    let remainder = &after_slashes[netloc_end..];
+    let mut url = &after_slashes[netloc_end..];
+
+    // `('[' in netloc and ']' not in netloc) or (']' in netloc and '[' not
+    // in netloc)` -- `urlsplit` raises `ValueError` here, which
+    // `_redact_url` catches by returning *value* unchanged.
+    if netloc.contains('[') != netloc.contains(']') {
+        return value.to_string();
+    }
+
+    if netloc.is_empty() {
+        return value.to_string();
+    }
     let Some(at) = netloc.rfind('@') else {
         return value.to_string();
     };
     let host = &netloc[at + 1..];
-    format!("{scheme}://{REDACTED}@{host}{remainder}")
+
+    let mut fragment = "";
+    if let Some(idx) = url.find('#') {
+        fragment = &url[idx + 1..];
+        url = &url[..idx];
+    }
+    let mut query = "";
+    if let Some(idx) = url.find('?') {
+        query = &url[idx + 1..];
+        url = &url[..idx];
+    }
+
+    // `urlunsplit`: the redacted netloc is always non-empty, so the path
+    // always gets a leading `//<netloc>`; an empty path stays empty
+    // (never gains a bare `/`); an empty query/fragment is dropped
+    // entirely (`https://u:p@h/p?` -> `.../p`, not `.../p?`).
+    let mut out = if url.is_empty() {
+        String::new()
+    } else if url.starts_with('/') {
+        url.to_string()
+    } else {
+        format!("/{url}")
+    };
+    out = format!("//{REDACTED}@{host}{out}");
+    out = format!("{scheme}:{out}");
+    if !query.is_empty() {
+        out = format!("{out}?{query}");
+    }
+    if !fragment.is_empty() {
+        out = format!("{out}#{fragment}");
+    }
+    out
 }
 
 /// `cli/redaction.py::_redact_string` -- a JWT or API-key-shaped string
@@ -183,7 +262,20 @@ pub fn cap_raw(encoded_redacted_raw: &[u8]) -> Option<RawCapMarker> {
     if encoded_redacted_raw.len() <= RAW_META_MAX_BYTES {
         return None;
     }
-    let preview = String::from_utf8_lossy(&encoded_redacted_raw[..RAW_META_MAX_BYTES]).into_owned();
+    let truncated = &encoded_redacted_raw[..RAW_META_MAX_BYTES];
+    // `bytes.decode("utf-8", errors="ignore")` drops an invalid byte
+    // sequence rather than substituting U+FFFD for it (what
+    // `from_utf8_lossy` would do) -- *encoded_redacted_raw* is always
+    // valid UTF-8 before this cut (`json.dumps`'s own output always is),
+    // so the only invalid sequence a byte-offset cut can produce is one
+    // partial multi-byte codepoint right at the very end; keeping only
+    // the longest valid-UTF-8 prefix reproduces that exactly.
+    let preview = match std::str::from_utf8(truncated) {
+        Ok(s) => s.to_string(),
+        Err(err) => std::str::from_utf8(&truncated[..err.valid_up_to()])
+            .expect("valid_up_to() bounds a valid UTF-8 prefix")
+            .to_string(),
+    };
     Some(RawCapMarker {
         original_bytes: encoded_redacted_raw.len(),
         preview,
@@ -250,8 +342,95 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_newline_does_not_hide_an_sk_shaped_secret() {
+        // `redact("sk-" + "a" * 20 + "\n")` -- Python's `$` (no
+        // `re.MULTILINE`) matches just before a single trailing `\n`.
+        let key = format!("sk-{}\n", "a".repeat(20));
+        assert_eq!(redact(Value::from(key.as_str())), Value::from(REDACTED));
+    }
+
+    #[test]
+    fn a_trailing_newline_does_not_hide_a_bearer_token() {
+        let header = format!("Bearer {}\n", "a".repeat(16));
+        assert_eq!(redact(Value::from(header.as_str())), Value::from(REDACTED));
+    }
+
+    #[test]
+    fn a_trailing_newline_does_not_hide_a_jwt() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n";
+        assert_eq!(redact(Value::from(jwt)), Value::from(REDACTED));
+    }
+
+    #[test]
+    fn a_trailing_newline_does_not_hide_a_sensitive_key() {
+        let input = dict(vec![("api_key\n", Value::from("x"))]);
+        let expected = dict(vec![("api_key\n", Value::from(REDACTED))]);
+        assert_eq!(redact(input), expected);
+    }
+
+    #[test]
+    fn two_trailing_newlines_do_not_match_the_single_newline_allowance() {
+        let key = format!("sk-{}\n\n", "a".repeat(20));
+        assert_eq!(redact(Value::from(key.as_str())), Value::from(key.as_str()));
+    }
+
+    #[test]
     fn a_url_with_no_userinfo_passes_through() {
         let url = "https://example.com/path";
+        assert_eq!(redact(Value::from(url)), Value::from(url));
+    }
+
+    #[test]
+    fn redact_url_strips_leading_whitespace_like_urlsplit() {
+        let url = " https://u:p@h";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://***REDACTED***@h")
+        );
+    }
+
+    #[test]
+    fn redact_url_drops_an_embedded_tab_like_urlsplit() {
+        let url = "ht\ttps://u:p@h";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://***REDACTED***@h")
+        );
+    }
+
+    #[test]
+    fn redact_url_lowercases_the_scheme_like_urlsplit() {
+        let url = "HTTPS://u:p@h";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://***REDACTED***@h")
+        );
+    }
+
+    #[test]
+    fn redact_url_drops_an_empty_query_like_urlunsplit() {
+        let url = "https://u:p@h/p?";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://***REDACTED***@h/p")
+        );
+    }
+
+    #[test]
+    fn redact_url_keeps_an_empty_query_dropped_but_fragment_present() {
+        let url = "https://u:p@h/p?#f";
+        assert_eq!(
+            redact(Value::from(url)),
+            Value::from("https://***REDACTED***@h/p#f")
+        );
+    }
+
+    #[test]
+    fn redact_url_leaves_an_unbalanced_bracket_unchanged() {
+        // `urlsplit` raises `ValueError` on a netloc with an unmatched
+        // `[`/`]` ("Invalid IPv6 URL"); `_redact_url` catches that and
+        // returns the value unchanged.
+        let url = "https://u:p@h[invalid";
         assert_eq!(redact(Value::from(url)), Value::from(url));
     }
 
@@ -305,5 +484,21 @@ mod tests {
         let marker = cap_raw(&encoded).unwrap();
         assert_eq!(marker.original_bytes, RAW_META_MAX_BYTES + 1);
         assert_eq!(marker.preview.len(), RAW_META_MAX_BYTES);
+    }
+
+    #[test]
+    fn cap_raw_drops_a_codepoint_split_by_the_cut_instead_of_substituting_u_fffd() {
+        // `_capped_raw({"k": "\u00e9" * 40000})["_preview"][-3:]` has no
+        // `\ufffd` -- Python's `errors="ignore"` drops a trailing partial
+        // multi-byte sequence rather than substituting the replacement
+        // character. Here: `RAW_META_MAX_BYTES` bytes of all-`a` except
+        // the very last one is the lead byte of a 2-byte UTF-8 sequence
+        // (`\u00e9`) whose second byte falls just past the cut.
+        let mut encoded = vec![b'a'; RAW_META_MAX_BYTES + 1];
+        encoded[RAW_META_MAX_BYTES - 1] = 0xC3;
+        encoded[RAW_META_MAX_BYTES] = 0xA9;
+        let marker = cap_raw(&encoded).unwrap();
+        assert!(!marker.preview.contains('\u{fffd}'));
+        assert_eq!(marker.preview.len(), RAW_META_MAX_BYTES - 1);
     }
 }
