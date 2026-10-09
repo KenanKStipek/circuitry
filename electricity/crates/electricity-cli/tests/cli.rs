@@ -451,6 +451,47 @@ fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
     );
 }
 
+/// A `CIRCUITRY_MODEL` environment overlay outranks both the config
+/// file's own `default_model` and `SANE_DEFAULTS` (issue #431's run-
+/// wiring step 1: `SANE_DEFAULTS`, the named file deep-merged on top,
+/// then `CIRCUITRY_*` env overlays) -- observed through `runtime.
+/// effective_settings.model` in `--out`, written even for this
+/// document's own structural failure (which happens after that field
+/// is set, run-wiring step 14).
+#[test]
+fn a_circuitry_env_overlay_outranks_the_config_files_own_default_model() {
+    let home = TempHome::new("env-overlay");
+    let config = home.config(r#"{"default_model": "from-config-file"}"#);
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "{}\n").unwrap();
+    let out = home.path.join("out.json");
+    let mut cmd = Command::new(bin());
+    cmd.env_clear();
+    cmd.env("HOME", &home.path);
+    cmd.env("PATH", env::var("PATH").unwrap_or_default());
+    cmd.env("CIRCUITRY_MODEL", "from-env-overlay");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["model"],
+        "from-env-overlay"
+    );
+    assert_eq!(
+        state["runtime"]["effective_settings"]["sources"]["model"],
+        "config"
+    );
+}
+
 /// A run that succeeds its document check but reaches `execute_root`
 /// (still lane B's own stub) with no `--out` at all: on failure,
 /// stdout always carries the JSON payload regardless of `--out`

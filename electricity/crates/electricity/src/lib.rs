@@ -662,26 +662,19 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         Value::Str(timestamp),
     );
 
-    // Step 12 (part 2): runtime.last_run -- document_hash comes from
-    // `post_state_checks`'s own digest attachment below (it needs a
-    // compiled Program first); written once that's available.
-
-    // Step 14: structural checks, compile, groups, cycles, digest --
-    // `post_state_checks`'s own composition (errors formatted exactly
-    // as `check_for_run` already does).
-    let program = match electricity_compiler::post_state_checks(&loaded, effective.runtime.as_ref())
-    {
-        Ok(program) => program,
-        Err(err) => {
-            // `runtime.last_run`/`effective_settings`/`plugins` were
-            // never written for this path (a structural/compile/group/
-            // cycle error happens before step 12 in `run()`'s own order
-            // too) -- `fail!` still backfills a sparse `last_run`/
-            // `plugins` the same way every other early failure does.
-            fail!(err.to_string());
-        }
-    };
-    let document_hash = program.document.as_ref().and_then(|doc| doc.digest.clone());
+    // Step 12 (part 2): runtime.last_run -- `document_hash` is computed
+    // independently of compilation, exactly as `cli/runtime_shim.py::run`
+    // does (its own `document_content_digest` call, ~:666-683, happens
+    // *before* the structural checks at ~:758 -- never gated on them
+    // succeeding): a document that fails `post_state_checks` below still
+    // gets a real digest here, not `null`. `None` only on an `OSError`-
+    // equivalent (the file vanished between the earlier load and now).
+    let document_hash = electricity_compiler::document_content_digest(
+        &loaded.path,
+        &loaded.document,
+        &loaded.confinement_root,
+    )
+    .ok();
 
     let last_run_node = store
         .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
@@ -787,6 +780,20 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         Value::Str("plugins".to_string()),
         plugins_meta_value(&effective.plugins),
     );
+
+    // Step 14: structural checks, compile, groups, cycles -- `post_
+    // state_checks`'s own composition (errors formatted exactly as
+    // `check_for_run` already does), run only now that steps 11-13
+    // have fully written `_run_id`/`_timestamp`/`runtime.last_run`/
+    // `effective_settings`/`plugins` -- a failure here only overwrites
+    // `last_run.completed_at`/`totals` (`fail!`'s own job), keeping
+    // every field already written intact, matching `run()`'s own
+    // `setdefault`-only except-block behaviour for a failure this late.
+    let program = match electricity_compiler::post_state_checks(&loaded, effective.runtime.as_ref())
+    {
+        Ok(program) => program,
+        Err(err) => fail!(err.to_string()),
+    };
 
     // Lane A's own refusal walker (issue #408's gate lane), wired in
     // after every check error above and before any file is written --

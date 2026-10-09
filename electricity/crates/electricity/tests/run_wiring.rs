@@ -105,15 +105,26 @@ async fn a_structural_check_failure_still_writes_out_state() {
         .unwrap()
         .as_dict()
         .unwrap();
-    // A sparse last_run: only completed_at/totals, Python's own
-    // `setdefault`-only behaviour for a failure before step 12 ever
-    // wrote the full shape.
+    // The full shape: `document_hash` is computed independently of
+    // compilation (this module's own `run_orchestration` doc comment),
+    // so even this structural failure gets every `last_run` key steps
+    // 11-13 always write, not a sparse `setdefault`-only shape.
     assert_eq!(
         last_run
             .keys()
             .map(|k| k.as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["completed_at", "totals"]
+        vec![
+            "run_id",
+            "orchestration_path",
+            "document_hash",
+            "dry_run",
+            "validate_only",
+            "verbose",
+            "started_at",
+            "completed_at",
+            "totals",
+        ]
     );
     let plugins = runtime
         .get(&electricity_value::Value::Str("plugins".to_string()))
@@ -125,7 +136,7 @@ async fn a_structural_check_failure_still_writes_out_state() {
             .keys()
             .map(|k| k.as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["configured", "loaded", "events"]
+        vec!["contract_version", "configured", "loaded", "events"]
     );
 }
 
