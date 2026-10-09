@@ -488,17 +488,22 @@ fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bo
     }
 }
 
-/// `Warning: ...` lines, then (on failure) a final `Error: <text>`
-/// line -- issue #431's "CLI output" decision's own stderr contract.
+/// `Warning: ...` lines, and nothing else -- issue #431's "CLI output"
+/// decision's own stderr contract (PR #441 review finding 4, K1): a
+/// run failure's own error already went out on stdout, inside the
+/// `{"ok": false, ...}` payload [`print_stdout_contract`] just wrote --
+/// `cli/app.py::run`'s own non-TTY failure path (`json_out`) prints
+/// nothing on stderr beyond `_print_run_warnings`'s own `Warning:`
+/// lines, never a second `Error:` line too. A bare `Error: <text>` on
+/// stderr stays reserved for the two checks that fail *before* `run()`
+/// is ever reached at all -- a config error and a missing orchestration
+/// (`run_action`'s own early-exit branches, both of which `return`
+/// before this function is ever called) -- exactly where Circuitry's
+/// own `CircuitryGroup.invoke`/CLI-layer checks report them, on stdout
+/// or plain stderr text, never through this JSON-failure path at all.
 fn print_stderr_contract(result: &RunResult) {
     for warning in &result.warnings {
         write_stderr(&format!("Warning: {warning}\n"));
-    }
-    if !result.ok {
-        write_stderr(&format!(
-            "Error: {}\n",
-            result.error.as_deref().unwrap_or("")
-        ));
     }
 }
 

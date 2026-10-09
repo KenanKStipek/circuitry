@@ -86,8 +86,10 @@ fn help_prints_usage_and_preview_notice_and_exits_zero() {
 /// (issue #431's run-wiring table). An empty document is one of the
 /// few checks fully resolvable without a real VM, so its exact text
 /// -- not just a marker naming an unimplemented lane -- is a stable
-/// thing to assert here. `electricity-cli`'s own stderr contract
-/// prefixes it with `Error: ` (issue #431's "CLI output" decision).
+/// thing to assert here. An ordinary run failure's own error lives in
+/// the stdout JSON payload, never on stderr (PR #441 review finding 4,
+/// K1: `cli/app.py::run`'s own non-TTY failure path prints no `Error:`
+/// line on stderr at all, only `Warning:` ones).
 #[test]
 fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
     let (mut cmd, home) = command("run");
@@ -99,14 +101,16 @@ fn run_request_fails_with_the_checks_own_error_text_and_exit_code_one() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
     // The "required property" text past the location is the Rust
     // `jsonschema` crate's own (third-party) wording, not required to
     // match Circuitry's Python `jsonschema` text word for word
     // (DESIGN.md §1/§12) -- only the "Orchestration validation failed:"
     // wrapper and the location are Circuitry's own.
-    assert!(stderr.starts_with("Error: Orchestration validation failed:\n  - top level: "));
-    assert!(stderr.contains("required property"), "{stderr}");
+    assert!(error.starts_with("Orchestration validation failed:\n  - top level: "));
+    assert!(error.contains("required property"), "{error}");
 }
 
 #[test]
@@ -177,10 +181,18 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         .unwrap();
     // `--profile` refuses with the preview marker before anything else
     // runs (profiles are M1-I) -- exit 1, every time, regardless of
-    // whether the document itself would otherwise run.
+    // whether the document itself would otherwise run. An ordinary run
+    // failure's own error lives in the stdout JSON payload, not stderr
+    // (PR #441 review finding 4, K1).
     assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("is a preview and cannot run orchestrations yet"));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("is a preview and cannot run orchestrations yet")
+    );
 }
 
 #[test]
@@ -446,10 +458,12 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
     assert!(
-        stderr.contains("is a preview and cannot run orchestrations yet"),
-        "{stderr}"
+        error.contains("is a preview and cannot run orchestrations yet"),
+        "{error}"
     );
     assert!(!out.exists());
     assert!(!events.exists());
