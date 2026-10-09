@@ -21,6 +21,7 @@ import pytest
 from . import harness
 from .normalize import (
     assert_errors_equal,
+    assert_events_equal,
     assert_out_serialization,
     assert_states_equal,
     normalize,
@@ -138,8 +139,16 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+    live_state_path = tmp_path / "live.json"
     result = _run_electricity(
-        electricity_binary, case_dir, metadata, out_path=out_path, home_dir=home_dir
+        electricity_binary,
+        case_dir,
+        metadata,
+        out_path=out_path,
+        home_dir=home_dir,
+        events_path=events_path,
+        live_state_path=live_state_path,
     )
 
     combined_output = result.stdout + result.stderr
@@ -163,6 +172,15 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         actual_state = json.loads(actual_text)
         expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
         assert_states_equal(normalize(actual_state), normalize(expected_state))
+
+        expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
+        assert_events_equal(events_path.read_text(encoding="utf-8"), expected_events_text)
+
+        # `--live-state`'s final write always ends equal to `--out`
+        # (electricity/DESIGN.md §10.5, issue #431's acceptance criterion).
+        assert live_state_path.read_bytes() == out_path.read_bytes(), (
+            "--live-state's final write is not byte-identical to --out"
+        )
 
         if metadata.get("also_pretty"):
             pretty_out_path = tmp_path / "out.pretty.json"

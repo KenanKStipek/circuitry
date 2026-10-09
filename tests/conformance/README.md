@@ -118,26 +118,62 @@ against it (under `normalize()`, like any other state) in addition to the
 error text. `also_pretty` is success-only — `harness.load_case` rejects it
 on a failure case.
 
+## Events and live state
+
+Every success case also commits `expected.events.jsonl`, `cof run --events`'s
+own output for that case (runtime-semantics.md §8.7). Both runners re-run
+the case with `--events`/`--live-state` set to a path under `tmp_path` and
+compare: electricity's own stream against the committed fixture; the Python
+runner's fresh stream against the same fixture, the same determinism check
+`expected.json` already gets. `normalize.assert_events_equal` does the
+comparison: `ts`/`ms`/`run_id`/`pid`/`engine` are shape-checked and replaced
+with a placeholder, like any other volatile state field; the per-instance
+`seq`/`id` are dropped outright rather than normalized, because a tree
+dynamic's branches are free to start and finish in a different wall-clock
+order on the two engines (cof's real OS threads vs. electricity's
+single-threaded cooperative scheduler) — comparing their absolute values
+would assert an implementation detail neither engine commits to. What *is*
+checked: both streams open with `run_start` and close with `run_end`
+(compared directly); every path's own `start`/`dispatch`/`end` appear in a
+container-before-child, child-before-container order; and each path's own
+set of events is the same multiset in both streams (`collections.Counter`),
+regardless of how tree siblings happened to interleave with each other. A
+chain has only one valid order to begin with, so this reduces to a plain
+sequence comparison for it.
+
+`--live-state`'s final write is asserted byte-identical to `--out` for
+every success case, in both engines (electricity/DESIGN.md §10.5) — no
+separate fixture needed, since it's compared against the same run's own
+`--out` rather than a committed file.
+
 ## Running it
 
 ```sh
-pytest tests/conformance/                      # both runners (electricity skips
-                                                 # today — see below)
+pytest tests/conformance/                      # both runners
 pytest tests/conformance/test_python_runner.py  # python engine only
+pytest tests/conformance/test_electricity_runner.py  # electricity engine only
 ```
 
 The electricity runner (`test_electricity_runner.py`) builds the
 `electricity` binary from `electricity/` with `cargo` (once per test
-session) and skips every case — with a reason naming why — when `cargo`
-isn't on `PATH` (a contributor machine that genuinely has no Rust
-toolchain; the ordinary `pytest -q -m 'not integration'` gate itself *does*
-have one — CI's `ubuntu-latest` image ships `cargo`, so each of
-`quality.yml`'s pytest jobs builds this crate once) or when the binary's
-own preview build refuses to run any document yet (`electricity 0.1.0 is a
-preview and cannot run orchestrations yet; use \`cof run\` instead`,
-`electricity/crates/electricity-cli`). Once electricity can run a
-document, these stop auto-skipping and start actually diffing state
-against the same `expected.json` the Python runner uses.
+session) and skips every case it applies to — with a reason naming why —
+only when `cargo` isn't on `PATH` (a contributor machine that genuinely has
+no Rust toolchain; the ordinary `pytest -q -m 'not integration'` gate
+itself *does* have one — CI's `ubuntu-latest` image ships `cargo`, so each
+of `quality.yml`'s pytest jobs builds this crate once). All of M0-H
+(issues #408, #431) is on `main`: electricity runs `tool`/`dynamic`/`if`/
+`finally:` documents end to end, so a case that lists `electricity` in its
+own `engines` and expects success now actually runs and is diffed against
+the same `expected.json`/`expected.events.jsonl` the Python runner uses —
+not skipped. A *failure* case may still legitimately skip for electricity
+if its document uses content M0-H's own preview genuinely doesn't support
+yet (`prompt`/`loop`/`use`/`reflector`/`yield`/...): the binary refuses
+those up front with a message containing `is a preview and cannot run
+orchestrations yet` (`electricity/crates/electricity-cli`), and the runner
+treats that refusal as an expected skip rather than a failure. The same
+refusal on a case that expects *success* is never skipped — it fails the
+test, since a success case electricity wrongly refuses is a real
+regression.
 
 electricity is invoked with the case's own `fakes/` first on `PATH` and no
 credential/`CIRCUITRY_*` env vars, same as the Python runner
@@ -145,9 +181,7 @@ credential/`CIRCUITRY_*` env vars, same as the Python runner
 has no equivalent to `cof run`'s "no config given" yet — a case without an
 explicit `case.json` `"config"` gets `default_config.json` (`{}`) as a
 placeholder baseline for the electricity runner only (see that file's
-comment in `test_electricity_runner.py`). A success case's `--pretty` half
-(`also_pretty`) isn't run against electricity: its CLI has no `--pretty`
-flag yet, so `c23-out-plain-vs-pretty` records this as a `known_divergence`.
+comment in `test_electricity_runner.py`).
 
 ## Adding a case
 

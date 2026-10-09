@@ -140,6 +140,8 @@ def run_case(
     out_path: Path,
     home_dir: Path,
     pretty: bool = False,
+    events_path: Path | None = None,
+    live_state_path: Path | None = None,
 ) -> CaseResult:
     """Run one case's document through `cof run`, writing state to
     `out_path`. `cwd` is the case directory, so `orchestration.yml` and any
@@ -156,6 +158,10 @@ def run_case(
     ]
     if pretty:
         cmd.append("--pretty")
+    if events_path is not None:
+        cmd += ["--events", str(events_path)]
+    if live_state_path is not None:
+        cmd += ["--live-state", str(live_state_path)]
     if metadata.get("config"):
         cmd += ["--config", metadata["config"]]
     cmd += [str(arg) for arg in metadata.get("cli_args", [])]

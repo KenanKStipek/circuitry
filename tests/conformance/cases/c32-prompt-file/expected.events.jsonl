@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-09T13:29:30.615Z","ev":"run_start","run_id":"51c40e27-5322-4f2d-a5a6-72d620e32bc4","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":80893}
+{"v":1,"seq":1,"ts":"2026-10-09T13:29:30.618Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-09T13:29:30.618Z","ev":"start","id":1,"path":"prime.brief"}
+{"v":1,"seq":3,"ts":"2026-10-09T13:29:30.618Z","ev":"end","id":1,"path":"prime.brief","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-09T13:29:30.618Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-09T13:29:30.618Z","ev":"run_end","ok":true}

@@ -44,6 +44,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tests.conformance import harness  # noqa: E402
 from tests.conformance.normalize import (  # noqa: E402
+    assert_events_equal,
     assert_states_equal,
     normalize,
     redact_leaked_paths,
@@ -72,14 +73,23 @@ def _generate_success(case_dir: Path, metadata: dict[str, Any], tmp_root: Path) 
     home_dir = tmp_root / "home"
     home_dir.mkdir(exist_ok=True)
     out_path = tmp_root / "out.json"
-    result = harness.run_case(case_dir, metadata, out_path=out_path, home_dir=home_dir)
+    events_path = tmp_root / "events.jsonl"
+    result = harness.run_case(
+        case_dir, metadata, out_path=out_path, home_dir=home_dir, events_path=events_path
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"{case_dir.name}: expected success, `cof run` exited {result.returncode}\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
     files = {
-        "expected.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False)
+        "expected.json": _redact_and_reserialize(out_path.read_bytes(), pretty=False),
+        # No path redaction needed: `--events` carries `path`/`orchestration`
+        # (already relative) and `run_id`/`ts`/`pid`/`engine` (not absolute
+        # paths at all) -- nothing a contributor's own checkout or temp
+        # directory could leak into (`tests/conformance/normalize.py`'s
+        # events comparator normalizes these at comparison time instead).
+        "expected.events.jsonl": events_path.read_bytes(),
     }
     if metadata.get("also_pretty"):
         pretty_home = tmp_root / "home-pretty"
@@ -135,16 +145,25 @@ def generate_case(case_dir: Path) -> dict[str, bytes]:
         raise ValueError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")
 
 
-def _content_is_current(current: bytes | None, generated: bytes) -> bool:
+def _content_is_current(current: bytes | None, generated: bytes, *, filename: str) -> bool:
     """Compare a committed expected file to a freshly generated one.
-    JSON content is compared under the suite's normalizer (run id,
-    timestamps, durations, and friends always differ byte-for-byte between
-    two runs); anything else (there is nothing else today, but `--check`
-    should degrade safely rather than silently pass) falls back to exact
-    bytes."""
+    A `.jsonl` file (`expected.events.jsonl`) is compared with the events
+    comparator (`assert_events_equal`) — it is a stream of JSON objects,
+    one per line, not a single JSON document `json.loads` could parse
+    whole. Everything else is compared under the suite's state normalizer
+    (run id, timestamps, durations, and friends always differ byte-for-byte
+    between two runs); anything that is neither (there is nothing else
+    today, but `--check` should degrade safely rather than silently pass)
+    falls back to exact bytes."""
     if current is None:
         return False
     if current == generated:
+        return True
+    if filename.endswith(".jsonl"):
+        try:
+            assert_events_equal(generated.decode("utf-8"), current.decode("utf-8"))
+        except AssertionError:
+            return False
         return True
     try:
         current_value = json.loads(current)
@@ -206,9 +225,9 @@ def main() -> int:
             target = case_dir / filename
             current = target.read_bytes() if target.exists() else None
             if args.check:
-                if not _content_is_current(current, content):
+                if not _content_is_current(current, content, filename=filename):
                     stale.append(str(target.relative_to(REPO_ROOT)))
-            elif not _content_is_current(current, content):
+            elif not _content_is_current(current, content, filename=filename):
                 # Only touch files that actually changed: a fresh run id,
                 # timestamp and duration differ on *every* invocation, so
                 # writing unconditionally would make every regeneration (even
