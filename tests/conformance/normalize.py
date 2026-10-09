@@ -349,6 +349,27 @@ def parse_event_lines(text: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+def _assert_compact_wire_format(text: str, *, label: str) -> None:
+    """Every non-empty line of *text* must already be exactly
+    `json.dumps(json.loads(line), separators=(",", ":"))` -- the wire
+    format runtime-semantics §8.7 specifies (`cli/events.py::EventLog.
+    _write_line`'s own `separators=(",", ":")`; `ensure_ascii` left at
+    its default `True`, so this never passes `ensure_ascii=False` here
+    either). Catches an engine whose events happen to parse the same but
+    were written with different separators -- `assert_events_equal`'s
+    own per-field comparison below parses every line first, so it would
+    never notice that on its own."""
+    for i, line in enumerate(text.splitlines()):
+        if not line.strip():
+            continue
+        expected = json.dumps(json.loads(line), separators=(",", ":"))
+        if line != expected:
+            raise AssertionError(
+                f"{label}: line {i} is not in the exact --events wire format:\n"
+                f"  actual:   {line!r}\n  expected: {expected!r}"
+            )
+
+
 def _split_and_check_order(
     events: list[dict[str, Any]], *, label: str
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
@@ -461,6 +482,8 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
     freely with each other on either engine, since only the nesting order
     between a container and its descendants (not sibling interleaving) is
     asserted for one of those."""
+    _assert_compact_wire_format(actual_text, label="actual")
+    _assert_compact_wire_format(expected_text, label="expected")
     actual = parse_event_lines(actual_text)
     expected = parse_event_lines(expected_text)
     actual_start, actual_middle, actual_end = _split_and_check_order(actual, label="actual")

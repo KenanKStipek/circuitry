@@ -206,7 +206,10 @@ def _event(ev: str, path: str | None = None, **extra: object) -> dict:
 
 
 def _events_text(events: list[dict]) -> str:
-    return "\n".join(json.dumps(event) for event in events) + "\n"
+    """The real `--events` wire format: compact separators (runtime-
+    semantics §8.7, `cli/events.py::EventLog._write_line`'s own
+    `separators=(",", ":")`), not `json.dumps`'s spaced default."""
+    return "\n".join(json.dumps(event, separators=(",", ":")) for event in events) + "\n"
 
 
 _RUN_START = _event(
@@ -300,3 +303,19 @@ def test_assert_events_equal_allows_tree_sibling_interleaving() -> None:
     expected = stream(["a", "b"])
     actual = stream(["b", "a"])
     assert_events_equal(actual, expected)
+
+
+def test_assert_events_equal_rejects_non_compact_separators() -> None:
+    """The wire-format check (runtime-semantics §8.7) fails on a stream
+    whose lines are valid JSON but weren't written with `cof`'s own
+    `separators=(",", ":")` -- a format drift the per-field comparison
+    below never catches on its own, since it parses every line first.
+    This is the exact drift electricity's `--events` had before it
+    switched from `WriteMode::COMPACT` to `WriteMode::EVENTS`: every
+    line still parsed and compared equal, but read `"v": 1` instead of
+    `"v":1`."""
+    events = [_RUN_START, _RUN_END]
+    compact = _events_text(events)
+    spaced = "\n".join(json.dumps(event) for event in events) + "\n"
+    with pytest.raises(AssertionError):
+        assert_events_equal(spaced, compact)
