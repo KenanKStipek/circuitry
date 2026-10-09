@@ -329,6 +329,7 @@ dependencies = [
  "chrono",
  "electricity-bytecode",
  "electricity-cel",
+ "electricity-config",
  "electricity-json",
  "electricity-schema",
  "electricity-template",
@@ -340,6 +341,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "electricity-config"
+version = "0.1.0"
+dependencies = [
+ "electricity-value",
+ "indexmap",
 ]
 
 [[package]]
