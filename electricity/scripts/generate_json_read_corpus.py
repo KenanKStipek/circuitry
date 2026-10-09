@@ -10,11 +10,12 @@ only, or ``"both"`` when the two can't differ -- anything without a
 repeated object key), and what reading it produces: the parsed value
 (tagged the same way ``generate_value_corpus.py`` tags a `Value`) for valid
 input; Circuitry's own ``DuplicateKeyError`` message, word for word, for a
-repeated object key (``core/json_load.py``); or, for malformed JSON, only
-the character position CPython's ``json.JSONDecodeError.pos`` reports — the
-message text there is CPython's own, not Circuitry's, so electricity-json
-only has to fail at the same position (DESIGN.md §1/§12). Two cases (a
-lone UTF-16 surrogate escape) are a documented *divergence* instead: see
+repeated object key (``core/json_load.py``); or, for malformed JSON, the
+full exact text of CPython's own ``json.JSONDecodeError`` (``str(exc)``,
+not just its ``.pos``) -- electricity-json's ``ReadError::Syntax`` Display
+is byte-identical to it (issue #442), so the recorded text is a real
+parity assertion, not merely a position check. Two cases (a lone UTF-16
+surrogate escape) are a documented *divergence* instead: see
 ``divergent_lone_surrogate_case``.
 
 Must be run with Python 3.11 (see ``generate_value_corpus.py``). Usage:
@@ -96,7 +97,7 @@ def syntax_error_case(text: str) -> dict:
     try:
         json.loads(text)
     except json.JSONDecodeError as e:
-        return {"text": text, "entry": "both", "expect": {"kind": "syntax", "pos": e.pos}}
+        return {"text": text, "entry": "both", "expect": {"kind": "syntax", "message": str(e)}}
     raise AssertionError(f"expected a JSONDecodeError for {text!r}")
 
 
@@ -185,6 +186,22 @@ def build_corpus() -> list[dict]:
         '"\\u0041',  # \uXXXX escape with nothing after it, not even the closing quote
         '"\\ud800\\udc00',  # same, mid-surrogate-pair
         '"a\x01b"',  # an unescaped control character inside a string
+        # Multi-line text before the failing position, so lineno/colno
+        # (not just pos) are pinned -- a missing comma found on line 3.
+        '{\n  "a": 1\n  "b": 2\n}',
+        # The same, but with CR LF line endings: JSONDecodeError's own
+        # lineno/colno come from counting '\n' only (not '\r'), so a
+        # CR LF document's column numbers are one less than an LF-only
+        # document's would be at the same byte offset, not adjusted for
+        # the extra '\r'.
+        '{\r\n  "a": 1,\r\n  "b": 2\r\n',
+        '{"a": 1,\r\n "b": 2\r\n "c": 3}',
+        # Non-ASCII text before the failing position (object keys and a
+        # list element), confirming `pos`/`lineno`/`colno` all stay in
+        # Python `str` indices (Unicode scalar values) across it.
+        '["café", "中文",\n  1 2]',
+        '"é中\x01b"',
+        '"café\\xZ"',
     ]
     lone_surrogate_texts = [
         '"\\ud800"',  # a lone high surrogate, with nothing following it

@@ -66,11 +66,10 @@ pub fn json_registry() -> ToolRegistry {
 
 /// `json`'s own `"json: parse failed: {err}"` wrap (`plugins/json.py`)
 /// around [`tool_leaf`]'s fixed malformed `input:` (`"not json"`) --
-/// third-party JSON-decoder text (DESIGN.md §1/§12: only has to fail at
-/// the same point CPython's own decoder would, not match it verbatim),
-/// but deterministic for this one fixed string, which is all any test
-/// here needs.
-pub const TOOL_FAIL_TEXT: &str = "json: parse failed: Expecting value: char 0";
+/// the third-party JSON-decoder text after it is byte-identical to
+/// CPython's own `json.JSONDecodeError` text (issue #442), deterministic
+/// for this one fixed string, which is all any test here needs.
+pub const TOOL_FAIL_TEXT: &str = "json: parse failed: Expecting value: line 1 column 1 (char 0)";
 
 /// A `tool` leaf -- real `json`-tool dispatch (through [`json_registry`]),
 /// `mode: parse` against the fixed malformed `input:` that always fails
