@@ -49,8 +49,7 @@ def _loop_progress(t0: float, done: int, total: int | None) -> dict[str, Any]:
     still to go — ``None`` before the first pass completes (no average yet)
     or when ``total`` itself is unknown (an uncapped ``while`` loop). Costs
     one ``time.monotonic()`` call and a few float ops per pass — see #271's
-    "must cost nothing measurable per pass" for the owner's long film/upscale
-    runs.
+    "must cost nothing measurable per pass" for long-running loops.
     """
     elapsed = time.monotonic() - t0
     eta: float | None = None

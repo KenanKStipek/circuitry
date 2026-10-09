@@ -293,11 +293,11 @@ reference for the full skip/rerun rule, the three state sources (`--state`,
 `--resume last`, `--resume <run-id>` via this section's persistence
 backend), and the content-hash/inputs safety checks.
 
-This is the owner's long film/upscale pipelines' main use: a 164-minute
-video-upscale loop that crashes — or is killed outright (Ctrl-C/SIGTERM/
-SIGHUP, exiting 130/143/129) — at frame 250 doesn't lose the 249 already-rendered
-frames — `cof run upscale.yml --state run.json --resume x` picks up at
-frame 250, and the adapter/tool calls for frames 0–249 never happen again.
+This matters most for long runs: a frame-by-frame video loop that crashes — or
+is killed outright (Ctrl-C/SIGTERM/SIGHUP, exiting 130/143/129) — at frame 250
+doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
+run.json --resume x` picks up at frame 250, and the adapter/tool calls for
+frames 0–249 never happen again.
 
 ## Anti-patterns
 

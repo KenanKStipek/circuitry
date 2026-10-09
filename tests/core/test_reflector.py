@@ -321,9 +321,9 @@ def test_reflector_renders_root_goal_in_planning_prompt() -> None:
 
 
 def test_reflector_nested_under_tree_dynamic_still_renders_root_goal() -> None:
-    """A reflector that is a direct child of a ``flow: tree`` dynamic — the
-    film reflectors' own topology — still reads the run's root ``goal``
-    effect, not an empty isolated branch state (#240 review finding 1).
+    """A reflector that is a direct child of a ``flow: tree`` dynamic still
+    reads the run's root ``goal`` effect, not an empty isolated branch state
+    (#240 review finding 1).
 
     ``Store.parallel_branches`` (used for every ``flow: tree`` dynamic and
     parallel loop) hands each branch a fresh, isolated state dict with no
