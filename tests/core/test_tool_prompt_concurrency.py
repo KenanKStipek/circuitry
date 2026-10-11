@@ -31,10 +31,18 @@ _JOIN_TIMEOUT = 10.0
 
 
 class _TrackingPlugin:
-    """A fake tool plugin that sleeps and records peak in-flight calls."""
+    """A fake tool plugin that sleeps and records peak in-flight calls.
 
-    def __init__(self, delay: float = 0.03) -> None:
+    An optional ``barrier``, sized to the concurrency a test expects,
+    makes the peak deterministic instead of inferred from the wall clock
+    (#456): a call waits on it while counted as in flight, so a lower
+    peak than expected times out with ``BrokenBarrierError`` instead of
+    racing a sleep.
+    """
+
+    def __init__(self, delay: float = 0.03, barrier: threading.Barrier | None = None) -> None:
         self._delay = delay
+        self._barrier = barrier
         self._lock = threading.Lock()
         self._in_flight = 0
         self.max_in_flight = 0
@@ -43,6 +51,8 @@ class _TrackingPlugin:
         with self._lock:
             self._in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        if self._barrier is not None:
+            self._barrier.wait()
         time.sleep(self._delay)
         with self._lock:
             self._in_flight -= 1
@@ -53,6 +63,7 @@ class _TrackingPlugin:
 class _TrackingAdapter:
     delay: float = 0.03
     name: str = "tracking"
+    barrier: threading.Barrier | None = None
     max_concurrent: int = field(default=0)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _in_flight: int = field(default=0)
@@ -61,6 +72,8 @@ class _TrackingAdapter:
         with self._lock:
             self._in_flight += 1
             self.max_concurrent = max(self.max_concurrent, self._in_flight)
+        if self.barrier is not None:
+            self.barrier.wait()
         time.sleep(self.delay)
         with self._lock:
             self._in_flight -= 1
@@ -87,8 +100,13 @@ def test_tool_runtime_respects_global_cap(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_tool_runtime_without_a_limiter_is_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
     """No `_concurrency_limiter` in runtime_config: full, uncapped concurrency,
-    exactly like before this feature existed."""
-    plugin = _TrackingPlugin(delay=0.05)
+    exactly like before this feature existed.
+
+    A barrier sized to all four calls (#456), not a sleep, proves the
+    peak: on a slow runner the fourth call can start after the first has
+    already finished.
+    """
+    plugin = _TrackingPlugin(delay=0.05, barrier=threading.Barrier(4, timeout=5))
     monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
     store = Store({})
 
@@ -212,7 +230,10 @@ def test_prompt_runtime_group_cap() -> None:
 
 
 def test_prompt_runtime_without_a_limiter_is_unaffected() -> None:
-    adapter = _TrackingAdapter(delay=0.05)
+    """A barrier sized to all four calls (#456), not a sleep, proves the
+    peak: on a slow runner the fourth call can start after the first has
+    already finished."""
+    adapter = _TrackingAdapter(delay=0.05, barrier=threading.Barrier(4, timeout=5))
     store = Store({})
 
     def run_one(i: int) -> None:

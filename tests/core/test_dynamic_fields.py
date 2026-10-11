@@ -51,10 +51,20 @@ class SlowFailAdapter:
 
 @dataclass
 class SleepingAdapter:
-    """Records how many calls are in flight at once, sleeping `delay` each."""
+    """Records how many calls are in flight at once, sleeping `delay` each.
+
+    An optional ``barrier``, sized to the concurrency a test expects, makes
+    the peak deterministic instead of inferred from the wall clock (#456):
+    on a slow runner a sleep can end before a sibling even starts, so a
+    tight upper bound doesn't prove a lower one. A child waits on the
+    barrier while counted as in flight; a real regression that never gets
+    enough callers there times out with ``BrokenBarrierError`` instead of
+    the test hanging or just racing the clock.
+    """
 
     delay: float = 0.08
     name: str = "sleeping"
+    barrier: threading.Barrier | None = None
     max_concurrent: int = field(default=0)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _in_flight: int = field(default=0)
@@ -65,6 +75,8 @@ class SleepingAdapter:
         with self._lock:
             self._in_flight += 1
             self.max_concurrent = max(self.max_concurrent, self._in_flight)
+        if self.barrier is not None:
+            self.barrier.wait()
         time.sleep(self.delay)
         with self._lock:
             self._in_flight -= 1
@@ -98,10 +110,16 @@ def test_max_concurrency_bounds_the_tree_worker_pool() -> None:
 
 
 def test_unset_max_concurrency_still_runs_every_child_at_once() -> None:
-    """Omitted max_concurrency keeps today's behavior: no bound at all."""
+    """Omitted max_concurrency keeps today's behavior: no bound at all.
+
+    A barrier sized to all four children (#456), not a sleep, proves the
+    peak: on a slow runner the fourth child can start after the first has
+    already finished, so ``== 4`` inferred purely from an 80ms sleep window
+    was observed to flake in CI.
+    """
     orch = _tree_of_prompts(4)
     root = compile_orchestration(orch=orch, root_name="prime")
-    adapter = SleepingAdapter(delay=0.08)
+    adapter = SleepingAdapter(delay=0.08, barrier=threading.Barrier(4, timeout=5))
 
     DynamicRuntime(root, adapter=adapter, model="unit-test").execute(store=Store({}))
 
@@ -109,9 +127,14 @@ def test_unset_max_concurrency_still_runs_every_child_at_once() -> None:
 
 
 def test_max_concurrency_two_bounds_four_children_to_two_at_a_time() -> None:
+    """A barrier sized to the cap (#456), not a sleep, proves two children
+    reach it together: the pool's own two worker threads each pick up two
+    of the four children in turn, so the (reusable) barrier is satisfied
+    twice.
+    """
     orch = _tree_of_prompts(4, max_concurrency=2)
     root = compile_orchestration(orch=orch, root_name="prime")
-    adapter = SleepingAdapter(delay=0.08)
+    adapter = SleepingAdapter(delay=0.08, barrier=threading.Barrier(2, timeout=5))
 
     DynamicRuntime(root, adapter=adapter, model="unit-test").execute(store=Store({}))
 
