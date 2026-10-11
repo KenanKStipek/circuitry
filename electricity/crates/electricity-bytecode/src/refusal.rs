@@ -6,7 +6,10 @@
 //! `reflector`/`yield` effect, a model-mode condition or `expect`, a
 //! `tool` effect naming an unsupported `provider:`, or an unexpanded
 //! `{{> name}}` partial reference (the run-time half of #406, out of
-//! scope through M1-P).
+//! scope through M1-P), or a document naming a top-level `adapter:` at
+//! all, since `cof run` runs preflight against it whenever a config is
+//! given and M0-H ports none of that check yet -- replaced once lane R
+//! of #448 (M1's run wiring v2) ports preflight (#451).
 //!
 //! **Capability-driven (issue #449's gate lane, item 9).** [`Supported`]
 //! is one flag per capability, plus the tool-provider allow-list, so
@@ -19,7 +22,15 @@
 //! after this lane: [`Supported::m0`] is the exact value M0 ran with
 //! (every flag `false`), pinned by this module's own golden tests
 //! below so no later lane can silently widen what the walker accepts
-//! without a reviewed, intentional flip.
+//! without a reviewed, intentional flip. [`Supported::preflight`] is
+//! one such flag, added by #451: a document naming a top-level
+//! `adapter:` is refused while it's `false`, the same as every other
+//! capability here, even though it stands in for a safety check this
+//! walker runs instead of real preflight rather than a VM capability a
+//! later M1 lane implements -- flipped only once lane R of #448 ports
+//! preflight for real. [`RefusalReason::PartialReference`] is the one
+//! exception, with no flag of its own: M1-P's own landing removes that
+//! check from the walker entirely rather than ever gating it.
 //!
 //! Walks the whole compiled tree in document order and stops at the
 //! first node [`RefusalReason`] names -- not a list of every offending
@@ -68,6 +79,25 @@ pub enum RefusalReason {
     /// M1-P's own landing removes this check from the walker entirely,
     /// rather than ever gating it behind a flag of its own.
     PartialReference,
+    /// The document's own top-level `adapter:` is a non-blank string,
+    /// and [`Supported::preflight`] is `false` -- `cli/allowlist.py::
+    /// walk_orchestration_refs`'s own `include_document_adapter` branch
+    /// folds it into the set `preflight()` checks liveness for, and
+    /// `cof run` runs preflight whenever a config is given
+    /// (`cli/runtime_shim.py`, `req.config is not None`); M0-H ports
+    /// none of that yet, so a document naming one is refused here
+    /// instead of silently running without the check Python would have
+    /// failed it on, until lane R of #448 (M1's run wiring v2) ports
+    /// preflight and flips [`Supported::preflight`] for the lanes that
+    /// no longer need this stand-in. The adapter name is carried
+    /// already `.strip()`'d, the same text `walk_orchestration_refs`
+    /// itself adds to that set ([`electricity_value::pycompat::py_strip`]
+    /// -- Python's exact `str.strip()` whitespace set, not
+    /// `electricity-compiler::pipeline::is_python_strip_whitespace`'s
+    /// own ASCII-only approximation; issue #449's gate lane added the
+    /// shared, non-approximating version this now reuses instead of
+    /// keeping its own copy).
+    DocumentAdapter(String),
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -101,6 +131,11 @@ pub struct Supported<'a> {
     pub model_expect: bool,
     /// M1-P (the document-level `prompts:` map `{{> name}}` expands).
     pub declared_prompts: bool,
+    /// Lane R of #448 (M1's run wiring v2): until then, a document
+    /// naming a top-level `adapter:` is refused regardless of every
+    /// other flag here, standing in for the preflight check M0-H never
+    /// ran (#451).
+    pub preflight: bool,
     /// A `tool` effect's own normalized `provider:` is accepted only
     /// when it is one of these (already-normalized, lower-case)
     /// names -- the caller's own [`electricity_tools::ToolRegistry`]/
@@ -127,6 +162,7 @@ impl<'a> Supported<'a> {
             model_condition: false,
             model_expect: false,
             declared_prompts: false,
+            preflight: false,
             providers,
         }
     }
@@ -141,6 +177,17 @@ pub fn first_unsupported(program: &Program, supported: &Supported<'_>) -> Option
             path: EffectPath::root(),
             reason: RefusalReason::DeclaredPrompts,
         });
+    }
+    if !supported.preflight {
+        if let Some(adapter) = &program.adapter {
+            let stripped = electricity_value::pycompat::py_strip(adapter);
+            if !stripped.is_empty() {
+                return Some(Refusal {
+                    path: EffectPath::root(),
+                    reason: RefusalReason::DocumentAdapter(stripped.to_string()),
+                });
+            }
+        }
     }
     walk_op(&program.root, supported)
 }
@@ -459,6 +506,88 @@ mod tests {
             ..m0()
         };
         assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn a_document_level_adapter_refuses_even_with_an_otherwise_supported_tree() {
+        let tool_path = EffectPath::root().push_name("parse");
+        let tool = leaf_op(
+            tool_path,
+            LeafKind::Tool(tool_op(ParamNode::Map(IndexMap::new()))),
+        );
+        let mut program = program_with_root(root_block(vec![tool]));
+        program.adapter = Some("openai".to_string());
+        let refusal = first_unsupported(&program, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
+        assert_eq!(refusal.path, EffectPath::root());
+    }
+
+    #[test]
+    fn a_document_level_adapter_is_accepted_once_preflight_is_set() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("openai".to_string());
+        let supported = Supported {
+            preflight: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn a_document_level_adapter_is_stripped_the_same_way_cof_run_strips_it() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("  openai \t".to_string());
+        let refusal = first_unsupported(&program, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
+    }
+
+    #[test]
+    fn a_document_level_adapter_that_is_blank_after_stripping_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("   ".to_string());
+        assert!(first_unsupported(&program, &m0()).is_none());
+    }
+
+    /// U+2003 (EM SPACE) is Unicode `White_Space`, so `char::is_whitespace()`
+    /// alone already strips it the same way Python's `str.isspace()` does --
+    /// unlike the \x1c-\x1f case below, this one needs no special-casing at
+    /// all, only confirms `is_whitespace()` isn't itself ASCII-only.
+    #[test]
+    fn a_document_level_adapter_of_only_an_em_space_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\u{2003}".to_string());
+        assert!(first_unsupported(&program, &m0()).is_none());
+    }
+
+    /// \x1c (FILE SEPARATOR) is a C0 control character Python's
+    /// `str.isspace()` counts as whitespace but Rust's `char::is_whitespace()`
+    /// does not -- the one gap [`electricity_value::pycompat::is_py_whitespace`]'s
+    /// own `\x1c`-`\x1f` range closes explicitly.
+    #[test]
+    fn a_document_level_adapter_of_only_a_file_separator_control_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\x1c".to_string());
+        assert!(first_unsupported(&program, &m0()).is_none());
+    }
+
+    /// U+00A0 (NO-BREAK SPACE) and U+2003 (EM SPACE) bracket "openai" --
+    /// both outside ASCII, confirming the stripped name survives with
+    /// neither left in it, not just that the whole string isn't blank.
+    #[test]
+    fn a_document_level_adapter_strips_unicode_whitespace_around_the_name() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\u{a0}openai\u{2003}".to_string());
+        let refusal = first_unsupported(&program, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
     }
 
     #[test]

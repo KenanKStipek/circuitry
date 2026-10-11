@@ -487,6 +487,52 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     assert!(!live_state.exists());
 }
 
+/// A document naming its own top-level `adapter:` is refused the same
+/// way, with no file written at all, even though the rest of the
+/// document (`json`/`dynamic` only) is otherwise fully supported --
+/// `cof run` would instead fail this one in preflight (no
+/// `OPENAI_API_KEY` in this test's own `env_clear`'d process), a check
+/// M0-H does not port yet.
+#[test]
+fn a_document_level_adapter_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("document-adapter-refusal");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "adapter: openai\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+            "--live-state",
+            live_state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(
+        error.contains("is a preview and cannot run orchestrations yet"),
+        "{error}"
+    );
+    assert!(error.contains("openai"), "{error}");
+    assert!(!out.exists());
+    assert!(!events.exists());
+    assert!(!live_state.exists());
+}
+
 /// A boolean flag given `=value` is a usage error, not silently
 /// accepted or ignored.
 #[test]

@@ -68,7 +68,10 @@ fn python_repr_str(s: &str) -> String {
 
 /// The [`electricity_compiler::CheckOptions`] an `electricity` run of
 /// *orchestration_path* against *config_path* checks against: trusting
-/// the document and skipping preflight (issue #408's CLI section),
+/// the document and skipping preflight (issue #408's CLI section --
+/// `first_unsupported` refuses a document naming a top-level `adapter:`
+/// outright instead, exactly because this crate never runs the check
+/// that flag would otherwise skip),
 /// *config_path*'s own fully-resolved `runtime:` block --
 /// `SANE_DEFAULTS`, the file deep-merged on top, then `CIRCUITRY_*`
 /// env overlays, exactly [`run_orchestration`]'s own step 1
@@ -216,6 +219,9 @@ fn refusal_reason_text(reason: &RefusalReason) -> String {
             format!("a tool effect with provider {provider:?}")
         }
         RefusalReason::PartialReference => "an unexpanded {{> name}} partial reference".to_string(),
+        RefusalReason::DocumentAdapter(adapter) => format!(
+            "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
+        ),
     }
 }
 
