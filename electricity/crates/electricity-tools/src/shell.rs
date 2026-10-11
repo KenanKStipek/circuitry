@@ -11,14 +11,6 @@ use electricity_value::Value;
 use electricity_value::pycompat::py_strip;
 use std::collections::BTreeSet;
 
-// `#[path]`, not a `mod generated;` line in `lib.rs` (review finding 9
-// on PR #467): this is the only module in the crate that needs
-// `is_py_alnum`, so the declaration lives here instead of adding a
-// line to a file `vm-lanes.md` calls final and complete for every
-// lane but the one that owns it.
-#[path = "generated/mod.rs"]
-mod generated;
-
 const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
 
 /// `plugins/shell.py::ShellPlugin` -- the default/pinned allowlist
@@ -233,12 +225,12 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
 /// `command.replace("-", "").replace("_", "").isalnum()` -- CPython's
 /// own Unicode `str.isalnum()` (true iff every character is alphabetic,
 /// decimal, digit, or numeric, and there's at least one -- `"".isalnum()`
-/// is `False`). [`generated::is_py_alnum`], not Rust's own,
+/// is `False`). [`crate::generated::is_py_alnum`], not Rust's own,
 /// broader `char::is_alphanumeric` -- see that function's own doc
 /// comment for the confirmed gap between the two.
 fn is_bare_command(command: &str) -> bool {
     let filtered: String = command.chars().filter(|&c| c != '-' && c != '_').collect();
-    !filtered.is_empty() && filtered.chars().all(generated::is_py_alnum)
+    !filtered.is_empty() && filtered.chars().all(crate::generated::is_py_alnum)
 }
 
 fn set_repr(items: &BTreeSet<String>) -> String {
@@ -397,7 +389,10 @@ mod tests {
             };
             let result = plugin
                 .execute(
-                    params(vec![("command", Value::from("echo")), ("args", falsy.clone())]),
+                    params(vec![
+                        ("command", Value::from("echo")),
+                        ("args", falsy.clone()),
+                    ]),
                     &call(&token),
                 )
                 .await

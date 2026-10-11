@@ -12,8 +12,8 @@ use electricity_value::{CancellationToken, Value};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io;
-use std::rc::Rc;
 use std::process::Stdio;
+use std::rc::Rc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -944,8 +944,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_timeout_kills_a_grandchild_that_keeps_the_pipe_open_after_the_tracked_child_exits()
-     {
+    async fn a_timeout_kills_a_grandchild_that_keeps_the_pipe_open_after_the_tracked_child_exits() {
         // Review finding 2 on PR #467: `sh`'s own `sleep 8470 &` forks a
         // grandchild that inherits the same stdout pipe and keeps it
         // open well past `echo hi; exit 0` -- a pipe-drain phase with no

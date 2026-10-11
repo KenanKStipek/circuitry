@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #460 test plan ('uuid' v5, bad version, bad namespace)",
+  "description": "v5 with dns/url/custom namespaces (count: 3, hex: true for one of them), and the exact bad-version/bad-namespace error texts. v1/v4 are deliberately not exercised here (electricity/docs/spec/tools-adapters-plugins.md §7 case 9): their own output is host/time-dependent and can never be byte-for-byte compared, even between two Python runs -- UuidPlugin.rs's own unit tests check their shape instead.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -793,7 +793,9 @@ mod tests {
         unsafe {
             std::env::remove_var("ELECTRICITY_TOOLS_TEST_BAD_UTF8");
         }
-        let merged = result.expect("merged_env must not panic on a non-UTF-8 env var").unwrap();
+        let merged = result
+            .expect("merged_env must not panic on a non-UTF-8 env var")
+            .unwrap();
         assert_eq!(merged.get("EXTRA"), Some(&"1".to_string()));
         assert!(!merged.contains_key("ELECTRICITY_TOOLS_TEST_BAD_UTF8"));
     }

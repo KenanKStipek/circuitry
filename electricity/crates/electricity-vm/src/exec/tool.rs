@@ -771,7 +771,9 @@ pub async fn execute_tool(
                                 // process-backed tool's own cancellation path
                                 // produces, never an ordinary tool's
                                 // unrelated success or failure.
-                                if token.is_set() && matches!(&dispatch, Err(err) if err.message == "cancelled") {
+                                if token.is_set()
+                                    && matches!(&dispatch, Err(err) if err.message == "cancelled")
+                                {
                                     return Err(VmError::Cancelled);
                                 }
                                 match dispatch {

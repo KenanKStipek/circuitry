@@ -44,6 +44,10 @@ pub enum PyExc {
     /// (review finding 5 on PR #454) -- CPython raises this, not
     /// `ValueError`, for a non-finite float.
     OverflowError,
+    /// `str.encode(encoding)`'s own strict-mode failure (lane D1's
+    /// `fs`/`hash` tools: appended here, never a change to an
+    /// existing variant's spelling, per this enum's own doc comment).
+    UnicodeEncodeError,
 }
 
 impl PyExc {
@@ -64,6 +68,7 @@ impl PyExc {
             PyExc::TimeoutError => "TimeoutError",
             PyExc::UnicodeDecodeError => "UnicodeDecodeError",
             PyExc::OverflowError => "OverflowError",
+            PyExc::UnicodeEncodeError => "UnicodeEncodeError",
         }
     }
 }

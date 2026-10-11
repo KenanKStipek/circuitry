@@ -23,6 +23,37 @@ async-trait = "0.1"
 # only behind `test-tools`.
 tokio = { version = "1", features = ["process", "io-util", "time", "rt"] }
 libc = "0.2"
+# `hash` (plugins/hash.py): hashlib's own algorithm set, split across
+# the RustCrypto family's per-algorithm crates (same `digest` 0.10 line
+# as the workspace's existing `sha2` dependency, so there's only ever
+# one `Digest` trait shape to call through).
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+digest = "0.10"
+# `hash`'s own `output_format: base64` -- standard alphabet, padded.
+base64 = "0.22"
+# `uuid` (plugins/uuid.py): v1/v4/v5 generation, `NAMESPACE_DNS`/`_URL`/
+# `_OID`/`_X500` and `uuid5`'s own SHA-1 construction all byte-identical
+# to CPython's `uuid` module (verified directly against it).
+uuid = { version = "1", features = ["v1", "v4", "v5"] }
+# `clock` (plugins/clock.py): a `timezone:` lookup has to read the
+# system tz database the way `zoneinfo.ZoneInfo` does -- a zone
+# compiled into a crate (`chrono-tz`) would accept a different set of
+# names than the host's own `/usr/share/zoneinfo` (#448 decision 8).
+# `jiff`, not `tzfile`: `jiff` evaluates a TZif file's own POSIX-TZ
+# footer for an instant past its last explicit transition (a "slim"
+# tzdata build keeps only a handful of explicit transitions and relies
+# on the footer for everything past them) and searches `TZDIR`/the
+# usual zoneinfo search path the way `zoneinfo.ZoneInfo` does; `tzfile`
+# 0.1.3 documents that it does not evaluate the footer at all.
+jiff = "0.2"
+# `clock`'s own `%<other>` directives (everything but the `%f`/`%z`/
+# `%Z` CPython pre-processes itself -- #448 decision 8) go to the
+# platform's own C `strftime`, not a pure-Rust reimplementation of it.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "process", "io-util", "time", "test-util"] }

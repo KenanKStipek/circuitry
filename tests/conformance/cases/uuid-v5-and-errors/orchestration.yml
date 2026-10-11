@@ -1,0 +1,31 @@
+name: uuid-v5-and-errors
+effects:
+  - type: tool
+    name: v5_dns
+    provider: uuid
+    params: {version: 5, namespace: dns, name: "example.com"}
+  - type: tool
+    name: v5_url
+    provider: uuid
+    params: {version: 5, namespace: url, name: "example.com"}
+  - type: tool
+    name: v5_custom_namespace
+    provider: uuid
+    params:
+      version: 5
+      namespace: "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+      name: "x"
+  - type: tool
+    name: v5_count_3_hex
+    provider: uuid
+    params: {version: 5, namespace: dns, name: "example.com", count: 3, hex: true}
+  - type: tool
+    name: bad_version
+    provider: uuid
+    on_error: continue
+    params: {version: 2}
+  - type: tool
+    name: bad_namespace
+    provider: uuid
+    on_error: continue
+    params: {version: 5, name: "x", namespace: "not-a-uuid"}

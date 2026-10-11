@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-10-11T08:39:52.893Z","ev":"run_start","run_id":"f767c249-a041-4d91-a3dc-b8cbd5079171","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":70585}
+{"v":1,"seq":1,"ts":"2026-10-11T08:39:52.896Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T08:39:52.896Z","ev":"start","id":1,"path":"prime.v5_dns"}
+{"v":1,"seq":3,"ts":"2026-10-11T08:39:52.896Z","ev":"end","id":1,"path":"prime.v5_dns","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T08:39:52.896Z","ev":"start","id":2,"path":"prime.v5_url"}
+{"v":1,"seq":5,"ts":"2026-10-11T08:39:52.896Z","ev":"end","id":2,"path":"prime.v5_url","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T08:39:52.896Z","ev":"start","id":3,"path":"prime.v5_custom_namespace"}
+{"v":1,"seq":7,"ts":"2026-10-11T08:39:52.896Z","ev":"end","id":3,"path":"prime.v5_custom_namespace","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-11T08:39:52.896Z","ev":"start","id":4,"path":"prime.v5_count_3_hex"}
+{"v":1,"seq":9,"ts":"2026-10-11T08:39:52.897Z","ev":"end","id":4,"path":"prime.v5_count_3_hex","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-11T08:39:52.897Z","ev":"start","id":5,"path":"prime.bad_version"}
+{"v":1,"seq":11,"ts":"2026-10-11T08:39:52.897Z","ev":"end","id":5,"path":"prime.bad_version","ok":false,"ms":0,"error":"uuid: unsupported version 2; expected 1|4|5."}
+{"v":1,"seq":12,"ts":"2026-10-11T08:39:52.897Z","ev":"start","id":6,"path":"prime.bad_namespace"}
+{"v":1,"seq":13,"ts":"2026-10-11T08:39:52.897Z","ev":"end","id":6,"path":"prime.bad_namespace","ok":false,"ms":0,"error":"uuid: invalid v5 namespace 'not-a-uuid': badly formed hexadecimal UUID string"}
+{"v":1,"seq":14,"ts":"2026-10-11T08:39:52.897Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":15,"ts":"2026-10-11T08:39:52.897Z","ev":"run_end","ok":true}
