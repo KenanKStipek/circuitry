@@ -277,9 +277,8 @@ pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// directory right now (`unique_run_dir`'s own default-`--out-dir`
 /// naming) -- a before/after diff around one test's own osp spawn(s)
 /// (comment 1 on #433), rather than a bare "is it empty" check on the
-/// whole temp directory, since other lanes and the owner's own work
-/// share this machine and may have their own `osp-*` directories
-/// there at the same time.
+/// whole temp directory, since other processes on the same machine
+/// may have their own `osp-*` directories there at the same time.
 pub fn snapshot_osp_dirs() -> std::collections::HashSet<PathBuf> {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return std::collections::HashSet::new();
