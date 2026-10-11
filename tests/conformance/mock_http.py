@@ -5,8 +5,11 @@ without a real network call, the same way `fakes/` fakes a process-backed
 tool.
 
 Owned entirely by the harness, never by a document or an adapter: started
-per case, on `127.0.0.1` with an ephemeral port, serving from one
-background thread, and always stopped in a `finally` (`mock_http_server`
+per case, on `127.0.0.1` with an ephemeral port, serving from a
+`ThreadingHTTPServer` (one daemon thread per connection, not one thread for
+the whole server) so a pooled client that opens a second connection while
+the first is still open (keep-alive) is served immediately instead of
+blocking behind it, and always stopped in a `finally` (`mock_http_server`
 below). It is scripted by a YAML (or JSON) fixture file in the case
 directory — a list of `request`/`response` pairs, loaded through
 Circuitry's own loader (`core.yaml_load.load_yaml`, per #450's decision)
@@ -24,7 +27,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
@@ -131,7 +134,8 @@ class MockHttpServer:
         self._next_index = 0
         self._lock = threading.Lock()
         self.requests: list[RecordedRequest] = []
-        self._httpd = HTTPServer(("127.0.0.1", 0), _make_handler(self))
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(self))
+        self._httpd.daemon_threads = True
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     @property

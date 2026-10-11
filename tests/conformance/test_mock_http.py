@@ -6,6 +6,7 @@ case or subprocess, the lowest-level proof the server itself behaves as
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -101,6 +102,34 @@ def test_a_request_that_does_not_match_the_next_matcher_gets_a_diagnostic_respon
         body = exc_info.value.read().decode("utf-8")
         assert "/expected" in body
         assert "/unexpected" in body
+
+
+def test_a_stalled_connection_does_not_block_a_second_connection(tmp_path: Path) -> None:
+    """PR #455 review finding P2-6: a single-threaded server handles one
+    connection fully before noticing a second one -- a pooled client that
+    keeps one connection open (an incomplete request, here) would hang a
+    second, independent connection until the first finishes or times out.
+    `ThreadingHTTPServer` serves each connection on its own thread, so the
+    second connection's own request completes promptly regardless."""
+    fixture = _write_fixture(
+        tmp_path,
+        """
+        - request: {method: GET, path: /b}
+          response: {status: 200, body: "b"}
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        stalled = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+        try:
+            # No terminating blank line -- the server's handler thread for
+            # this connection stays blocked reading the rest of the request
+            # (and so, having never finished parsing a request, never
+            # consumes a matcher at all).
+            stalled.sendall(b"GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{server.port}/b", timeout=5)
+            assert resp.read() == b"b"
+        finally:
+            stalled.close()
 
 
 def test_a_request_with_no_matchers_left_gets_a_diagnostic_response(tmp_path: Path) -> None:
