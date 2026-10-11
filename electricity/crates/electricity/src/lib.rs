@@ -1224,6 +1224,24 @@ pub async fn run_orchestration_with_config(
                 .collect(),
         ),
     );
+    // A loaded `--profile`'s own record (DESIGN §6.11), added after
+    // `sources` (`cli/runtime_shim.py:714-718`) -- never present at all
+    // for a run with no profile, matching Python's own conditional
+    // `if profile is not None` key insertion exactly (never a `null`
+    // placeholder entry).
+    if let Some(profile) = &profile {
+        let mut profile_dict = Dict::new();
+        profile_dict.insert(
+            Value::Str("name".to_string()),
+            Value::Str(profile.name.clone()),
+        );
+        profile_dict.insert(
+            Value::Str("content".to_string()),
+            electricity_redaction::redact(profile.raw.clone()),
+        );
+        effective_settings_dict
+            .insert(Value::Str("profile".to_string()), Value::Dict(profile_dict));
+    }
     store.set_leaf(
         &runtime_node,
         Value::Str("effective_settings".to_string()),
