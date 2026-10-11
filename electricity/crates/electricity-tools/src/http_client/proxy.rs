@@ -153,10 +153,16 @@ mod tests {
 
     #[test]
     fn lowercase_wins_over_uppercase_regardless_of_order() {
-        let e = env(&[("HTTP_PROXY", "http://upper:1"), ("http_proxy", "http://lower:2")]);
+        let e = env(&[
+            ("HTTP_PROXY", "http://upper:1"),
+            ("http_proxy", "http://lower:2"),
+        ]);
         let proxies = getproxies_environment(&e);
         assert_eq!(
-            proxies.iter().find(|(k, _)| k == "http").map(|(_, v)| v.as_str()),
+            proxies
+                .iter()
+                .find(|(k, _)| k == "http")
+                .map(|(_, v)| v.as_str()),
             Some("http://lower:2")
         );
     }
@@ -177,7 +183,10 @@ mod tests {
         ]);
         let proxies = getproxies_environment(&e);
         assert_eq!(
-            proxies.iter().find(|(k, _)| k == "http").map(|(_, v)| v.as_str()),
+            proxies
+                .iter()
+                .find(|(k, _)| k == "http")
+                .map(|(_, v)| v.as_str()),
             Some("http://lower:2")
         );
     }
@@ -229,7 +238,10 @@ mod tests {
 
     #[test]
     fn resolve_proxy_returns_none_when_bypassed() {
-        let e = env(&[("http_proxy", "http://proxy:3128"), ("no_proxy", "example.com")]);
+        let e = env(&[
+            ("http_proxy", "http://proxy:3128"),
+            ("no_proxy", "example.com"),
+        ]);
         assert_eq!(resolve_proxy("http", "example.com", &e), None);
     }
 

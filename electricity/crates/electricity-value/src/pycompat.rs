@@ -685,7 +685,10 @@ mod urlencode_tests {
     use crate::Dict;
 
     fn pairs(entries: Vec<(&str, Value)>) -> Vec<(String, Value)> {
-        entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
     }
 
     #[test]
@@ -696,17 +699,18 @@ mod urlencode_tests {
             ("c", Value::None),
             ("d", Value::Float(1.5)),
         ]);
-        assert_eq!(
-            urlencode(&params, true).unwrap(),
-            "a=1&b=True&c=None&d=1.5"
-        );
+        assert_eq!(urlencode(&params, true).unwrap(), "a=1&b=True&c=None&d=1.5");
     }
 
     #[test]
     fn doseq_list_emits_one_pair_per_element() {
         let params = pairs(vec![(
             "a",
-            Value::List(vec![Value::from(1i64), Value::from(2i64), Value::from(3i64)]),
+            Value::List(vec![
+                Value::from(1i64),
+                Value::from(2i64),
+                Value::from(3i64),
+            ]),
         )]);
         assert_eq!(urlencode(&params, true).unwrap(), "a=1&a=2&a=3");
     }

@@ -5,7 +5,9 @@
 //! the server's own (possibly empty) reason phrase, duplicate response
 //! headers kept in wire order, and a body read timeout.
 
-use electricity_tools::http_client::{self, ConnectTarget, RawRequest, Scheme, SendError, TimeoutModel};
+use electricity_tools::http_client::{
+    self, ConnectTarget, RawRequest, Scheme, SendError, TimeoutModel,
+};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
@@ -42,9 +44,8 @@ fn get_request() -> RawRequest {
 
 #[tokio::test]
 async fn an_empty_reason_phrase_round_trips_verbatim() {
-    let addr = spawn_raw_server(
-        "HTTP/1.1 404 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-    );
+    let addr =
+        spawn_raw_server("HTTP/1.1 404 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
     let client = http_client::build_client().unwrap();
     let response = http_client::send(
         &client,
@@ -107,7 +108,10 @@ async fn duplicate_response_headers_keep_first_position_and_last_value() {
     .await
     .unwrap();
     let names: Vec<&str> = response.headers.iter().map(|(k, _)| k.as_str()).collect();
-    assert_eq!(names, vec!["set-cookie", "x-other", "content-length", "connection"]);
+    assert_eq!(
+        names,
+        vec!["set-cookie", "x-other", "content-length", "connection"]
+    );
     let set_cookie = response
         .headers
         .iter()
@@ -125,9 +129,8 @@ async fn a_request_is_sent_with_no_default_headers_added() {
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).unwrap();
         let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
-        let _ = stream.write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        );
+        let _ =
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         request_text
     });
     let client = http_client::build_client().unwrap();
@@ -156,9 +159,8 @@ async fn a_short_body_against_content_length_is_incomplete_read() {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let _ = stream.write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n12345",
-        );
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n12345");
         // Close early, short of the declared Content-Length.
     });
     let client = http_client::build_client().unwrap();
@@ -275,6 +277,17 @@ async fn dropping_the_send_future_aborts_the_connection() {
         // it without ever awaiting a response.
         let _ = tokio::time::timeout(Duration::from_millis(100), send_future).await;
     }
+    // The `#[tokio::test]` runtime is single-threaded: the spawned
+    // connection-driver task `AbortOnDrop` just cancelled needs this
+    // same runtime to actually poll it once more before the abort
+    // takes effect and the socket closes -- `recv_timeout` below is a
+    // blocking call, which would otherwise starve that runtime of the
+    // chance. Yielding first (still inside the async context) gives it
+    // that chance before this test ever blocks the OS thread.
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let closed = closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(closed, "the server should observe the client closing the connection");
+    assert!(
+        closed,
+        "the server should observe the client closing the connection"
+    );
 }

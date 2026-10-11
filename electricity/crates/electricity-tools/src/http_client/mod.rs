@@ -4,27 +4,27 @@
 //! body. Shared with lane F2's own model-provider adapters, which run
 //! raw HTTP to the providers through the same client rather than curl.
 //!
-//! **Stack decision (issue #485's own "Settled questions"):** `hyper`
-//! + `hyper-util` + `tokio-rustls`, never `reqwest`. Checked
+//! Stack decision (issue #485's own "Settled questions"): `hyper` plus
+//! `hyper-util` plus `tokio-rustls`, never `reqwest`. Checked
 //! empirically against a loopback server before writing anything
-//! else, exactly as the issue's own "Settled questions" section asks:
+//! else, exactly as the issue's own "Settled questions" section asks.
 //! `reqwest::Client::builder().build()` inserts an `Accept: */*`
 //! default header on every request with no way to suppress it (the
 //! mock harness records every header but `User-Agent`, so that one
 //! extra header alone would fail every recorded-request comparison
-//! against urllib, which never sends one), and `reqwest::Response`
-//! has no API that exposes a server's own, non-canonical reason
-//! phrase at all -- only `StatusCode::canonical_reason()`, the RFC
-//! text, never what the server actually wrote on the status line.
+//! against urllib, which never sends one); `reqwest::Response` has no
+//! API that exposes a server's own, non-canonical reason phrase at
+//! all, only `StatusCode::canonical_reason()`, the RFC text, never
+//! what the server actually wrote on the status line.
+//!
 //! Driving `hyper::client::conn::http1::handshake` directly keeps both
-//! working: no default headers are ever added (confirmed against a
-//! loopback server: the recorded request carried nothing but `host`),
-//! and the server's own reason phrase survives as `hyper::ext::
-//! ReasonPhrase` on the response's own `Extensions` (also confirmed:
-//! an empty reason phrase round-trips as `ReasonPhrase(b"")`, not
-//! silently replaced by the canonical text) -- `hyper` only stores
-//! that extension when the wire reason differs from the canonical one
-//! ([`decode_response`]'s own module docs), so the fallback to
+//! working. No default headers are ever added (confirmed against a
+//! loopback server: the recorded request carried nothing but `host`).
+//! The server's own reason phrase survives as `hyper::ext::ReasonPhrase`
+//! on the response's own `Extensions` (also confirmed: an empty reason
+//! phrase round-trips as `ReasonPhrase(b"")`, not silently replaced by
+//! the canonical text) -- `hyper` only stores that extension when the
+//! wire reason differs from the canonical one, so the fallback to
 //! `StatusCode::canonical_reason()` below is exact, not approximate,
 //! for the common case where the server's own phrase already matches.
 //!
@@ -166,7 +166,10 @@ impl std::fmt::Display for SendError {
                 write!(f, "Remote end closed connection without response")
             }
             SendError::IncompleteRead { read, expected } => {
-                write!(f, "IncompleteRead({read} bytes read, {expected} more expected)")
+                write!(
+                    f,
+                    "IncompleteRead({read} bytes read, {expected} more expected)"
+                )
             }
             SendError::Other(text) => write!(f, "{text}"),
         }
@@ -252,7 +255,7 @@ impl Drop for AbortOnDrop {
 
 enum AnyStream {
     Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    Tls(Box<TlsStream<TcpStream>>),
 }
 
 impl tokio::io::AsyncRead for AnyStream {
@@ -330,13 +333,14 @@ async fn connect(
         Scheme::Http => Ok(AnyStream::Plain(tcp)),
         Scheme::Https => {
             let connector = TlsConnector::from(client.tls_config.clone());
-            let server_name = ServerName::try_from(target.host.clone())
-                .map_err(|_| SendError::Connect(format!("invalid TLS server name '{}'", target.host)))?;
+            let server_name = ServerName::try_from(target.host.clone()).map_err(|_| {
+                SendError::Connect(format!("invalid TLS server name '{}'", target.host))
+            })?;
             let tls = tokio::time::timeout(connect_deadline, connector.connect(server_name, tcp))
                 .await
                 .map_err(|_| SendError::Timeout)
                 .and_then(|r| r.map_err(|e| SendError::Connect(e.to_string())))?;
-            Ok(AnyStream::Tls(tls))
+            Ok(AnyStream::Tls(Box::new(tls)))
         }
     }
 }
@@ -498,7 +502,11 @@ pub async fn send(
                 }
             }
             Some(Err(err)) => {
-                return Err(classify_body_phase_error(err, body_bytes.len(), content_length));
+                return Err(classify_body_phase_error(
+                    err,
+                    body_bytes.len(),
+                    content_length,
+                ));
             }
         }
     }
@@ -595,7 +603,7 @@ pub struct RedirectRequest {
 /// (always becomes `GET`); any other method is never followed.
 pub fn redirect_policy(method: &str, status: u16) -> Option<RedirectRequest> {
     let method = method.to_ascii_uppercase();
-    let always_get = matches!(status, 301 | 302 | 303);
+    let always_get = matches!(status, 301..=303);
     let same_method_only_for_head = matches!(status, 307 | 308);
     match method.as_str() {
         "GET" | "HEAD" if always_get || same_method_only_for_head => {
