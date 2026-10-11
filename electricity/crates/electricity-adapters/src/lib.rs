@@ -17,12 +17,20 @@
 //!   this adapter needs a *request_handler* injected at run time via
 //!   `RunRequest::adapter` (`circuitry-mcp`'s own use), never built
 //!   from `runtime.adapters.host_claude` config alone.
-//!
-//! Every real network-backed provider (`ollama`, the OpenAI-compatible
-//! family, `anthropic`) is lane F2's own, added as sibling modules
-//! here in that lane's own PR.
+//! - [`openai`], [`anthropic`], [`openai_compat`], [`curl_text`]: lane
+//!   F2's own real network-backed providers and the shared curl
+//!   failure-text helper -- stub files created now too (review P2-5
+//!   on PR #454's second review, extending item S9 to these), so F2's
+//!   own PR only ever fills a body here, same as F1's own files
+//!   above; `ollama` has no file of its own in this table yet, so F2
+//!   creates it fresh in its own PR -- a brand new file is never a
+//!   seam conflict the way editing one of these would be.
 
+pub mod anthropic;
+pub mod curl_text;
 pub mod host_claude;
+pub mod openai;
+pub mod openai_compat;
 pub mod scripted;
 
 use electricity_vm::adapter::{Adapter, AdapterError, AdapterRegistry, PyExc};
