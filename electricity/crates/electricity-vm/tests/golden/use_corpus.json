@@ -1,0 +1,3453 @@
+{
+  "clean_yaml_fences_cases": [
+    {
+      "input": "```yaml\neffects: []\n```",
+      "output": "effects: []"
+    },
+    {
+      "input": "---\neffects: []\n---",
+      "output": "effects: []"
+    },
+    {
+      "input": "effects:\n  - type: tool\n```\n",
+      "output": "effects:\n  - type: tool"
+    },
+    {
+      "input": "no fences at all",
+      "output": "no fences at all"
+    },
+    {
+      "input": "```\n```\n",
+      "output": ""
+    }
+  ],
+  "collect_child_errors_cases": [
+    {
+      "errors": [],
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "errors": [
+        {
+          "error": "boom",
+          "path": "step"
+        }
+      ],
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "str",
+                          "v": "boom"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "errors": [
+        {
+          "error": "nested boom",
+          "path": "outer.inner"
+        }
+      ],
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outer"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inner"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "meta"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "error"
+                              },
+                              {
+                                "t": "str",
+                                "v": "nested boom"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "end_to_end_cases": [
+    {
+      "case": "path_full_passthrough",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "0424ddfb33ec2d2d2107a7d7fee5b4a4f9c2da0fef3a4e4f0ad78a3085d32ed6"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"hello-from-child\""
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "json"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "input"
+                              },
+                              {
+                                "t": "str",
+                                "v": "hello-from-child"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "path_explicit_outputs",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "greeting"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"hello-from-child\""
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "0424ddfb33ec2d2d2107a7d7fee5b4a4f9c2da0fef3a4e4f0ad78a3085d32ed6"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "path_record_children",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "greeting"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"hello-from-child\""
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "0424ddfb33ec2d2d2107a7d7fee5b4a4f9c2da0fef3a4e4f0ad78a3085d32ed6"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"hello-from-child\""
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "json"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "input"
+                              },
+                              {
+                                "t": "str",
+                                "v": "hello-from-child"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "path_auto_outputs_from_interface",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "greeting"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"Ada\""
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_with_interface.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_with_interface.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "name"
+                        },
+                        {
+                          "t": "str",
+                          "v": "Ada"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "times"
+                        },
+                        {
+                          "t": "int",
+                          "v": "1"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "3b01d64bba23c17c943edecb26550aff4e3f27f204dbdaeb5ead0e10ebc44995"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "path_interface_error_not_retried",
+      "error": "use 'path_interface_error_not_retried' -> <temp>/child_with_interface.yml: Use effect 'path_interface_error_not_retried': missing required input 'name' declared in orchestration interface.",
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_with_interface.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_with_interface.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Use effect 'path_interface_error_not_retried': missing required input 'name' declared in orchestration interface."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "3b01d64bba23c17c943edecb26550aff4e3f27f204dbdaeb5ead0e10ebc44995"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": true
+    },
+    {
+      "case": "path_cycle",
+      "error": "use 'path_cycle' -> <temp>/cycle_a.yml: prime.to_b: use 'to_b' -> <temp>/cycle_b.yml: prime.to_a: use 'to_a' -> <temp>/cycle_a.yml: use 'to_a': cycle detected — <temp>/cycle_a.yml → <temp>/cycle_b.yml → <temp>/cycle_a.yml",
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "cycle_a.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/cycle_a.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prime.to_b: use 'to_b' -> <temp>/cycle_b.yml: prime.to_a: use 'to_a' -> <temp>/cycle_a.yml: use 'to_a': cycle detected — <temp>/cycle_a.yml → <temp>/cycle_b.yml → <temp>/cycle_a.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "path"
+                            },
+                            {
+                              "t": "str",
+                              "v": "prime"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "prime.to_b: use 'to_b' -> <temp>/cycle_b.yml: prime.to_a: use 'to_a' -> <temp>/cycle_a.yml: use 'to_a': cycle detected — <temp>/cycle_a.yml → <temp>/cycle_b.yml → <temp>/cycle_a.yml"
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "path"
+                            },
+                            {
+                              "t": "str",
+                              "v": "to_b"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "prime.to_a: use 'to_a' -> <temp>/cycle_a.yml: use 'to_a': cycle detected — <temp>/cycle_a.yml → <temp>/cycle_b.yml → <temp>/cycle_a.yml"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "22362e95d167999b50409d1744b915207ee5935e4d09089c566c430f3a83d573"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": true
+    },
+    {
+      "case": "retried_failing_expect_then_fails",
+      "error": "use 'retried_failing_expect_then_fails' -> <temp>/child_always_fails_expect.yml: expect failed: false",
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_always_fails_expect.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_always_fails_expect.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "expect failed: false"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "2b3ab4c23cb2d248e35b420c52538db880edadf030de1062c998a49245d660da"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "false"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": false
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "retries_used"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"ok\""
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "json"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "input"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": true
+    },
+    {
+      "case": "on_error_skip_absorbs_failure",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_always_fails_expect.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_always_fails_expect.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "expect failed: false"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "2b3ab4c23cb2d248e35b420c52538db880edadf030de1062c998a49245d660da"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "false"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": false
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"ok\""
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "json"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "input"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "inline_quirk_q3",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": true
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "v"
+                        },
+                        {
+                          "t": "str",
+                          "v": "X"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "d4cf9693d27d7d847d356017f5fd0ad3c59e516b7374a12ab94091e1922125ec"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"Y\""
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "created_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "completed_at"
+                        },
+                        {
+                          "t": "str",
+                          "v": "<TIMESTAMP>"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "provider"
+                        },
+                        {
+                          "t": "str",
+                          "v": "json"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "error"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stdout"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "stderr"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "exit_code"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "waiting_for"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "params_rendered"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "input"
+                              },
+                              {
+                                "t": "str",
+                                "v": "Y"
+                              }
+                            ]
+                          ]
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "raw"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "mode"
+                              },
+                              {
+                                "t": "str",
+                                "v": "stringify"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    }
+  ],
+  "graft_child_record_cases": [
+    {
+      "child_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "step"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "hi"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "meta"
+                        },
+                        {
+                          "t": "dict",
+                          "v": []
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "node_after": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "result"
+                  },
+                  {
+                    "t": "str",
+                    "v": "mapped"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "step"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "str",
+                    "v": "hi"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "node_before": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "result"
+                  },
+                  {
+                    "t": "str",
+                    "v": "mapped"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "inline_identity_cases": [
+    {
+      "cleaned": "effects: []\n",
+      "digest": "97f26cb17f03004ddfa97ac5a2b5375573d78d4effdc6df37c56cf47f7bfbef8",
+      "identity": "inline:97f26cb17f03004d"
+    },
+    {
+      "cleaned": "effects:\n  - type: tool\n    name: step\n    provider: json\n    params: {mode: parse, input: '1'}\n",
+      "digest": "65a3d802ddc57b34666cb574ea8ca3761c1e189cf6af361ba573f3ab234cab63",
+      "identity": "inline:65a3d802ddc57b34"
+    }
+  ],
+  "normalize_outputs_cases": [
+    {
+      "error": null,
+      "raised": false,
+      "raw": {
+        "t": "none"
+      },
+      "result": {}
+    },
+    {
+      "error": null,
+      "raised": false,
+      "raw": {
+        "t": "dict",
+        "v": []
+      },
+      "result": {}
+    },
+    {
+      "error": null,
+      "raised": false,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "result"
+            },
+            {
+              "t": "str",
+              "v": "prime.step.value"
+            }
+          ]
+        ]
+      },
+      "result": {
+        "result": "prime.step.value"
+      }
+    },
+    {
+      "error": null,
+      "raised": false,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "result"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prime.step.value"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "result": {
+        "result": "prime.step.value"
+      }
+    },
+    {
+      "error": "Use effect 'x': child interface.outputs: output 'result' is an empty string. Give it a state path — result: {path: prime.<effect>.value}.",
+      "raised": true,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "result"
+            },
+            {
+              "t": "str",
+              "v": ""
+            }
+          ]
+        ]
+      },
+      "result": null
+    },
+    {
+      "error": "Use effect 'x': child interface.outputs: output 'result' has no 'path'. Canonical form is result: {path: prime.<effect>.value} (the bare string result: prime.<effect>.value is also accepted).",
+      "raised": true,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "result"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "result": null
+    },
+    {
+      "error": "Use effect 'x': child interface.outputs: output 'result' must be an object with a 'path' key (canonical) or a bare state-path string (shorthand); got int.",
+      "raised": true,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "result"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      },
+      "result": null
+    },
+    {
+      "error": "Use effect 'x': child interface.outputs: outputs must be a mapping of name -> {path: <state path>}, not str.",
+      "raised": true,
+      "raw": {
+        "t": "str",
+        "v": "not a dict"
+      },
+      "result": null
+    }
+  ],
+  "relative_child_path_cases": [
+    {
+      "path": "prime",
+      "result": null
+    },
+    {
+      "path": "prime.step",
+      "result": "step"
+    },
+    {
+      "path": "prime.outer.inner",
+      "result": "outer.inner"
+    },
+    {
+      "path": "other",
+      "result": "other"
+    }
+  ],
+  "render_inputs_cases": [
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "name"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Ada"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "items"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "10"
+                      },
+                      {
+                        "t": "int",
+                        "v": "20"
+                      },
+                      {
+                        "t": "int",
+                        "v": "30"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "literal"
+            },
+            {
+              "t": "str",
+              "v": "{{input.name}}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "ref"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "from"
+                  },
+                  {
+                    "t": "str",
+                    "v": "input.name"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "rendered": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "literal"
+            },
+            {
+              "t": "str",
+              "v": "Ada"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "ref"
+            },
+            {
+              "t": "str",
+              "v": "Ada"
+            }
+          ]
+        ]
+      },
+      "unresolved": {}
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "name"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Ada"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "items"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "10"
+                      },
+                      {
+                        "t": "int",
+                        "v": "20"
+                      },
+                      {
+                        "t": "int",
+                        "v": "30"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "missing_ref"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "from"
+                  },
+                  {
+                    "t": "str",
+                    "v": "input.missing"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "rendered": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "missing_ref"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "unresolved": {
+        "missing_ref": "input.missing"
+      }
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "name"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Ada"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "items"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "10"
+                      },
+                      {
+                        "t": "int",
+                        "v": "20"
+                      },
+                      {
+                        "t": "int",
+                        "v": "30"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "list_index"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "from"
+                  },
+                  {
+                    "t": "str",
+                    "v": "input.items.1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "rendered": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "list_index"
+            },
+            {
+              "t": "int",
+              "v": "20"
+            }
+          ]
+        ]
+      },
+      "unresolved": {}
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "name"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Ada"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "items"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "10"
+                      },
+                      {
+                        "t": "int",
+                        "v": "20"
+                      },
+                      {
+                        "t": "int",
+                        "v": "30"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "nested_literal"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "b"
+                        },
+                        {
+                          "t": "str",
+                          "v": "{{not rendered}}"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "rendered": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "nested_literal"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "b"
+                        },
+                        {
+                          "t": "str",
+                          "v": "{{not rendered}}"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "unresolved": {}
+    }
+  ],
+  "resolve_dot_path_cases": [
+    {
+      "path": "prime.step.value",
+      "result": {
+        "t": "str",
+        "v": "hi"
+      },
+      "state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "step"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "hi"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "meta"
+                        },
+                        {
+                          "t": "dict",
+                          "v": []
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "path": "prime.missing",
+      "result": {
+        "t": "none"
+      },
+      "state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "step"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "hi"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "meta"
+                        },
+                        {
+                          "t": "dict",
+                          "v": []
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "path": "prime.step.meta.missing.deeper",
+      "result": {
+        "t": "none"
+      },
+      "state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "step"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "hi"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "meta"
+                        },
+                        {
+                          "t": "dict",
+                          "v": []
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "value"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "meta"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "validate_inline_yaml_cases": [
+    {
+      "case": "valid",
+      "errors": [],
+      "input": "effects:\n  - type: tool\n    name: step\n    provider: json\n    params: {mode: parse, input: '1'}\n",
+      "ok": true
+    },
+    {
+      "case": "not_a_mapping",
+      "errors": [
+        "Inline orchestration must be a YAML mapping with an 'effects' key."
+      ],
+      "input": "- 1\n- 2\n",
+      "ok": false
+    },
+    {
+      "case": "missing_effects_key",
+      "errors": [
+        "Inline orchestration is missing required 'effects' key."
+      ],
+      "input": "interface: {}\n",
+      "ok": false
+    },
+    {
+      "case": "yaml_parse_error",
+      "errors": [
+        "YAML parse error: while parsing a flow node\nexpected the node content, but found '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^"
+      ],
+      "input": "effects: [\n",
+      "ok": false
+    },
+    {
+      "case": "structural_error",
+      "errors": [],
+      "input": "effects:\n  - type: tool\n    name: step\n    provider: json\n",
+      "ok": true
+    }
+  ]
+}
