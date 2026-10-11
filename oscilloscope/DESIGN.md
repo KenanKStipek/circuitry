@@ -63,7 +63,7 @@ Every node has the shape `{value, meta}`. Every `meta` has `created_at`, `comple
 
 These values were measured but were not what a reader would expect:
 
-- **Retry visibility differs between tools and prompts.** *(as measured against `cof` 0.1.0; fixed upstream by issue #421 in this repository — see Q9 — so a `cof` build or an electricity build after that lands no longer matches this row.)*
+- **Retry visibility differs between tools and prompts.** *(as measured against `cof` 0.1.0, before issue #421 fixed this upstream — see Q9. Neither `cof` nor electricity's own tool retry loop still behaves this way.)*
   - A retried tool resets `created_at` to the start of its *last* attempt, and on failure it carries **no `retries_used`**.
   - A retried prompt keeps the start of its *first* attempt. `retries_used: 2` appears only on success, and `fallback_attempts` lists only the final attempt.
 - **`on_error: skip` and `on_error: continue` give identical nodes** (`value: null` plus `error`). The plan is the only way to tell them apart.

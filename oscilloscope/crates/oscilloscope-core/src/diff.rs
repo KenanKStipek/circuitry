@@ -1676,6 +1676,54 @@ mod tests {
     }
 
     #[test]
+    fn a_leaf_that_fails_again_after_a_retry_gets_one_retry_line_and_one_final_cross() {
+        // #421: a retry that itself fails, exhausting the budget, must
+        // still produce exactly one final ✗ -- the earlier attempt's ✗
+        // (printed when it first failed) gets annotated as a retry via
+        // the ↻ line, not duplicated into a second ✗ for the same pass.
+        let mut differ = Differ::new();
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        differ.diff(&running, &PlanTree::empty());
+
+        let first_failure = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "boom", "provider": "shell"}}
+        }});
+        let first_fail_lines = differ.diff(&first_failure, &PlanTree::empty());
+        assert_eq!(
+            first_fail_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.flaky"))
+                .count(),
+            1,
+            "{first_fail_lines:?}"
+        );
+
+        let retrying = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+        }});
+        let retry_lines = differ.diff(&retrying, &PlanTree::empty());
+        assert!(
+            retry_lines.iter().any(|l| l.text == "↻ prime.flaky retry"),
+            "{retry_lines:?}"
+        );
+
+        let exhausted = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "flaky": {"value": null, "meta": {"created_at": "t0", "completed_at": "t2", "error": "boom again", "provider": "shell"}}
+        }});
+        let final_lines = differ.diff(&exhausted, &PlanTree::empty());
+        assert_eq!(
+            final_lines
+                .iter()
+                .filter(|l| l.text.starts_with("✗ prime.flaky"))
+                .count(),
+            1,
+            "{final_lines:?}"
+        );
+    }
+
+    #[test]
     fn diff_event_emits_no_line_for_a_named_container() {
         // DESIGN.md §1.4: `start`/`end` fire for the root and every
         // *named* container the same as for a leaf, but a container
