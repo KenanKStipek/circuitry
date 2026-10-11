@@ -130,13 +130,11 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("env", None)
 
     env = metadata["env"]
-    if env is not None:
-        if not isinstance(env, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in env.items()
-        ):
-            raise ValueError(
-                f"{case_dir.name}: case.json 'env' must be a mapping of str to str"
-            )
+    if env is not None and (
+        not isinstance(env, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())
+    ):
+        raise ValueError(f"{case_dir.name}: case.json 'env' must be a mapping of str to str")
 
     if not isinstance(metadata["electricity_preview_ok"], bool):
         raise ValueError(f"{case_dir.name}: case.json 'electricity_preview_ok' must be a bool")

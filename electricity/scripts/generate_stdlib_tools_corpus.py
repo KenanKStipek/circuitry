@@ -337,11 +337,10 @@ def uuid_case(name: str, params: dict[str, Any]) -> dict:
 
 
 def build_uuid_cases() -> list[dict]:
-    cases: list[dict] = []
-    for ns in ("dns", "url", "oid", "x500", "DNS"):
-        cases.append(
-            uuid_case(f"v5_namespace_{ns}", {"version": 5, "namespace": ns, "name": "example.com"})
-        )
+    cases: list[dict] = [
+        uuid_case(f"v5_namespace_{ns}", {"version": 5, "namespace": ns, "name": "example.com"})
+        for ns in ("dns", "url", "oid", "x500", "DNS")
+    ]
     custom_ns = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
     for spelling_name, spelling in (
         ("plain", custom_ns),
