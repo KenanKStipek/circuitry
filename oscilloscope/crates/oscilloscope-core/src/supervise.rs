@@ -10,6 +10,15 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
+
+/// How long [`SupervisedChild::wait`] waits for its own tee threads to
+/// notice their pipe closed before giving up on joining them (issue
+/// #433): a descendant outside the engine's process group that
+/// inherited the pipe (none of cof's own paths do this today) would
+/// otherwise keep osp waiting forever on a thread stuck in `read_line`
+/// past the child it was reading from already exiting.
+const TEE_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A signal osp forwards to the engine's process group (DESIGN.md
 /// §4.1): the three it itself handles (SIGINT twice, SIGTERM, SIGHUP),
@@ -53,6 +62,11 @@ pub struct SupervisedChild {
     pid: i32,
     stdout_thread: Option<thread::JoinHandle<()>>,
     stderr_thread: Option<thread::JoinHandle<()>>,
+    /// One send per tee thread, right before it returns (EOF or a read
+    /// error) -- `wait` waits on this, bounded, instead of joining the
+    /// threads directly, so a thread stuck reading a pipe a descendant
+    /// still holds open never blocks it past `TEE_JOIN_TIMEOUT`.
+    tee_done: Receiver<()>,
 }
 
 impl SupervisedChild {
@@ -88,9 +102,13 @@ impl SupervisedChild {
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
 
-        let stdout_thread = thread::spawn(move || tee_lines(stdout, stdout_file, None));
+        let (tee_done_tx, tee_done_rx) = mpsc::channel();
+        let stdout_done = tee_done_tx.clone();
+        let stdout_thread =
+            thread::spawn(move || tee_lines(stdout, stdout_file, None, stdout_done));
         let (tx, rx) = mpsc::channel();
-        let stderr_thread = thread::spawn(move || tee_lines(stderr, stderr_file, Some(tx)));
+        let stderr_thread =
+            thread::spawn(move || tee_lines(stderr, stderr_file, Some(tx), tee_done_tx));
 
         Ok((
             SupervisedChild {
@@ -98,6 +116,7 @@ impl SupervisedChild {
                 pid,
                 stdout_thread: Some(stdout_thread),
                 stderr_thread: Some(stderr_thread),
+                tee_done: tee_done_rx,
             },
             rx,
         ))
@@ -110,14 +129,30 @@ impl SupervisedChild {
 
     /// Blocks until the engine exits — only ever called after
     /// `try_wait` has already reported it has, or when osp itself is
-    /// about to exit and must not leave it behind.
+    /// about to exit and must not leave it behind. Joining the tee
+    /// threads is bounded by `TEE_JOIN_TIMEOUT`: a thread that hasn't
+    /// reported itself done by then (its pipe held open by a
+    /// descendant outside the engine's own process group) is left
+    /// running rather than joined, so this can never block past that
+    /// bound.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.child.wait()?;
+        let deadline = Instant::now() + TEE_JOIN_TIMEOUT;
+        for _ in 0..2 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || self.tee_done.recv_timeout(remaining).is_err() {
+                break;
+            }
+        }
         if let Some(t) = self.stdout_thread.take() {
-            let _ = t.join();
+            if t.is_finished() {
+                let _ = t.join();
+            }
         }
         if let Some(t) = self.stderr_thread.take() {
-            let _ = t.join();
+            if t.is_finished() {
+                let _ = t.join();
+            }
         }
         Ok(status)
     }
@@ -153,7 +188,12 @@ impl Drop for SupervisedChild {
     }
 }
 
-fn tee_lines(reader: impl io::Read, mut file: File, tx: Option<mpsc::Sender<String>>) {
+fn tee_lines(
+    reader: impl io::Read,
+    mut file: File,
+    tx: Option<mpsc::Sender<String>>,
+    done: mpsc::Sender<()>,
+) {
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     loop {
@@ -169,6 +209,7 @@ fn tee_lines(reader: impl io::Read, mut file: File, tx: Option<mpsc::Sender<Stri
             }
         }
     }
+    let _ = done.send(());
 }
 
 /// osp's own exit code: the engine's, exactly (DESIGN.md §4.1's "osp
@@ -297,6 +338,40 @@ mod tests {
             !alive,
             "child should have been killed when SupervisedChild was dropped"
         );
+    }
+
+    #[test]
+    fn wait_does_not_block_past_tee_join_timeout_when_a_descendant_holds_the_pipe_open() {
+        // A child that backgrounds a grandchild sharing its own
+        // stdout/stderr fds, then exits immediately itself: the
+        // grandchild (still alive, still holding the pipe open) keeps
+        // the tee reader thread blocked in `read_line` forever, since
+        // EOF never arrives. Issue #433: `wait` must still return once
+        // the engine's own direct child exits, not block on that
+        // reader past `TEE_JOIN_TIMEOUT`.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & exit 0");
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, _rx) =
+            SupervisedChild::spawn(cmd, &dir.path().join("out"), &dir.path().join("err")).unwrap();
+        let pid = child.pid;
+
+        let started = Instant::now();
+        let status = child.wait().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "wait() blocked past TEE_JOIN_TIMEOUT: {:?}",
+            started.elapsed()
+        );
+        assert!(status.success());
+
+        // Clean up the grandchild `sleep`, left alive on purpose by
+        // this test in the same process group `wait` just returned
+        // from without killing.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     #[test]

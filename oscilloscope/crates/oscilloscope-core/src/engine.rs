@@ -3,8 +3,19 @@
 //! §4 and §6.1).
 
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// How long a `--help` capability probe may run before osp gives up on
+/// it (issue #433): an engine binary whose `--help` hangs -- a corrupt
+/// install, a broken Python startup hook -- must not block osp (or the
+/// Ctrl-C a user sends while it waits) forever. 10s is generous for a
+/// subprocess that only prints its own help text.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What one run needs, independent of which engine runs it (DESIGN.md
 /// §4): the document, an optional config, inline `-e key=value` sets
@@ -62,6 +73,12 @@ pub struct EngineCaps {
     /// ahead of the real "couldn't launch cof" error the later spawn
     /// goes on to report for the exact same reason.
     pub missing: bool,
+    /// Set when the probe itself didn't finish within [`PROBE_TIMEOUT`]
+    /// (issue #433): every other field stays at its default (no
+    /// `--events`/`--live-state`), the same as a binary that answered
+    /// but mentioned neither flag, so a caller falls back to state-only
+    /// either way -- this field only changes which notice it prints.
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +138,76 @@ fn help_mentions(stdout: &str, stderr: &str, flag: &str) -> bool {
     strip_ansi_escapes(stdout).contains(flag) || strip_ansi_escapes(stderr).contains(flag)
 }
 
+/// A `--help` probe's outcome: it either finished (with its captured
+/// output) or didn't, within [`PROBE_TIMEOUT`] (issue #433).
+enum ProbeOutcome {
+    Completed { stdout: String, stderr: String },
+    TimedOut,
+}
+
+/// Runs an already-configured probe `cmd` (stdin null, its own process
+/// group) to completion, polling rather than blocking on it the way
+/// `Command::output` does -- a `--help` that hangs must not block osp,
+/// or the Ctrl-C a user sends while it waits, past `timeout`. On a
+/// timeout, the probe's whole process group is killed; on either
+/// outcome, the two reader threads are given a bounded moment to
+/// report back what they read before this gives up on joining them --
+/// a probe binary that leaves a grandchild holding its stdout/stderr
+/// pipe open must not block osp either (the same concern as
+/// `supervise::SupervisedChild::wait`'s own bounded join).
+fn run_probe(mut cmd: Command, timeout: Duration) -> std::io::Result<ProbeOutcome> {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    let pid = child.id() as i32;
+
+    let mut stdout_pipe = child.stdout.take().expect("piped stdout");
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        let _ = stdout_tx.send(buf);
+    });
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        let _ = stderr_tx.send(buf);
+    });
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            // Give the readers a short, bounded moment to notice their
+            // pipes just closed -- never block on them past this.
+            let _ = stdout_rx.recv_timeout(Duration::from_secs(2));
+            let _ = stderr_rx.recv_timeout(Duration::from_secs(2));
+            return Ok(ProbeOutcome::TimedOut);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let stdout = stdout_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_default();
+    let stderr = stderr_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_default();
+    Ok(ProbeOutcome::Completed {
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
+}
+
 pub trait Engine {
     fn name(&self) -> &'static str;
     fn caps(&self) -> EngineCaps;
@@ -161,21 +248,22 @@ impl CofEngine {
         // silently ran the real engine state-only even on a `cof` that
         // actually has the flag.
         cmd.process_group(0);
-        let output = cmd.output();
-        let missing = matches!(&output, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let events = output
-            .map(|out| {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let err_text = String::from_utf8_lossy(&out.stderr);
-                help_mentions(&text, &err_text, "--events")
-            })
-            .unwrap_or(false);
+        let outcome = run_probe(cmd, PROBE_TIMEOUT);
+        let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        let (events, timed_out) = match outcome {
+            Ok(ProbeOutcome::Completed { stdout, stderr }) => {
+                (help_mentions(&stdout, &stderr, "--events"), false)
+            }
+            Ok(ProbeOutcome::TimedOut) => (false, true),
+            Err(_) => (false, false),
+        };
         CofEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state: true,
                 missing,
+                timed_out,
             },
         }
     }
@@ -258,24 +346,24 @@ impl ElectricityEngine {
         // probe only, never the real run.
         cmd.env("NO_COLOR", "1");
         cmd.process_group(0);
-        let output = cmd.output();
-        let missing = matches!(&output, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let (events, live_state) = output
-            .map(|out| {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let err_text = String::from_utf8_lossy(&out.stderr);
-                (
-                    help_mentions(&text, &err_text, "--events"),
-                    help_mentions(&text, &err_text, "--live-state"),
-                )
-            })
-            .unwrap_or((false, false));
+        let outcome = run_probe(cmd, PROBE_TIMEOUT);
+        let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        let (events, live_state, timed_out) = match outcome {
+            Ok(ProbeOutcome::Completed { stdout, stderr }) => (
+                help_mentions(&stdout, &stderr, "--events"),
+                help_mentions(&stdout, &stderr, "--live-state"),
+                false,
+            ),
+            Ok(ProbeOutcome::TimedOut) => (false, false, true),
+            Err(_) => (false, false, false),
+        };
         ElectricityEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state,
                 missing,
+                timed_out,
             },
         }
     }
@@ -381,6 +469,7 @@ mod tests {
                 events: true,
                 live_state: true,
                 missing: false,
+                timed_out: false,
             },
         );
         let spec = RunSpec {
@@ -409,6 +498,7 @@ mod tests {
                 events: false,
                 live_state: true,
                 missing: false,
+                timed_out: false,
             },
         );
         let spec = RunSpec {
@@ -466,6 +556,7 @@ mod tests {
                 events: true,
                 live_state: true,
                 missing: false,
+                timed_out: false,
             },
         );
         let spec = RunSpec {
@@ -506,6 +597,7 @@ mod tests {
                 events: false,
                 live_state: false,
                 missing: false,
+                timed_out: false,
             },
         );
         let spec = RunSpec {
@@ -551,5 +643,58 @@ mod tests {
         assert!(engine.caps().missing);
         assert!(!engine.caps().events);
         assert!(!engine.caps().live_state);
+    }
+
+    #[test]
+    fn run_probe_times_out_on_a_hanging_binary_instead_of_blocking_forever() {
+        // Issue #433: a `--help` that never exits (`sleep` standing in
+        // for a hung/corrupt engine binary) must not block the probe
+        // past its own bound.
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        cmd.process_group(0);
+        let started = Instant::now();
+        let outcome = run_probe(cmd, Duration::from_millis(200)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(matches!(outcome, ProbeOutcome::TimedOut));
+    }
+
+    #[test]
+    fn run_probe_captures_output_from_a_binary_that_exits_in_time() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("echo out; echo err >&2");
+        let outcome = run_probe(cmd, Duration::from_secs(5)).unwrap();
+        match outcome {
+            ProbeOutcome::Completed { stdout, stderr } => {
+                assert_eq!(stdout.trim(), "out");
+                assert_eq!(stderr.trim(), "err");
+            }
+            ProbeOutcome::TimedOut => panic!("should not have timed out"),
+        }
+    }
+
+    #[test]
+    fn cof_detect_falls_back_to_state_only_on_a_hanging_help() {
+        // The real `detect()` path end to end, with a short probe
+        // timeout substituted in: a `cof` stand-in whose `run --help`
+        // hangs still returns promptly, with `timed_out` set and no
+        // `--events` support assumed.
+        let dir = tempfile::tempdir().unwrap();
+        let fake_cof = dir.path().join("cof");
+        std::fs::write(&fake_cof, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(
+            &fake_cof,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        use std::os::unix::process::CommandExt;
+        let started = Instant::now();
+        let mut probe_cmd = std::process::Command::new(&fake_cof);
+        probe_cmd.args(["run", "--help"]);
+        probe_cmd.process_group(0);
+        let outcome = run_probe(probe_cmd, Duration::from_millis(200)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(matches!(outcome, ProbeOutcome::TimedOut));
     }
 }

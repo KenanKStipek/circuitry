@@ -398,7 +398,25 @@ impl RunModel {
                         self.open_by_id.remove(id);
                     }
                     None => {
-                        if let Some(count) = self.open_unid.get_mut(path) {
+                        // An `end` with `id: null` can still name a
+                        // path whose own `start` carried an id (issue
+                        // #433): close the oldest open id'd start at
+                        // that path, since `open_by_id` is a
+                        // `BTreeMap` and ids are strictly increasing
+                        // in file order, so the first match found by
+                        // iterating it is the oldest. Otherwise it
+                        // would stay open forever, and the row it
+                        // belongs to would end the run looking
+                        // cancelled/aborted instead of however it
+                        // really ended.
+                        let oldest = self
+                            .open_by_id
+                            .iter()
+                            .find(|(_, p)| p.as_str() == path)
+                            .map(|(id, _)| *id);
+                        if let Some(oldest_id) = oldest {
+                            self.open_by_id.remove(&oldest_id);
+                        } else if let Some(count) = self.open_unid.get_mut(path) {
                             *count = count.saturating_sub(1);
                         }
                     }
@@ -1705,5 +1723,64 @@ mod tests {
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let rows = model.observe(&state, &PlanTree::empty(), ProcessState::Running);
         assert_eq!(rows["prime.flaky"].kind, StatusKind::Running);
+    }
+
+    #[test]
+    fn an_end_with_id_null_closes_the_oldest_open_idd_start_at_its_path() {
+        // Issue #433: an `end` naming no `id` of its own can still
+        // close a `start` that had one, at the same path -- without
+        // this, the id'd `start` stays open forever, and the row ends
+        // the run looking cancelled/aborted instead of however it
+        // really ended.
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "t0".to_string(),
+            id: Some(7),
+            path: "prime.flaky".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "t1".to_string(),
+            id: None,
+            path: "prime.flaky".to_string(),
+            ok: true,
+            ms: Some(5),
+            error: None,
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rows = model.observe(&state, &PlanTree::empty(), ProcessState::exited(true));
+        assert_eq!(rows["prime.flaky"].kind, StatusKind::Done);
+    }
+
+    #[test]
+    fn an_end_with_id_null_closes_the_oldest_of_several_open_idd_starts_at_its_path() {
+        // Several concurrent instances at the same unnamed path
+        // (tree-flow passes reusing it, DESIGN.md §2.3), each with its
+        // own id: an `end` with no id of its own must close the
+        // oldest still-open one, not an arbitrary one or the newest.
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::Start {
+            ts: "t1".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "t2".to_string(),
+            id: None,
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5),
+            error: None,
+        });
+        assert!(model.open_by_id.values().any(|p| p == "prime.u_nap"));
+        assert_eq!(
+            model.open_by_id.get(&2).map(String::as_str),
+            Some("prime.u_nap"),
+            "the oldest id (1), not the newest (2), should have closed"
+        );
     }
 }

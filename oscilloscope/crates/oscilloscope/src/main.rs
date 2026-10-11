@@ -54,14 +54,22 @@ and shows it running.
 #[derive(Parser, Debug)]
 #[command(name = "osp", version = VERSION, about = ABOUT)]
 struct RunArgs {
+    /// The orchestration document to run (YAML or JSON).
     orchestration: String,
+    /// The engine's own config (JSON), passed through unchanged. With
+    /// none, the engine resolves its own default (DESIGN.md §4).
     config: Option<String>,
+    /// `-e key=value` inputs, passed through to the engine unchanged.
     #[arg(short = 'e', value_name = "key=value")]
     set: Vec<String>,
+    /// Which engine runs the orchestration.
     #[arg(long, value_enum, default_value = "cof")]
     engine: EngineChoice,
+    /// Keeps the run directory (state, events, stdout/stderr) here
+    /// instead of a temporary one that's removed once done.
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
+    /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
     #[arg(long)]
     log: bool,
 }
@@ -71,6 +79,10 @@ struct RunArgs {
 struct WatchArgs {
     /// A run directory, or a `state.live.json` file directly.
     target: String,
+    /// Compiles this document into a plan, the same one a live `osp
+    /// <doc>` run of it would have from the start (DESIGN.md §5) --
+    /// without it, container detection (an `if`/loop vs. a leaf) can
+    /// briefly fall back to a snapshot it hasn't seen yet instead.
     #[arg(long, value_name = "doc.yml")]
     plan: Option<PathBuf>,
     /// The config `--plan`'s own document should be checked against
@@ -345,7 +357,12 @@ fn do_run(args: RunArgs) -> ExitCode {
     // only true) when the binary was actually found and simply
     // predates `--events` (cof's own age, or an electricity built
     // before #431's lane E2).
-    if !engine.caps().events && !engine.caps().missing {
+    if engine.caps().timed_out {
+        eprintln!(
+            "osp: {} --help didn't answer in time; running from state only",
+            engine.name()
+        );
+    } else if !engine.caps().events && !engine.caps().missing {
         eprintln!(
             "osp: this {} has no --events: running from state only",
             engine.name()
@@ -1137,13 +1154,20 @@ fn observe_tick(
     Vec<oscilloscope_core::diff::LogLine>,
     Option<serde_json::Value>,
 ) {
-    // Events first, then the state diff (not the order either was
-    // originally polled in): `diff_event` marks a path event-sourced
-    // as it goes, and `diff` needs that already set for *this* tick to
-    // skip its own line for a path whose state write landed in the
-    // very same tick as its event — this real race only starts
-    // mattering once `--events` is actually flowing (#423), which is
-    // when it first showed up as a genuine duplicate line.
+    // The state poll happens first, purely so `diff_event` below has
+    // this tick's own freshest snapshot to fall back on for container
+    // detection (`note_preview`, issue #433's "osp watch without
+    // --plan" item) — events are still processed *before* `diff`
+    // itself: `diff_event` marks a path event-sourced as it goes, and
+    // `diff` needs that already set for *this* tick to skip its own
+    // line for a path whose state write landed in the very same tick
+    // as its event — this real race only starts mattering once
+    // `--events` is actually flowing (#423), which is when it first
+    // showed up as a genuine duplicate line.
+    let state = live_poller.poll();
+    if let Some(state) = &state {
+        differ.note_preview(state);
+    }
     let mut lines = Vec::new();
     for raw_event in events_tailer.poll() {
         if let Some(event) = parse_event(&raw_event) {
@@ -1151,7 +1175,6 @@ fn observe_tick(
             lines.extend(differ.diff_event(&event, plan, model));
         }
     }
-    let state = live_poller.poll();
     if let Some(state) = &state {
         lines.extend(differ.diff(state, plan));
     }
@@ -1825,6 +1848,19 @@ mod tests {
     #[test]
     fn help_flag_exits_zero() {
         assert_eq!(run(args(&["--help"])), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn run_args_help_describes_every_argument() {
+        // Issue #433: `osp <doc>`'s own arguments had no --help
+        // descriptions at all, unlike `osp watch`'s.
+        let err = RunArgs::try_parse_from(args(&["--help"])).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("The orchestration document to run"));
+        assert!(rendered.contains("passed through to the engine unchanged"));
+        assert!(rendered.contains("Which engine runs the orchestration"));
+        assert!(rendered.contains("Keeps the run directory"));
+        assert!(rendered.contains("Forces the plain-text stream"));
     }
 
     #[test]

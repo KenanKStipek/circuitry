@@ -305,6 +305,13 @@ pub struct Differ {
     /// container's `end` landing right after it, producing a second,
     /// duplicate ✗ for the container.
     event_failed: BTreeSet<String>,
+    /// The freshest state `note_preview` has been handed, kept
+    /// separate from `last` (which only ever advances inside `diff`
+    /// itself): container detection for an event whose own `start`
+    /// outruns the next state poll (`osp watch` with no `--plan`,
+    /// issue #433) needs the very latest snapshot available, even one
+    /// `diff` hasn't been handed yet this tick.
+    preview: BTreeMap<String, NodeMeta>,
 }
 
 impl Differ {
@@ -315,6 +322,32 @@ impl Differ {
             unnamed_pass_counts: BTreeMap::new(),
             event_sourced: BTreeSet::new(),
             event_failed: BTreeSet::new(),
+            preview: BTreeMap::new(),
+        }
+    }
+
+    /// Records the latest polled state for [`Differ::diff_event`]'s
+    /// own container detection to fall back on, ahead of `diff` itself
+    /// ever being handed this same snapshot (issue #433: `osp watch`
+    /// with no `--plan` could otherwise misjudge a container whose
+    /// very first state write lands in the same tick as its own
+    /// `start` event, since events are processed before that tick's
+    /// `diff` call updates `last`). A no-op once a real plan exists,
+    /// since `is_container_path` already answers from it before ever
+    /// consulting state.
+    pub fn note_preview(&mut self, state: &Value) {
+        self.preview = flatten_state(state);
+    }
+
+    /// The freshest state known for container detection at `path`:
+    /// `last` (what `diff` has already processed) when it has an
+    /// entry, `preview` (this tick's own poll, not yet diffed)
+    /// otherwise.
+    fn container_lookup(&self, path: &str) -> &BTreeMap<String, NodeMeta> {
+        if self.last.contains_key(path) {
+            &self.last
+        } else {
+            &self.preview
         }
     }
 
@@ -330,6 +363,17 @@ impl Differ {
         match event {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
+                // A path reused by a later pass must not keep
+                // answering for a failure from an earlier one (issue
+                // #433's comments): `event_failed` is keyed only by
+                // path, with nothing else to tell passes apart, so a
+                // fresh `start` at this exact path clears both its own
+                // entry and every descendant's (a loop's path is also
+                // every one of its children's own prefix).
+                let restarted_prefix = format!("{path}.");
+                self.event_failed.remove(path);
+                self.event_failed
+                    .retain(|other| !other.starts_with(&restarted_prefix));
                 // A named container (the document root included) fires
                 // `start`/`end` the same as a leaf (DESIGN.md §1.4's
                 // probe notes), but gets no ▶/✓/✗ of its own — same
@@ -340,7 +384,7 @@ impl Differ {
                 // strictly *after* its `start` though (it must already
                 // be running to dispatch anything), so this can't catch
                 // it here — only its later `end` (below).
-                if is_container_path(path, plan, &self.last, model) {
+                if is_container_path(path, plan, self.container_lookup(path), model) {
                     return Vec::new();
                 }
                 let summary = self
@@ -371,7 +415,7 @@ impl Differ {
                     // this tick's later `diff` call.
                     self.event_failed.insert(path.clone());
                 }
-                if is_container_path(path, plan, &self.last, model) {
+                if is_container_path(path, plan, self.container_lookup(path), model) {
                     // P2-6: the container's own failure, when it has
                     // one, still needs a line if nothing under it
                     // already printed one -- the events path has the
@@ -1484,6 +1528,94 @@ mod tests {
     }
 
     #[test]
+    fn event_failed_is_cleared_on_the_paths_next_start_so_a_later_passs_own_failure_is_not_hidden_by_an_earlier_one()
+     {
+        // Issue #433's comments: `event_failed` used to be keyed only
+        // by path and never cleared, so an unnamed loop's leaf failing
+        // on one pass kept `any_descendant_failed` answering true for
+        // every later pass too -- hiding a container's own cross mark
+        // in a pass where the leaf itself actually succeeded and the
+        // container failed on its own (a CEL error evaluating the
+        // loop's condition, say).
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        // Pass 1: the unnamed loop's leaf fails.
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.u_loop.leaf".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.u_loop.leaf".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("boom".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        // Pass 2 reuses the same path (DESIGN.md §2.3) and succeeds.
+        differ.diff_event(
+            &Event::Start {
+                ts: "t2".to_string(),
+                id: Some(2),
+                path: "prime.u_loop.leaf".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        differ.diff_event(
+            &Event::End {
+                ts: "t3".to_string(),
+                id: Some(2),
+                path: "prime.u_loop.leaf".to_string(),
+                ok: true,
+                ms: Some(1),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        // The container itself now fails on its own, in the same
+        // batch as nothing else failing.
+        let container_lines = differ.diff_event(
+            &Event::End {
+                ts: "t3".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(5),
+                error: Some("loop condition: CEL error".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        assert!(
+            container_lines
+                .iter()
+                .any(|l| l.text.starts_with("✗ prime")),
+            "the container's own failure must get its own cross mark, not be hidden by pass 1's stale entry: {container_lines:?}"
+        );
+    }
+
+    #[test]
     fn finish_keeps_a_multi_line_reasons_first_line_on_the_summary_and_indents_the_rest() {
         // M2: cof's own validation error can be several lines long;
         // the first goes right on the ■ line, the rest print indented
@@ -1720,6 +1852,40 @@ mod tests {
                 .count(),
             1,
             "{final_lines:?}"
+        );
+    }
+
+    #[test]
+    fn diff_event_detects_a_container_from_a_just_polled_preview_with_no_plan_and_no_prior_last() {
+        // Issue #433: `osp watch` with no `--plan` has no static plan
+        // to check, so a container whose first-ever state write lands
+        // in the very same tick as its own `start` event must still
+        // be recognised from that fresh snapshot, not misread as a
+        // leaf just because `diff` (which only updates `last`) hasn't
+        // been handed it yet this tick.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let fresh_state = json!({
+            "prime": {
+                "value": null,
+                "meta": {"completed_at": null},
+                "gate": {"value": null, "meta": {"completed_at": null, "mode": "cel"}}
+            }
+        });
+        differ.note_preview(&fresh_state);
+        let lines = differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.gate".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        assert!(
+            lines.is_empty(),
+            "a container detected from the preview must get no ▶ line: {lines:?}"
         );
     }
 

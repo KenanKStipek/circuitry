@@ -226,6 +226,8 @@ golden_events_test!(
     each_tree_loop_concurrency_events,
     "each_tree_loop_concurrency"
 );
+golden_events_test!(sigint_once_events, "sigint_once");
+golden_events_test!(aborted_second_sigint_events, "aborted_second_sigint");
 
 /// Committed fixtures must never carry a local machine's own path (the
 /// lane contract's standing rule for generated/recorded files): this
