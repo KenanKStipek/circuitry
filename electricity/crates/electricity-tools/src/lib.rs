@@ -24,6 +24,7 @@ pub mod registry;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
 
+pub use electricity_value::pycompat::PyExc;
 pub use registry::build_plugin;
 
 /// `plugins/base.py::ToolResult`, field for field.
@@ -84,56 +85,10 @@ impl ToolResult {
     }
 }
 
-/// A Python exception class name -- carried by [`ToolError`] so #442's
-/// multi-failure tree text (`"[i] {type}: {err}"`) can name the real
-/// exception a Circuitry plugin would have raised, not a single generic
-/// Rust error type. Not exhaustive of every exception class in
-/// Circuitry's own plugin catalog -- lane D1/C/E/L widen this enum (a
-/// new variant, never a change to an existing one's spelling) the first
-/// time a ported plugin actually needs to raise one not listed here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PyExc {
-    ValueError,
-    RuntimeError,
-    TypeError,
-    KeyError,
-    LookupError,
-    PermissionError,
-    FileNotFoundError,
-    IsADirectoryError,
-    NotADirectoryError,
-    OSError,
-    ConnectionError,
-    TimeoutError,
-    UnicodeDecodeError,
-}
-
-impl PyExc {
-    /// The bare class name, e.g. `"ValueError"` -- #442's own `{type}`.
-    pub fn name(self) -> &'static str {
-        match self {
-            PyExc::ValueError => "ValueError",
-            PyExc::RuntimeError => "RuntimeError",
-            PyExc::TypeError => "TypeError",
-            PyExc::KeyError => "KeyError",
-            PyExc::LookupError => "LookupError",
-            PyExc::PermissionError => "PermissionError",
-            PyExc::FileNotFoundError => "FileNotFoundError",
-            PyExc::IsADirectoryError => "IsADirectoryError",
-            PyExc::NotADirectoryError => "NotADirectoryError",
-            PyExc::OSError => "OSError",
-            PyExc::ConnectionError => "ConnectionError",
-            PyExc::TimeoutError => "TimeoutError",
-            PyExc::UnicodeDecodeError => "UnicodeDecodeError",
-        }
-    }
-}
-
-impl fmt::Display for PyExc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
+/// The one canonical Python-exception-class-name enum every crate that
+/// needs to report one shares (`electricity_value::pycompat::PyExc`'s
+/// own doc comment -- review finding 1 on PR #454: this crate and
+/// `electricity-vm::adapter` each used to keep their own copy).
 
 /// What kind of failure a [`ToolError`] carries, for retry
 /// classification (`core/tool.py::ToolRuntime._is_retryable_failure`,

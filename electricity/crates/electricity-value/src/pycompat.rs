@@ -13,34 +13,134 @@
 //! error, never a fake result.
 
 use crate::Value;
+use std::fmt;
+
+/// A Python exception class name -- the one canonical copy every
+/// crate that needs to report one builds on (issue #449's gate lane;
+/// review finding 1 on PR #454 named `electricity-tools::PyExc` and
+/// `electricity-vm::adapter::PyExc` as two copies of the same thing,
+/// kept apart by a dependency-direction rule that doesn't actually
+/// hold -- `electricity-vm` already depends on `electricity-tools`).
+/// Not exhaustive of every exception class in Circuitry's own plugin
+/// catalog -- a later lane widens this enum (a new variant, never a
+/// change to an existing one's spelling) the first time a ported
+/// plugin/adapter actually needs to raise one not listed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyExc {
+    ValueError,
+    RuntimeError,
+    TypeError,
+    KeyError,
+    LookupError,
+    PermissionError,
+    FileNotFoundError,
+    IsADirectoryError,
+    NotADirectoryError,
+    OSError,
+    ConnectionError,
+    TimeoutError,
+    UnicodeDecodeError,
+    /// `int(float("inf"))`/`int(float("nan"))`'s own exception class
+    /// (review finding 5 on PR #454) -- CPython raises this, not
+    /// `ValueError`, for a non-finite float.
+    OverflowError,
+}
+
+impl PyExc {
+    /// The bare class name, e.g. `"ValueError"` -- #442's own `{type}`.
+    pub fn name(self) -> &'static str {
+        match self {
+            PyExc::ValueError => "ValueError",
+            PyExc::RuntimeError => "RuntimeError",
+            PyExc::TypeError => "TypeError",
+            PyExc::KeyError => "KeyError",
+            PyExc::LookupError => "LookupError",
+            PyExc::PermissionError => "PermissionError",
+            PyExc::FileNotFoundError => "FileNotFoundError",
+            PyExc::IsADirectoryError => "IsADirectoryError",
+            PyExc::NotADirectoryError => "NotADirectoryError",
+            PyExc::OSError => "OSError",
+            PyExc::ConnectionError => "ConnectionError",
+            PyExc::TimeoutError => "TimeoutError",
+            PyExc::UnicodeDecodeError => "UnicodeDecodeError",
+            PyExc::OverflowError => "OverflowError",
+        }
+    }
+}
+
+impl fmt::Display for PyExc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+/// A failed [`py_int`] coercion -- the Python exception class it would
+/// have raised (review finding 5 on PR #454: a caller that only kept
+/// the message text couldn't tell a `ValueError` from the
+/// `OverflowError` a non-finite float raises) plus CPython's own
+/// message text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PyIntError {
+    pub py_class: PyExc,
+    pub message: String,
+}
+
+impl fmt::Display for PyIntError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+fn value_error(message: impl Into<String>) -> PyIntError {
+    PyIntError {
+        py_class: PyExc::ValueError,
+        message: message.into(),
+    }
+}
 
 /// Python's `int(value)` coercion, with CPython's own error wording on
 /// failure: `bool`/`int`/`float` convert the way the `int()` builtin
 /// does (`int(True) == 1`, truncating a float toward zero); a
 /// numeric-looking `str` parses the same way (surrounding whitespace
 /// tolerated via [`py_strip`]); anything else is a `TypeError`-shaped
-/// message naming the value's own Python type.
+/// message naming the value's own Python type. A non-finite float
+/// raises `OverflowError`/`ValueError` exactly as `int(float("inf"))`/
+/// `int(float("nan"))` do, rather than truncating silently.
 ///
 /// Known divergence (shared by every caller): Python's `int()` is
 /// arbitrary-precision and tolerates `_` digit grouping (`"1_0"` ==
 /// `10`); this returns `i64`, so a numeral outside that range, or one
 /// written with underscores, fails to parse here where CPython would
 /// succeed.
-pub fn py_int(value: &Value) -> Result<i64, String> {
+pub fn py_int(value: &Value) -> Result<i64, PyIntError> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::Int(i) => i
             .to_string()
             .parse::<i64>()
-            .map_err(|_| format!("int too large to convert: {i}")),
+            .map_err(|_| value_error(format!("int too large to convert: {i}"))),
+        Value::Float(f) if f.is_nan() => Err(PyIntError {
+            py_class: PyExc::ValueError,
+            message: "cannot convert float NaN to integer".to_string(),
+        }),
+        Value::Float(f) if f.is_infinite() => Err(PyIntError {
+            py_class: PyExc::OverflowError,
+            message: "cannot convert float infinity to integer".to_string(),
+        }),
         Value::Float(f) => Ok(f.trunc() as i64),
-        Value::Str(s) => py_strip(s)
-            .parse::<i64>()
-            .map_err(|_| format!("invalid literal for int() with base 10: {:?}", s)),
-        other => Err(format!(
-            "int() argument must be a string, a bytes-like object or a real number, not '{}'",
-            other.type_name()
-        )),
+        Value::Str(s) => py_strip(s).parse::<i64>().map_err(|_| {
+            value_error(format!(
+                "invalid literal for int() with base 10: {}",
+                Value::Str(s.clone()).py_repr()
+            ))
+        }),
+        other => Err(PyIntError {
+            py_class: PyExc::TypeError,
+            message: format!(
+                "int() argument must be a string, a bytes-like object or a real number, not '{}'",
+                other.type_name()
+            ),
+        }),
     }
 }
 
@@ -117,21 +217,38 @@ mod tests {
 
     #[test]
     fn py_int_reports_cpythons_own_text_for_a_bad_string() {
-        assert_eq!(
-            py_int(&Value::Str("x".to_string())),
-            Err("invalid literal for int() with base 10: \"x\"".to_string())
-        );
+        let err = py_int(&Value::Str("x".to_string())).unwrap_err();
+        // CPython's own `repr('x')` is single-quoted, not Rust's
+        // double-quoted `{:?}` (review finding 5 on PR #454).
+        assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
+        assert_eq!(err.py_class, PyExc::ValueError);
     }
 
     #[test]
     fn py_int_reports_cpythons_own_text_for_an_unsupported_type() {
+        let err = py_int(&Value::List(Vec::new())).unwrap_err();
         assert_eq!(
-            py_int(&Value::List(Vec::new())),
-            Err(
-                "int() argument must be a string, a bytes-like object or a real number, not 'list'"
-                    .to_string()
-            )
+            err.message,
+            "int() argument must be a string, a bytes-like object or a real number, not 'list'"
         );
+        assert_eq!(err.py_class, PyExc::TypeError);
+    }
+
+    #[test]
+    fn py_int_raises_value_error_for_nan() {
+        let err = py_int(&Value::Float(f64::NAN)).unwrap_err();
+        assert_eq!(err.message, "cannot convert float NaN to integer");
+        assert_eq!(err.py_class, PyExc::ValueError);
+    }
+
+    #[test]
+    fn py_int_raises_overflow_error_for_infinity() {
+        let err = py_int(&Value::Float(f64::INFINITY)).unwrap_err();
+        assert_eq!(err.message, "cannot convert float infinity to integer");
+        assert_eq!(err.py_class, PyExc::OverflowError);
+        let err = py_int(&Value::Float(f64::NEG_INFINITY)).unwrap_err();
+        assert_eq!(err.message, "cannot convert float infinity to integer");
+        assert_eq!(err.py_class, PyExc::OverflowError);
     }
 
     #[test]

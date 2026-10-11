@@ -123,28 +123,13 @@ pub struct AdapterError {
     pub py_class: PyExc,
 }
 
-/// Mirrors [`electricity_tools::PyExc`] -- kept as its own copy for the
-/// same dependency-direction reason [`CheckResult`] is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PyExc {
-    ValueError,
-    RuntimeError,
-    KeyError,
-    TimeoutError,
-    ConnectionError,
-}
-
-impl PyExc {
-    pub fn name(self) -> &'static str {
-        match self {
-            PyExc::ValueError => "ValueError",
-            PyExc::RuntimeError => "RuntimeError",
-            PyExc::KeyError => "KeyError",
-            PyExc::TimeoutError => "TimeoutError",
-            PyExc::ConnectionError => "ConnectionError",
-        }
-    }
-}
+/// The one canonical Python-exception-class enum
+/// (`electricity_value::pycompat::PyExc`'s own doc comment) -- this
+/// module used to keep its own 5-variant copy, justified by a
+/// dependency-direction rule that doesn't actually hold here: this
+/// crate (`electricity-vm`) already depends on `electricity-tools`
+/// (review finding 1 on PR #454).
+pub use electricity_tools::PyExc;
 
 impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
