@@ -615,24 +615,25 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // whole CLI command, before `run()`'s own JSON-output logic is
     // ever reached, so unlike every other failure this prints no
     // stdout payload at all, `--out` or not (PR #441 review finding 8).
-    // `config_error` resolves *config_path* only to check for an
-    // error -- `run_orchestration` below resolves it again as its own
-    // step 1 (that function's own doc comment). A log::warn! a
-    // resolve triggers (electricity-config's own "Unknown environment"
-    // warning) must fire exactly once per invocation, as it would for
-    // a single `cof run`, so logging is silenced for this throwaway
-    // first resolve and restored right after (issue #442) -- a config
-    // error, below, ends the process before the real resolve would
-    // ever run, so no warning is lost by silencing this one.
+    // `config_error` resolves *config_path* exactly once for this
+    // whole invocation, at `cof run`'s own point in its resolution
+    // order (`cli/app.py` resolves config at ~:1127, before the
+    // missing-orchestration/bad-`-e` checks below) -- so logging stays
+    // on here: a resolve-time warning (electricity-config's own
+    // "Unknown environment ...", issue #442) must print even when one
+    // of those checks then ends the run early, exactly as it would for
+    // `cof run`. The resolved config is threaded through to
+    // `run_orchestration_with_config` below rather than resolved a
+    // second time, so that warning never fires twice.
     let config_path = PathBuf::from(&run_args.config);
-    log::set_max_level(log::LevelFilter::Off);
-    let config_check = electricity::config_error(&config_path);
-    log::set_max_level(log::LevelFilter::Warn);
-    if let Some(message) = config_check {
-        signal_guard.disarm();
-        write_stderr(&format!("Error: {message}\n"));
-        return ExitCode::from(1);
-    }
+    let cfg = match electricity::config_error(&config_path) {
+        Ok(cfg) => cfg,
+        Err(message) => {
+            signal_guard.disarm();
+            write_stderr(&format!("Error: {message}\n"));
+            return ExitCode::from(1);
+        }
+    };
 
     // `cof`'s own "Orchestration not found" check (`_resolve_orchestration`)
     // happens in the CLI layer *before* `-e` is ever parsed
@@ -693,7 +694,9 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             .enable_all()
             .build()
             .expect("could not start the electricity async runtime");
-        runtime.block_on(electricity::run_orchestration(&req, &token))
+        runtime.block_on(electricity::run_orchestration_with_config(
+            cfg, &req, &token,
+        ))
     };
 
     if let Some(path) = &out_path {

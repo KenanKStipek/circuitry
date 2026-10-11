@@ -555,8 +555,8 @@ fn current_env_vars() -> std::collections::HashMap<String, String> {
     std::env::vars().collect()
 }
 
-/// *config_path*'s own config error, if resolving it fails -- `None` on
-/// success. `electricity-cli`'s own "a config error exits 1 with
+/// *config_path*'s own resolved config, or its config error text on
+/// failure. `electricity-cli`'s own "a config error exits 1 with
 /// Circuitry's own text and writes no `--out`" special case (issue
 /// #431's run-wiring step 1): Circuitry's `CircuitryGroup.invoke`
 /// catches a `ConfigError` *around* the whole CLI command, before
@@ -565,16 +565,19 @@ fn current_env_vars() -> std::collections::HashMap<String, String> {
 /// all -- unlike every other failure [`run_orchestration`] itself
 /// reports, which always goes through that logic. A caller that wants
 /// this distinction checks this function *before* building a
-/// [`RunRequest`] and calling [`run_orchestration`] (which still
-/// resolves the same config again, internally, as step 1 of its own
-/// run-wiring table -- this is deliberately not threaded through as a
-/// parameter, so a direct [`run_orchestration`] caller, like this
-/// crate's own tests, never has to resolve a config twice itself just
-/// to get a [`RunResult`]).
-pub fn config_error(config_path: &Path) -> Option<String> {
-    electricity_config::resolve_config(config_path, &current_env_vars())
-        .err()
-        .map(|err| err.0)
+/// [`RunRequest`] -- resolving config here, first, is also `cof run`'s
+/// own resolution order (`cli/app.py` resolves config at ~:1127,
+/// before `_resolve_orchestration`/`_parse_env_vars`), so this is
+/// where `electricity_config::resolve_config`'s own `log::warn!`
+/// ("Unknown environment ...", issue #442) belongs for
+/// `electricity-cli`'s own caller. On success, pass the `Ok` value to
+/// [`run_orchestration_with_config`] rather than building a
+/// [`RunRequest`] and calling [`run_orchestration`] (which resolves
+/// config again, independently -- fine for a direct caller like this
+/// crate's own tests, but it would log that same warning a second
+/// time for a caller that already has it from here).
+pub fn config_error(config_path: &Path) -> Result<CircuitryConfig, String> {
+    electricity_config::resolve_config(config_path, &current_env_vars()).map_err(|err| err.0)
 }
 
 /// Runs *req* the way `electricity <config.json> <doc> ...` does (issue
@@ -595,24 +598,45 @@ pub fn config_error(config_path: &Path) -> Option<String> {
 /// function already wrote to *store* rather than reporting it, so a
 /// refused run leaves no `--out`/`--events`/`--live-state` trace at all.
 pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> RunResult {
+    // Step 1: config -- a config error exits 1 with Circuitry's own
+    // text and writes no --out (no state exists yet to write). Resolved
+    // here, and only here, for a caller that hasn't already resolved it
+    // itself (`electricity-cli`'s own entry point has -- see
+    // [`run_orchestration_with_config`]'s own doc comment) -- this is
+    // every direct caller in this crate's own tests, so this is where
+    // `electricity_config::resolve_config`'s own `log::warn!` ("Unknown
+    // environment ...", issue #442) fires for them.
+    let env_vars = current_env_vars();
+    match electricity_config::resolve_config(&req.config_path, &env_vars) {
+        Ok(cfg) => run_orchestration_with_config(cfg, req, token).await,
+        Err(err) => RunResult {
+            ok: false,
+            state: None,
+            error: Some(err.0),
+            warnings: Vec::new(),
+            signal: None,
+        },
+    }
+}
+
+/// [`run_orchestration`]'s own step 1 already done by *cfg* -- the one
+/// `electricity-cli` itself calls, with the `CircuitryConfig`
+/// [`config_error`]'s own resolve (run first, before even the
+/// orchestration-path-exists check below, to match `cof run`'s own
+/// resolution order -- `cli/app.py` resolves config at ~:1127, before
+/// `_resolve_orchestration` at ~:1150 and `_parse_env_vars` at ~:1270)
+/// already produced. A second call to `electricity_config::resolve_config`
+/// for the same invocation would log "Unknown environment ..." (issue
+/// #442) a second time, where a single `cof run` only ever logs it once
+/// -- so this function trusts *cfg* instead of resolving it again, and
+/// is the only way to reach the rest of this run without doing so.
+pub async fn run_orchestration_with_config(
+    cfg: CircuitryConfig,
+    req: &RunRequest,
+    token: &CancellationToken,
+) -> RunResult {
     let run_t0 = Instant::now();
     let mut warnings: Vec<String> = Vec::new();
-
-    // Step 1: config -- a config error exits 1 with Circuitry's own
-    // text and writes no --out (no state exists yet to write).
-    let env_vars = current_env_vars();
-    let cfg = match electricity_config::resolve_config(&req.config_path, &env_vars) {
-        Ok(cfg) => cfg,
-        Err(err) => {
-            return RunResult {
-                ok: false,
-                state: None,
-                error: Some(err.0),
-                warnings,
-                signal: None,
-            };
-        }
-    };
 
     // Step 4: seed state (`input` namespace, from the CLI's own `-e`
     // entries) -- every failure from here on reports *some* state,
