@@ -263,6 +263,10 @@ pub fn parse_template(
 /// at the call site through `electricity_value::pycompat::py_int`:
 /// `0` means "replace every match"; a negative count means "replace
 /// none" (pinned against CPython 3.11 directly, not assumed).
+// `fancy_regex::Error`'s own size, not ours to shrink -- it's reached
+// only on a backtrack-limit or stack-overflow guard trip during
+// matching, never on a hot path worth boxing for.
+#[allow(clippy::result_large_err)]
 pub fn substitute(
     re: &fancy_regex::Regex,
     template: &Template,
@@ -271,6 +275,7 @@ pub fn substitute(
     substitute_n(re, template, text, usize::MAX)
 }
 
+#[allow(clippy::result_large_err)]
 pub fn substitute_n(
     re: &fancy_regex::Regex,
     template: &Template,
@@ -311,6 +316,7 @@ pub fn substitute_n(
 /// exactly the matches Python's `finditer`/`findall` would) --
 /// eagerly collected, since a `regex` tool call is always over one
 /// in-memory string, never a stream.
+#[allow(clippy::result_large_err)]
 pub fn find_iter<'t>(
     re: &fancy_regex::Regex,
     text: &'t str,
