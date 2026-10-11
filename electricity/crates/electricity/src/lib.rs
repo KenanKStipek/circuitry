@@ -448,19 +448,20 @@ struct Observer<'a> {
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
     /// Issue #449's gate lane item 7's own per-instance `--events`
-    /// pairing seam -- a plain incrementing counter is enough here:
-    /// M0-H never runs two overlapping calls at the same
-    /// [`EffectPath`] (no `loop`, and a tree's own branches are each
-    /// at their *own* concretized path), so `--events` output stays
-    /// byte-identical either way; this only has to hand back a value
-    /// `effect_complete` can be given.
+    /// pairing seam -- the fallback id source when `--events` itself
+    /// is off, so `effect_start` always has *some* value to hand back
+    /// regardless. When `--events` is on, [`events::EventLog::on_start`]'s
+    /// own id is used instead (review finding 3 on PR #454: a *second*,
+    /// independent counter here could never line up with `EventLog`'s
+    /// own per-path stack, which is keyed by the ids `EventLog::on_start`
+    /// itself hands out).
     next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
 }
 
 impl RunObserver for Observer<'_> {
     fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
         if let Some(log) = self.events {
-            log.on_start(&path.to_string());
+            return log.on_start(&path.to_string());
         }
         let instance = self.next_instance.get() + 1;
         self.next_instance.set(instance);
@@ -470,12 +471,12 @@ impl RunObserver for Observer<'_> {
     fn effect_complete(
         &self,
         path: &EffectPath,
-        _instance: electricity_vm::observer::InstanceId,
+        instance: electricity_vm::observer::InstanceId,
         error: Option<&str>,
     ) {
         self.totals.observe_complete();
         if let Some(log) = self.events {
-            log.on_complete(&path.to_string(), error);
+            log.on_complete(&path.to_string(), instance, error);
         }
     }
 
