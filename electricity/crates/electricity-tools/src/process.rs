@@ -7,9 +7,12 @@
 //! token kills every tracked process group at once on `request()`, and
 //! a per-call *timeout* still applies independently.
 
+use crate::PyExc;
 use electricity_value::{CancellationToken, Value};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io;
+use std::rc::Rc;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -58,7 +61,18 @@ pub enum ProcError {
     },
     Cancelled,
     Decode(String),
-    Other(String),
+    /// An `OSError` (or a subclass) other than the `FileNotFoundError`
+    /// [`ProcError::NotFound`] already covers -- e.g. `cwd` naming a
+    /// file, not a directory (`NotADirectoryError`), or a permission
+    /// error on it. *py_class*/*message* are CPython's own exception
+    /// class and `str(exc)` text (review finding 3 on PR #467: this
+    /// used to collapse into the same `"cancelled"` text as
+    /// [`ProcError::Cancelled`] at every call site, which is wrong --
+    /// a bad `cwd` is not a cancellation).
+    Other {
+        py_class: PyExc,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for ProcError {
@@ -75,7 +89,7 @@ impl std::fmt::Display for ProcError {
             ),
             ProcError::Cancelled => write!(f, "cancelled"),
             ProcError::Decode(message) => write!(f, "{message}"),
-            ProcError::Other(message) => write!(f, "{message}"),
+            ProcError::Other { message, .. } => write!(f, "{message}"),
         }
     }
 }
@@ -93,11 +107,40 @@ impl std::error::Error for ProcError {}
 /// mid-await rather than returning normally -- Rust runs every live
 /// local's own `Drop` impl when the generated state machine is
 /// dropped, same as it would for a synchronous scope exit.
-struct KillGroupOnDrop(Option<u32>);
+struct KillGroupOnDrop {
+    pid: Option<u32>,
+    /// `true` only while [`RunOpts::new_session`] put this child in its
+    /// own session (`setsid`) -- [`run_tracked`]'s own *pgid* equals
+    /// *pid* in that case (`_isolated_pgid`'s own shape), so the group
+    /// kill below can use it directly without an extra `getpgid` call.
+    isolated: bool,
+    /// Set once [`run_tracked`]'s own wait loop has observed the child
+    /// exit -- lets this guard skip killing anything at all once the
+    /// pid is no longer this child's (review finding 2 on PR #467: a
+    /// `getpgid(pid)`-based kill issued *after* the pid has already
+    /// been reaped can, in the rare case the OS has since reused that
+    /// pid for an unrelated process, SIGKILL that unrelated process
+    /// instead of a no-op). A pid can never be reused while the
+    /// process holding it is still alive, so `!reaped.get()` here is
+    /// proof *pid* is still this child's own.
+    reaped: Rc<Cell<bool>>,
+}
 
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
-        if let Some(pid) = self.0 {
+        let Some(pid) = self.pid else { return };
+        if self.isolated {
+            // Safe regardless of whether *pid* (the group's own leader)
+            // has already been reaped: a pgid can never be reused while
+            // any member of the group -- e.g. a grandchild the leader
+            // itself forked -- is still alive, so this never needs
+            // `self.reaped`'s own guard the way the plain-pid kill below
+            // does (review finding 2 on PR #467: that guard exists
+            // specifically to protect a *pid*-based kill from ever
+            // landing on a reused pid, which a `killpg` on a
+            // structurally-still-valid pgid never risks).
+            repeat_group_kill(pid);
+        } else if !self.reaped.get() {
             kill_process_group(pid);
         }
     }
@@ -117,9 +160,10 @@ pub async fn run_tracked(
         return Err(ProcError::Cancelled);
     }
     let Some(program) = cmd.first() else {
-        return Err(ProcError::Other(
-            "run_tracked called with an empty cmd".to_string(),
-        ));
+        return Err(ProcError::Other {
+            py_class: PyExc::RuntimeError,
+            message: "run_tracked called with an empty cmd".to_string(),
+        });
     };
 
     let mut command = Command::new(program);
@@ -142,13 +186,43 @@ pub async fn run_tracked(
         command.stdin(Stdio::inherit());
     }
     #[cfg(unix)]
-    if opts.new_session {
-        // A new process group (not a full `setsid()` session -- this
-        // crate's own kill path only ever needs group isolation for
-        // `kill_process_group`'s own `killpg`, never controlling-
-        // terminal detachment) only while armed/`new_session`, mirroring
-        // `start_new_session=(token.armed or new_session)`.
-        command.process_group(0);
+    {
+        // A `pre_exec` closure is installed unconditionally, not only
+        // while `opts.new_session` -- Rust's std only takes its
+        // `posix_spawn(2)` fast path when it's absent, and that fast
+        // path can only report a generic `ENOENT` for *any*
+        // `current_dir` failure on at least one platform this crate
+        // runs on (confirmed directly: an identical `Command` whose
+        // `cwd` names a plain file reports `NotFound`/`ENOENT` via
+        // `posix_spawn`, but `NotADirectoryError`/`ENOTDIR` -- the
+        // real reason -- once *any* `pre_exec` forces plain `fork`+
+        // `exec` instead, the only path that actually runs `chdir` and
+        // reports its own real errno). `describe_spawn_error` needs the
+        // latter, in both the isolated and non-isolated case, to match
+        // Python's own `_posixsubprocess` (which never takes a
+        // `posix_spawn` shortcut for this).
+        //
+        // `setsid()`, not merely `process_group(0)`, while isolated
+        // (review finding 1 on PR #467) -- Python's own
+        // `start_new_session=True` calls `setsid()`, detaching the
+        // child from any controlling terminal entirely.
+        // `process_group(0)` alone only calls `setpgid`: the child
+        // stays in the *session* of whatever terminal started this
+        // run, in a background process group, so a child that reads or
+        // writes the inherited tty (`ffmpeg`'s own startup `tcsetattr`,
+        // a `cat` reading stdin) is stopped by `SIGTTOU`/`SIGTTIN`
+        // until this call's own timeout kills it -- invisible in CI (no
+        // tty) but reproducible with any real terminal, or a pty in a
+        // test.
+        let new_session = opts.new_session;
+        unsafe {
+            command.pre_exec(move || {
+                if new_session && libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
 
     let mut child = match command.spawn() {
@@ -157,17 +231,31 @@ pub async fn run_tracked(
             return Err(ProcError::NotFound(format!("{program}: {err}")));
         }
         Err(err) => {
-            return Err(ProcError::Other(format!(
-                "failed to start {program}: {err}"
-            )));
+            let (py_class, message) = describe_spawn_error(&err, program, opts.cwd.as_deref());
+            return Err(ProcError::Other { py_class, message });
         }
     };
 
     let pid = child.id();
+    // `setsid()` above makes the child its own session **and** process
+    // group leader, so its pgid is its own pid -- captured once, right
+    // after spawn, exactly like `core/cancellation.py::_isolated_pgid`:
+    // a pgid can never be reused while any member of the group is still
+    // alive, so this stays valid for every repeat kill below even after
+    // this *pid* itself has been reaped (review finding 2 on PR #467 --
+    // a `getpgid(pid)` lookup done *after* the reap always fails ESRCH,
+    // even while a grandchild forked into the same, still-live pgid
+    // keeps the group itself alive).
+    let pgid = if opts.new_session { pid } else { None };
+    let reaped = Rc::new(Cell::new(false));
     // Lives for the rest of this function -- its own `Drop` is this
     // call's safety net against being torn down mid-await from outside
     // (see the struct's own doc comment above).
-    let _kill_on_drop = KillGroupOnDrop(pid);
+    let _kill_on_drop = KillGroupOnDrop {
+        pid,
+        isolated: opts.new_session,
+        reaped: reaped.clone(),
+    };
 
     if let Some(data) = opts.input.clone() {
         if let Some(mut stdin) = child.stdin.take() {
@@ -181,17 +269,23 @@ pub async fn run_tracked(
     }
 
     let Some(mut stdout_pipe) = child.stdout.take() else {
-        return Err(ProcError::Other("child has no stdout pipe".to_string()));
+        return Err(ProcError::Other {
+            py_class: PyExc::RuntimeError,
+            message: "child has no stdout pipe".to_string(),
+        });
     };
     let Some(mut stderr_pipe) = child.stderr.take() else {
-        return Err(ProcError::Other("child has no stderr pipe".to_string()));
+        return Err(ProcError::Other {
+            py_class: PyExc::RuntimeError,
+            message: "child has no stderr pipe".to_string(),
+        });
     };
-    let stdout_task = tokio::spawn(async move {
+    let mut stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stdout_pipe.read_to_end(&mut buf).await;
         buf
     });
-    let stderr_task = tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stderr_pipe.read_to_end(&mut buf).await;
         buf
@@ -201,53 +295,101 @@ pub async fn run_tracked(
         .timeout
         .map(|timeout| tokio::time::Instant::now() + timeout);
 
-    let status = loop {
+    // The whole call's own wall-clock deadline covers waiting for the
+    // child to exit **and** for both pipes to reach EOF (review finding
+    // 2 on PR #467) -- a grandchild that keeps a pipe open after the
+    // tracked child itself has exited (`awk 'BEGIN{system("sleep 600
+    // &")}'`) must not make this call hang with no limit once
+    // `child.wait()` alone has returned. `child_status`/`stdout_bytes`/
+    // `stderr_bytes` each go from `None` to `Some` independently and
+    // never revert, so a `select!` branch already resolved is excluded
+    // from every later iteration's own `if` guard -- `child.wait()` and
+    // a `JoinHandle` are both safe to poll again on a fresh `select!`
+    // each loop iteration up until their own branch first fires.
+    let mut child_status: Option<std::process::ExitStatus> = None;
+    let mut stdout_bytes: Option<Vec<u8>> = None;
+    let mut stderr_bytes: Option<Vec<u8>> = None;
+
+    let timed_out = loop {
+        if child_status.is_some() && stdout_bytes.is_some() && stderr_bytes.is_some() {
+            break false;
+        }
         let remaining =
             deadline.map(|dl| dl.saturating_duration_since(tokio::time::Instant::now()));
-        if let Some(remaining) = remaining {
-            if remaining.is_zero() {
-                // The whole call's own wall-clock deadline, not a
-                // per-slice one -- kill the group, wait, then one more
-                // group kill (`_repeat_group_kill`) for a grandchild
-                // forked at the instant of the first kill.
-                if let Some(pid) = pid {
-                    kill_process_group(pid);
-                }
-                let _ = child.wait().await;
-                if let Some(pid) = pid {
-                    kill_process_group(pid);
-                }
-                stdout_task.abort();
-                stderr_task.abort();
-                let timeout_seconds = opts.timeout.map(|t| t.as_secs()).unwrap_or(0);
-                return Err(ProcError::Timeout {
-                    binary: program.clone(),
-                    timeout_seconds,
-                });
-            }
+        if remaining.is_some_and(|r| r.is_zero()) {
+            break true;
         }
         let sleep_for = remaining
             .map(|r| r.min(POLL_INTERVAL))
             .unwrap_or(POLL_INTERVAL);
         tokio::select! {
-            status = child.wait() => break status,
+            status = child.wait(), if child_status.is_none() => {
+                match status {
+                    Ok(status) => {
+                        child_status = Some(status);
+                        reaped.set(true);
+                    }
+                    Err(err) => {
+                        return Err(ProcError::Other {
+                            py_class: PyExc::RuntimeError,
+                            message: format!("wait failed: {err}"),
+                        });
+                    }
+                }
+            }
+            out = &mut stdout_task, if stdout_bytes.is_none() => {
+                stdout_bytes = Some(out.unwrap_or_default());
+            }
+            err = &mut stderr_task, if stderr_bytes.is_none() => {
+                stderr_bytes = Some(err.unwrap_or_default());
+            }
             () = tokio::time::sleep(sleep_for) => {
                 // While cancellation is set, keep repeating the group
                 // kill until the pipes reach EOF -- `_repeat_group_kill`
                 // closes the race window a fork right at the first
-                // `kill_process_group` call can slip through.
+                // `kill_process_group` call can slip through. Only ever
+                // targets *pgid* directly (never re-derives it from
+                // *pid*, and never fires at all when this run isn't
+                // isolated) -- see `repeat_group_kill`'s own doc comment.
                 if token.is_set() {
-                    if let Some(pid) = pid {
-                        kill_process_group(pid);
+                    if let Some(pgid) = pgid {
+                        repeat_group_kill(pgid);
                     }
                 }
             }
         }
     };
 
-    let status = status.map_err(|err| ProcError::Other(format!("wait failed: {err}")))?;
-    let stdout_bytes = stdout_task.await.unwrap_or_default();
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
+    if timed_out {
+        // The first kill, same as `core/cancellation.py::kill_process_group`
+        // itself: a no-op once the child (not necessarily the whole
+        // group) has already exited.
+        if let Some(pid) = pid {
+            kill_process_group(pid);
+        }
+        if child_status.is_none() && child.wait().await.is_ok() {
+            reaped.set(true);
+        }
+        // One more kill for a grandchild forked at the instant of the
+        // first one -- always against the remembered *pgid* directly
+        // (never re-derived via `getpgid(pid)`, which would already
+        // report ESRCH once *pid* itself has been reaped even though
+        // the grandchild, and so the group, is still alive).
+        if let Some(pgid) = pgid {
+            repeat_group_kill(pgid);
+        }
+        stdout_task.abort();
+        stderr_task.abort();
+        let timeout_seconds = opts.timeout.map(|t| t.as_secs()).unwrap_or(0);
+        return Err(ProcError::Timeout {
+            binary: program.clone(),
+            timeout_seconds,
+        });
+    }
+
+    let status = child_status.expect("loop only breaks `false` once child_status is Some");
+    let stdout_bytes = stdout_bytes.unwrap_or_default();
+    let stderr_bytes = stderr_bytes.unwrap_or_default();
     let stdout = decode_text(&stdout_bytes)?;
     let stderr = decode_text(&stderr_bytes)?;
 
@@ -389,6 +531,81 @@ pub fn kill_process_group(pid: u32) {
     }
 }
 
+/// `core/cancellation.py::_repeat_group_kill` -- a raw `killpg` on the
+/// remembered, already-isolated *pgid* (`pid == pgid`, since `setsid`
+/// made the child its own session/group leader) -- bypasses
+/// [`kill_process_group`]'s own `getpgid(pid)` precheck entirely,
+/// deliberately: once the group's own leader has been reaped, that
+/// lookup always reports ESRCH, even while a grandchild forked into the
+/// same, still-valid pgid keeps the whole group alive -- a pgid can
+/// never be reused while any member of it still lives, so repeating the
+/// exact same `killpg` call is always safe and never reaches a
+/// different, unrelated process.
+fn repeat_group_kill(pgid: u32) {
+    #[cfg(unix)]
+    {
+        // SAFETY: a plain libc `killpg` on a pgid this crate itself
+        // isolated at spawn time; errors (`ESRCH`/`EPERM`) are both
+        // ignored, same as `kill_process_group`'s own last call.
+        unsafe {
+            libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+    }
+}
+
+/// `OSError.__str__`'s own `[Errno {n}] {strerror}: {filename!r}` shape
+/// (or, with no `filename`, just `[Errno {n}] {strerror}`) -- for a
+/// `Command::spawn` failure other than `ErrorKind::NotFound` (that one
+/// is [`ProcError::NotFound`] already, matching Python's own
+/// `FileNotFoundError` special case in `plugins/_subprocess.py::
+/// run_binary`). *cwd* is reported as the failing path whenever the
+/// error itself says "not a directory" (a `cwd` naming a plain file);
+/// every other case blames *program*, the executable being spawned.
+fn describe_spawn_error(
+    err: &io::Error,
+    program: &str,
+    cwd: Option<&std::path::Path>,
+) -> (PyExc, String) {
+    let py_class = match err.kind() {
+        io::ErrorKind::PermissionDenied => PyExc::PermissionError,
+        io::ErrorKind::NotADirectory => PyExc::NotADirectoryError,
+        io::ErrorKind::IsADirectory => PyExc::IsADirectoryError,
+        _ => PyExc::OSError,
+    };
+    let filename = if err.kind() == io::ErrorKind::NotADirectory {
+        cwd.map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|| program.to_string())
+    } else {
+        program.to_string()
+    };
+    let strerror = strerror_text(err);
+    let message = match err.raw_os_error() {
+        Some(errno) => format!(
+            "[Errno {errno}] {strerror}: {}",
+            Value::Str(filename).py_repr()
+        ),
+        None => strerror,
+    };
+    (py_class, message)
+}
+
+/// `exc.strerror`: the bare OS error message, without Rust's own
+/// `io::Error::to_string()` " (os error N)" suffix -- the same small
+/// helper `electricity_config::config::strerror` carries under its own
+/// lane; this crate keeps its own copy rather than reaching across the
+/// lane boundary for it.
+fn strerror_text(err: &io::Error) -> String {
+    let text = err.to_string();
+    match text.rfind(" (os error ") {
+        Some(idx) if text.ends_with(')') => text[..idx].to_string(),
+        _ => text,
+    }
+}
+
 /// `plugins/_subprocess.py::resolve_binary` -- the first of *candidates*
 /// found on `PATH` (or an absolute path that exists), else `None`;
 /// never an error -- Python's own version takes a list because a
@@ -412,10 +629,18 @@ pub fn resolve_binary(candidates: &[&str]) -> Option<String> {
     None
 }
 
+/// `os.defpath` -- `shutil.which`'s own fallback `PATH` when the
+/// environment doesn't set one at all (distinct from an *empty*
+/// `PATH`, which stays empty: `os.environ.get("PATH", os.defpath)`
+/// only substitutes this on a missing key, never on a present-but-empty
+/// value).
+const DEFPATH: &str = "/bin:/usr/bin";
+
 /// `shutil.which`'s own POSIX semantics, as far as [`resolve_binary`]
 /// needs them: a name with a directory component is checked directly
-/// (no `PATH` search); otherwise every `PATH` entry is tried in order,
-/// requiring an existing, executable, non-directory file.
+/// (no `PATH` search); otherwise every `PATH` entry is tried in order
+/// (falling back to [`DEFPATH`] when the variable is unset), requiring
+/// an existing, executable, non-directory file.
 fn which(name: &str) -> Option<String> {
     let path = std::path::Path::new(name);
     if path
@@ -428,7 +653,7 @@ fn which(name: &str) -> Option<String> {
             None
         };
     }
-    let path_var = std::env::var_os("PATH")?;
+    let path_var = std::env::var_os("PATH").unwrap_or_else(|| std::ffi::OsString::from(DEFPATH));
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
         if is_executable_file(&candidate) {
@@ -438,13 +663,23 @@ fn which(name: &str) -> Option<String> {
     None
 }
 
+/// `shutil.which`'s own `_access_check`: exists, `os.access(path,
+/// os.X_OK)`, and not a directory -- `os.access` (review finding 7 on
+/// PR #467), not a manual permission-bit check: it asks the kernel
+/// directly, honouring ACLs/setuid/filesystem mount flags a plain
+/// `mode & 0o111` check can't see.
 fn is_executable_file(path: &std::path::Path) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+        use std::os::unix::ffi::OsStrExt;
+        if path.is_dir() {
+            return false;
+        }
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: a plain libc `access` syscall on a NUL-free path.
+        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
     }
     #[cfg(not(unix))]
     {
@@ -697,6 +932,116 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "must not wait anywhere near the full 10s deadline"
+        );
+    }
+
+    fn pgrep_matches(pattern: &str) -> bool {
+        std::process::Command::new("pgrep")
+            .args(["-f", pattern])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn a_timeout_kills_a_grandchild_that_keeps_the_pipe_open_after_the_tracked_child_exits()
+     {
+        // Review finding 2 on PR #467: `sh`'s own `sleep 8470 &` forks a
+        // grandchild that inherits the same stdout pipe and keeps it
+        // open well past `echo hi; exit 0` -- a pipe-drain phase with no
+        // deadline of its own would hang here, ignoring `timeout_ms`
+        // entirely (the issue's own `awk 'BEGIN{system("sleep ... &")}'`
+        // example, same shape).
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            timeout: Some(Duration::from_millis(300)),
+            new_session: true,
+            ..RunOpts::default()
+        };
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8470 & echo hi".to_string(),
+        ];
+        let started = tokio::time::Instant::now();
+        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        assert!(matches!(err, ProcError::Timeout { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the pipe-drain phase must share the same deadline as the \
+             child's own exit, not wait unboundedly for the grandchild"
+        );
+        // The repeat kill after the timeout's own `wait()` must reach
+        // the grandchild via the remembered *pgid* directly, not a
+        // `getpgid(pid)` lookup on a pid `sh` has already had reaped.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !pgrep_matches("sleep 8470"),
+            "a timed-out run must not leak the grandchild it forked"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unarmed_timeout_still_returns_promptly_even_with_a_surviving_grandchild() {
+        // The unarmed/non-isolated case has no pgid to repeat-kill
+        // (`_repeat_group_kill(None)` is a no-op in the Python
+        // reference too) -- the grandchild is allowed to survive, but
+        // this call must still return `Timeout` promptly rather than
+        // hanging on the pipe that grandchild keeps open.
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            timeout: Some(Duration::from_millis(300)),
+            ..RunOpts::default()
+        };
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8471 & echo hi".to_string(),
+        ];
+        let started = tokio::time::Instant::now();
+        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        assert!(matches!(err, ProcError::Timeout { .. }));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        // This test cleans up the leftover itself -- an unarmed run has
+        // no process-group isolation to clean it up with, by design.
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "sleep 8471"])
+            .status();
+    }
+
+    #[tokio::test]
+    async fn dropping_the_future_after_the_child_exits_still_kills_a_surviving_grandchild() {
+        // Review finding 2 on PR #467: by the time this future is
+        // dropped, `sh` itself has already exited and been reaped --
+        // the drop guard's own pid-based `kill_process_group` would be
+        // a no-op against a reaped pid, so it must fall back to the
+        // remembered *pgid* directly (`repeat_group_kill`) to still
+        // reach the grandchild.
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            new_session: true,
+            ..RunOpts::default()
+        };
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8472 & echo hi".to_string(),
+        ];
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token));
+        // `sh` itself (printing "hi" and exiting) finishes almost at
+        // once; this gives it ample time to exit and be reaped by this
+        // future's own wait loop before the drop below, while the
+        // grandchild it forked keeps sleeping.
+        tokio::select! {
+            _ = &mut fut => panic!("must not finish: the grandchild still holds the pipe open"),
+            () = tokio::time::sleep(Duration::from_millis(300)) => {}
+        }
+        drop(fut);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            !pgrep_matches("sleep 8472"),
+            "the drop guard must still kill a grandchild once the tracked \
+             child itself has already been reaped"
         );
     }
 
