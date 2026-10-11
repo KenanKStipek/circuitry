@@ -1,0 +1,42 @@
+[
+  {
+    "method": "GET",
+    "path": "/always-500",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  },
+  {
+    "method": "GET",
+    "path": "/always-500",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  }
+]

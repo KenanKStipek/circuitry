@@ -1,0 +1,14 @@
+- request:
+    method: GET
+    path: /always-500
+  response:
+    status: 500
+    reason: Internal Server Error
+    body: "boom"
+- request:
+    method: GET
+    path: /always-500
+  response:
+    status: 500
+    reason: Internal Server Error
+    body: "boom"

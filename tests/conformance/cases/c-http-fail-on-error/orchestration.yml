@@ -1,0 +1,19 @@
+name: c-http-fail-on-error
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: default_fails
+    on_error: continue
+    provider: http
+    params:
+      url: "{{input.base_url}}/always-500"
+  - type: tool
+    name: opted_out
+    provider: http
+    params:
+      url: "{{input.base_url}}/always-500"
+      fail_on_error: false
