@@ -1,0 +1,19 @@
+name: c8-each-chain-prev-and-collect
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '["a", "b", "c"]'}
+  - type: loop
+    name: refine
+    each: {in: "prime.seed.value", as: "item"}
+    collect: step
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params:
+          mode: stringify
+          input:
+            item: "{{item}}"
+            prev: "{{prime.refine.prev.step.value}}"

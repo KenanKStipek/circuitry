@@ -1,0 +1,6 @@
+{
+  "spec_case": "C9",
+  "description": "Named each loop, flow: tree, 4 items, max_concurrency: 2 (electricity/docs/spec/runtime-semantics.md): iter_0..3 all present with the correct per-item value, last == iter_3, order-independent of actual completion order; the dispatch event records branches=4, concurrency=2.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

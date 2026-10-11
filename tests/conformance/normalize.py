@@ -127,6 +127,13 @@ def _normalize_leaf(key: str, value: Any, *, field_path: str | None) -> Any:
             )
         return TIMESTAMP_PLACEHOLDER
     if kind == "duration":
+        # `meta.progress.eta_s` (electricity M1-H, #461) is legitimately
+        # `None` before the first pass completes or when `total` itself
+        # is unknown (an uncapped `while` loop) — `core/loop.py::
+        # _loop_progress`'s own contract, not a missing/malformed value
+        # to reject.
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise NormalizationError(f"{key!r}: expected a numeric duration, got {value!r}")
         if value < 0:
