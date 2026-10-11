@@ -473,8 +473,12 @@ pub async fn execute_tool(
             }
         }
 
-        // The per-attempt `meta` reset, in Python's own order.
-        set_leaf(store, &meta_node, "created_at", now_iso());
+        // The per-attempt `meta` reset, in Python's own order. `created_at`
+        // is set only on this pass's first attempt (#421): the start of a
+        // retried tool's final attempt is not when it started.
+        if attempt_index == 0 {
+            set_leaf(store, &meta_node, "created_at", now_iso());
+        }
         set_leaf(store, &meta_node, "completed_at", Value::None);
         set_leaf(
             store,
@@ -704,6 +708,16 @@ pub async fn execute_tool(
             if !is_last_attempt {
                 next_delay_ms = full_jitter_backoff_ms(attempt_index, base_backoff_ms);
                 continue;
+            }
+            // Set on failure too (#421), same as success below -- absent,
+            // not 0, when the first attempt is also the last.
+            if attempt_index > 0 {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "retries_used",
+                    Value::from(i64::from(attempt_index)),
+                );
             }
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
@@ -1243,7 +1257,10 @@ mod tests {
             expect_meta.get(&Value::from("result")),
             Some(&Value::Bool(false))
         );
-        assert!(!meta.contains_key(&Value::from("retries_used")));
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
     }
 
     #[tokio::test]

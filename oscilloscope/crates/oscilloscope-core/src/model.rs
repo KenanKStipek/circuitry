@@ -313,6 +313,12 @@ enum EventEnd {
 /// status still comes from `observe`'s own state-only rules.
 pub struct RunModel {
     last_created_at: BTreeMap<String, String>,
+    /// A path's own `created_at` the last time it was seen not running
+    /// with an error set -- a later running sighting with the *same*
+    /// `created_at` is this pass retrying (#421: created_at no longer
+    /// moves between a pass's own attempts, so `last_created_at`
+    /// changing while running can no longer catch this).
+    last_failed_created_at: BTreeMap<String, String>,
     dispatch: BTreeMap<String, DispatchInfo>,
     /// Open `start`s with an `id` (DESIGN.md §3: unique per effect
     /// *instance*), keyed by that id so an `end` with the same id pairs
@@ -332,6 +338,7 @@ impl RunModel {
     pub fn new() -> Self {
         RunModel {
             last_created_at: BTreeMap::new(),
+            last_failed_created_at: BTreeMap::new(),
             dispatch: BTreeMap::new(),
             open_by_id: BTreeMap::new(),
             open_unid: BTreeMap::new(),
@@ -543,16 +550,32 @@ impl RunModel {
 
         for (path, node) in &flat {
             let retrying = if node.is_running() {
-                match (self.last_created_at.get(path), &node.created_at) {
+                let moved = match (self.last_created_at.get(path), &node.created_at) {
                     (Some(prev), Some(now)) => prev != now,
                     _ => false,
-                }
+                };
+                let same_pass_retry =
+                    match (self.last_failed_created_at.get(path), &node.created_at) {
+                        (Some(failed_ca), Some(now)) => failed_ca == now,
+                        _ => false,
+                    };
+                moved || same_pass_retry
             } else {
                 false
             };
             if let Some(created_at) = &node.created_at {
                 self.last_created_at
                     .insert(path.clone(), created_at.clone());
+            }
+            if !node.is_running() {
+                if node.error.is_some() {
+                    if let Some(created_at) = &node.created_at {
+                        self.last_failed_created_at
+                            .insert(path.clone(), created_at.clone());
+                    }
+                } else {
+                    self.last_failed_created_at.remove(path);
+                }
             }
 
             let kind = if node.is_running() {
@@ -1184,6 +1207,32 @@ mod tests {
             "tool": {"value": null, "meta": {"created_at": "b", "completed_at": null}}
         }});
         let rows2 = model.observe(&second, &PlanTree::empty(), ProcessState::Running);
+        assert!(rows2["prime.tool"].retrying);
+    }
+
+    #[test]
+    fn retry_detected_from_a_same_created_at_restart_after_a_failure() {
+        // #421: created_at no longer moves between a pass's own
+        // attempts, so the signal is now completed_at going back to
+        // running (null) with created_at unchanged, not created_at
+        // itself moving (the case above, kept for whichever
+        // engine/version still moves it).
+        let mut model = RunModel::new();
+        let first = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": null, "meta": {"created_at": "a", "completed_at": null}}
+        }});
+        model.observe(&first, &PlanTree::empty(), ProcessState::Running);
+
+        let failed = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": null, "meta": {"created_at": "a", "completed_at": "b", "error": "boom"}}
+        }});
+        let rows = model.observe(&failed, &PlanTree::empty(), ProcessState::Running);
+        assert!(!rows["prime.tool"].retrying);
+
+        let retrying = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": null, "meta": {"created_at": "a", "completed_at": null}}
+        }});
+        let rows2 = model.observe(&retrying, &PlanTree::empty(), ProcessState::Running);
         assert!(rows2["prime.tool"].retrying);
     }
 

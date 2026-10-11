@@ -1049,7 +1049,8 @@
                 "mode": "cel",
                 "expr": "value == 2",
                 "result": false
-              }
+              },
+              "retries_used": 2
             }
           }
         }
@@ -1215,7 +1216,8 @@
                 "mode": "cel",
                 "expr": "value == 2",
                 "result": false
-              }
+              },
+              "retries_used": 2
             }
           }
         }
