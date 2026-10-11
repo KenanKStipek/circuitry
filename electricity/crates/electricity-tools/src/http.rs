@@ -620,35 +620,121 @@ fn default_port(scheme: &str) -> u16 {
     if scheme == "https" { 443 } else { 80 }
 }
 
-/// The port text, when *netloc* carries one that is syntactically
-/// numeric but outside `u16`'s range (`0..=65535`) -- [`split_netloc`]
-/// itself can't tell this apart from "no port at all" (its own
-/// `parse::<u16>().ok()` returns `None` either way), which would
-/// otherwise silently fall back to the scheme's own default port and
-/// actually open a TCP connection to a *different* port than the one
-/// written (probed directly: `http://127.0.0.1:99999/x` connecting to
-/// port 80). CPython never gets this far either -- `getaddrinfo`
-/// itself rejects the out-of-range numeric "service" before any
-/// packet goes out (`[Errno 8] nodename nor servname provided, or not
-/// known` on macOS) -- but that OS text isn't reproduced here (a
-/// documented divergence, DESIGN.md): no socket of any kind is ever
-/// opened for this case, which is the part that matters.
-fn out_of_range_port(netloc: &str) -> Option<String> {
+/// The port part of a netloc's host, the way
+/// `http.client.HTTPConnection._get_hostport` splits it: the text after
+/// the last `:`, but only when that `:` comes after any `]` (an IPv6
+/// literal's own colons are never a port separator).
+#[derive(Debug, PartialEq, Eq)]
+enum PortText<'a> {
+    /// No port separator at all: the scheme's default port.
+    Absent,
+    /// `host:` -- `_get_hostport` maps an empty port to the default port
+    /// too (`http://foo.com:/` == `http://foo.com/`).
+    Empty,
+    /// `host:<text>`, still to be read with `int()`.
+    Given(&'a str),
+}
+
+/// `(host, port text)` for *netloc* (userinfo dropped, see
+/// [`split_netloc`]), with the port separator and, for an IPv6 literal,
+/// the surrounding brackets removed -- `_get_hostport`'s own split.
+fn split_hostport(netloc: &str) -> (&str, PortText<'_>) {
     let hostinfo = match netloc.rfind('@') {
         Some(idx) => &netloc[idx + 1..],
         None => netloc,
     };
-    let port_str = if let Some(rest) = hostinfo.strip_prefix('[') {
-        rest.split_once(']')
-            .and_then(|(_, after)| after.strip_prefix(':'))
-    } else {
-        hostinfo.rsplit_once(':').map(|(_, p)| p)
+    let (host, port) = match (hostinfo.rfind(':'), hostinfo.rfind(']')) {
+        (Some(colon), bracket) if bracket.is_none_or(|b| colon > b) => {
+            let text = &hostinfo[colon + 1..];
+            let port = if text.is_empty() {
+                PortText::Empty
+            } else {
+                PortText::Given(text)
+            };
+            (&hostinfo[..colon], port)
+        }
+        _ => (hostinfo, PortText::Absent),
     };
-    port_str
-        .filter(|p| {
-            !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_err()
-        })
-        .map(str::to_string)
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    (host, port)
+}
+
+/// `int(text)` for a port, as `_get_hostport` reads it: CPython's own
+/// base-10 `int()` of a `str` -- surrounding whitespace, one optional
+/// sign, ASCII digits with PEP 515 single underscores between digits
+/// (`+80` and `8_0` are both port 80). `None` where `int()` raises
+/// `ValueError`. Non-ASCII decimal digits, which `int()` also accepts,
+/// count as non-numeric here (documented in DESIGN.md).
+fn py_int_port(text: &str) -> Option<i128> {
+    let s = py_strip(text);
+    let (negative, digits) = match s.as_bytes().first() {
+        Some(b'+') => (false, &s[1..]),
+        Some(b'-') => (true, &s[1..]),
+        _ => (false, s),
+    };
+    let bytes = digits.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut value: i128 = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'_' {
+            let between_digits = i > 0
+                && i + 1 < bytes.len()
+                && bytes[i - 1].is_ascii_digit()
+                && bytes[i + 1].is_ascii_digit();
+            if !between_digits {
+                return None;
+            }
+            continue;
+        }
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value
+            .saturating_mul(10)
+            .saturating_add(i128::from(b - b'0'));
+    }
+    Some(if negative { -value } else { value })
+}
+
+/// The request's `(host, port)`, or the error `cof` raises for the port:
+/// `InvalidURL: nonnumeric port: '<text>'` (bare, before any I/O, as
+/// `http.client` raises it outside urllib's `URLError` wrapping), or,
+/// for a number outside `0..=65535`, electricity's own wrapped
+/// "port out of range" text (CPython only fails later, in
+/// `getaddrinfo`, with OS-specific text; documented in DESIGN.md). Either
+/// way no socket is opened, so a bad port never falls back to the
+/// scheme's default port.
+fn request_host_port(
+    netloc: &str,
+    scheme: &str,
+    original_url: &str,
+) -> Result<(String, u16), ToolError> {
+    let (host, port_text) = split_hostport(netloc);
+    let port = match port_text {
+        PortText::Absent | PortText::Empty => default_port(scheme),
+        PortText::Given(text) => match py_int_port(text) {
+            None => {
+                return Err(ToolError {
+                    py_class: PyExc::InvalidURL,
+                    message: format!("nonnumeric port: '{text}'"),
+                    cause: ErrorCause::None,
+                });
+            }
+            Some(value) => u16::try_from(value).map_err(|_| ToolError {
+                py_class: PyExc::RuntimeError,
+                message: format!(
+                    "HTTP request to {original_url} failed: port out of range 0-65535: {text}"
+                ),
+                cause: ErrorCause::NoReply,
+            })?,
+        },
+    };
+    Ok((host.to_string(), port))
 }
 
 /// A header value's own latin-1 encodability -- `http.client`'s own
@@ -1144,17 +1230,7 @@ impl ToolPlugin for HttpPlugin {
             } else {
                 Scheme::Http
             };
-            if let Some(bad_port) = out_of_range_port(&split.netloc) {
-                return Err(ToolError {
-                    py_class: PyExc::RuntimeError,
-                    message: format!(
-                        "HTTP request to {original_url} failed: port out of range 0-65535: {bad_port}"
-                    ),
-                    cause: ErrorCause::NoReply,
-                });
-            }
-            let (host, parsed_port) = split_netloc(&split.netloc);
-            let port = parsed_port.unwrap_or_else(|| default_port(&split.scheme));
+            let (host, port) = request_host_port(&split.netloc, &split.scheme, &original_url)?;
             let proxy = resolve_proxy_target(&split.scheme, &split.netloc);
 
             let mut target = split.path.clone();
@@ -1489,6 +1565,80 @@ mod proxy_parse_tests {
     fn netloc_host_as_written_keeps_ipv6_brackets() {
         assert_eq!(netloc_host_as_written("[::1]:8080"), "[::1]:8080");
         assert_eq!(netloc_host_as_written("[::1]"), "[::1]");
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn split_hostport_follows_get_hostport() {
+        assert_eq!(split_hostport("h"), ("h", PortText::Absent));
+        assert_eq!(split_hostport("h:"), ("h", PortText::Empty));
+        assert_eq!(split_hostport("h:80"), ("h", PortText::Given("80")));
+        assert_eq!(split_hostport("u:p@h:abc"), ("h", PortText::Given("abc")));
+        assert_eq!(split_hostport("[::1]"), ("::1", PortText::Absent));
+        assert_eq!(split_hostport("[::1]:"), ("::1", PortText::Empty));
+        assert_eq!(split_hostport("[::1]:abc"), ("::1", PortText::Given("abc")));
+    }
+
+    #[test]
+    fn py_int_port_reads_a_port_the_way_cpython_int_does() {
+        assert_eq!(py_int_port("80"), Some(80));
+        assert_eq!(py_int_port("+9"), Some(9));
+        assert_eq!(py_int_port("-1"), Some(-1));
+        assert_eq!(py_int_port("0_9"), Some(9));
+        assert_eq!(py_int_port("99999"), Some(99999));
+        for bad in [
+            "abc",
+            "_9",
+            "9_",
+            "9__0",
+            "+",
+            "-",
+            "8o",
+            "+-1",
+            "\u{0668}\u{0660}",
+        ] {
+            assert_eq!(py_int_port(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn request_host_port_matches_cof_for_each_port_shape() {
+        let url = "http://x/";
+        assert_eq!(
+            request_host_port("h", "http", url).unwrap(),
+            ("h".to_string(), 80)
+        );
+        assert_eq!(
+            request_host_port("h:", "https", url).unwrap(),
+            ("h".to_string(), 443)
+        );
+        assert_eq!(
+            request_host_port("h:+9", "http", url).unwrap(),
+            ("h".to_string(), 9)
+        );
+        assert_eq!(
+            request_host_port("[::1]:8_0", "http", url).unwrap(),
+            ("::1".to_string(), 80)
+        );
+        let err = request_host_port("h:abc", "http", url).unwrap_err();
+        assert_eq!(err.py_class, PyExc::InvalidURL);
+        assert_eq!(err.message, "nonnumeric port: 'abc'");
+        assert_eq!(err.cause, ErrorCause::None);
+        let err = request_host_port("[::1]:abc", "http", url).unwrap_err();
+        assert_eq!(err.message, "nonnumeric port: 'abc'");
+        for (netloc, text) in [("h:99999", "99999"), ("h:-1", "-1")] {
+            let err = request_host_port(netloc, "http", url).unwrap_err();
+            assert_eq!(err.py_class, PyExc::RuntimeError);
+            assert_eq!(
+                err.message,
+                format!("HTTP request to {url} failed: port out of range 0-65535: {text}")
+            );
+            assert_eq!(err.cause, ErrorCause::NoReply);
+        }
     }
 }
 
