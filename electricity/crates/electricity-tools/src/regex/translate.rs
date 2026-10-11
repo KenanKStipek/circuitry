@@ -718,12 +718,16 @@ impl Translator {
             {
                 i += 1;
             }
-            if i == name_start || self.chars.get(i) != Some(&'>') {
+            let name: String = self.chars[name_start..i].iter().collect();
+            let starts_like_identifier = name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_');
+            if i == name_start || !starts_like_identifier || self.chars.get(i) != Some(&'>') {
                 return Err(format!(
                     "bad character in group name at position {name_start}"
                 ));
             }
-            let name: String = self.chars[name_start..i].iter().collect();
             self.group_count += 1;
             let number = self.group_count;
             self.group_names.insert(name, number);

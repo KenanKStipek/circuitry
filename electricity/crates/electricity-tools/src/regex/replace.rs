@@ -13,6 +13,7 @@
 //! every other `re.error`-shaped text in this module, it's compared by
 //! *location*, never byte for byte.
 
+use electricity_value::Value;
 use std::collections::HashMap;
 
 /// One piece of a parsed replacement template.
@@ -112,8 +113,12 @@ pub fn parse_template(
                     .is_some_and(|c| c.is_alphabetic() || c == '_')
                     && name.chars().all(|c| c.is_alphanumeric() || c == '_');
                 let index = if is_identifier && name.parse::<i64>().is_err() {
+                    // CPython raises a bare `IndexError` here (not
+                    // `re.error`), with no position in the text --
+                    // confirmed directly; exact-matched, never
+                    // location-compared (module doc comment).
                     *group_names.get(&name).ok_or_else(|| {
-                        format!("unknown group name {name:?} at position {name_start}")
+                        format!("unknown group name {}", Value::Str(name.clone()).py_repr())
                     })?
                 } else {
                     let parsed: i64 = name.parse().map_err(|_| {
