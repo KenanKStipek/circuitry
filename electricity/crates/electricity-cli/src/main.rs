@@ -748,9 +748,49 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     exit_code_for(&result)
 }
 
+/// Issue #478's own exit-path wiring: no document can make a
+/// `scripted` adapter load until lane G flips `prompt`, so `tests/
+/// leftover_export.rs` has no other way to exercise
+/// `electricity::write_leftover_export`'s own real call site end to
+/// end. When `test-tools` is enabled (never in a plain build) and
+/// `ELECTRICITY_TEST_SCRIPTED_REGISTER_REPLIES_FILE` names a replies
+/// file, this builds a real `scripted` adapter over it and calls
+/// `check()` -- the same lazy-load-then-register path `generate()`
+/// takes (`ScriptedAdapter::ensure_loaded`), registering a full,
+/// untouched instance for the leftover-replies export before anything
+/// else in this process runs. A malformed replies file, or one this
+/// process can't read, is silently skipped -- this hook exists only to
+/// drive the export's own wiring, never to make the run itself fail on
+/// a test fixture's own mistake.
+#[cfg(feature = "test-tools")]
+fn register_test_only_scripted_adapter() {
+    const VAR: &str = "ELECTRICITY_TEST_SCRIPTED_REGISTER_REPLIES_FILE";
+    let Some(replies_file) = std::env::var_os(VAR) else {
+        return;
+    };
+    let mut cfg = electricity_value::Dict::new();
+    cfg.insert(
+        electricity_value::Value::Str("replies_file".to_string()),
+        electricity_value::Value::Str(replies_file.to_string_lossy().into_owned()),
+    );
+    let Ok(adapter) =
+        electricity_adapters::scripted::build_scripted(&electricity_value::Value::Dict(cfg))
+    else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a tiny current-thread runtime for this test-only check() call");
+    runtime.block_on(adapter.check());
+}
+
+#[cfg(not(feature = "test-tools"))]
+fn register_test_only_scripted_adapter() {}
+
 fn main() -> ExitCode {
     install_secret_safe_panic_hook();
     install_warning_logger();
+    register_test_only_scripted_adapter();
     // `args_os` + lossy conversion instead of `args()`, which panics on a
     // non-UTF-8 argument.
     let args: Vec<String> = std::env::args_os()
@@ -776,7 +816,7 @@ fn main() -> ExitCode {
     if !matches!(action, Action::Version | Action::Help) {
         user_env::load_user_env();
     }
-    match action {
+    let exit_code = match action {
         Action::Version => {
             write_stdout(&format!("{}\n", electricity::version_string()));
             ExitCode::SUCCESS
@@ -787,25 +827,24 @@ fn main() -> ExitCode {
         }
         Action::Run(run_args) => run_action(run_args),
         Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
-            let inputs = match electricity::parse_inputs(&raw_inputs) {
-                Ok(inputs) => inputs,
+            match electricity::parse_inputs(&raw_inputs) {
+                Ok(inputs) => match electricity::dump_ir(
+                    Path::new(&config_path),
+                    Path::new(&orchestration_path),
+                    &inputs,
+                ) {
+                    Ok(json) => {
+                        write_stdout(&format!("{json}\n"));
+                        ExitCode::SUCCESS
+                    }
+                    Err(message) => {
+                        write_stderr(&format!("{message}\n"));
+                        ExitCode::from(1)
+                    }
+                },
                 Err(message) => {
                     write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
-                    return ExitCode::from(2);
-                }
-            };
-            match electricity::dump_ir(
-                Path::new(&config_path),
-                Path::new(&orchestration_path),
-                &inputs,
-            ) {
-                Ok(json) => {
-                    write_stdout(&format!("{json}\n"));
-                    ExitCode::SUCCESS
-                }
-                Err(message) => {
-                    write_stderr(&format!("{message}\n"));
-                    ExitCode::from(1)
+                    ExitCode::from(2)
                 }
             }
         }
@@ -813,7 +852,21 @@ fn main() -> ExitCode {
             write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
             ExitCode::from(2)
         }
-    }
+    };
+    // The leftover-replies export (electricity/docs/spec/scripted-
+    // replies.md §7, issue #478): Circuitry's own `atexit` hook runs
+    // on every normal interpreter exit -- 0, 1, 2, and the *first*
+    // signal's own handled exit (`cli/interrupts.py`'s cooperative
+    // cancellation, which still reaches `sys.exit`) -- but never on a
+    // *second* SIGINT/SIGTERM's `os._exit`, which skips `atexit`
+    // entirely. This one call site covers the same set: every path
+    // through `main` ends up here (including every signal exit
+    // `run_action` itself returns for, via `exit_code_for`), while a
+    // second signal's own hard exit
+    // (`arm_signals`'s own `std::process::exit` call) never reaches
+    // this function at all.
+    electricity::write_leftover_export();
+    exit_code
 }
 
 #[cfg(test)]

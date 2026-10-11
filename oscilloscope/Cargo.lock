@@ -669,8 +669,10 @@ name = "electricity-adapters"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "electricity-json",
  "electricity-value",
  "electricity-vm",
+ "electricity-yaml",
 ]
 
 [[package]]
