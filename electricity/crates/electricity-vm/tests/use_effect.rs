@@ -490,16 +490,16 @@ async fn use_inside_a_tree_dynamic_has_no_false_cycle_between_sibling_branches()
     }
 }
 
-/// Review finding 3 on PR #472 / orchestrator ruling R1: a `use`
-/// child's own tree `dynamic` dispatch event is never namespaced
-/// under the use node (`ChildObserver::dispatch`'s own
-/// `unnamespace`), matching `core/use.py`'s own unnamespaced
-/// `Store.concurrent_dispatch`. Also a Rust test, not a conformance
+/// #483: a `use` child's own tree `dynamic` dispatch event carries
+/// the same absolute path its own start/end events use, namespaced
+/// under the use node like every other child effect (this test used
+/// to pin the opposite, unnamespaced behaviour per a now-superseded
+/// review finding 3 on PR #472). Also a Rust test, not a conformance
 /// case, for the same `known_divergence` single-location reason as
 /// the sibling test above (the child's own dynamic container also
 /// picks up the use-triggered real-adapter heuristic).
 #[tokio::test]
-async fn use_child_containing_a_tree_dynamic_dispatch_is_not_namespaced_under_the_use_node() {
+async fn use_child_containing_a_tree_dynamic_dispatch_is_namespaced_under_the_use_node() {
     let inline_yaml = "\
 effects:
   - type: dynamic
@@ -528,15 +528,16 @@ effects:
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.fan")),
-        "the child's own dispatch event must carry its own unnamespaced path, not \
+            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.step.fan")),
+        "the child's dispatch event must carry the same path its start/end events use, \
          prime.step.fan: {events:?}"
     );
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.step.fan")),
-        "the child's own dispatch event must never be namespaced under the use node: {events:?}"
+            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.fan")),
+        "the child's dispatch event must never carry its own unnamespaced prime.<loop> path: \
+         {events:?}"
     );
 }
 
