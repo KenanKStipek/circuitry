@@ -649,7 +649,7 @@ fn finish_run(
     for line in stderr_rx.try_iter() {
         print_line(out, clock, None, &format!("engine: {line}"));
     }
-    let (lines, final_state) = drain_until_ended(
+    let (lines, final_state, _) = drain_until_ended(
         &spec.out_path(),
         live_poller,
         events_tailer,
@@ -1094,7 +1094,7 @@ fn run_tui(
                 // final read `finish_run` takes, so this loop's own
                 // post-exit screen can't show the run `aborted` with
                 // every write already sitting on disk.
-                let (lines, state) = drain_until_ended(
+                let (lines, out_state, last_live) = drain_until_ended(
                     &spec.out_path(),
                     &mut live_poller,
                     &mut events_tailer,
@@ -1108,7 +1108,7 @@ fn run_tui(
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
                 }
-                if let Some(state) = state {
+                if let Some(state) = out_state.or(last_live) {
                     current_state = Some(state);
                 }
                 dirty = true;
@@ -1323,6 +1323,17 @@ fn drain_observations(
 /// `aborted` with the engine already gone; calling this the moment
 /// each caller first observes the run has ended closes that gap for
 /// every one of them, through the one read they all now share.
+///
+/// Also returns the last live-state snapshot the drain loop itself
+/// polled, separately from `out_path`'s own read: `LiveStatePoller::
+/// poll` only reports a snapshot once, the first time it sees it
+/// change, so a caller that only kept the diff lines and dropped the
+/// snapshot could never get it back if `out_path` then turned out to
+/// have nothing to read (`osp watch` on a target with no sibling
+/// `state.json`, DESIGN.md Q5) — `finish_run`/`finish_watch` still
+/// read only `out_path`'s own return value, exactly as before; only
+/// the TUI loops that can outlive that file's absence fall back to
+/// this one.
 fn drain_until_ended(
     out_path: &Path,
     live_poller: &mut LiveStatePoller,
@@ -1333,12 +1344,18 @@ fn drain_until_ended(
 ) -> (
     Vec<oscilloscope_core::diff::LogLine>,
     Option<serde_json::Value>,
+    Option<serde_json::Value>,
 ) {
     let mut lines = Vec::new();
+    let mut last_live = None;
     loop {
-        let (tick_lines, _) = observe_tick(live_poller, events_tailer, differ, model, plan);
+        let (tick_lines, live_state) =
+            observe_tick(live_poller, events_tailer, differ, model, plan);
         if tick_lines.is_empty() {
             break;
+        }
+        if live_state.is_some() {
+            last_live = live_state;
         }
         lines.extend(tick_lines);
     }
@@ -1348,7 +1365,7 @@ fn drain_until_ended(
     if let Some(state) = &final_state {
         lines.extend(differ.diff(state, plan));
     }
-    (lines, final_state)
+    (lines, final_state, last_live)
 }
 
 /// `do_watch`'s own plain stop-condition loop, shared with `run_tui_
@@ -1706,7 +1723,7 @@ fn run_tui_watch(
                 // loop's own post-exit screen can't show a dead-pid
                 // or events-only ending as `aborted` with every write
                 // already sitting on disk.
-                let (more_lines, state) = drain_until_ended(
+                let (more_lines, out_state, last_live) = drain_until_ended(
                     &run_dir.join("state.json"),
                     &mut live_poller,
                     &mut events_tailer,
@@ -1720,7 +1737,7 @@ fn run_tui_watch(
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
                 }
-                if let Some(state) = state {
+                if let Some(state) = out_state.or(last_live) {
                     last_state = Some(state);
                 }
                 dirty = true;
@@ -1899,11 +1916,16 @@ fn finish_watch(
     // #494: the same shared final drain every path that reaches a
     // run's end takes, before the one authoritative read every
     // ending (osp run's `finish_run` included) takes from its own
-    // `--out`/`state.json` -- by this point the run has already been
-    // judged ended by one of `run_tui_watch`/`supervise_plain_watch`'s
-    // three stop conditions, so draining until a pass yields nothing
-    // new can't spin on a still-writing engine.
-    let (lines, final_state) = drain_until_ended(
+    // `--out`/`state.json`. By this point the run is either already
+    // ended, by one of `run_tui_watch`/`supervise_plain_watch`'s three
+    // stop conditions, or `local_signal` is set (a local Ctrl-C, or an
+    // INT/TERM/HUP forwarded to `osp watch` itself) and the watched
+    // run may still be live -- but there's no spin risk either way:
+    // one tailer poll reads whatever's on disk to EOF, so the loop
+    // always ends on its first quiet pass, whether that's because the
+    // engine has nothing left to say or because it's still running
+    // and simply hasn't written anything new yet.
+    let (lines, final_state, _) = drain_until_ended(
         &run_dir.join("state.json"),
         live_poller,
         events_tailer,
@@ -2307,7 +2329,7 @@ mod tests {
             run_dir: dir.path().to_path_buf(),
         };
 
-        let (_lines, final_state) = drain_until_ended(
+        let (_lines, final_state, _) = drain_until_ended(
             &spec.out_path(),
             &mut live_poller,
             &mut events_tailer,
@@ -2378,7 +2400,7 @@ mod tests {
             run_dir: dir.path().to_path_buf(),
         };
 
-        let (_lines, final_state) = drain_until_ended(
+        let (lines, final_state, _) = drain_until_ended(
             &spec.out_path(),
             &mut live_poller,
             &mut events_tailer,
@@ -2387,6 +2409,15 @@ mod tests {
             &plan,
         );
         let state = final_state.expect("drain_until_ended should read the final --out write");
+
+        // Review finding 3 (PR #496): the drain's own diff lines must
+        // carry the failure, not just the fixture this test wrote by
+        // hand straight into `state.json` -- a check against that
+        // fixture alone would pass even with no drain at all.
+        assert!(
+            lines.iter().any(|l| l.text.contains("boom failed")),
+            "{lines:?}"
+        );
 
         let render_state = oscilloscope_core::render::build(
             "do.yml",
@@ -2405,10 +2436,81 @@ mod tests {
         );
         assert_eq!(render_state.header.status, RunStatus::Failed);
         assert_eq!(render_state.header.effects_done, 1);
-        assert_eq!(
-            oscilloscope_core::model::run_error(&state).as_deref(),
-            Some("boom: boom failed")
+
+        let details = oscilloscope_core::render::details_for("prime.boom", &plan, Some(&state));
+        assert_eq!(details.error.as_deref(), Some("boom failed"));
+    }
+
+    #[test]
+    fn drain_until_ended_falls_back_to_the_live_snapshot_it_polled_when_out_path_has_nothing() {
+        // Review finding 1 on PR #496: `osp watch <dir | live.json>`
+        // (DESIGN.md Q5) can point at a run osp didn't start, where
+        // `out_path` (`run_dir.join("state.json")`) is never written
+        // at all -- `drain_until_ended` must still surface the final
+        // live write its own loop just polled, rather than discarding
+        // it the moment the loop ends, which is what left a run like
+        // this stuck showing `aborted` forever.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = PlanTree::empty();
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+
+        let (lines, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
         );
+        assert!(lines.is_empty());
+        assert!(state.is_none());
+
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n\
+             {\"v\":1,\"seq\":1,\"ts\":\"t\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n\
+             {\"v\":1,\"seq\":2,\"ts\":\"t\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.hello\",\"ok\":true,\"ms\":1}\n\
+             {\"v\":1,\"seq\":3,\"ts\":\"t\",\"ev\":\"run_end\",\"ok\":true}\n",
+        )
+        .unwrap();
+        // Only `state.live.json` is ever written -- no `state.json`
+        // sibling, exactly the case `out_path` can't read.
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            r#"{"runtime":{"last_run":{"completed_at":"t","totals":{"wall_time_s":0.01}}},"prime":{"value":true,"meta":{"completed_at":"t","error":null},"hello":{"value":"hi\n","meta":{"completed_at":"t","error":null,"exit_code":0,"provider":"shell"}}}}"#,
+        )
+        .unwrap();
+
+        let (_lines, out_state, last_live) = drain_until_ended(
+            &dir.path().join("state.json"),
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        assert!(out_state.is_none(), "no state.json exists for this run");
+        let state = last_live.expect("the drain should have kept its own polled live snapshot");
+
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "electricity",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: false,
+                has_failure_reason: false,
+            },
+            0.1,
+            "2024-01-01T00:00:00Z",
+            &[],
+        );
+        assert_eq!(render_state.header.status, RunStatus::Ok);
+        assert_eq!(render_state.header.effects_done, 1);
     }
 
     #[test]

@@ -83,6 +83,19 @@ fn open_pty() -> (File, PathBuf) {
         // before osp ever wrote a single byte. Leaking this one fd
         // for the rest of the test binary's own short life keeps the
         // slave's own open count never reaching zero in between.
+        //
+        // Review finding 5 on PR #496: the cost of that is paid by
+        // every test in this file, not just this one -- this leaked
+        // fd stays open for the whole binary's life, so the real
+        // slave fds `spawn_osp_on_pty` opens next are never the last
+        // ones left, and `master` (this pty's own read side) can
+        // never see a real EOF once osp's own three close on exit.
+        // `drain_continuously`'s loop below only ever stops reading
+        // because its read errors (the master itself closing when
+        // this function's own `File` drops at the end of a test),
+        // never because the pipe quietly ran dry -- no test here can
+        // be written the other way, waiting on `master` for EOF to
+        // know osp is done, while this leak stands.
         std::mem::forget(slave);
     }
 
@@ -863,10 +876,18 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         !rendered.contains("aborted"),
         "the TUI showed the finished run as aborted instead of failed; got:\n{rendered:?}"
     );
-    // The header's own status span (`Color::Red` for `RunStatus::
-    // Failed`), the same specific check the ok test above makes.
+    // The header's own status span starts a fresh styled run right
+    // at the word `failed` -- an SGR sequence (ending `m`) directly
+    // followed by the literal text, rather than every other place
+    // `failed` appears in this buffer (the plan/log rows and the
+    // error text print it mid-line, after a cursor-position escape
+    // or a plain space, never straight out of an `m`). Checking for
+    // that shape, rather than crossterm's own exact SGR encoding for
+    // `Color::Red` (review finding 3 on PR #496), survives a
+    // dependency bump that changes how a color is encoded without
+    // losing what this assertion is actually for.
     assert!(
-        rendered.contains("\u{1b}[38;5;1;49mfailed"),
+        rendered.contains("mfailed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
 
