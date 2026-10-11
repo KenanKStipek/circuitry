@@ -608,7 +608,17 @@ pub fn seeded_input_namespace<'a>(
 /// out so [`build_input_namespace_best_effort`] can run the same
 /// mutations and simply stop where this would have raised, instead of
 /// losing every key it already touched.
-fn apply_declared_inputs(
+///
+/// Public (M1 lane I, issue #469): a `use` effect's own `interface.
+/// inputs` check (`core/use.py::_check_interface`'s own
+/// `check_interface_inputs(interface, rendered_inputs, label=...)`
+/// call) is this exact same mutation -- default-fill/require/coerce
+/// against a *rendered* inputs namespace that is not the CLI `-e`
+/// text-only namespace [`build_input_namespace`]'s own preamble
+/// ([`seeded_input_namespace`]) builds, so lane I calls this function
+/// directly on a `use` child's already-rendered inputs rather than
+/// duplicating its default/require/coerce logic a second time.
+pub fn apply_declared_inputs(
     namespace: &mut IndexMap<Value, Value>,
     iface_inputs: &Dict,
 ) -> Result<(), String> {

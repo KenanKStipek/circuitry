@@ -1,0 +1,5 @@
+name: use-child-tree-constructs-dispatch
+effects:
+  - type: use
+    name: wrapper
+    path: child.yml

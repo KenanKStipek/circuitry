@@ -1,0 +1,17 @@
+name: c16-use-inline-quirk-q3
+interface:
+  inputs:
+    v:
+      type: string
+      default: "Y"
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: tool
+          name: step
+          provider: json
+          params: {mode: stringify, input: "{{input.v}}"}
+    inputs:
+      v: "X"

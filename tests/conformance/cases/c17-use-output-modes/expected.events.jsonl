@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-10-11T11:00:13.497Z","ev":"run_start","run_id":"b148c4fa-e9d8-4f12-a682-647288daf191","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":78748}
+{"v":1,"seq":1,"ts":"2026-10-11T11:00:13.501Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T11:00:13.501Z","ev":"start","id":1,"path":"prime.explicit"}
+{"v":1,"seq":3,"ts":"2026-10-11T11:00:13.502Z","ev":"start","id":2,"path":"prime.explicit.inner"}
+{"v":1,"seq":4,"ts":"2026-10-11T11:00:13.502Z","ev":"end","id":2,"path":"prime.explicit.inner","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-11T11:00:13.502Z","ev":"end","id":1,"path":"prime.explicit","ok":true,"ms":2}
+{"v":1,"seq":6,"ts":"2026-10-11T11:00:13.503Z","ev":"start","id":3,"path":"prime.auto"}
+{"v":1,"seq":7,"ts":"2026-10-11T11:00:13.504Z","ev":"start","id":4,"path":"prime.auto.inner"}
+{"v":1,"seq":8,"ts":"2026-10-11T11:00:13.504Z","ev":"end","id":4,"path":"prime.auto.inner","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-11T11:00:13.504Z","ev":"end","id":3,"path":"prime.auto","ok":true,"ms":2}
+{"v":1,"seq":10,"ts":"2026-10-11T11:00:13.504Z","ev":"start","id":5,"path":"prime.full_namespace"}
+{"v":1,"seq":11,"ts":"2026-10-11T11:00:13.506Z","ev":"start","id":6,"path":"prime.full_namespace.inner"}
+{"v":1,"seq":12,"ts":"2026-10-11T11:00:13.506Z","ev":"end","id":6,"path":"prime.full_namespace.inner","ok":true,"ms":0}
+{"v":1,"seq":13,"ts":"2026-10-11T11:00:13.506Z","ev":"end","id":5,"path":"prime.full_namespace","ok":true,"ms":2}
+{"v":1,"seq":14,"ts":"2026-10-11T11:00:13.506Z","ev":"end","id":0,"path":"prime","ok":true,"ms":6}
+{"v":1,"seq":15,"ts":"2026-10-11T11:00:13.506Z","ev":"run_end","ok":true}

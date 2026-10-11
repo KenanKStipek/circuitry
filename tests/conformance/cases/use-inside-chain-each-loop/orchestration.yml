@@ -1,0 +1,19 @@
+name: use-inside-chain-each-loop
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '["Ada", "Grace"]'}
+  - type: loop
+    name: shots
+    flow: chain
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: use
+        name: child
+        path: child.yml
+        inputs:
+          name: "{{item}}"
+        outputs:
+          greeting:
+            path: prime.step.value

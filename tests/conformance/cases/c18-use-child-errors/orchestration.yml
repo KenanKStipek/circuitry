@@ -1,0 +1,11 @@
+name: c18-use-child-errors
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: tool
+          name: broken
+          provider: json
+          on_error: skip
+          params: {mode: parse, input: "not json"}

@@ -260,8 +260,8 @@ impl<'a> Supported<'a> {
             prompt: false,
             // lane H (#448)
             loop_: true,
-            // lane I (#448)
-            use_: false,
+            // lane I (#448, #469)
+            use_: true,
             // lane P (#448)
             yield_: false,
             // lane L1 (#448)
@@ -542,7 +542,10 @@ mod tests {
         assert_eq!(current.prompt, m0.prompt);
         assert!(current.loop_);
         assert!(!m0.loop_);
-        assert_eq!(current.use_, m0.use_);
+        // lane I (#448, #469): `use_` is `true` now -- asserted
+        // directly rather than against `m0.use_` (always `false`),
+        // the one field this lane's own PR flips.
+        assert!(current.use_);
         assert_eq!(current.yield_, m0.yield_);
         assert_eq!(current.reflector, m0.reflector);
         assert_eq!(current.model_condition, m0.model_condition);

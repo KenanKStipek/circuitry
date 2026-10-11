@@ -1,0 +1,13 @@
+effects:
+  - type: use
+    name: always_fails
+    on_error: continue
+    retries:
+      max_attempts: 2
+      backoff_ms: 0
+    inline: |
+      effects:
+        - type: tool
+          name: step
+          provider: json
+          params: {mode: parse, input: "not json"}

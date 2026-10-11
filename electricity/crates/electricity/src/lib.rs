@@ -232,6 +232,62 @@ fn persistence_is_configured(runtime: Option<&Value>) -> bool {
     electricity_config::persistence_enabled(runtime)
 }
 
+/// `cli/runtime_shim.py::_has_prompt_effects`, ported over a compiled
+/// [`electricity_bytecode::Program`]'s own root [`electricity_bytecode::Op`]
+/// instead of a raw `*Definition` tree -- orchestrator P1 (reachable
+/// now that `use` runs): a document containing one of these needs the
+/// *real* `effective.adapter`/`effective.model` names (`runtime.
+/// effective_settings` and every container's own `meta.adapter`), not
+/// the `_noop` sentinel every other document gets, even though M0-H
+/// still refuses every one of these capabilities before ever building
+/// a real adapter object -- a `use` child's own content is never
+/// walked (Python's own check is conservative: *any* `use` effect
+/// counts, since its content might not even exist yet at this point --
+/// an inline child renders at run time). A disabled effect (`enabled:
+/// false`) never runs, so it and everything nested under it are
+/// skipped entirely, matching Python's own `is_enabled` guard ahead of
+/// every other check in the function this ports.
+fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
+    use electricity_bytecode::{Condition, ExpectCondition, LeafKind, LoopSpec, NodeKind, Region};
+
+    fn region_has_prompt_effects(region: &Region) -> bool {
+        match region {
+            Region::Block { ops, .. } => ops.iter().any(has_prompt_effects),
+            Region::Parallel { branches, .. } => branches.iter().any(has_prompt_effects),
+            Region::TryFinally { body, finally } => {
+                region_has_prompt_effects(body) || region_has_prompt_effects(finally)
+            }
+            Region::If {
+                cond, then_, else_, ..
+            } => {
+                matches!(cond, Condition::Model { .. })
+                    || region_has_prompt_effects(then_)
+                    || else_.as_deref().is_some_and(region_has_prompt_effects)
+            }
+            Region::Loop { spec, body, .. } => {
+                matches!(spec, LoopSpec::While(Condition::Model { .. }))
+                    || region_has_prompt_effects(body)
+            }
+        }
+    }
+
+    if !op.enabled {
+        return false;
+    }
+    match &op.kind {
+        NodeKind::Leaf(leaf) => match leaf.as_ref() {
+            LeafKind::Prompt(_) => true,
+            LeafKind::Use(_) => true,
+            LeafKind::Tool(tool) => {
+                matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
+            }
+            LeafKind::Reflector(reflector) => region_has_prompt_effects(&reflector.inner),
+            LeafKind::Yield(_) => false,
+        },
+        NodeKind::Control(region) => region_has_prompt_effects(region),
+    }
+}
+
 /// The preview-marker refusal for a document/config that configures
 /// persistence or runtime plugins (issue #431's "Out of scope"
 /// section: "refused with the preview marker, after the step-6/9
@@ -492,6 +548,15 @@ impl RunObserver for Observer<'_> {
         if let Some(mirror) = self.live_state {
             mirror.clear_graft(node_path);
         }
+    }
+
+    // R4's own refinement on PR #472's review: `graft_child_write`
+    // above is a no-op without a mirror, so a caller that would
+    // otherwise snapshot a child store purely to call it should never
+    // do so either -- true exactly when a `--live-state` mirror is
+    // actually running.
+    fn wants_child_snapshots(&self) -> bool {
+        self.live_state.is_some()
     }
 }
 
@@ -1077,6 +1142,54 @@ pub async fn run_orchestration_with_config(
         };
     }
 
+    // `cli/runtime_shim.py::run`'s own `_require_resolved_settings`,
+    // deferred to the same relative position ("right before the
+    // adapter is actually built" -- there is no real adapter object to
+    // build yet here, every capability `has_prompt_effects` can see is
+    // still refused above, but the *name* still has to resolve and
+    // fail exactly like `cof run` the moment it doesn't, now that a
+    // `use` document can actually reach this far). Order matters:
+    // Python checks `effective.adapter` first, so a document missing
+    // both reports only the adapter error. `fail!` (not a bare
+    // `state: None` `RunResult`, unlike the two refusals just above,
+    // which are electricity-only preview concepts with no Python
+    // equivalent): this failure has a direct one, and `cof run` writes
+    // `--out` with whatever state existed when it raised.
+    let resolved_adapter_name: String = if has_prompt_effects(&program.root) {
+        let Some(adapter_name) = effective.adapter.as_deref().filter(|s| !s.is_empty()) else {
+            fail!(format!(
+                "No adapter resolved for orchestration {}. Set 'adapter' in the orchestration \
+                 or 'default_adapter' in config.json. (adapter source: {})",
+                out::python_path_str(&req.orchestration_path),
+                effective
+                    .sources
+                    .get("adapter")
+                    .map(String::as_str)
+                    .unwrap_or("None")
+            ));
+        };
+        if effective
+            .model
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            fail!(format!(
+                "No model resolved for orchestration {}. Set 'model' in the orchestration or \
+                 'default_model' in config.json. (model source: {})",
+                out::python_path_str(&req.orchestration_path),
+                effective
+                    .sources
+                    .get("model")
+                    .map(String::as_str)
+                    .unwrap_or("None")
+            ));
+        }
+        adapter_name.to_string()
+    } else {
+        "_noop".to_string()
+    };
+
     // Step 16: the live-state mirror (first write synchronous and
     // fatal), then EventLog + run_start.
     let live_mirror = match &req.live_state_path {
@@ -1131,11 +1244,13 @@ pub async fn run_orchestration_with_config(
         registry: &registry,
         limiter: &limiter,
         model: &model,
-        // Step 15: no prompt effects exist in M0-H, so this is always
-        // the no-op adapter sentinel -- `effective.adapter` (the real
-        // resolved name) is still what `runtime.effective_settings.
-        // adapter` reports, a separate, metadata-only field above.
-        adapter: "_noop",
+        // Step 15: `resolved_adapter_name` -- `_noop` unless
+        // `has_prompt_effects` found a real need for one, matching
+        // `cof run`'s own `prime.meta.adapter` for a `use`/`prompt`/
+        // model-condition document even though M0-H still refuses
+        // every one of those before building a real adapter *object*
+        // (`default_adapter` below stays the no-op one regardless).
+        adapter: &resolved_adapter_name,
         runtime_config: &runtime_config_value,
         dry_run: false,
         armed: req.armed,

@@ -1,0 +1,6 @@
+{
+  "spec_case": "C17",
+  "description": "A use effect's three output-mapping modes, in one precedence order: explicit outputs:, auto-generated from the child's own interface.outputs (only when outputs: is absent), and full-namespace passthrough (neither present) (runtime-semantics.md Section 5.3).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
