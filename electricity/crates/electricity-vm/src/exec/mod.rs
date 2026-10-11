@@ -289,6 +289,28 @@ pub(crate) fn execute_op<'a>(
     token: &'a CancellationToken,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
+        // Review P2-4 on PR #454's second review: wired now (`core/
+        // dynamic.py::DynamicRuntime._execute_effect`'s own single
+        // `is_enabled` check, before dispatching to any effect type,
+        // leaf or container -- disabling a container disables its
+        // whole subtree because nothing inside it ever gets this far)
+        // so lane J2's own PR only ever fills `disabled.rs`'s own stub
+        // bodies, never this file. `op.enabled` is `true` for every
+        // `Op` this build can compile today -- orchestration YAML
+        // itself never sets the field (only a profile's own `effects.
+        // <path>.enabled: false`, `electricity-compiler::overrides`,
+        // not created until lane J2), so this branch is unreachable in
+        // any real or test run, same as the model-mode `expect`/
+        // condition wiring below.
+        if disabled::skip_disabled(op, &Value::None) {
+            if op.name.is_some() {
+                let effect_path = frame.effect_path(&op.path);
+                let instance = observer.effect_start(&effect_path);
+                disabled::write_disabled_node(store, parent, op)?;
+                observer.effect_complete(&effect_path, instance, None);
+            }
+            return Ok(());
+        }
         match &op.kind {
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
                 LeafKind::Tool(tool_op) => {

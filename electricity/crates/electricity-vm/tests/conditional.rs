@@ -9,7 +9,7 @@ use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
     CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic, json_registry,
-    json_tool_leaf, run_ctx, tool_leaf, tree_dynamic,
+    json_tool_leaf, model_if, run_ctx, tool_leaf, tree_dynamic,
 };
 
 fn root_path() -> EffectPath {
@@ -1058,5 +1058,40 @@ async fn a_tool_params_template_resolves_the_same_sibling_path_as_probe_e() {
         get(render_node, "value"),
         Some(&Value::from(1i64)),
         "the template must resolve `outline`'s write, not silently render empty"
+    );
+}
+
+#[tokio::test]
+async fn a_model_mode_if_reaches_condition_models_own_stub_not_a_panic() {
+    // Review P2-4 on PR #454's second review: `decide_and_run` used to
+    // return its own inline `VmError::NotImplemented` for `Condition::
+    // Model` without ever calling `condition_model::
+    // evaluate_model_condition` -- lane G2 would have had to add that
+    // call itself. Wired now, so this reaches that function's own
+    // stub error (which also names M1-G2) and -- the actual probe --
+    // never panics getting there.
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![model_if(
+            root_path().push_name("gate"),
+            Some("gate"),
+            "ok?",
+            OnError::Fail,
+        )],
+    );
+    let (_, _, result) = run(root).await;
+    let err = result.unwrap_err();
+    // Wrapped by the enclosing chain's own `wrap_effect_error` (a
+    // `VmError::NotImplemented` is never a `VmError::Raised`, so it
+    // collapses to a plain `VmError::Message`, same as the disabled-op
+    // probe in `tests/dynamic.rs`) -- the M1-G2 text survives inside it.
+    let VmError::Message(message) = err else {
+        panic!("expected a chain wrap around condition_model's own error, got {err:?}")
+    };
+    assert!(
+        message.contains("M1-G2"),
+        "expected condition_model::evaluate_model_condition's own M1-G2 stub error, got: {message}"
     );
 }

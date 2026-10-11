@@ -207,6 +207,36 @@ pub fn cel_if(
     }
 }
 
+/// A `mode: model` `if` -- review P2-4 on PR #454's second review:
+/// `execute_conditional`'s own `decide_and_run` routes this through
+/// `condition_model::evaluate_model_condition` now, so this always
+/// fails with that function's own `VmError::NotImplemented` (M1-G2
+/// hasn't filled in a real body yet), never panics.
+pub fn model_if(path: EffectPath, name: Option<&str>, template: &str, on_error: OnError) -> Op {
+    Op {
+        path,
+        name: name.map(str::to_string),
+        kind: NodeKind::Control(Region::If {
+            cond: Condition::Model {
+                template: electricity_bytecode::TemplateText::new(
+                    template,
+                    false,
+                    electricity_bytecode::Escape::None,
+                ),
+            },
+            then_: Box::new(Region::Block {
+                ops: vec![],
+                overlay: true,
+            }),
+            else_: None,
+            threshold: 0.5,
+        }),
+        on_error,
+        labels: None,
+        enabled: true,
+    }
+}
+
 /// Every hook [`RecordingObserver`] saw, in call order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {

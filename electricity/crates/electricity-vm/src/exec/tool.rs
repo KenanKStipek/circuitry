@@ -792,64 +792,124 @@ pub async fn execute_tool(
                                                 message,
                                             ));
                                         } else if let Some(expect) = &tool.expect {
-                                            let ExpectCondition::Cel { expr } = expect else {
-                                                unreachable!(
-                                                    "a tool expect in model mode is refused before a run starts"
-                                                )
-                                            };
-                                            let meta_snapshot = store.snapshot(&meta_node);
-                                            let mut expect_meta = IndexMap::new();
-                                            expect_meta
-                                                .insert(Value::from("mode"), Value::from("cel"));
-                                            expect_meta.insert(
-                                                Value::from("expr"),
-                                                Value::from(expr.as_str()),
-                                            );
-                                            match electricity_cel::evaluate_expect(
-                                                expr,
-                                                &value_for_expect,
-                                                &meta_snapshot,
-                                                ctx,
-                                            ) {
-                                                Ok(passed) => {
+                                            match expect {
+                                                ExpectCondition::Cel { expr } => {
+                                                    let meta_snapshot = store.snapshot(&meta_node);
+                                                    let mut expect_meta = IndexMap::new();
                                                     expect_meta.insert(
-                                                        Value::from("result"),
-                                                        Value::Bool(passed),
+                                                        Value::from("mode"),
+                                                        Value::from("cel"),
                                                     );
-                                                    set_leaf(
-                                                        store,
-                                                        &meta_node,
-                                                        "expect",
-                                                        Value::Dict(expect_meta),
+                                                    expect_meta.insert(
+                                                        Value::from("expr"),
+                                                        Value::from(expr.as_str()),
                                                     );
-                                                    if !passed {
-                                                        failure = Some(
-                                                            electricity_tools::ToolError::message(
-                                                                format!("expect failed: {expr}"),
-                                                            ),
-                                                        );
+                                                    match electricity_cel::evaluate_expect(
+                                                        expr,
+                                                        &value_for_expect,
+                                                        &meta_snapshot,
+                                                        ctx,
+                                                    ) {
+                                                        Ok(passed) => {
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(passed),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            if !passed {
+                                                                failure = Some(
+                                                                    electricity_tools::ToolError::message(
+                                                                        format!("expect failed: {expr}"),
+                                                                    ),
+                                                                );
+                                                            }
+                                                        }
+                                                        Err(cel_err) => {
+                                                            expect_meta.insert(
+                                                                Value::from("error"),
+                                                                Value::from(
+                                                                    cel_err.to_string().as_str(),
+                                                                ),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(false),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            failure = Some(
+                                                                electricity_tools::ToolError::message(
+                                                                    format!("expect failed: {expr}"),
+                                                                ),
+                                                            );
+                                                        }
                                                     }
                                                 }
-                                                Err(cel_err) => {
-                                                    expect_meta.insert(
-                                                        Value::from("error"),
-                                                        Value::from(cel_err.to_string().as_str()),
-                                                    );
-                                                    expect_meta.insert(
-                                                        Value::from("result"),
-                                                        Value::Bool(false),
-                                                    );
-                                                    set_leaf(
-                                                        store,
-                                                        &meta_node,
-                                                        "expect",
-                                                        Value::Dict(expect_meta),
-                                                    );
-                                                    failure = Some(
-                                                        electricity_tools::ToolError::message(
-                                                            format!("expect failed: {expr}"),
-                                                        ),
-                                                    );
+                                                // Review P2-4 on PR #454's second review: wired to
+                                                // `condition_model::evaluate_model_expect` now, so
+                                                // lane G2's own PR only ever fills that module's
+                                                // stub bodies, never this file -- unreachable in any
+                                                // real run today (`Supported::model_expect` stays
+                                                // `false` until G2 flips it, and the refusal walker
+                                                // refuses a model-mode `expect:` before any run
+                                                // starts), but a real call site instead of a panic
+                                                // if that ever changed without the matching wiring.
+                                                ExpectCondition::Model { template } => {
+                                                    match super::condition_model::evaluate_model_expect(
+                                                        template,
+                                                        &value_for_expect,
+                                                        ctx,
+                                                        &effect_path,
+                                                        frame,
+                                                        run_ctx,
+                                                        token,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(outcome) => {
+                                                            let mut expect_meta = IndexMap::new();
+                                                            expect_meta.insert(
+                                                                Value::from("mode"),
+                                                                Value::from("model"),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("template"),
+                                                                Value::from(
+                                                                    template.source.as_str(),
+                                                                ),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(outcome.passed),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            if !outcome.passed {
+                                                                failure = Some(
+                                                                    electricity_tools::ToolError::message(
+                                                                        format!(
+                                                                            "expect failed: {}",
+                                                                            template.source
+                                                                        ),
+                                                                    ),
+                                                                );
+                                                            }
+                                                        }
+                                                        Err(err) => return Err(err),
+                                                    }
                                                 }
                                             }
                                         }
@@ -1608,6 +1668,60 @@ mod tests {
         assert_eq!(
             expect_meta.get(&Value::from("result")),
             Some(&Value::Bool(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_mode_expect_reaches_condition_models_own_stub_not_a_panic() {
+        // Review P2-4 on PR #454's second review: this call site used
+        // to `unreachable!()` for `ExpectCondition::Model` -- wired
+        // now to `condition_model::evaluate_model_expect`, so lane
+        // G2's own PR only ever fills that module's stub bodies. This
+        // path is refused before any real run starts
+        // (`Supported::model_expect` stays `false` until G2 flips it),
+        // reachable only through a direct call like this one -- the
+        // actual probe is that it returns that function's own M1-G2
+        // stub error instead of panicking.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("2"));
+        let mut tool = tool_op(params);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "well?",
+                false,
+                electricity_bytecode::Escape::None,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, VmError::NotImplemented(ref msg) if msg.contains("M1-G2")),
+            "expected condition_model::evaluate_model_expect's own M1-G2 stub error, got: {err:?}"
         );
     }
 

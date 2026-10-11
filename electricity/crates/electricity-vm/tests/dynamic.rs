@@ -957,3 +957,50 @@ async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after
         "2 chain steps (x, y) in prime's own body + 3 tree branches + 1 post-merge write"
     );
 }
+
+#[tokio::test]
+async fn a_disabled_op_reaches_disabled_rs_own_stub_not_a_silent_run() {
+    // Review P2-4 on PR #454's second review: `execute_op` used to
+    // never read `Op::enabled` at all, so a disabled effect ran
+    // normally (M0-H's own documented gap). Wired now, so lane J2's
+    // own PR only ever fills `disabled.rs`'s own stub bodies, never
+    // this file -- unreachable for any document this build can
+    // compile today (every compiled `Op` has `enabled: true`; only a
+    // profile's own effect override, not yet wired, can ever produce
+    // `false`), reachable only by building the `Op` directly like
+    // this one. The probe: the tool leaf's own always-fails `json`
+    // dispatch never runs at all -- `disabled::write_disabled_node`'s
+    // own M1-J2 stub error is what the run fails with instead.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let disabled_leaf = electricity_bytecode::Op {
+        enabled: false,
+        ..tool_leaf(root_path().push_name("b"), "b")
+    };
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![disabled_leaf]);
+
+    let err = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+    let VmError::Message(message) = err else {
+        panic!(
+            "expected a chain wrap around disabled::write_disabled_node's own error, got {err:?}"
+        )
+    };
+    assert!(
+        message.contains("M1-J2"),
+        "expected disabled::write_disabled_node's own M1-J2 stub error, got: {message}"
+    );
+}
