@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-11T09:26:07.234Z","ev":"run_start","run_id":"c4850d8b-2cc3-43d2-a8b7-7560d84bf31f","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":33319}
+{"v":1,"seq":1,"ts":"2026-10-11T09:26:07.237Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T09:26:07.237Z","ev":"start","id":1,"path":"prime.result"}
+{"v":1,"seq":3,"ts":"2026-10-11T09:26:07.839Z","ev":"end","id":1,"path":"prime.result","ok":false,"ms":602,"error":"shell: command 'rm' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."}
+{"v":1,"seq":4,"ts":"2026-10-11T09:26:07.839Z","ev":"end","id":0,"path":"prime","ok":true,"ms":602}
+{"v":1,"seq":5,"ts":"2026-10-11T09:26:07.839Z","ev":"run_end","ok":true}

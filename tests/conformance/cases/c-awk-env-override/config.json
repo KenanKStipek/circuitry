@@ -1,0 +1,1 @@
+{"runtime": {"plugins": {"awk": {"env": {"FAKE_AWK_VAR": "configured-value"}}}}}

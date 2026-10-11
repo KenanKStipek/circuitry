@@ -1,0 +1,7 @@
+name: c-shell-default-denial
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: rm

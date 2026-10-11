@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""A fake `echo` for the conformance suite: real `echo`'s own argv-join
+semantics (space-separated args, trailing newline), standing in for the
+system binary so the case's own point -- a falsy `params.args` runs with
+*no* arguments at all, same as an absent one -- doesn't depend on a real
+`echo`'s own install path, which differs across platforms (`/bin/echo` on
+this machine, `/usr/bin/echo` on most Linux distributions) and would
+otherwise leak into `meta.binary`.
+"""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    print(" ".join(sys.argv[1:]))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

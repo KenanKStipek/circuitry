@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (ffmpeg success, PATH fake)",
+  "description": "`ffmpeg` resolves through the case's own `fakes/` directory first on PATH, named literally `ffmpeg` (issue #450 item 4), so no real ffmpeg needs to be installed -- the fake prints its own argv to stdout, proving the exact command `FfmpegPlugin` built (`-y -i <input>`, then the parsed `flags`, then `<output>`).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

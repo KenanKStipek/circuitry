@@ -217,15 +217,117 @@ pub fn round6(x: f64) -> f64 {
     format!("{x:.6}").parse::<f64>().unwrap_or(x)
 }
 
-/// `shlex.split(s)` (POSIX mode) -- signature only; lane C fills the
-/// body (the `ffmpeg`/`shell` plugins' own flag parsing).
-pub fn shlex_split(_s: &str) -> Result<Vec<String>, String> {
-    Err("electricity_value::pycompat::shlex_split is not implemented yet (lane C)".to_string())
+/// `shlex.split(s)` states, as far as this crate's own `posix=True,
+/// whitespace_split=True, comments=False, punctuation_chars=False`
+/// configuration (`shlex.split`'s own defaults) ever reaches -- a bare
+/// backslash escape outside quotes, or one inside a double-quoted
+/// string (only `\\`/`\"` are consumed there; any other `\x` keeps
+/// its own backslash), never inside a single-quoted string (single
+/// quotes have no escape at all in POSIX shells, matched here too).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShlexState {
+    Space,
+    Word,
+    Quote(char),
+    /// `escapedstate` in CPython's own `shlex.py` -- where this escape
+    /// resumes once it resolves: back to a bare word, or back inside
+    /// the double-quoted string that opened it.
+    Escape(EscapeCtx),
 }
 
-/// `shlex.quote(s)` -- signature only; lane C fills the body.
-pub fn shlex_quote(_s: &str) -> Result<String, String> {
-    Err("electricity_value::pycompat::shlex_quote is not implemented yet (lane C)".to_string())
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EscapeCtx {
+    Bare,
+    DoubleQuote,
+}
+
+fn is_shlex_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
+/// `shlex.split(s)` (POSIX mode, `comments=False`, `whitespace_split=
+/// True`) -- a direct port of `shlex.py`'s own `read_token` state
+/// machine, narrowed to the one configuration `shlex.split` itself ever
+/// builds (`wordchars` never matters once `whitespace_split` is set: it
+/// only widens, never narrows, which characters a bare word accepts).
+/// `Err` carries CPython's own `ValueError` text (`"No closing
+/// quotation"`/`"No escaped character"`) verbatim.
+pub fn shlex_split(s: &str) -> Result<Vec<String>, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    let mut tokens = Vec::new();
+
+    'outer: loop {
+        let mut token = String::new();
+        let mut state = ShlexState::Space;
+
+        loop {
+            let c = chars.get(pos).copied();
+            if c.is_some() {
+                pos += 1;
+            }
+            match (state, c) {
+                (ShlexState::Space, None) => break 'outer,
+                (ShlexState::Space, Some(ch)) if is_shlex_whitespace(ch) => continue,
+                (ShlexState::Space, Some('\\')) => state = ShlexState::Escape(EscapeCtx::Bare),
+                (ShlexState::Space, Some(ch)) if ch == '\'' || ch == '"' => {
+                    state = ShlexState::Quote(ch);
+                }
+                (ShlexState::Space, Some(ch)) => {
+                    token.push(ch);
+                    state = ShlexState::Word;
+                }
+
+                (ShlexState::Word, None) => break,
+                (ShlexState::Word, Some(ch)) if is_shlex_whitespace(ch) => break,
+                (ShlexState::Word, Some(ch)) if ch == '\'' || ch == '"' => {
+                    state = ShlexState::Quote(ch);
+                }
+                (ShlexState::Word, Some('\\')) => state = ShlexState::Escape(EscapeCtx::Bare),
+                (ShlexState::Word, Some(ch)) => token.push(ch),
+
+                (ShlexState::Quote(_), None) => return Err("No closing quotation".to_string()),
+                (ShlexState::Quote(qc), Some(ch)) if ch == qc => state = ShlexState::Word,
+                (ShlexState::Quote('"'), Some('\\')) => {
+                    state = ShlexState::Escape(EscapeCtx::DoubleQuote);
+                }
+                (ShlexState::Quote(_), Some(ch)) => token.push(ch),
+
+                (ShlexState::Escape(_), None) => return Err("No escaped character".to_string()),
+                (ShlexState::Escape(EscapeCtx::Bare), Some(ch)) => {
+                    token.push(ch);
+                    state = ShlexState::Word;
+                }
+                (ShlexState::Escape(EscapeCtx::DoubleQuote), Some(ch)) => {
+                    if ch != '\\' && ch != '"' {
+                        token.push('\\');
+                    }
+                    token.push(ch);
+                    state = ShlexState::Quote('"');
+                }
+            }
+        }
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+/// `shlex.quote(s)` -- `_find_unsafe = re.compile(r'[^\w@%+=:,./-]',
+/// re.ASCII).search`'s own safe set (`\w` under `re.ASCII` is exactly
+/// `[a-zA-Z0-9_]`) plus the listed punctuation; anything outside it
+/// (including every non-ASCII character, which `\w` under `re.ASCII`
+/// never matches) is single-quoted, with an embedded `'` closed,
+/// literal-quoted, and reopened (`'"'"'`). Always `Ok` -- `shlex.quote`
+/// itself never raises.
+pub fn shlex_quote(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        return Ok("''".to_string());
+    }
+    let is_safe = |c: char| c.is_ascii_alphanumeric() || "@%+=:,./-_".contains(c);
+    if s.chars().all(is_safe) {
+        return Ok(s.to_string());
+    }
+    Ok(format!("'{}'", s.replace('\'', "'\"'\"'")))
 }
 
 /// `urllib.parse.urlencode(params, doseq=...)` -- signature only; lane
@@ -350,5 +452,99 @@ mod tests {
         assert!(round6(f64::NAN).is_nan());
         assert_eq!(round6(f64::INFINITY), f64::INFINITY);
         assert_eq!(round6(f64::NEG_INFINITY), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn shlex_split_splits_on_whitespace_and_strips_quotes() {
+        assert_eq!(
+            shlex_split("ffmpeg -i in.mp4 out.mp4"),
+            Ok(vec!["ffmpeg", "-i", "in.mp4", "out.mp4"]
+                .into_iter()
+                .map(String::from)
+                .collect())
+        );
+        assert_eq!(
+            shlex_split("a 'b c' \"d e\""),
+            Ok(vec!["a", "b c", "d e"]
+                .into_iter()
+                .map(String::from)
+                .collect())
+        );
+    }
+
+    #[test]
+    fn shlex_split_handles_empty_and_whitespace_only_input() {
+        assert_eq!(shlex_split(""), Ok(Vec::new()));
+        assert_eq!(shlex_split("   \t "), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn shlex_split_preserves_an_empty_quoted_argument() {
+        assert_eq!(
+            shlex_split("a '' b"),
+            Ok(vec!["a", "", "b"].into_iter().map(String::from).collect())
+        );
+    }
+
+    #[test]
+    fn shlex_split_concatenates_adjacent_quoted_and_bare_text() {
+        assert_eq!(shlex_split("'abc'def"), Ok(vec!["abcdef".to_string()]));
+        assert_eq!(shlex_split("'it'\"'\"'s'"), Ok(vec!["it's".to_string()]));
+    }
+
+    #[test]
+    fn shlex_split_escapes_a_space_outside_quotes() {
+        assert_eq!(shlex_split("a\\ b"), Ok(vec!["a b".to_string()]));
+    }
+
+    #[test]
+    fn shlex_split_double_quote_escape_only_consumes_backslash_and_quote() {
+        assert_eq!(shlex_split(r#""a\$b""#), Ok(vec!["a\\$b".to_string()]));
+        assert_eq!(shlex_split(r#""a\"b""#), Ok(vec!["a\"b".to_string()]));
+        assert_eq!(shlex_split(r#""a\\b""#), Ok(vec!["a\\b".to_string()]));
+    }
+
+    #[test]
+    fn shlex_split_reports_cpythons_own_text_for_an_unterminated_quote() {
+        assert_eq!(
+            shlex_split("'unterminated"),
+            Err("No closing quotation".to_string())
+        );
+    }
+
+    #[test]
+    fn shlex_split_reports_cpythons_own_text_for_a_trailing_backslash() {
+        assert_eq!(
+            shlex_split("trailing\\"),
+            Err("No escaped character".to_string())
+        );
+    }
+
+    #[test]
+    fn shlex_quote_wraps_an_empty_string() {
+        assert_eq!(shlex_quote(""), Ok("''".to_string()));
+    }
+
+    #[test]
+    fn shlex_quote_leaves_a_plain_word_unchanged() {
+        assert_eq!(
+            shlex_quote("plain-word_1.txt"),
+            Ok("plain-word_1.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn shlex_quote_single_quotes_a_string_with_a_space() {
+        assert_eq!(shlex_quote("a b"), Ok("'a b'".to_string()));
+    }
+
+    #[test]
+    fn shlex_quote_escapes_an_embedded_single_quote() {
+        assert_eq!(shlex_quote("it's"), Ok("'it'\"'\"'s'".to_string()));
+    }
+
+    #[test]
+    fn shlex_quote_quotes_any_non_ascii_character() {
+        assert_eq!(shlex_quote("café"), Ok("'café'".to_string()));
     }
 }

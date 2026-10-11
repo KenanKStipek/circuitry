@@ -770,6 +770,7 @@ dependencies = [
  "sha1",
  "sha2",
  "sha3",
+ "tokio",
  "uuid",
 ]
 
@@ -2592,8 +2593,13 @@ version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
+ "bytes",
+ "libc",
+ "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "tokio-macros",
+ "windows-sys",
 ]
 
 [[package]]

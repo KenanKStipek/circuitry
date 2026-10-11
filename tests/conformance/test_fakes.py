@@ -69,6 +69,41 @@ def test_invalid_utf8_output() -> None:
     assert with_pytest_raises, "the fixture's own stdout should not be valid UTF-8"
 
 
+def test_cat_copies_stdin_to_stdout_verbatim() -> None:
+    proc = subprocess.run(
+        [sys.executable, str(FAKE), "--cat"],
+        input=b"hello from stdin\n",
+        capture_output=True,
+        check=False,
+    )
+    assert proc.stdout == b"hello from stdin\n"
+    assert proc.returncode == 0
+
+
+def test_print_env_reports_a_set_variable() -> None:
+    env = {**os.environ, "FAKE_TEST_VAR": "the-value"}
+    proc = subprocess.run(
+        [sys.executable, str(FAKE), "--print-env", "FAKE_TEST_VAR"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert proc.stdout == "the-value\n"
+
+
+def test_print_env_reports_unset_for_a_missing_variable() -> None:
+    env = {k: v for k, v in os.environ.items() if k != "FAKE_TEST_VAR_MISSING"}
+    proc = subprocess.run(
+        [sys.executable, str(FAKE), "--print-env", "FAKE_TEST_VAR_MISSING"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert proc.stdout == "<unset>\n"
+
+
 def test_sleep_ignores_sigterm_until_killed() -> None:
     proc = subprocess.Popen(
         [sys.executable, str(FAKE), "--sleep"],

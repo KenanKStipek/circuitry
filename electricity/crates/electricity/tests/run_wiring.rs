@@ -337,17 +337,20 @@ async fn a_config_default_model_is_recorded_as_its_own_source() {
 async fn an_unknown_tool_provider_is_refused_before_a_structural_error_elsewhere_would_fire() {
     let dir = temp_dir("unknown-provider");
     let config = write(&dir, "config.json", "{}");
+    // `shell` is lane C's own supported provider as of #459 -- `git` is
+    // still M2 scope (#448's own "Out of scope" list), so it stays a
+    // genuinely unknown provider for this test's own purpose.
     let doc = write(
         &dir,
         "doc.yml",
-        "effects:\n  - name: broken\n    type: tool\n    provider: shell\n    params: {command: echo}\n",
+        "effects:\n  - name: broken\n    type: tool\n    provider: git\n    params: {command: echo}\n",
     );
     let req = request(config, doc);
 
     let result = run(&req).await;
     assert!(!result.ok);
     assert!(result.state.is_none());
-    assert!(result.error.unwrap().contains("shell"));
+    assert!(result.error.unwrap().contains("git"));
 }
 
 /// PR #441 review finding 4: a document that turns a (valid) `runtime.
