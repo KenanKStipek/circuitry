@@ -1,0 +1,72 @@
+name: loop-nested-tree-dispatch-paths
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    name: named_outer
+    flow: tree
+    each: {in: "prime.seed.value", as: "a"}
+    body:
+      - type: loop
+        name: named_inner
+        flow: tree
+        each: {in: "prime.seed.value", as: "b"}
+        body:
+          - type: tool
+            name: leaf_nn
+            provider: json
+            params: {mode: stringify, input: "{{a}}-{{b}}"}
+  - type: loop
+    name: named_outer2
+    flow: tree
+    each: {in: "prime.seed.value", as: "a"}
+    body:
+      - type: loop
+        flow: tree
+        each: {in: "prime.seed.value", as: "b"}
+        body:
+          - type: tool
+            name: leaf_nu
+            provider: json
+            params: {mode: stringify, input: "{{a}}-{{b}}"}
+  - type: loop
+    flow: tree
+    each: {in: "prime.seed.value", as: "a"}
+    body:
+      - type: loop
+        name: named_inner2
+        flow: tree
+        each: {in: "prime.seed.value", as: "b"}
+        body:
+          - type: tool
+            name: leaf_un
+            provider: json
+            params: {mode: stringify, input: "{{a}}-{{b}}"}
+  - type: loop
+    flow: tree
+    each: {in: "prime.seed.value", as: "a"}
+    body:
+      - type: loop
+        flow: tree
+        each: {in: "prime.seed.value", as: "b"}
+        body:
+          - type: tool
+            name: leaf_uu
+            provider: json
+            params: {mode: stringify, input: "{{a}}-{{b}}"}
+  - type: loop
+    name: chain_outer
+    flow: chain
+    each: {in: "prime.seed.value", as: "a"}
+    body:
+      - type: loop
+        name: chain_inner
+        flow: tree
+        each: {in: "prime.seed.value", as: "b"}
+        body:
+          - type: tool
+            name: leaf_ct
+            provider: json
+            params: {mode: stringify, input: "{{a}}-{{b}}"}

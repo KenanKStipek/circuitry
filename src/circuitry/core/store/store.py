@@ -30,6 +30,14 @@ def replace_node(
     return {**state, head: replace_node(inner, rest, replacement)}
 
 
+def _under_prefix(prefix: str, relative: str) -> str:
+    """*relative* nested under *prefix* — *prefix* itself when *relative* is
+    empty (an unnamed loop/dynamic dispatching directly in a branch whose
+    own relative path is ""), never a trailing-dot ``f"{prefix}."``.
+    """
+    return f"{prefix}.{relative}" if relative else prefix
+
+
 def _prefixed_effect_cb(
     callback: _EffectCallback | None, prefix: str
 ) -> _EffectCallback | None:
@@ -38,7 +46,41 @@ def _prefixed_effect_cb(
         return callback
 
     def _forward(path: str, payload: dict[str, Any]) -> None:
-        callback(f"{prefix}.{path}", payload)
+        callback(_under_prefix(prefix, path), payload)
+
+    return _forward
+
+
+def _prefixed_dispatch_cb(
+    callback: Callable[[str, int, int], None] | None, prefix: str
+) -> Callable[[str, int, int], None] | None:
+    """Wrap ``concurrent_dispatch`` so a branch-relative path nests under
+    *prefix*, the same rule :func:`_prefixed_effect_cb` applies to
+    ``start``/``end`` — a nested tree loop's/dynamic's own ``dispatch``
+    (#475) must use the same absolute path those already do.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str, concurrency: int, total: int) -> None:
+        callback(_under_prefix(prefix, path), concurrency, total)
+
+    return _forward
+
+
+def _prefixed_branch_settled_cb(
+    callback: Callable[[str], None] | None, prefix: str
+) -> Callable[[str], None] | None:
+    """Wrap ``branch_settled`` the same way :func:`_prefixed_dispatch_cb`
+    wraps ``concurrent_dispatch`` (#475) — both must agree on a nested
+    dispatch's path, since ``RunManager`` pairs one's settle points against
+    the other's announced count.
+    """
+    if callback is None or not prefix:
+        return callback
+
+    def _forward(path: str) -> None:
+        callback(_under_prefix(prefix, path))
 
     return _forward
 
@@ -234,8 +276,12 @@ class Store:
                     self.effect_complete, self._path_prefix
                 ),
                 effect_start=_prefixed_effect_cb(self.effect_start, self._path_prefix),
-                concurrent_dispatch=self.concurrent_dispatch,
-                branch_settled=self.branch_settled,
+                concurrent_dispatch=_prefixed_dispatch_cb(
+                    self.concurrent_dispatch, self._path_prefix
+                ),
+                branch_settled=_prefixed_branch_settled_cb(
+                    self.branch_settled, self._path_prefix
+                ),
                 _lock=self._lock,
                 _true_root=self.true_root_state,
             )
@@ -302,13 +348,19 @@ class Store:
         path = self.own_path if name is None else self.effect_path(name)
         self.concurrent_dispatch(path, concurrency, total)
 
-    def fire_branch_settled(self, name: str) -> None:
+    def fire_branch_settled(self, name: str | None) -> None:
         """Notify ``branch_settled`` (if set) that one branch of *name*'s
         dispatch just finished — called once per branch, as it completes.
+
+        *name* is ``None`` for an unnamed ``flow: tree`` loop, the same
+        case :meth:`fire_concurrent_dispatch` handles — falls back to this
+        store's own path (:attr:`own_path`) rather than ``effect_path``'s
+        literal ``"None"`` suffix if handed straight through (#470, #475).
         """
         if self.branch_settled is None:
             return
-        self.branch_settled(self.effect_path(name))
+        path = self.own_path if name is None else self.effect_path(name)
+        self.branch_settled(path)
 
     def dump_json(self, out_path: Path, *, pretty: bool = False) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

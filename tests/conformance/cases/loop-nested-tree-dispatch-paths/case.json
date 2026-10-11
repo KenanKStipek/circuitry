@@ -1,0 +1,6 @@
+{
+  "spec_case": "#470/#475",
+  "description": "A `flow: tree` loop nested inside another `flow: tree` loop's body, in every named/unnamed combination, plus a `flow: tree` loop inside a named `flow: chain` loop's body -- the inner loop's own `dispatch` must carry the exact same absolute path its own `start`/`end` events already use: a named inner loop's own child path (`<outer-pass>.inner`), or an unnamed inner loop's enclosing pass node's own path, never a path relative to the outer loop's isolated branch (#475 review finding 3/R5).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
