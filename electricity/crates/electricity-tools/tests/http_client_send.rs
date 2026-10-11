@@ -186,7 +186,16 @@ async fn a_connection_closed_before_any_response_is_remote_disconnected() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        // Drain the client's request first: dropping a socket with
+        // unread bytes still sitting in the kernel receive buffer
+        // sends an RST, not a graceful FIN -- an inherently racy
+        // `ConnectionResetError` on the client side, not the
+        // deterministic "closed with nothing sent back at all" this
+        // test means to pin. Reading it all away first guarantees a
+        // clean close.
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
         drop(stream);
     });
     let client = http_client::build_client().unwrap();

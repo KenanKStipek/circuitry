@@ -532,11 +532,42 @@ pub async fn send(
 /// closed before any response at all is [`SendError::RemoteDisconnected`];
 /// anything else keeps `hyper`'s own text, compared by location.
 fn classify_response_phase_error(err: hyper::Error) -> SendError {
-    if err.is_incomplete_message() || err.is_closed() {
+    // A peer that closes with no unread bytes left in its own receive
+    // buffer sends a graceful FIN (`is_incomplete_message`/`is_closed`
+    // below); one that still has unread bytes sitting there sends an
+    // RST instead, which surfaces as a plain `io::ErrorKind::
+    // ConnectionReset` -- a real race any TCP peer can hit depending
+    // on kernel buffering/scheduling, not a distinction `plugins/
+    // http.py`'s own urllib-based reference actually makes a retry
+    // decision on (`adapters/_retry.py::_classify_cause_chain`'s own
+    // `ConnectionError` arm already treats *either* text as
+    // `ErrorCause::NoReply`, i.e. retryable) -- so this crate folds
+    // both into the one [`SendError::RemoteDisconnected`] shape rather
+    // than exposing the raw OS text for a condition whose wording a
+    // real server's own timing, not this client, decides.
+    if err.is_incomplete_message() || err.is_closed() || is_connection_reset(&err) {
         SendError::RemoteDisconnected
     } else {
         SendError::Other(err.to_string())
     }
+}
+
+fn is_connection_reset(err: &dyn std::error::Error) -> bool {
+    let mut cause = err.source();
+    while let Some(err) = cause {
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io_err.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) {
+                return true;
+            }
+        }
+        cause = err.source();
+    }
+    false
 }
 
 /// A body-read failure -- a short body against a known
