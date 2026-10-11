@@ -62,6 +62,46 @@ def test_load_case_rejects_empty_engines(tmp_path: Path) -> None:
         harness.load_case(case_dir)
 
 
+def test_load_case_rejects_non_bool_sort_warnings(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "sort_warnings": "true"})
+    with pytest.raises(ValueError, match="'sort_warnings' must be a bool"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_defaults_sort_warnings_to_false(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success"})
+    metadata = harness.load_case(case_dir)
+    assert metadata["sort_warnings"] is False
+
+
+def test_warning_lines_keeps_only_prefixed_lines_in_order() -> None:
+    stderr = (
+        "WARNING: first\n"
+        "some other line\n"
+        "ERROR: second\n"
+        "Warning: lowercase, not a logging line\n"
+        "INFO: third\n"
+    )
+    assert harness.warning_lines(stderr) == [
+        "WARNING: first",
+        "ERROR: second",
+        "INFO: third",
+    ]
+
+
+def test_warning_lines_sorts_when_asked() -> None:
+    stderr = "WARNING: b\nWARNING: a\nWARNING: c\n"
+    assert harness.warning_lines(stderr, sort=True) == [
+        "WARNING: a",
+        "WARNING: b",
+        "WARNING: c",
+    ]
+
+
+def test_warning_lines_empty_stderr_is_an_empty_list() -> None:
+    assert harness.warning_lines("") == []
+
+
 def test_sandboxed_env_drops_credentials_and_circuitry_vars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

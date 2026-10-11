@@ -119,6 +119,11 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'also_pretty' only applies to a 'success' case"
         )
+    if not isinstance(metadata["sort_warnings"], bool):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'sort_warnings' must be a bool, "
+            f"got {metadata['sort_warnings']!r}"
+        )
     return metadata
 
 
