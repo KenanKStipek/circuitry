@@ -98,6 +98,20 @@ fn value_error(message: impl Into<String>) -> PyIntError {
     }
 }
 
+/// `%.200R`'s own truncation (`Objects/longobject.c`'s own invalid-
+/// literal message, review P2-9 on PR #454's second review) --
+/// *value*'s own [`Value::py_repr`], truncated to its first 200
+/// *characters* (not bytes: a multi-byte codepoint is never split),
+/// with no ellipsis added -- CPython's own `%R` precision truncation
+/// (`PyUnicode_Substring`) is a plain substring, never a "..." marker.
+fn py_repr_truncated_200(value: &Value) -> String {
+    let repr = value.py_repr();
+    match repr.char_indices().nth(200) {
+        Some((byte_index, _)) => repr[..byte_index].to_string(),
+        None => repr,
+    }
+}
+
 /// Python's `int(value)` coercion, with CPython's own error wording on
 /// failure: `bool`/`int`/`float` convert the way the `int()` builtin
 /// does (`int(True) == 1`, truncating a float toward zero); a
@@ -111,7 +125,13 @@ fn value_error(message: impl Into<String>) -> PyIntError {
 /// arbitrary-precision and tolerates `_` digit grouping (`"1_0"` ==
 /// `10`); this returns `i64`, so a numeral outside that range, or one
 /// written with underscores, fails to parse here where CPython would
-/// succeed.
+/// succeed. The same gap applies to the `Value::Float` arm below
+/// (review P2-9 on PR #454's second review): `f.trunc() as i64` is
+/// Rust's own saturating float-to-int cast, silently clamping to
+/// `i64::MAX`/`MIN` for a float whose truncated value doesn't fit --
+/// CPython raises `OverflowError` instead (`int(1e30)`), the same
+/// class [`py_int`] already raises for a non-finite float, just not
+/// yet for a finite one too large to represent.
 pub fn py_int(value: &Value) -> Result<i64, PyIntError> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
@@ -131,7 +151,7 @@ pub fn py_int(value: &Value) -> Result<i64, PyIntError> {
         Value::Str(s) => py_strip(s).parse::<i64>().map_err(|_| {
             value_error(format!(
                 "invalid literal for int() with base 10: {}",
-                Value::Str(s.clone()).py_repr()
+                py_repr_truncated_200(&Value::Str(s.clone()))
             ))
         }),
         other => Err(PyIntError {
@@ -222,6 +242,25 @@ mod tests {
         // double-quoted `{:?}` (review finding 5 on PR #454).
         assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
         assert_eq!(err.py_class, PyExc::ValueError);
+    }
+
+    #[test]
+    fn py_int_truncates_a_long_bad_string_to_200_chars_like_percent_200_r() {
+        // Review P2-9 on PR #454's second review: CPython's own
+        // invalid-literal message formats the repr with `%.200R`, a
+        // plain substring truncation to 200 characters, no ellipsis.
+        let long = "x".repeat(250);
+        let err = py_int(&Value::Str(long)).unwrap_err();
+        let expected_repr = format!("'{}", "x".repeat(199));
+        assert_eq!(
+            err.message,
+            format!("invalid literal for int() with base 10: {expected_repr}")
+        );
+        // The repr itself (`'` + 250 x's + `'`) is 252 chars; truncated
+        // to the first 200 leaves the opening quote plus 199 x's, no
+        // closing quote -- CPython's own truncation cuts the repr's
+        // own text wherever the 200th character falls, quote or not.
+        assert_eq!(expected_repr.chars().count(), 200);
     }
 
     #[test]

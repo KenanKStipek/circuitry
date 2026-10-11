@@ -94,6 +94,15 @@ impl RetryInfo {
 /// `adapters/_retry.py::parse_retry_after_seconds` -- a `Retry-After`
 /// header value (seconds, or an HTTP-date) as seconds from now. `None`
 /// when *value* is neither.
+///
+/// Known divergence (review P2-9 on PR #454's second review): Python's
+/// own `float()` accepts a few numeral forms Rust's `str::parse::<f64>`
+/// does not -- `_` digit grouping (`"1_000"`) and non-ASCII decimal
+/// digits Unicode considers numeric (`float("١٢")`, Arabic-Indic
+/// digits). A `Retry-After` header carrying either reads as not-a-
+/// number here where CPython would parse it; left for lane E to widen
+/// if a real provider is ever seen sending one (no normal HTTP server
+/// has reason to, in practice).
 pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
