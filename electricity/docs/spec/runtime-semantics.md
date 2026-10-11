@@ -1546,11 +1546,13 @@ Python `logging` warnings (its CLI's default `WARNING` level, never
 changed by a `--verbose`/`--quiet` of its own) as the same `WARNING: ...`
 lines, through a `log::Log` `electricity-cli`'s own `main` installs (issue
 #442) -- the `core/dynamic.py`/`core/conditional.py` on_error/`finally:`
-degradation warnings, `cli/config.py`'s "Unknown environment" warning, and
-`cli/live_state.py`/`cli/events.py`'s mid-run write-failure warnings, all
-reachable from M0-H's own supported subset. See electricity/DESIGN.md §6.9,
-"CLI output", for the full statement and its own two narrower, still-open
-gaps.
+degradation warnings, `core/tool.py`'s invalid-timeout warning,
+`cli/config.py`'s "Unknown environment" warning, and `cli/live_state.py`/
+`cli/events.py`'s mid-run write-failure warnings, all reachable from
+M0-H's own supported subset, in order for a chain and sorted for a tree --
+both `tests/warnings.rs` and the conformance suite now compare these
+lines against a real `cof run`. See electricity/DESIGN.md §6.9, "CLI
+output", for the full statement and its own narrower, still-open gaps.
 
 ### 8.5 `--resume` rules
 
