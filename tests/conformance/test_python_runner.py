@@ -29,19 +29,6 @@ def _case_ids() -> list[str]:
     return [d.name for d in CASE_DIRS]
 
 
-def _assert_no_leftover_replies(leftover_path: Path, *, case_name: str) -> None:
-    """A case that leaves a scripted reply unused fails here, on either
-    engine (issue #450's acceptance criterion) -- over-provisioning a
-    script is not itself a run failure (scripted-replies.md §6), but it is
-    always a conformance-case bug: a fixture author who left dead replies
-    behind, or a document that stopped calling a path the fixture still
-    answers for."""
-    leftover = harness.read_leftover_replies(leftover_path)
-    assert leftover == {}, (
-        f"{case_name}: scripted replies left over after the run: {leftover} "
-        "-- remove them from the replies file or make the document consume them"
-    )
-
 
 @pytest.mark.parametrize("case_dir", CASE_DIRS, ids=_case_ids())
 def test_case(case_dir: Path, tmp_path: Path) -> None:
@@ -72,7 +59,9 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         )
         recorded_requests = list(server.requests) if server is not None else None
 
-    _assert_no_leftover_replies(leftover_replies_path, case_name=case_dir.name)
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
+    )
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (

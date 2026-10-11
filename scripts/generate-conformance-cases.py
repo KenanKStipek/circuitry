@@ -77,14 +77,6 @@ def _redact_and_reserialize(
     return text.encode("utf-8")
 
 
-def _assert_no_leftover_replies(leftover_path: Path, *, case_name: str) -> None:
-    leftover = harness.read_leftover_replies(leftover_path)
-    if leftover:
-        raise RuntimeError(
-            f"{case_name}: scripted replies left over after the run: {leftover} "
-            "-- remove them from the replies file or make the document consume them"
-        )
-
 
 def _generate_success(
     case_dir: Path,
@@ -113,7 +105,9 @@ def _generate_success(
             f"{case_dir.name}: expected success, `cof run` exited {result.returncode}\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
-    _assert_no_leftover_replies(leftover_replies_path, case_name=case_dir.name)
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
+    )
     files = {
         "expected.json": _redact_and_reserialize(
             out_path.read_bytes(), pretty=False, replacements=replacements
@@ -172,7 +166,9 @@ def _generate_failure(
     )
     if result.returncode == 0:
         raise RuntimeError(f"{case_dir.name}: expected a failure, but `cof run` exited 0")
-    _assert_no_leftover_replies(leftover_replies_path, case_name=case_dir.name)
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
+    )
     error = redact_runtime_strings(harness.parse_cli_error(result.stdout), replacements)
     payload = {"error": error}
     text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n"

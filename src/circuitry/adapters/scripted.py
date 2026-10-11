@@ -58,11 +58,24 @@ class ScriptedRepliesError(RuntimeError):
 #: handle to the adapter instance it built, so it cannot call
 #: :meth:`ScriptedAdapter.leftover_replies` directly after the run. When
 #: this variable names a writable path, every :class:`ScriptedAdapter`
-#: built in the process registers itself here; at process exit, their
-#: ``leftover_replies()`` counts are merged (summed per path, across every
-#: instance — a fallback chain can build more than one) and written to
-#: that path as a single JSON object. Never read when unset: an ordinary
-#: run pays nothing for this.
+#: registers itself here the moment it *loads* its replies file
+#: (``_ensure_loaded``, under its own lock) — including a preflight-only
+#: instance, which loads the file to call ``check()`` but never consumes a
+#: reply from it. At process exit, every registered instance's remaining
+#: counts are merged by taking, per path, the lowest remaining count across
+#: every instance that holds that path (a path an instance's own queues
+#: don't hold at all simply isn't one of its votes) — never summed: a
+#: fallback chain, or more than one ``runtime.adapters.*`` block naming
+#: ``scripted``, can build more than one instance, and each loads its own,
+#: independent copy of the queue (``core.prompt._resolve_adapter`` builds a
+#: fresh instance for any adapter name that isn't the run's own default).
+#: For a path with ``n`` replies, the number actually used is the most any
+#: *single* instance consumed, so the unused count is the minimum of what
+#: every instance that touched that path still has left — summing instead
+#: double-counts replies two different instances happened to use between
+#: them, and a preflight-only instance's full, untouched count can never
+#: pull that minimum up, so it can never manufacture a false leftover
+#: either. Never read when unset: an ordinary run pays nothing for this.
 LEFTOVER_REPLIES_EXPORT_ENV_VAR = "CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE"
 
 _export_lock = threading.Lock()
@@ -73,9 +86,9 @@ _export_hook_registered = False
 def _merge_leftover_replies(instances: list[ScriptedAdapter]) -> dict[str, int]:
     merged: dict[str, int] = {}
     for instance in instances:
-        for path, count in instance.leftover_replies().items():
-            merged[path] = merged.get(path, 0) + count
-    return merged
+        for path, count in instance._remaining_counts().items():
+            merged[path] = min(merged.get(path, count), count)
+    return {path: count for path, count in merged.items() if count > 0}
 
 
 def _write_leftover_export() -> None:
@@ -281,7 +294,29 @@ class ScriptedAdapter:
         with self._lock:
             if self._queues is None:
                 self._queues = _parse_replies(_load_raw(self._path()), source=self._path())
+            if not self._registered_for_export:
+                # Registered here, the moment the file is actually loaded --
+                # by `check()` (a preflight-only instance) just as much as
+                # by `generate()` -- under this same lock, so two tree-flow
+                # threads racing to build and dispatch the same fresh
+                # instance can never register it twice. A preflight-only
+                # instance's full, untouched counts can't manufacture a
+                # false leftover: the export merges by minimum remaining
+                # count per path, and the lowest vote always wins.
+                _register_for_leftover_export(self)
+                self._registered_for_export = True
             return self._queues
+
+    def _remaining_counts(self) -> dict[str, int]:
+        """Every path this instance's own loaded queues know about, mapped
+        to its remaining reply count -- `0` included, for a path this
+        instance has fully consumed, not omitted the way `leftover_replies`
+        filters it. `_merge_leftover_replies` needs the `0` entries so an
+        exhausted path pulls the cross-instance minimum down to `0` instead
+        of simply not voting."""
+        with self._lock:
+            queues = self._queues or {}
+            return {path: len(queue) for path, queue in queues.items()}
 
     def generate(
         self,
@@ -292,15 +327,6 @@ class ScriptedAdapter:
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
         del model, prompt, timeout_seconds
-        if not self._registered_for_export:
-            # Registered here, on first actual dispatch -- never at
-            # construction time -- so a preflight-only instance (built
-            # solely to call `check()`, which loads the replies file but
-            # never consumes one, see `cli.runtime_shim.preflight`) never
-            # contributes a false "leftover" count for replies nothing
-            # ever asked it to use.
-            _register_for_leftover_export(self)
-            self._registered_for_export = True
         path = current_call_path()
         if path is None:
             raise RuntimeError(
@@ -345,9 +371,7 @@ class ScriptedAdapter:
         harness that built this instance calls it after the run to fail
         the case on anything left over.
         """
-        with self._lock:
-            queues = self._queues or {}
-            return {path: len(queue) for path, queue in queues.items() if queue}
+        return {path: count for path, count in self._remaining_counts().items() if count > 0}
 
     def check(self) -> CheckResult:
         try:
@@ -355,3 +379,19 @@ class ScriptedAdapter:
         except ScriptedRepliesError as e:
             return CheckResult(ok=False, missing=[], message=str(e))
         return CheckResult(ok=True)
+
+
+def total_replies_by_path(path: Path) -> dict[str, int]:
+    """Every path a replies file configures, mapped to how many replies it
+    queues there -- parsed with the identical loader `ScriptedAdapter`
+    itself uses (`_load_raw`/`_parse_replies`), for a caller (the
+    conformance harness, `tests/conformance/harness.py`) that needs to know
+    what *would* have been consumed without building an adapter instance or
+    running anything. Used when a run's leftover-replies export (§7) is
+    absent: that means no instance ever registered for it -- either nothing
+    in the run ever actually loaded this file, or the engine running it
+    doesn't implement the export at all -- so every reply this file
+    configures is left over, by definition."""
+    resolved = path.expanduser()
+    parsed = _parse_replies(_load_raw(resolved), source=resolved)
+    return {reply_path: len(entries) for reply_path, entries in parsed.items()}

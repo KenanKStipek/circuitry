@@ -24,7 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from circuitry.adapters.scripted import LEFTOVER_REPLIES_EXPORT_ENV_VAR
+from circuitry.adapters.scripted import (
+    LEFTOVER_REPLIES_EXPORT_ENV_VAR,
+    total_replies_by_path,
+)
 
 from .mock_http import MockHttpServer
 
@@ -193,14 +196,61 @@ def _sandboxed_env(
     return env
 
 
-def read_leftover_replies(path: Path) -> dict[str, int]:
+def resolved_scripted_replies_path(case_dir: Path, metadata: dict[str, Any]) -> Path | None:
+    """The case's own `runtime.adapters.scripted.replies_file`, resolved
+    against the case directory, or `None` when the case's `config` doesn't
+    set one (`config` is always JSON -- `cli.config.load_config`'s own
+    format -- so this reads it the same way, never the materialized-port
+    copy, since a replies-file name never carries the mock-port
+    placeholder)."""
+    config_name = metadata.get("config")
+    if not config_name:
+        return None
+    config_data = json.loads((case_dir / config_name).read_text(encoding="utf-8"))
+    replies_file = (
+        ((config_data.get("runtime") or {}).get("adapters") or {}).get("scripted") or {}
+    ).get("replies_file")
+    if not replies_file:
+        return None
+    return case_dir / replies_file
+
+
+def read_leftover_replies(path: Path, *, replies_file: Path | None = None) -> dict[str, int]:
     """The merged leftover-reply counts a run exported (scripted-replies.md
-    §7), or `{}` when the file is absent -- meaning either no
-    scripted-adapter instance was built during the run, or every one that
-    was had nothing left over by the time it exported."""
-    if not path.exists():
+    §7), when the file is present. An **absent** file means no instance
+    ever registered for it -- either nothing in the run ever loaded
+    *replies_file*, or the engine running it doesn't implement the export at
+    all -- so nothing was *consumed*, and every reply *replies_file* itself
+    configures is left over; this is computed by parsing that file with the
+    same loader the adapter uses (`total_replies_by_path`), never assumed to
+    be `{}`. When *replies_file* is also `None` (the case's own config
+    doesn't name a scripted replies file at all), there is nothing to check
+    and an absent export file means exactly that: `{}`."""
+    if path.exists():
+        return dict(json.loads(path.read_text(encoding="utf-8")))
+    if replies_file is None:
         return {}
-    return dict(json.loads(path.read_text(encoding="utf-8")))
+    return total_replies_by_path(replies_file)
+
+
+def assert_no_leftover_replies(
+    leftover_replies_path: Path, *, case_dir: Path, metadata: dict[str, Any], case_name: str
+) -> None:
+    """A case that leaves a scripted reply unused fails here, on either
+    engine (issue #450's acceptance criterion) -- over-provisioning a script
+    is not itself a run failure (scripted-replies.md §6), but it is always a
+    conformance-case bug: a fixture author who left dead replies behind, or
+    a document that stopped calling a path the fixture still answers for.
+    The one place both pytest runners and the generator make this check, so
+    it can never drift into three slightly different copies of the same
+    assertion."""
+    replies_file = resolved_scripted_replies_path(case_dir, metadata)
+    leftover = read_leftover_replies(leftover_replies_path, replies_file=replies_file)
+    if leftover:
+        raise AssertionError(
+            f"{case_name}: scripted replies left over after the run: {leftover} "
+            "-- remove them from the replies file or make the document consume them"
+        )
 
 
 def materialize_cli_args(cli_args: list[Any], *, mock_http_port: int | None) -> list[str]:

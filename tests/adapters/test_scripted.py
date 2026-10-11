@@ -488,20 +488,24 @@ def test_leftover_export_writes_nothing_when_env_var_unset(
 def test_leftover_export_merges_every_registered_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """PR #455 review finding 1: a fallback chain (or more than one
+    ``provider: scripted`` prompt) builds a fresh instance per attempt, each
+    loading its own, independent copy of the queue -- so the export must
+    merge by the lowest remaining count *per path*, never by summing every
+    registered instance's own counts together. Two instances here each
+    consume a different path to exhaustion; summing would wrongly report
+    both paths as left over (each instance still holds the *other* path's
+    reply, untouched), where the minimum correctly reports neither."""
     export_path = tmp_path / "leftover.json"
     monkeypatch.setenv(scripted.LEFTOVER_REPLIES_EXPORT_ENV_VAR, str(export_path))
     monkeypatch.setattr(scripted, "_export_instances", [], raising=False)
     monkeypatch.setattr(scripted, "_export_hook_registered", False, raising=False)
 
-    replies_path_a = _write_replies(
-        tmp_path, {"prime.a": [{"text": "used"}, {"text": "leftover-a"}]}, name="a.yaml"
+    replies_path = _write_replies(
+        tmp_path, {"prime.a": [{"text": "a"}], "prime.b": [{"text": "b"}]}
     )
-    replies_path_b = _write_replies(
-        tmp_path, {"prime.b": [{"text": "leftover-b-1"}, {"text": "leftover-b-2"}]},
-        name="b.yaml",
-    )
-    adapter_a = ScriptedAdapter(replies_file=str(replies_path_a))
-    adapter_b = ScriptedAdapter(replies_file=str(replies_path_b))
+    adapter_a = ScriptedAdapter(replies_file=str(replies_path))
+    adapter_b = ScriptedAdapter(replies_file=str(replies_path))
 
     monkeypatch.setattr(scripted, "current_call_path", lambda: "prime.a")
     adapter_a.generate(model="test", prompt="p")
@@ -510,15 +514,54 @@ def test_leftover_export_merges_every_registered_instance(
 
     scripted._write_leftover_export()
 
-    assert json.loads(export_path.read_text(encoding="utf-8")) == {
-        "prime.a": 1,
-        "prime.b": 1,
-    }
-    # An instance that never actually dispatches a call (a preflight-only
-    # instance built solely for ``check()``, which loads the replies file
-    # but never consumes one) never registers at all -- it must never
-    # contribute a false "leftover" count for replies nothing asked it to
-    # use.
-    untouched = ScriptedAdapter(replies_file=str(replies_path_b))
+    assert json.loads(export_path.read_text(encoding="utf-8")) == {}
+
+
+def test_leftover_export_a_preflight_only_instance_cannot_hide_a_leftover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preflight-only instance (built solely to call ``check()``, which
+    loads the replies file but never consumes a reply) now registers too --
+    but since the merge takes the *minimum* remaining count per path, its
+    full, untouched count can never pull a genuinely leftover reply's count
+    back up to look used."""
+    export_path = tmp_path / "leftover.json"
+    monkeypatch.setenv(scripted.LEFTOVER_REPLIES_EXPORT_ENV_VAR, str(export_path))
+    monkeypatch.setattr(scripted, "_export_instances", [], raising=False)
+    monkeypatch.setattr(scripted, "_export_hook_registered", False, raising=False)
+
+    replies_path = _write_replies(tmp_path, {"prime.only": [{"text": "used"}]})
+
+    untouched = ScriptedAdapter(replies_file=str(replies_path))
     untouched.check()
-    assert all(instance is not untouched for instance in scripted._export_instances)
+
+    scripted._write_leftover_export()
+
+    assert json.loads(export_path.read_text(encoding="utf-8")) == {"prime.only": 1}
+
+
+def test_leftover_export_per_attempt_fresh_instances_at_one_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path configured with two replies, consumed once each by two
+    independent fresh instances (``core.prompt._resolve_adapter`` building a
+    new instance per attempt for a non-default ``provider:``) -- each
+    instance's own queue starts over from its own first reply, so the
+    second reply is never reached by either instance and is correctly
+    reported left over."""
+    export_path = tmp_path / "leftover.json"
+    monkeypatch.setenv(scripted.LEFTOVER_REPLIES_EXPORT_ENV_VAR, str(export_path))
+    monkeypatch.setattr(scripted, "_export_instances", [], raising=False)
+    monkeypatch.setattr(scripted, "_export_hook_registered", False, raising=False)
+
+    replies_path = _write_replies(
+        tmp_path, {"prime.x": [{"text": "first"}, {"text": "second"}]}
+    )
+    monkeypatch.setattr(scripted, "current_call_path", lambda: "prime.x")
+
+    ScriptedAdapter(replies_file=str(replies_path)).generate(model="test", prompt="p")
+    ScriptedAdapter(replies_file=str(replies_path)).generate(model="test", prompt="p")
+
+    scripted._write_leftover_export()
+
+    assert json.loads(export_path.read_text(encoding="utf-8")) == {"prime.x": 1}

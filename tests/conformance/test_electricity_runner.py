@@ -196,10 +196,8 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     # one documented difference -- not applicable when one engine never ran
     # the document at all).
 
-    leftover = harness.read_leftover_replies(leftover_replies_path)
-    assert leftover == {}, (
-        f"{case_dir.name}: scripted replies left over after the run: {leftover} "
-        "-- remove them from the replies file or make the document consume them"
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
 
     if metadata["expect"] == "success":
