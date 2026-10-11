@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: shell: command 'echo' is blocked by the host's runtime.plugins.shell.allowed_commands pin ['ls']; adding it to params['allowed_commands'] cannot widen past the pin."
+}

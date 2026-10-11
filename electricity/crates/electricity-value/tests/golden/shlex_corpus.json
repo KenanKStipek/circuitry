@@ -1,0 +1,197 @@
+{
+  "shlex_split_cases": [
+    {
+      "input": "",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "input": "   ",
+      "expected": {
+        "ok": []
+      }
+    },
+    {
+      "input": "ffmpeg -i in.mp4 out.mp4",
+      "expected": {
+        "ok": [
+          "ffmpeg",
+          "-i",
+          "in.mp4",
+          "out.mp4"
+        ]
+      }
+    },
+    {
+      "input": "a 'b c' \"d e\"",
+      "expected": {
+        "ok": [
+          "a",
+          "b c",
+          "d e"
+        ]
+      }
+    },
+    {
+      "input": "a '' b",
+      "expected": {
+        "ok": [
+          "a",
+          "",
+          "b"
+        ]
+      }
+    },
+    {
+      "input": "'abc'def",
+      "expected": {
+        "ok": [
+          "abcdef"
+        ]
+      }
+    },
+    {
+      "input": "'it'\"'\"'s'",
+      "expected": {
+        "ok": [
+          "it's"
+        ]
+      }
+    },
+    {
+      "input": "a\\ b",
+      "expected": {
+        "ok": [
+          "a b"
+        ]
+      }
+    },
+    {
+      "input": "\"a\\$b\"",
+      "expected": {
+        "ok": [
+          "a\\$b"
+        ]
+      }
+    },
+    {
+      "input": "\"a\\\"b\"",
+      "expected": {
+        "ok": [
+          "a\"b"
+        ]
+      }
+    },
+    {
+      "input": "\"a\\\\b\"",
+      "expected": {
+        "ok": [
+          "a\\b"
+        ]
+      }
+    },
+    {
+      "input": "caf\u00e9 --flag 'na\u00efve value'",
+      "expected": {
+        "ok": [
+          "caf\u00e9",
+          "--flag",
+          "na\u00efve value"
+        ]
+      }
+    },
+    {
+      "input": "-vf scale=100:100",
+      "expected": {
+        "ok": [
+          "-vf",
+          "scale=100:100"
+        ]
+      }
+    },
+    {
+      "input": "'unterminated",
+      "expected": {
+        "err": "No closing quotation"
+      }
+    },
+    {
+      "input": "trailing\\",
+      "expected": {
+        "err": "No escaped character"
+      }
+    },
+    {
+      "input": "\"unterminated double",
+      "expected": {
+        "err": "No closing quotation"
+      }
+    },
+    {
+      "input": "a\\",
+      "expected": {
+        "err": "No escaped character"
+      }
+    },
+    {
+      "input": "'\\n'",
+      "expected": {
+        "ok": [
+          "\\n"
+        ]
+      }
+    },
+    {
+      "input": "--x=1 --y=2",
+      "expected": {
+        "ok": [
+          "--x=1",
+          "--y=2"
+        ]
+      }
+    }
+  ],
+  "shlex_quote_cases": [
+    {
+      "input": "",
+      "expected": "''"
+    },
+    {
+      "input": "plain-word_1.txt",
+      "expected": "plain-word_1.txt"
+    },
+    {
+      "input": "a b",
+      "expected": "'a b'"
+    },
+    {
+      "input": "it's",
+      "expected": "'it'\"'\"'s'"
+    },
+    {
+      "input": "caf\u00e9",
+      "expected": "'caf\u00e9'"
+    },
+    {
+      "input": "/abs/path/to/binary",
+      "expected": "/abs/path/to/binary"
+    },
+    {
+      "input": "key=value,more:stuff",
+      "expected": "key=value,more:stuff"
+    },
+    {
+      "input": "semi;colon",
+      "expected": "'semi;colon'"
+    },
+    {
+      "input": "a\nb",
+      "expected": "'a\nb'"
+    },
+    {
+      "input": "100%",
+      "expected": "100%"
+    }
+  ]
+}

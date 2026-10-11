@@ -11,15 +11,18 @@ description = "ToolPlugin trait, registry, and the json tool for electricity (el
 default = []
 # Blocking `sleep`/`fail` test tools, for the signal-handling test suite
 # only (issue #431's acceptance criteria) -- never compiled into a
-# release build. Pulls in `tokio`'s own timer (`SleepTool::execute`)
-# only when this feature is actually enabled.
-test-tools = ["dep:tokio"]
+# release build.
+test-tools = []
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
 async-trait = "0.1"
-tokio = { version = "1", features = ["time"], optional = true }
+# Non-optional as of lane C (#459): `process.rs`'s own `run_tracked`
+# needs tokio's process/io-util/time/rt features unconditionally, not
+# only behind `test-tools`.
+tokio = { version = "1", features = ["process", "io-util", "time", "rt"] }
+libc = "0.2"
 # `hash` (plugins/hash.py): hashlib's own algorithm set, split across
 # the RustCrypto family's per-algorithm crates (same `digest` 0.10 line
 # as the workspace's existing `sha2` dependency, so there's only ever
@@ -50,10 +53,10 @@ jiff = "0.2"
 # `clock`'s own `%<other>` directives (everything but the `%f`/`%z`/
 # `%Z` CPython pre-processes itself -- #448 decision 8) go to the
 # platform's own C `strftime`, not a pure-Rust reimplementation of it.
-libc = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "time", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "process", "io-util", "time", "test-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+libc = "0.2"

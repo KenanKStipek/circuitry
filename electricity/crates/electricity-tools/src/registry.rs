@@ -68,11 +68,7 @@ fn builders() -> HashMap<&'static str, Builder> {
     // Circuitry itself doesn't recognize the name.
     map.insert(
         "shell",
-        |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
-            Ok(Box::new(crate::shell::ShellPlugin {
-                pinned_allowed_commands: None,
-            }))
-        },
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::shell::make_plugin(cfg) },
     );
     map.insert(
         "awk",
@@ -262,6 +258,42 @@ mod tests {
             Ok(_) => panic!("expected an unknown-plugin error"),
         };
         assert!(err.message.starts_with("Unknown plugin: 'mcp'."));
+    }
+
+    #[test]
+    fn build_plugin_validates_the_shell_host_pin_per_attempt() {
+        // `shell::make_plugin` (lane C's own `_build_shell` seam) --
+        // a non-list `allowed_commands` pin fails this one attempt's
+        // build, matching Python's own per-attempt `ValueError`.
+        let mut cfg = electricity_value::Dict::new();
+        let mut plugins = electricity_value::Dict::new();
+        let mut shell_cfg = electricity_value::Dict::new();
+        shell_cfg.insert(Value::from("allowed_commands"), Value::from("not-a-list"));
+        plugins.insert(Value::from("shell"), Value::Dict(shell_cfg));
+        cfg.insert(Value::from("plugins"), Value::Dict(plugins));
+        let err = match build_plugin("shell", &Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected a bad-pin build error"),
+        };
+        assert_eq!(
+            err.message,
+            "runtime.plugins.shell.allowed_commands must be a list of strings."
+        );
+    }
+
+    #[test]
+    fn build_plugin_builds_a_pinned_shell_plugin_from_config() {
+        let mut cfg = electricity_value::Dict::new();
+        let mut plugins = electricity_value::Dict::new();
+        let mut shell_cfg = electricity_value::Dict::new();
+        shell_cfg.insert(
+            Value::from("allowed_commands"),
+            Value::List(vec![Value::from("ls")]),
+        );
+        plugins.insert(Value::from("shell"), Value::Dict(shell_cfg));
+        cfg.insert(Value::from("plugins"), Value::Dict(plugins));
+        let plugin = build_plugin("shell", &Value::Dict(cfg)).unwrap();
+        assert_eq!(plugin.name(), "shell");
     }
 
     #[test]

@@ -1,0 +1,9 @@
+name: c-ffmpeg-unsafe-filter-complex
+effects:
+  - type: tool
+    name: result
+    provider: ffmpeg
+    params:
+      input: in.mp4
+      output: out.mp4
+      filter_complex: "scale=100:100 && rm -rf /"

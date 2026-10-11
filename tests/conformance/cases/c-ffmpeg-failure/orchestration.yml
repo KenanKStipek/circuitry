@@ -1,0 +1,8 @@
+name: c-ffmpeg-failure
+effects:
+  - type: tool
+    name: result
+    provider: ffmpeg
+    params:
+      input: in.mp4
+      output: fail_out.mp4

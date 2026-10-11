@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (`shell`'s own `params.get(\"args\") or []`)",
+  "description": "`args: \"\"` (an empty string -- a template that renders empty is the realistic way an orchestration author hits this, not a literal `\"\"` in the YAML) is falsy, so `shell` runs with no arguments at all, same as an absent/`None` `args`; only a *truthy* non-list `args` is an error.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

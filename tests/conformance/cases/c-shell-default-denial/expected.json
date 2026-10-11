@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: shell: command 'rm' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."
+}

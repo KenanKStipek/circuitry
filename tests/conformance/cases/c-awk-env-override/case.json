@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (awk env override, PATH fake)",
+  "description": "`awk`'s own candidate list (`awk, gawk, mawk`) resolves through the case's own `fakes/` directory first on PATH (issue #450 item 4) -- named literally `awk` here, so no real `awk`/ImageMagick needs to be installed. `runtime.plugins.awk.env` reaches the child's own environment; the `--print-env` fake proves it.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

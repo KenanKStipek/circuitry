@@ -275,7 +275,7 @@ impl<'a> Supported<'a> {
             // lane R (#448)
             preflight: false,
             // lane C (#448)
-            tools_process: false,
+            tools_process: true,
             // lane D1 (#460)
             tools_stdlib: true,
             // lane D2 (#448)
@@ -531,11 +531,12 @@ mod tests {
         // Review P2-b on PR #454: `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
         // (pinned forever to the exact M0 value by the golden tests
-        // below) -- every field still agrees with `Supported::m0` until
-        // its own lane lands. Lane H (#448, #461) is the first to land:
-        // `current.loop_` now asserts `true` directly instead of
-        // comparing against `m0.loop_`, which stays pinned to `false`
-        // forever.
+        // below) -- now that lanes C (#459), D1 (#460) and H (#448,
+        // #461) have landed, `current` and `m0` diverge on
+        // `tools_process`/`tools_stdlib`/`loop_`; every other field
+        // must still agree field for field. `current.loop_` asserts
+        // `true` directly instead of comparing against `m0.loop_`,
+        // which stays pinned to `false` forever.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
         assert_eq!(current.prompt, m0.prompt);
@@ -548,9 +549,7 @@ mod tests {
         assert_eq!(current.model_expect, m0.model_expect);
         assert_eq!(current.declared_prompts, m0.declared_prompts);
         assert_eq!(current.preflight, m0.preflight);
-        assert_eq!(current.tools_process, m0.tools_process);
-        // lane D1 (#460): `tools_stdlib` is the first M1 flag to flip --
-        // `fs`/`env_vars`/`hash`/`uuid`/`clock` are real now.
+        assert!(current.tools_process);
         assert!(current.tools_stdlib);
         assert_eq!(current.tool_regex, m0.tool_regex);
         assert_eq!(current.tool_http, m0.tool_http);

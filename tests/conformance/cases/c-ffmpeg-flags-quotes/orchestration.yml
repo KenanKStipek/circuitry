@@ -1,0 +1,9 @@
+name: c-ffmpeg-flags-quotes
+effects:
+  - type: tool
+    name: result
+    provider: ffmpeg
+    params:
+      input: in.mp4
+      output: out.mp4
+      flags: "-metadata title='a quoted value' -vf scale=100:100"

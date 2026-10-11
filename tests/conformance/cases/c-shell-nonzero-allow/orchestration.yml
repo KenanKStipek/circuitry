@@ -1,0 +1,10 @@
+name: c-shell-nonzero-allow
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "partial output", "--exit", "7"]
+      allow_nonzero: true

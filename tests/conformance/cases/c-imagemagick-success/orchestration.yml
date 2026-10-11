@@ -1,0 +1,7 @@
+name: c-imagemagick-success
+effects:
+  - type: tool
+    name: result
+    provider: imagemagick
+    params:
+      args: ["--stdout", "hello from the fake magick"]

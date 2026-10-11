@@ -1,0 +1,9 @@
+name: c-shell-cwd-not-a-directory
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: echo
+      allowed_commands: [echo]
+      cwd: orchestration.yml

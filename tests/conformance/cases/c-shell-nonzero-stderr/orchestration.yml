@@ -1,0 +1,9 @@
+name: c-shell-nonzero-stderr
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stderr", "boom", "--exit", "1"]
