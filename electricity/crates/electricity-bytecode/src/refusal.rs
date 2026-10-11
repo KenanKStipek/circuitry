@@ -89,10 +89,11 @@ pub enum RefusalReason {
     UnsupportedToolProvider(String),
     /// An unexpanded `{{> name}}` partial reference in a field the VM
     /// would otherwise render (a supported tool's `prompt`/`params`/
-    /// `params_json`) -- the run-time half of #406 never ran to splice
-    /// it in. Unconditional (not one of [`Supported`]'s own flags):
-    /// M1-P's own landing removes this check from the walker entirely,
-    /// rather than ever gating it behind a flag of its own.
+    /// `params_json`, or a supported `use`'s own `inputs` -- M1 gate
+    /// seam round 2, item S7) -- the run-time half of #406 never ran
+    /// to splice it in. Unconditional (not one of [`Supported`]'s own
+    /// flags): M1-P's own landing removes this check from the walker
+    /// entirely, rather than ever gating it behind a flag of its own.
     PartialReference,
     /// The document's own top-level `adapter:` is a non-blank string,
     /// and [`Supported::preflight`] is `false` -- `cli/allowlist.py::
@@ -328,6 +329,17 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                 && matches!(&use_op.expect, Some(ExpectCondition::Model { .. }))
             {
                 return refusal(path, RefusalReason::ModelExpect);
+            }
+            // S7 (M1 gate seam round 2): the `{{> name}}` check below
+            // only ever looked at a tool's own `prompt`/`params`/
+            // `params_json` -- a `use`'s own `inputs` renders the same
+            // way (`crate::params`) and never got the same check, so
+            // it was wrongly accepted. Unconditional, same as the
+            // tool check -- not gated by one of `Supported`'s own
+            // flags, until M1-P's own landing removes this check from
+            // the walker entirely.
+            if use_op.inputs.as_ref().is_some_and(param_node_has_partial) {
+                return refusal(path, RefusalReason::PartialReference);
             }
             None
         }
@@ -1298,6 +1310,37 @@ mod tests {
         let program = program_with_root(root_block(vec![tool]));
         let refusal = first_unsupported(&program, &m0()).unwrap();
         assert_eq!(refusal.reason, RefusalReason::PartialReference);
+    }
+
+    #[test]
+    fn an_unexpanded_partial_in_use_inputs_is_refused_even_once_use_is_supported() {
+        // S7 (M1 gate seam round 2): `UseOp::inputs` renders the same
+        // way a tool's own `params`/`params_json` does, so an
+        // unexpanded `{{> name}}` inside it must be refused the same
+        // way -- this walker used to only ever check a tool's fields.
+        let mut inputs = IndexMap::new();
+        inputs.insert(
+            electricity_value::Value::Str("greeting".to_string()),
+            ParamNode::Template(TemplateText::new("{{> greeting}}", true, Escape::Html)),
+        );
+        let use_path = EffectPath::root().push_name("sub");
+        let use_op = leaf_op(
+            use_path.clone(),
+            LeafKind::Use(crate::effects::UseOp {
+                source: crate::effects::UseSource::Path("child.yml".to_string()),
+                inputs: Some(ParamNode::Map(inputs)),
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy::default(),
+                expect: None,
+                description: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![use_op]));
+        let supported = Supported { use_: true, ..m0() };
+        let refusal = first_unsupported(&program, &supported).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::PartialReference);
+        assert_eq!(refusal.path, use_path);
     }
 
     #[test]
