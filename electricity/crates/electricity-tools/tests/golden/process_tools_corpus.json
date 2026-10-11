@@ -1,0 +1,491 @@
+{
+  "drawtext_escape_cases": [
+    {
+      "text": "",
+      "expected": "\"\""
+    },
+    {
+      "text": "plain text",
+      "expected": "\"plain text\""
+    },
+    {
+      "text": "say \"hi\" it's\nme",
+      "expected": "\"say \\\"hi\\\" it\u2019s me\""
+    },
+    {
+      "text": "line1\r\nline2",
+      "expected": "\"line1 line2\""
+    },
+    {
+      "text": "100% done\\path",
+      "expected": "\"100%% done\\\\path\""
+    },
+    {
+      "text": "unicode \u2028 line separator",
+      "expected": "\"unicode   line separator\""
+    }
+  ],
+  "drawtext_filter_cases": [
+    {
+      "cfg": {
+        "text": "hello"
+      },
+      "expected": "drawtext=text=\"hello\""
+    },
+    {
+      "cfg": {
+        "text": "\"hi.\"",
+        "x": "10",
+        "y": "20"
+      },
+      "expected": "drawtext=text=\"hi.\":x=10:y=20"
+    },
+    {
+      "cfg": {
+        "text": "'quoted'",
+        "fontsize": 24,
+        "fontcolor": "white"
+      },
+      "expected": "drawtext=text=\"quoted\":fontsize=24:fontcolor=white"
+    },
+    {
+      "cfg": {
+        "text": "multi\nline\r\ntext",
+        "box": "1",
+        "boxcolor": "black@0.5"
+      },
+      "expected": "drawtext=text=\"multi line text\":box=1:boxcolor=black@0.5"
+    }
+  ],
+  "check_safe_cases": [
+    {
+      "value": "input.mp4",
+      "field": "input",
+      "expected_error": null
+    },
+    {
+      "value": "out;rm -rf /",
+      "field": "output",
+      "expected_error": "ffmpeg params['output'] contains unsafe shell characters: ';'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "-vf scale=100",
+      "field": "flags",
+      "expected_error": null
+    },
+    {
+      "value": "a && b",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '&&'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "a | b",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '|'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "a > b",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '>'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "a < b",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '<'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "`cmd`",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '`'. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "$(cmd)",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '$('. Only plain ffmpeg arguments are allowed."
+    },
+    {
+      "value": "a\nb",
+      "field": "flags",
+      "expected_error": "ffmpeg params['flags'] contains unsafe shell characters: '\\n'. Only plain ffmpeg arguments are allowed."
+    }
+  ],
+  "check_filter_safe_cases": [
+    {
+      "value": "scale=100:100",
+      "expected_error": null
+    },
+    {
+      "value": "a|b;c",
+      "expected_error": null
+    },
+    {
+      "value": "a && b",
+      "expected_error": "ffmpeg params['filter_complex'] contains unsafe characters: '&&'. Only ffmpeg filter graph expressions are allowed."
+    },
+    {
+      "value": "a > b",
+      "expected_error": "ffmpeg params['filter_complex'] contains unsafe characters: '>'. Only ffmpeg filter graph expressions are allowed."
+    },
+    {
+      "value": "`cmd`",
+      "expected_error": "ffmpeg params['filter_complex'] contains unsafe characters: '`'. Only ffmpeg filter graph expressions are allowed."
+    },
+    {
+      "value": "$(cmd)",
+      "expected_error": "ffmpeg params['filter_complex'] contains unsafe characters: '$('. Only ffmpeg filter graph expressions are allowed."
+    },
+    {
+      "value": "a\nb",
+      "expected_error": "ffmpeg params['filter_complex'] contains unsafe characters: '\\n'. Only ffmpeg filter graph expressions are allowed."
+    }
+  ],
+  "shell_validation_cases": [
+    {
+      "params": {},
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell requires params['command'] as a string."
+    },
+    {
+      "params": {
+        "command": "   "
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell requires params['command'] as a string."
+    },
+    {
+      "params": {
+        "command": 5
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell requires params['command'] as a string."
+    },
+    {
+      "params": {
+        "command": "ls; rm -rf /"
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: command 'ls; rm -rf /' must be alphanumeric (with optional -_); use args for everything else."
+    },
+    {
+      "params": {
+        "command": "ls/../etc"
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: command 'ls/../etc' must be alphanumeric (with optional -_); use args for everything else."
+    },
+    {
+      "params": {
+        "command": "rm"
+      },
+      "pin": null,
+      "expected_error_class": "PermissionError",
+      "expected_error_message": "shell: command 'rm' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."
+    },
+    {
+      "params": {
+        "command": "rm",
+        "allowed_commands": [
+          "rm"
+        ]
+      },
+      "pin": [
+        "ls"
+      ],
+      "expected_error_class": "PermissionError",
+      "expected_error_message": "shell: command 'rm' is blocked by the host's runtime.plugins.shell.allowed_commands pin ['ls']; adding it to params['allowed_commands'] cannot widen past the pin."
+    },
+    {
+      "params": {
+        "command": "ls",
+        "allowed_commands": "nope"
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: params['allowed_commands'] must be a list of strings."
+    },
+    {
+      "params": {
+        "command": "ls",
+        "allowed_commands": [
+          1,
+          2
+        ]
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: params['allowed_commands'] must be a list of strings."
+    },
+    {
+      "params": {
+        "command": "ls",
+        "args": "nope"
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: params['args'] must be a list."
+    },
+    {
+      "params": {
+        "command": "ls",
+        "args": [
+          "a\u0000b"
+        ]
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: args[0] contains forbidden char '\\x00'."
+    },
+    {
+      "params": {
+        "command": "ls",
+        "args": [
+          "a\nb"
+        ]
+      },
+      "pin": null,
+      "expected_error_class": "ValueError",
+      "expected_error_message": "shell: args[0] contains forbidden char '\\n'."
+    },
+    {
+      "params": {
+        "command": "yt-dlp"
+      },
+      "pin": null,
+      "expected_error_class": "PermissionError",
+      "expected_error_message": "shell: command 'yt-dlp' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."
+    }
+  ],
+  "str_conversion_cases": [
+    {
+      "value": true,
+      "expected": "True"
+    },
+    {
+      "value": false,
+      "expected": "False"
+    },
+    {
+      "value": 1,
+      "expected": "1"
+    },
+    {
+      "value": -1,
+      "expected": "-1"
+    },
+    {
+      "value": 1.0,
+      "expected": "1.0"
+    },
+    {
+      "value": 1.5,
+      "expected": "1.5"
+    },
+    {
+      "value": null,
+      "expected": "None"
+    },
+    {
+      "value": "already a string",
+      "expected": "already a string"
+    },
+    {
+      "value": [
+        1,
+        2,
+        "three"
+      ],
+      "expected": "[1, 2, 'three']"
+    },
+    {
+      "value": {
+        "a": 1
+      },
+      "expected": "{'a': 1}"
+    }
+  ],
+  "plugin_env_override_cases": [
+    {
+      "cfg": {},
+      "expected_error": null,
+      "expected_env": null
+    },
+    {
+      "cfg": {
+        "env": null
+      },
+      "expected_error": null,
+      "expected_env": null
+    },
+    {
+      "cfg": {
+        "env": {}
+      },
+      "expected_error": null,
+      "expected_env": null
+    },
+    {
+      "cfg": {
+        "env": "not-a-mapping"
+      },
+      "expected_error": "runtime.plugins.awk.env must be a mapping of environment variable names to values, got str.",
+      "expected_env": null
+    },
+    {
+      "cfg": {
+        "env": [
+          1,
+          2
+        ]
+      },
+      "expected_error": "runtime.plugins.awk.env must be a mapping of environment variable names to values, got list.",
+      "expected_env": null
+    },
+    {
+      "cfg": {
+        "env": {
+          "A": "1",
+          "B": 2
+        }
+      },
+      "expected_error": null,
+      "expected_env": {
+        "A": "1",
+        "B": "2"
+      }
+    },
+    {
+      "cfg": {
+        "env": {
+          "A": true
+        }
+      },
+      "expected_error": null,
+      "expected_env": {
+        "A": "True"
+      }
+    }
+  ],
+  "resolve_plugin_binary_cases": [
+    {
+      "plugin_name": "awk",
+      "candidates": [
+        "definitely-not-a-real-binary"
+      ],
+      "configured": null,
+      "expected_error": "awk: none of ['definitely-not-a-real-binary'] found on PATH. Install one of them, or set runtime.plugins.awk.binary."
+    },
+    {
+      "plugin_name": "awk",
+      "candidates": [
+        "awk"
+      ],
+      "configured": "relative/path",
+      "expected_error": "awk: configured runtime.plugins.awk.binary='relative/path' must be an absolute path (resolved: relative/path)."
+    }
+  ],
+  "check_binary_cases": [
+    {
+      "candidates": [
+        "definitely-not-a-real-binary"
+      ],
+      "label": "definitely-not-a-real-binary",
+      "configured": null,
+      "plugin_name": "awk",
+      "expected_ok": false,
+      "expected_missing": [
+        "binary:definitely-not-a-real-binary"
+      ],
+      "expected_message": "none of ['definitely-not-a-real-binary'] found on PATH. Install one of them, or set runtime.plugins.awk.binary."
+    },
+    {
+      "candidates": [
+        "ffmpeg"
+      ],
+      "label": "ffmpeg",
+      "configured": "relative/path",
+      "plugin_name": "ffmpeg",
+      "expected_ok": false,
+      "expected_missing": [
+        "binary:ffmpeg"
+      ],
+      "expected_message": "configured runtime.plugins.ffmpeg.binary='relative/path' must be an absolute path (resolved: relative/path)."
+    }
+  ],
+  "utf8_decode_cases": [
+    {
+      "bytes_hex": "68656c6c6f20776f726c64",
+      "expected_error": null,
+      "expected_text": "hello world"
+    },
+    {
+      "bytes_hex": "68c3a96c6c6f2077c3b6726c64",
+      "expected_error": null,
+      "expected_text": "h\u00e9llo w\u00f6rld"
+    },
+    {
+      "bytes_hex": "e697a5e69cace8aa9e",
+      "expected_error": null,
+      "expected_text": "\u65e5\u672c\u8a9e"
+    },
+    {
+      "bytes_hex": "ff",
+      "expected_error": "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "fe",
+      "expected_error": "'utf-8' codec can't decode byte 0xfe in position 0: invalid start byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "616263ff646566",
+      "expected_error": "'utf-8' codec can't decode byte 0xff in position 3: invalid start byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "c2",
+      "expected_error": "'utf-8' codec can't decode byte 0xc2 in position 0: unexpected end of data",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "c200",
+      "expected_error": "'utf-8' codec can't decode byte 0xc2 in position 0: invalid continuation byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "e09f80",
+      "expected_error": "'utf-8' codec can't decode byte 0xe0 in position 0: invalid continuation byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "eda080",
+      "expected_error": "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "f0808080",
+      "expected_error": "'utf-8' codec can't decode byte 0xf0 in position 0: invalid continuation byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "f4908080",
+      "expected_error": "'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte",
+      "expected_text": null
+    },
+    {
+      "bytes_hex": "00",
+      "expected_error": null,
+      "expected_text": "\u0000"
+    },
+    {
+      "bytes_hex": "",
+      "expected_error": null,
+      "expected_text": ""
+    }
+  ]
+}

@@ -13,11 +13,11 @@ use electricity_value::Value;
 /// env`, so a real body here needs `?`, not a function lane C would
 /// have to widen the return type of first). Signature only; lane C
 /// fills the body.
-pub fn make_plugin(_cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
+pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
     Ok(Box::new(GenericSubprocessTool {
         name: "awk".to_string(),
         binary_candidates: vec!["awk".to_string(), "gawk".to_string(), "mawk".to_string()],
-        binary: None,
-        env: None,
+        binary: crate::subprocess_tool::plugin_binary_override(cfg),
+        env: crate::subprocess_tool::plugin_env_override(cfg, "awk")?,
     }))
 }
