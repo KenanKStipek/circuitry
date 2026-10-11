@@ -236,34 +236,34 @@ impl<'a> Supported<'a> {
     /// to [`Supported::m0`]'s own value until the first M1 lane lands.
     pub fn current(providers: &'a [&'a str]) -> Self {
         Supported {
-            prompt: false,
             // lane G (#448)
-            loop_: false,
+            prompt: false,
             // lane H (#448)
-            use_: false,
+            loop_: false,
             // lane I (#448)
-            yield_: false,
+            use_: false,
             // lane P (#448)
-            reflector: false,
+            yield_: false,
             // lane L1 (#448)
+            reflector: false,
+            // lane G2 (#448)
             model_condition: false,
             // lane G2 (#448)
             model_expect: false,
-            // lane G2 (#448)
-            declared_prompts: false,
             // lane P (#448)
-            preflight: false,
+            declared_prompts: false,
             // lane R (#448)
-            tools_process: false,
+            preflight: false,
             // lane C (#448)
-            tools_stdlib: false,
+            tools_process: false,
             // lane D1 (#448)
-            tool_regex: false,
+            tools_stdlib: false,
             // lane D2 (#448)
-            tool_http: false,
+            tool_regex: false,
             // lane E (#448)
-            tool_validate_yaml: false,
+            tool_http: false,
             // lane L2 (#448)
+            tool_validate_yaml: false,
             providers,
         }
     }
