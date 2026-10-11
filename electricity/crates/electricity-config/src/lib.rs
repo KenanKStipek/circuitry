@@ -42,6 +42,7 @@ pub mod dotenv;
 mod effective_settings;
 mod merge;
 mod persistence;
+mod profile;
 mod util;
 
 pub use allowlist::{
@@ -60,6 +61,11 @@ pub use config::{CircuitryConfig, ConfigError, resolve_config};
 pub use effective_settings::{EffectiveSettings, effective_settings};
 pub use merge::merge_runtime;
 pub use persistence::persistence_enabled;
+pub use profile::{
+    ProfileError, ProfileSettings, collect_orchestration_condition_paths,
+    collect_orchestration_effect_paths, condition_target_message, profile_name_from_path,
+    settings_from_raw, validate_effect_paths, validate_profile_routing_pins,
+};
 
 use electricity_value::Value;
 

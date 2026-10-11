@@ -514,6 +514,7 @@ fn profile_validator() -> &'static jsonschema::Validator {
     VALIDATOR.get_or_init(|| {
         jsonschema::draft7::options()
             .should_validate_formats(false)
+            .with_keyword("type", type_keyword_factory)
             .build(profile_schema())
             .expect("bundled profile.schema.json compiles as Draft 7")
     })
@@ -570,10 +571,17 @@ fn is_spurious_marker_error(err: &ValidationError<'_>) -> bool {
 /// Every schema violation in `document` against Circuitry's
 /// `schema/profile.schema.json`; empty when it conforms. Mirrors
 /// `cli.profiles._validate_profile_schema`'s accept/reject verdict and, for
-/// each violation, its `/`-joined location exactly.
+/// each violation, its `/`-joined location exactly. Carries the same
+/// [`is_spurious_marker_error`] filter [`orchestration_errors`] applies,
+/// for the same reason: a `Date`/`DateTime`/`Bytes`/`NaN`/`Infinity`
+/// marker under `effects`/`persistence`/`inputs` is a real JSON object as
+/// far as the object-shape keywords (`required`, `additionalProperties`,
+/// ...) are concerned, where Python's own `isinstance(value, dict)` is
+/// `False` for every one of those values.
 pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
     profile_validator()
         .iter_errors(document)
+        .filter(|err| !is_spurious_marker_error(err))
         .map(|err| SchemaError {
             location: profile_location(err.instance_path.as_str()),
             message: substitute_value_prefix(&err.instance, err.to_string()),
@@ -616,16 +624,97 @@ fn orchestration_location(document: &Value, instance_pointer: &str) -> String {
 }
 
 /// `cli.profiles._validate_profile_schema`'s location: raw path segments
-/// joined with `/`, or `"<root>"` for the document root.
+/// joined with `/`, or `"<root>"` for the document root. Each segment is
+/// `str(p)`, not `repr(p)` (`"/".join(str(p) for p in e.path)`) -- for
+/// every marker type but a date/datetime the two forms are identical
+/// (`int`/`bool`/`float`/`None`/`bytes` all have `str() == repr()` in
+/// CPython), so [`decode_non_string_key_segment`] only has real work to
+/// do for one.
 fn profile_location(instance_pointer: &str) -> String {
     let segments: Vec<String> = pointer_segments(instance_pointer)
         .map(unescape_json_pointer_segment)
+        .map(|segment| decode_non_string_key_segment(&segment))
         .collect();
     if segments.is_empty() {
         "<root>".to_string()
     } else {
         segments.join("/")
     }
+}
+
+/// `str(p)` for a profile location path segment: unchanged for an
+/// ordinary string segment or a [`non_string_key_marker`] whose own
+/// `repr()` text already equals its `str()` (every marker type but a
+/// date/datetime); for a `datetime.date(...)`/`datetime.datetime(...)`
+/// marker, the equivalent `str()` rendering, parsed back out of the
+/// fixed shape `electricity-compiler`'s own `schema_instance.rs` always
+/// produces for one -- see [`python_str_of_marker_repr`]'s own doc
+/// comment for the one residual gap (an aware `datetime.datetime`).
+fn decode_non_string_key_segment(segment: &str) -> String {
+    match segment.strip_prefix(NON_STRING_KEY_PREFIX) {
+        Some(repr_text) => python_str_of_marker_repr(repr_text),
+        None => segment.to_string(),
+    }
+}
+
+/// Python's `str(key)` for a non-string `Dict` key the schema instance
+/// encodes as [`NON_STRING_KEY_PREFIX`] plus the key's own `repr()` text
+/// -- `cli.profiles`' own location format joins `str(p)` for each
+/// `jsonschema` error path segment, not `repr(p)`. A `datetime.date`'s
+/// `repr()` (`"datetime.date(2024, 1, 1)"`) and `str()` (`"2024-01-01"`)
+/// differ, so this parses the fixed, deterministic repr shape back into
+/// the `str()` form directly, without needing the original value (the
+/// marker's own repr text is all this crate has by the time a location
+/// is rendered).
+///
+/// **Known gap:** an *aware* `datetime.datetime` (one whose repr carries
+/// a trailing `tzinfo=...`) keeps its repr form rather than rendering
+/// the UTC-offset suffix `str()` would add -- not reachable through the
+/// bundled profile schema today (no property accepts a free-form
+/// mapping whose *key* could plausibly be a timezone-aware date-time),
+/// so narrowing this further is deferred rather than guessed at.
+fn python_str_of_marker_repr(repr_text: &str) -> String {
+    if let Some(args) = repr_text
+        .strip_prefix("datetime.date(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let parts = parse_decimal_args(args);
+        if let [y, m, d] = parts.as_slice() {
+            return format!("{y:04}-{m:02}-{d:02}");
+        }
+    }
+    if let Some(args) = repr_text
+        .strip_prefix("datetime.datetime(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        if !args.contains("tzinfo=") {
+            let parts = parse_decimal_args(args);
+            if parts.len() >= 3 {
+                let (y, m, d) = (parts[0], parts[1], parts[2]);
+                let h = parts.get(3).copied().unwrap_or(0);
+                let mi = parts.get(4).copied().unwrap_or(0);
+                let s = parts.get(5).copied().unwrap_or(0);
+                let us = parts.get(6).copied().unwrap_or(0);
+                return if us == 0 {
+                    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+                } else {
+                    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}")
+                };
+            }
+        }
+    }
+    repr_text.to_string()
+}
+
+/// Every comma-separated argument in a `datetime.date(...)`/`datetime.
+/// datetime(...)` repr's parenthesized body, parsed as a plain decimal
+/// integer -- `None` (dropped) for anything that isn't one, so a
+/// `tzinfo=...` trailing keyword argument (never reached here; callers
+/// check for it first) wouldn't corrupt the positional list either way.
+fn parse_decimal_args(args: &str) -> Vec<i64> {
+    args.split(',')
+        .filter_map(|part| part.trim().parse::<i64>().ok())
+        .collect()
 }
 
 /// JSON Pointer segments, root (`""`) yielding none: `split('/')` always
@@ -862,6 +951,43 @@ mod tests {
         let errors = profile_errors(&doc);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].location, "<root>");
+    }
+
+    #[test]
+    fn profile_non_json_scalar_marker_under_a_bare_object_position_fails_type_not_additional_properties()
+     {
+        // `inputs`/`effects.<path>`/`persistence` are all bare `"type":
+        // "object"` positions a non-JSON scalar marker would otherwise
+        // vacuously pass -- same fix as `orchestration_validator`'s.
+        let marker = non_json_scalar("2024-01-01", false);
+        let doc = json!({"inputs": marker});
+        let errors = profile_errors(&doc);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].location, "inputs");
+        assert!(errors[0].message.contains("not of type"));
+    }
+
+    #[test]
+    fn profile_non_string_date_key_location_renders_str_not_repr() {
+        let marker_key = non_string_key_marker("datetime.date(2024, 1, 1)");
+        let doc = json!({"inputs": {marker_key: "x"}});
+        // Not a schema failure on its own (inputs is free-form) -- probe
+        // the decoder directly instead of through a real error path.
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.date(2024, 1, 1)"
+            )),
+            "2024-01-01"
+        );
+        let _ = doc;
+    }
+
+    #[test]
+    fn profile_non_string_int_key_str_equals_repr() {
+        assert_eq!(
+            decode_non_string_key_segment(&format!("{NON_STRING_KEY_PREFIX}1")),
+            "1"
+        );
     }
 
     #[test]

@@ -91,6 +91,16 @@ impl RoutingSettings {
             .iter()
             .find(|band| band.max.is_none_or(|max| value <= max))
     }
+
+    /// `band_named` (`cli/complexity_config.py`): the band whose own
+    /// `name` equals *name*, by direct identifier rather than by score --
+    /// a profile's per-effect `routing: <band-name>` pin reads a table
+    /// this way. A band with no `name` can never match.
+    pub fn band_named(&self, name: &str) -> Option<&ComplexityBand> {
+        self.bands
+            .iter()
+            .find(|band| band.name.as_deref() == Some(name))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
