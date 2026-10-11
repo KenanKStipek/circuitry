@@ -182,21 +182,38 @@ pub fn walk_orchestration_refs(
     (adapters, tools)
 }
 
-/// `allowlist.py::orchestration_denials`, narrowed to a top-level
-/// document (no `use` walk -- see this module's own doc comment).
-fn orchestration_denials(
+/// `allowlist.py::orchestration_denials`. Public (M1 lane I
+/// prerequisites, issue #448, item U4): *skip_templated* and
+/// *include_document_adapter* are Python's own named keyword
+/// parameters -- `cli/allowlist.py::check_allowlist`'s own per-child
+/// loop passes `skip_templated=True, include_document_adapter=False`
+/// for each `use` child it walks (`iter_use_children`), never for the
+/// top-level document itself ([`check_allowlist`]'s own call below).
+/// Lane I's own runtime check (vm-lanes.md's `exec/use_.rs` row) calls
+/// this directly, per freshly-loaded child, the same way.
+///
+/// *skip_templated* leaves a name with a Mustache tag in it (an
+/// unrendered `inline:` child's `provider: "{{input.tool}}"`) unjudged:
+/// it only becomes a name once rendered, and the run-time gate checks
+/// it then.
+pub fn orchestration_denials(
     document: &Value,
     enabled_adapters: Option<&[String]>,
     enabled_tools: Option<&[String]>,
+    skip_templated: bool,
+    include_document_adapter: bool,
 ) -> Vec<String> {
-    let (adapter_refs, tool_refs) = walk_orchestration_refs(document, true);
+    let (adapter_refs, tool_refs) = walk_orchestration_refs(document, include_document_adapter);
+    let skip = |name: &str| skip_templated && name.contains("{{");
     let mut errors: Vec<String> = adapter_refs
         .iter()
+        .filter(|name| !skip(name))
         .filter_map(|name| adapter_denial(name, enabled_adapters))
         .collect();
     errors.extend(
         tool_refs
             .iter()
+            .filter(|name| !skip(name))
             .filter_map(|name| tool_denial(name, enabled_tools)),
     );
     errors
@@ -209,6 +226,8 @@ pub fn check_allowlist(document: &Value, config: &CircuitryConfig) -> Vec<String
         document,
         config.enabled_adapters.as_deref(),
         config.enabled_tools.as_deref(),
+        false,
+        true,
     )
 }
 
@@ -330,5 +349,47 @@ mod tests {
     #[test]
     fn capability_allow_is_always_empty() {
         assert_eq!(capability_allow(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn orchestration_denials_skips_a_templated_name_only_when_asked() {
+        let mut tool_effect = Dict::new();
+        tool_effect.insert(Value::Str("type".to_string()), Value::from("tool"));
+        tool_effect.insert(
+            Value::Str("provider".to_string()),
+            Value::from("{{input.tool}}"),
+        );
+        let document = doc_from_pairs(vec![(
+            "effects",
+            Value::List(vec![Value::Dict(tool_effect)]),
+        )]);
+        let enabled_tools = vec!["json".to_string()];
+
+        // A top-level document is judged as written -- a literal template
+        // there is not going to render into something else.
+        let strict = orchestration_denials(&document, None, Some(&enabled_tools), false, true);
+        assert_eq!(strict.len(), 1);
+
+        // A `use` child's own templated provider is left unjudged here --
+        // it only becomes a name once rendered.
+        let skipped = orchestration_denials(&document, None, Some(&enabled_tools), true, true);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn orchestration_denials_can_leave_the_document_adapter_out() {
+        let document = doc_from_pairs(vec![("adapter", Value::from("openai"))]);
+        let enabled_adapters = vec!["ollama".to_string()];
+
+        let with_document_adapter =
+            orchestration_denials(&document, Some(&enabled_adapters), None, false, true);
+        assert_eq!(with_document_adapter.len(), 1);
+
+        // A `use` child's own top-level `adapter:` is dead text (it runs
+        // on the adapter object its parent already built), so a child's
+        // own walk never judges it.
+        let without_document_adapter =
+            orchestration_denials(&document, Some(&enabled_adapters), None, false, false);
+        assert!(without_document_adapter.is_empty());
     }
 }
