@@ -50,3 +50,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
+# `test-tools`'s own `flaky_build` builder (S1's own test: a fallible
+# per-attempt plugin *builder*, not just a flaky `execute`) -- only ever
+# active for this crate's own test target, never a release build.
+electricity-tools = { path = "../electricity-tools", features = ["test-tools"] }

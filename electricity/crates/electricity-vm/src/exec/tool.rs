@@ -1894,6 +1894,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_build_error_fails_one_attempt_and_is_retried_like_any_other_failure() {
+        // S1 (M1 gate seam round 2): `registry::Builder` is now
+        // fallible, like `plugins/factory.py::_build_shell`/
+        // `plugin_env_override`, which validate their own config and
+        // raise. `flaky_build` (`test-tools` feature) fails its first
+        // build, succeeds on the second -- dispatched entirely through
+        // `resolve_plugin`'s own fallback to `electricity_tools::
+        // build_plugin` (never registered in `registry` directly), so
+        // this exercises the real per-attempt rebuild, not a stand-in.
+        let mut plugins = Dict::new();
+        let mut flaky_build_cfg = Dict::new();
+        flaky_build_cfg.insert(
+            Value::from("id"),
+            Value::from("a_build_error_fails_one_attempt_and_is_retried"),
+        );
+        flaky_build_cfg.insert(Value::from("fail_times"), Value::from(1i64));
+        plugins.insert(Value::from("flaky_build"), Value::Dict(flaky_build_cfg));
+        let mut runtime = Dict::new();
+        runtime.insert(Value::from("plugins"), Value::Dict(plugins));
+        let runtime_config = Value::Dict(runtime);
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "flaky_build".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::from("ok")));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+        assert_eq!(meta.get(&Value::from("waiting_for")), Some(&Value::None));
+    }
+
+    #[tokio::test]
     async fn a_not_ok_result_with_no_stderr_uses_the_default_failure_text() {
         struct AlwaysNotOk;
         #[async_trait::async_trait(?Send)]

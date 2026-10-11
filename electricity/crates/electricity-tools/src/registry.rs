@@ -26,21 +26,37 @@ use crate::{ToolError, ToolPlugin};
 use electricity_value::Value;
 use std::collections::HashMap;
 
-type Builder = fn(&Value) -> Box<dyn ToolPlugin>;
+/// Fallible: a builder that validates its own `runtime.plugins.<name>`
+/// config (`plugins/shell.py`'s own `_build_shell`, `_subprocess.py`'s
+/// own `plugin_env_override`) can fail on a single attempt without that
+/// failure being mistaken for a document-shape error caught up front --
+/// `core/tool.py::ToolRuntime.execute` calls Python's own `build_plugin`
+/// inside its retry loop for exactly this reason (M1 gate seam S1).
+type Builder = fn(&Value) -> Result<Box<dyn ToolPlugin>, ToolError>;
 
 fn builders() -> HashMap<&'static str, Builder> {
     let mut map: HashMap<&'static str, Builder> = HashMap::new();
-    map.insert("json", |_cfg: &Value| -> Box<dyn ToolPlugin> {
-        Box::new(crate::json::JsonTool)
-    });
+    map.insert(
+        "json",
+        |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+            Ok(Box::new(crate::json::JsonTool))
+        },
+    );
     #[cfg(feature = "test-tools")]
     {
-        map.insert("sleep", |_cfg: &Value| -> Box<dyn ToolPlugin> {
-            Box::new(crate::test_tools::SleepTool)
-        });
-        map.insert("fail", |_cfg: &Value| -> Box<dyn ToolPlugin> {
-            Box::new(crate::test_tools::FailTool)
-        });
+        map.insert(
+            "sleep",
+            |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+                Ok(Box::new(crate::test_tools::SleepTool))
+            },
+        );
+        map.insert(
+            "fail",
+            |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+                Ok(Box::new(crate::test_tools::FailTool))
+            },
+        );
+        map.insert("flaky_build", crate::test_tools::build_flaky);
     }
     map
 }
@@ -86,7 +102,7 @@ pub fn build_plugin(
         }
     })?;
     let cfg = plugin_config_slice(runtime_config, &normalized);
-    Ok(builder(&cfg))
+    builder(&cfg)
 }
 
 #[cfg(test)]
