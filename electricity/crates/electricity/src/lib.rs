@@ -990,7 +990,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     // doc comment).
     if let Some(refusal) = first_unsupported(
         &program,
-        &electricity_bytecode::Supported::m0(supported_providers()),
+        &electricity_bytecode::Supported::current(supported_providers()),
     ) {
         return RunResult {
             ok: false,

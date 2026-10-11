@@ -166,6 +166,34 @@ impl<'a> Supported<'a> {
             providers,
         }
     }
+
+    /// This build's own actual capability set -- the one value
+    /// `electricity` (lib)'s own run wiring passes to
+    /// [`first_unsupported`] (review finding/P2-b on PR #454: without
+    /// a named function for "what this build can really run today",
+    /// every M1 lane would otherwise flip its own flag in the same
+    /// bare `Supported::m0(...)` call expression at that one call
+    /// site, each PR's own diff colliding with every other lane's).
+    /// Each M1 lane flips exactly one field here, in its own PR, never
+    /// [`Supported::m0`] (pinned by this module's own golden tests to
+    /// the exact M0 value forever) -- one field per line, so two
+    /// lanes landing around the same time touch different lines of
+    /// this function, not the same expression. Identical to
+    /// [`Supported::m0`]'s own value until the first M1 lane lands.
+    pub fn current(providers: &'a [&'a str]) -> Self {
+        Supported {
+            prompt: false,           // M1-G
+            loop_: false,            // M1-H
+            use_: false,             // M1-I
+            yield_: false,           // M1-P
+            reflector: false,        // M1-L1
+            model_condition: false,  // M1-G2
+            model_expect: false,     // M1-G2
+            declared_prompts: false, // M1-P
+            preflight: false,        // R
+            providers,
+        }
+    }
 }
 
 /// Walks *program* in document order, returning the first [`Refusal`],
@@ -326,6 +354,26 @@ mod tests {
     /// the M0-H VM refused.
     fn m0() -> Supported<'static> {
         Supported::m0(&["json"])
+    }
+
+    #[test]
+    fn current_matches_m0_until_the_first_m1_lane_lands() {
+        // Review P2-b on PR #454: `Supported::current` is the single
+        // place every M1 lane flips its own flag, never `Supported::m0`
+        // (pinned forever to the exact M0 value by the golden tests
+        // below) -- today, before any M1 lane has landed, the two must
+        // still agree field for field.
+        let current = Supported::current(&["json"]);
+        let m0 = Supported::m0(&["json"]);
+        assert_eq!(current.prompt, m0.prompt);
+        assert_eq!(current.loop_, m0.loop_);
+        assert_eq!(current.use_, m0.use_);
+        assert_eq!(current.yield_, m0.yield_);
+        assert_eq!(current.reflector, m0.reflector);
+        assert_eq!(current.model_condition, m0.model_condition);
+        assert_eq!(current.model_expect, m0.model_expect);
+        assert_eq!(current.declared_prompts, m0.declared_prompts);
+        assert_eq!(current.preflight, m0.preflight);
     }
 
     fn tool_op(params: ParamNode) -> ToolOp {

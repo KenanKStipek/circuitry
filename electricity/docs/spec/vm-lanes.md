@@ -88,7 +88,7 @@ walker's body again.
 | `electricity-vm` | `src/complexity/` | the scorer, `score_and_route` | K1 (library) -> K2 (wiring) | |
 | `electricity-adapters` | `src/{lib,scripted,host_claude}.rs` | the registry builders, `ScriptedAdapter` | A (stub) -> F1 | New crate; not created yet (lane A left the seam in `electricity-vm::adapter` instead -- the trait and registry are final there, so this crate's own first PR is purely additive). |
 | `electricity-adapters` | `src/{openai_compat,openai,anthropic,curl_text}.rs` | the providers, the `curl_failure_message` equivalent | F2 | |
-| `electricity-bytecode` | `src/refusal.rs` | `first_unsupported`, `Supported` | A | Final and complete -- `Supported::m0` is golden-tested to refuse exactly what M0 refused; every later lane flips one field of its own. |
+| `electricity-bytecode` | `src/refusal.rs` | `first_unsupported`, `Supported` | A | Final and complete -- `Supported::m0` is golden-tested to refuse exactly what M0 refused, never edited again; every later lane flips one field of its own in `Supported::current` instead (review P2-b on PR #454), the one value `electricity` (lib)'s own run wiring actually passes to `first_unsupported`. |
 | `electricity-bytecode` | `src/path_index.rs` | the profile effect-path index (`_collect_effect_paths` port) | A (stub) -> J2 | Not created yet. |
 | `electricity-compiler` | `src/overrides.rs` | `apply_effect_overrides(&mut Program, ...)` | A (stub) -> J2 | Not created yet. |
 | `electricity-config` | `src/profile.rs` | `load_profile`, `ProfileSettings`, the validators | J1 | Not created yet. |
