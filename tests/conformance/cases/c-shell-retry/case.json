@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (retries_used, #421)",
+  "description": "A deterministically failing process-backed tool (a command outside shell's own default allowlist, denied before any binary is ever resolved) retries like any other tool failure (non-HTTP-family, always retryable) -- `meta.retries_used: 1` once both attempts of a `max_attempts: 2` policy fail, absorbed by `on_error: continue`. Denied before resolution rather than a real/fake binary's own nonzero exit, so the failure text embeds no resolved path at all -- the one thing a committed `--events` stream (unlike `expected.json`) is never redacted for the fakes-dir/case-dir substring a different checkout or OS would otherwise bake in.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

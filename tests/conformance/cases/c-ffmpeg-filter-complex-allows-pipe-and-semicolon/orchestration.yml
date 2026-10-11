@@ -1,0 +1,9 @@
+name: c-ffmpeg-filter-complex-allows-pipe-and-semicolon
+effects:
+  - type: tool
+    name: result
+    provider: ffmpeg
+    params:
+      input: in.mp4
+      output: out.mp4
+      filter_complex: "scale=100:100|crop=10:10;overlay"

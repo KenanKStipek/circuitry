@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §7 (tool plugins case 2)",
+  "description": "A templated `params.allowed_commands` list item is rejected at dispatch time before any process spawns, naming the literal-only rule regardless of what the template resolves to -- catches a Rust port that renders before checking (core/tool.py's own `_reject_templated_security_params`, unchanged from M0).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

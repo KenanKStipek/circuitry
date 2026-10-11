@@ -1,0 +1,9 @@
+name: c-shell-crlf
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--crlf"]

@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (a spawn error other than a missing binary)",
+  "description": "`params.cwd` naming a plain file, not a directory (the case's own `orchestration.yml`), is a spawn failure `run_tracked`/`run_binary` don't special-case the way a missing binary is -- it must surface as its own `OSError` text (`NotADirectoryError`/`ENOTDIR`), never collapse into the same generic 'cancelled' text an actual cancellation uses.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

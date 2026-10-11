@@ -714,6 +714,7 @@ pub async fn execute_tool(
                                 // `ToolRuntime.execute` (`core/tool.py`) has no
                                 // cancellation check once a dispatched call has
                                 // actually returned, only before the next attempt.
+                                //
                                 let dispatch = tokio::select! {
                                     biased;
                                     result = run_tool(
@@ -740,6 +741,41 @@ pub async fn execute_tool(
                                 let Some(dispatch) = dispatch else {
                                     return Err(VmError::Cancelled);
                                 };
+                                // Review finding 6 on PR #467: a process-
+                                // backed tool's own `run_tracked` returns
+                                // `Err(ProcError::Cancelled)` *synchronously*
+                                // -- before its first `.await` -- the moment
+                                // cancellation was already set when dispatch
+                                // started, which `subprocess_tool.rs`/
+                                // `shell.rs`/`ffmpeg.rs` all turn into the
+                                // exact same `ToolError::message("cancelled")`.
+                                // Against `biased;` above, that makes the
+                                // `run_tool(...)` branch already `Ready` on
+                                // the select!'s very first poll, so it
+                                // always wins over `token.cancelled()` in
+                                // exactly that case -- turning a real
+                                // cancellation into an ordinary, `on_error`-
+                                // recordable tool failure instead of
+                                // `VmError::Cancelled`. Caught here by its
+                                // exact, narrow text rather than by skipping
+                                // dispatch outright: the `a_cancelled_token_
+                                // before_the_call_still_runs_a_ready_slot_
+                                // and_tool` test below is deliberate, tested
+                                // Python parity (`core/tool.py`'s own
+                                // `_acquire_one` just takes a free slot and
+                                // dispatches, with no cancellation check of
+                                // its own at all) that an ordinary tool
+                                // dispatched with the token already
+                                // cancelled must still run to completion --
+                                // this only ever intercepts the one shape a
+                                // process-backed tool's own cancellation path
+                                // produces, never an ordinary tool's
+                                // unrelated success or failure.
+                                if token.is_set()
+                                    && matches!(&dispatch, Err(err) if err.message == "cancelled")
+                                {
+                                    return Err(VmError::Cancelled);
+                                }
                                 match dispatch {
                                     Err(err) => failure = Some(err),
                                     Ok(result) => {
@@ -2768,6 +2804,80 @@ mod tests {
             let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
             assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
         }
+    }
+
+    #[tokio::test]
+    // Review finding 6 on PR #467: this test's own sibling above ("...
+    // still_runs_a_ready_slot_and_tool") already proves a ready slot
+    // wins the *acquire* race even with the token already cancelled --
+    // this proves the *other* half, for a dispatch that itself
+    // surfaces that same already-cancelled token as a tool failure
+    // (exactly what a process-backed tool's `run_tracked` does: it
+    // returns `Err(Cancelled)` synchronously, before its first
+    // `.await`, turned into `ToolError::message("cancelled")` by
+    // `subprocess_tool.rs`/`shell.rs`/`ffmpeg.rs` alike). Against
+    // `biased;`, that makes the dispatch `select!`'s `run_tool(...)`
+    // branch already `Ready` on its very first poll, so without this
+    // fix it would always win over `token.cancelled()` -- this must
+    // still come back as `VmError::Cancelled`, not an ordinary,
+    // `on_error`-recordable failure.
+    async fn a_cancelled_token_before_the_call_with_a_dispatch_that_itself_says_cancelled() {
+        struct SynchronouslyCancelledTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for SynchronouslyCancelledTool {
+            fn name(&self) -> &str {
+                "synchronously_cancelled"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                // No `.await` at all -- mirrors `run_tracked`'s own
+                // `if token.is_set() { return Err(ProcError::Cancelled) }`
+                // ahead of `Popen`, which never yields either.
+                Err(electricity_tools::ToolError::message("cancelled"))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "synchronously_cancelled".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(SynchronouslyCancelledTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        token.request(2);
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, VmError::Cancelled);
     }
 
     #[tokio::test]

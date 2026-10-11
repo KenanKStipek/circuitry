@@ -1,0 +1,10 @@
+name: c-shell-templated-allowed-commands
+inputs:
+  user_cmd: {default: "rm"}
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: ls
+      allowed_commands: ["{{user_cmd}}"]

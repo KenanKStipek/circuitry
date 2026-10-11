@@ -1,0 +1,9 @@
+name: c-shell-retry
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    retries: {max_attempts: 2, backoff_ms: 0}
+    on_error: continue
+    params:
+      command: rm
