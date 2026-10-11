@@ -1,0 +1,4886 @@
+{
+  "clock_cases": [
+    {
+      "case": "default_format_utc",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "2024-07-04T12:30:45+0000"
+      },
+      "params": {
+        "t": "dict",
+        "v": []
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "epoch_mode",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "int",
+        "v": "1720096245"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "percent_percent",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "%"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "str",
+              "v": "%%"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "percent_percent_then_z_literal",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "%z"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "str",
+              "v": "%%z"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "microseconds_in_f_and_iso",
+      "epoch_micros": 654321,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "654321"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "str",
+              "v": "%f"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45.654321+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "named_timezone_summer_dst",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "2024-07-04 08:30:45 EDT -0400"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "America/New_York"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "str",
+              "v": "%Y-%m-%d %H:%M:%S %Z %z"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T08:30:45-04:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "America/New_York"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "named_timezone_winter_no_dst",
+      "epoch_micros": 0,
+      "epoch_seconds": 1705305600,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "2024-01-15 03:00:00 EST -0500"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "America/New_York"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "str",
+              "v": "%Y-%m-%d %H:%M:%S %Z %z"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-01-15T03:00:00-05:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1705305600"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "America/New_York"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unknown_timezone",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": "clock: unknown timezone 'Not/AZone'",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "Not/AZone"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "unknown_timezone_non_string",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": "clock: unknown timezone 5",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "explicit_null_format",
+      "epoch_micros": 0,
+      "epoch_seconds": 1720096245,
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "None"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "format"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "iso"
+            },
+            {
+              "t": "str",
+              "v": "2024-07-04T12:30:45+00:00"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "epoch"
+            },
+            {
+              "t": "int",
+              "v": "1720096245"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "timezone"
+            },
+            {
+              "t": "str",
+              "v": "UTC"
+            }
+          ]
+        ]
+      }
+    }
+  ],
+  "env_vars_cases": [
+    {
+      "case": "get_present",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "plain-value"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "get"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "PLAIN_VAR"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "PLAIN_VAR"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "present"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "get_unset_with_default",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "fallback"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "get"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "DOES_NOT_EXIST"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "default"
+            },
+            {
+              "t": "str",
+              "v": "fallback"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "DOES_NOT_EXIST"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "present"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "get_requires_name",
+      "err": "env_vars: get requires params['name'].",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "get"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "list_all_masks_secrets",
+      "err": null,
+      "ok": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "PATH"
+            },
+            {
+              "t": "str",
+              "v": "/usr/bin:/bin"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "HOME"
+            },
+            {
+              "t": "str",
+              "v": "/home/fake"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "MY_API_KEY_SUFFIX"
+            },
+            {
+              "t": "str",
+              "v": "***"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "MY_APIKEYLESS_VAR"
+            },
+            {
+              "t": "str",
+              "v": "***"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "PLAIN_VAR"
+            },
+            {
+              "t": "str",
+              "v": "plain-value"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_ONE"
+            },
+            {
+              "t": "str",
+              "v": "one"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_TWO"
+            },
+            {
+              "t": "str",
+              "v": "two"
+            }
+          ]
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "7"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "include_secrets"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "list_includes_secrets",
+      "err": null,
+      "ok": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "PATH"
+            },
+            {
+              "t": "str",
+              "v": "/usr/bin:/bin"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "HOME"
+            },
+            {
+              "t": "str",
+              "v": "/home/fake"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "MY_API_KEY_SUFFIX"
+            },
+            {
+              "t": "str",
+              "v": "visible-name-but-masked-value"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "MY_APIKEYLESS_VAR"
+            },
+            {
+              "t": "str",
+              "v": "also-masked"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "PLAIN_VAR"
+            },
+            {
+              "t": "str",
+              "v": "plain-value"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_ONE"
+            },
+            {
+              "t": "str",
+              "v": "one"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_TWO"
+            },
+            {
+              "t": "str",
+              "v": "two"
+            }
+          ]
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "include_secrets"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "7"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "include_secrets"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "list_with_prefix",
+      "err": null,
+      "ok": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_ONE"
+            },
+            {
+              "t": "str",
+              "v": "one"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_TWO"
+            },
+            {
+              "t": "str",
+              "v": "two"
+            }
+          ]
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "prefix"
+            },
+            {
+              "t": "str",
+              "v": "APP_PREFIXED_"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "include_secrets"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "list_prefix_matches_nothing",
+      "err": null,
+      "ok": {
+        "t": "dict",
+        "v": []
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "prefix"
+            },
+            {
+              "t": "str",
+              "v": "NO_SUCH_PREFIX_"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "include_secrets"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unknown_mode",
+      "err": "env_vars: unknown mode 'bogus'",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    }
+  ],
+  "fs_cases": [
+    {
+      "case": "write",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "<root>/greeting.txt"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bytes_written"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "read_after_write",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "hello"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "append",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "<root>/greeting.txt"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "append"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "str",
+              "v": " world"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "append"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bytes_written"
+            },
+            {
+              "t": "int",
+              "v": "6"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "read_after_append",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "hello world"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "read_translates_crlf_and_cr",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "a\nb\nc\n"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/crlf.txt"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/crlf.txt"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "list_sorted_by_code_point",
+      "err": null,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a.txt"
+          },
+          {
+            "t": "str",
+            "v": "b.txt"
+          },
+          {
+            "t": "str",
+            "v": "c.txt"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/sub"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/sub"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "list_of_a_file_is_not_a_directory",
+      "err": "fs: not a directory: <root>/greeting.txt",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "list"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "exists_true",
+      "err": null,
+      "ok": {
+        "t": "bool",
+        "v": true
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "exists"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "exists"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/greeting.txt"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "exists_false",
+      "err": null,
+      "ok": {
+        "t": "bool",
+        "v": false
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "exists"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/missing"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "exists"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/missing"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "delete_missing_is_false",
+      "err": null,
+      "ok": {
+        "t": "bool",
+        "v": false
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "delete"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/missing2"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "delete"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/missing2"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "delete_directory_without_recursive_raises",
+      "err": "fs: refusing to delete directory without recursive=True: <root>/sub",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "delete"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/sub"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "delete_directory_with_recursive_succeeds",
+      "err": null,
+      "ok": {
+        "t": "bool",
+        "v": true
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "delete"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/sub"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "recursive"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "delete"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/sub"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "read_of_missing_file",
+      "err": "fs: not a file: <root>/nope.txt",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/nope.txt"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "unknown_mode",
+      "err": "fs: unknown mode 'bogus'",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "unknown_mode_explicit_none",
+      "err": "fs: unknown mode 'none'",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "path_must_be_non_empty_string",
+      "err": "fs: params['path'] must be a non-empty string.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": ""
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "path_rejects_null_byte",
+      "err": "fs: path contains null byte.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a\u0000b"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "write_requires_str_content",
+      "err": "fs: write/append requires params['content'] as str.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "write_with_utf8_alias",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "<root>/codec.txt"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/codec.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "str",
+              "v": "café"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "UTF8"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/codec.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bytes_written"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "read_with_latin1_alias",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "cafÃ©"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/codec.txt"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "latin-1"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "read"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/codec.txt"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unknown_codec",
+      "err": "unknown encoding: bogus-codec",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/y"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "bogus-codec"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "ascii_encode_error",
+      "err": "'ascii' codec can't encode character '\\xe9' in position 3: ordinal not in range(128)",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "write"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "<root>/z"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "content"
+            },
+            {
+              "t": "str",
+              "v": "café"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "ascii"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    }
+  ],
+  "hash_cases": [
+    {
+      "case": "hex_md5",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "5d41402abc4b2a76b9719d911017c592"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "md5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "md5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_md5",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "XUFAKrxLKna5cZ2REBfFkg=="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "md5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "md5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha1",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha1",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "qvTGHdzF6KLavt4PO0gs2a6pQ00="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha224",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "ea09ae9cc6768c50fcee903ed054556e5bfc8347907f12598aa24193"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha224"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha224"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha224",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "6gmunMZ2jFD87pA+0FRVblv8g0eQfxJZiqJBkw=="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha224"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha224"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha256",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha256",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha384",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "59e1748777448c69de6b800d7a33bbfb9ff1b463e44354c3553bcdb9c666fa90125a3c79f90397bdf5f6a13de828684f"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha384"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha384"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha384",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "WeF0h3dEjGnea4ANejO7+5/xtGPkQ1TDVTvNucZm+pASWjx5+QOXvfX2oT3oKGhP"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha384"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha384"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha512",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha512",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "m3HSJL1i83hdltRq0+o9czGb+8KJDKra4t/3JRlnPKcjI8PZm6XBHXx6zG4UuMXaDEZjR1wuXDre9G9zvN7AQw=="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha3_256",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "3338be694f50c5f338814986cdf0686453a888b84f424d792af4b9202398f392"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha3_256",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "Mzi+aU9QxfM4gUmGzfBoZFOoiLhPQk15KvS5ICOY85I="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_sha3_512",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "75d527c368f2efe848ecf6b073a36767800805e9eef2b1857d5f984f036eb6df891d75f72d9b154518c1cd58835286d1da9a38deba3de98b5a53e5ed78a84976"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_sha3_512",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "ddUnw2jy7+hI7Pawc6NnZ4AIBenu8rGFfV+YTwNutt+JHXX3LZsVRRjBzViDUobR2po43ro96YtaU+XteKhJdg=="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha3_512"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_blake2b",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "e4cfa39a3d37be31c59609e807970799caa68a19bfaa15135f165085e01d41a65ba1e1b146aeb6bd0092b49eac214c103ccfa3a365954bbbe52f74a2b3620c94"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_blake2b",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "5M+jmj03vjHFlgnoB5cHmcqmihm/qhUTXxZQheAdQaZboeGxRq62vQCStJ6sIUwQPM+jo2WVS7vlL3Sis2IMlA=="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "hex_blake2s",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "19213bacc58dee6dbde3ceb9a47cbb330b3d86f8cca8997eb00be456f140ca25"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2s"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2s"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "base64_blake2s",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "GSE7rMWN7m294865pHy7Mws9hvjMqJl+sAvkVvFAyiU="
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2s"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "blake2s"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "base64"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "default_algorithm_is_sha256",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "hello"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "unsupported_algorithm",
+      "err": "hash: unsupported algorithm 'bogus'. Supported: ['blake2b', 'blake2s', 'md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha3_256', 'sha3_512', 'sha512']",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "bad_output_format",
+      "err": "hash: output_format must be 'hex' or 'base64'.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "bogus"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "in_memory_requires_str",
+      "err": "hash: in-memory mode requires params['input'] as str.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "from_path_requires_path",
+      "err": "hash: from_path=True requires params['input'] path.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "from_path"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "encoding_latin1",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "dafd66c0b98965e688be1fc12942c09f0350e6be0685017c3f234e97d0adc92e"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "café"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "latin-1"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "from_path_hashes_file",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "8dae7f8f563b0685e8e968cb86136543af9de633294b7f7a283f9f07659773cc"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "from_path"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "<root>/hash_input.bin"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "output_format"
+            },
+            {
+              "t": "str",
+              "v": "hex"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "from_path_missing_file",
+      "err": "[Errno 2] No such file or directory: '<root>/nope.bin'",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "from_path"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "<root>/nope.bin"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "ascii_encode_error_run_of_two",
+      "err": "'ascii' codec can't encode characters in position 0-1: ordinal not in range(128)",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "日本"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "ascii"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "latin1_encode_error_run_of_two",
+      "err": "'latin-1' codec can't encode characters in position 1-2: ordinal not in range(256)",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "algorithm"
+            },
+            {
+              "t": "str",
+              "v": "sha256"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a日本b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "encoding"
+            },
+            {
+              "t": "str",
+              "v": "latin-1"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    }
+  ],
+  "uuid_cases": [
+    {
+      "case": "v5_namespace_dns",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "cfbff0d1-9375-5685-968c-48ce8b15ae17"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "dns"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_namespace_url",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "a5cf6e8e-4cfa-5f31-a804-6de6d1245e26"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "url"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_namespace_oid",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "eb6106fd-8a37-5395-b3f7-7cb93195fdba"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "oid"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_namespace_x500",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "f014ed3c-177a-541e-a840-fc330670f8e8"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "x500"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_namespace_DNS",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "cfbff0d1-9375-5685-968c-48ce8b15ae17"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "DNS"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_custom_namespace_plain",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "05b16a01-46c6-56dd-bd6e-c6dfb4a1427a"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_custom_namespace_urn",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "05b16a01-46c6-56dd-bd6e-c6dfb4a1427a"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_custom_namespace_braces",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "05b16a01-46c6-56dd-bd6e-c6dfb4a1427a"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "{6ba7b810-9dad-11d1-80b4-00c04fd430c8}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_custom_namespace_no_dashes",
+      "err": null,
+      "ok": {
+        "t": "str",
+        "v": "05b16a01-46c6-56dd-bd6e-c6dfb4a1427a"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "6ba7b8109dad11d180b400c04fd430c8"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_count_3_hex_true",
+      "err": null,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "cfbff0d193755685968c48ce8b15ae17"
+          },
+          {
+            "t": "str",
+            "v": "cfbff0d193755685968c48ce8b15ae17"
+          },
+          {
+            "t": "str",
+            "v": "cfbff0d193755685968c48ce8b15ae17"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "dns"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "example.com"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "hex"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "v5_requires_name",
+      "err": "uuid: v5 requires params['name'].",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "v5_requires_namespace",
+      "err": "uuid: v5 requires params['namespace'].",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "v5_bad_namespace",
+      "err": "uuid: invalid v5 namespace 'not-a-uuid': badly formed hexadecimal UUID string",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "name"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "namespace"
+            },
+            {
+              "t": "str",
+              "v": "not-a-uuid"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "unsupported_version",
+      "err": "uuid: unsupported version 2; expected 1|4|5.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "version"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "count_must_be_at_least_1",
+      "err": "uuid: count must be >= 1.",
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "count"
+            },
+            {
+              "t": "int",
+              "v": "-1"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    }
+  ]
+}

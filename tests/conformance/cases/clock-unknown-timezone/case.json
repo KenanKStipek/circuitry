@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #460 test plan ('clock' timezone error)",
+  "description": "An unknown `timezone:` fails the run with the exact `clock: unknown timezone 'Not/AZone'` text. The only clock case run as a document (rather than through clock.rs's own unit tests): every other `clock` behavior writes `meta.raw.iso`/`epoch`, the live wall clock at call time, which can never match between generation and any later --check/replay even on the same engine -- this one fails before producing a result at all, so no such field ever reaches compared state.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

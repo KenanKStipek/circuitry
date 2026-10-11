@@ -276,8 +276,8 @@ impl<'a> Supported<'a> {
             preflight: false,
             // lane C (#448)
             tools_process: false,
-            // lane D1 (#448)
-            tools_stdlib: false,
+            // lane D1 (#460)
+            tools_stdlib: true,
             // lane D2 (#448)
             tool_regex: false,
             // lane E (#448)
@@ -545,7 +545,9 @@ mod tests {
         assert_eq!(current.declared_prompts, m0.declared_prompts);
         assert_eq!(current.preflight, m0.preflight);
         assert_eq!(current.tools_process, m0.tools_process);
-        assert_eq!(current.tools_stdlib, m0.tools_stdlib);
+        // lane D1 (#460): `tools_stdlib` is the first M1 flag to flip --
+        // `fs`/`env_vars`/`hash`/`uuid`/`clock` are real now.
+        assert!(current.tools_stdlib);
         assert_eq!(current.tool_regex, m0.tool_regex);
         assert_eq!(current.tool_http, m0.tool_http);
         assert_eq!(current.tool_validate_yaml, m0.tool_validate_yaml);
