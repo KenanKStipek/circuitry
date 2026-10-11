@@ -546,6 +546,43 @@
     },
     {
       "ctx": {
+        "__circuitry_partial_0__": "shadowed-out",
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hidden"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hidden:hidden",
+      "template": "{{> reply}}:{{__circuitry_partial_0__}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hi"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hi[hi]",
+      "template": "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}"
+    },
+    {
+      "ctx": {
         "prime": {
           "x": {
             "meta": {},

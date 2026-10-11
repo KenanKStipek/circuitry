@@ -315,6 +315,29 @@ def build_compose_cases() -> list[dict]:
             {"prime": {"reply": _effect("hi")}},
         )
     )
+    # A hidden key (the first effect reference mints `__circuitry_
+    # partial_0__`) shadowing a *real*, pre-existing top-level key of
+    # that exact name -- the shallow `{**ctx, **extra}` merge must have
+    # the hidden binding win outright (issue #492 review finding 4).
+    cases.append(
+        compose_case(
+            "{{> reply}}:{{__circuitry_partial_0__}}",
+            {
+                "prime": {"reply": _effect("hidden")},
+                "__circuitry_partial_0__": "shadowed-out",
+            },
+        )
+    )
+    # `{{.}}` at the root, with a hidden binding present -- the only
+    # case that actually exercises the hidden overlay's own `whole()`
+    # (a section over `.` pushes it as the new nearest scope) rather
+    # than just `lookup` (issue #492 review finding 4).
+    cases.append(
+        compose_case(
+            "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}",
+            {"prime": {"reply": _effect("hi")}},
+        )
+    )
 
     # --- shared counter: two sibling declared prompts each nesting a
     # different effect reference (C33's shape) ---
