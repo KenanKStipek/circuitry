@@ -623,18 +623,20 @@ mod tests {
 
     #[test]
     fn an_invalid_key_still_warns_even_when_its_truncated_prefix_matches_a_real_variable() {
-        // #473 review: `std::env::var_os`'s own `getenv` is specified
-        // (POSIX, and this platform's own libc) to truncate a name
-        // containing `=` at the first `=` before searching -- so
-        // `var_os("A=B")` matches a real `A`, not nothing, once one is
-        // set. The validity check now runs *before* that lookup, so
-        // the entry is still reported invalid (one warning, named only
-        // by the key) rather than silently treated as already set.
+        // #473 review: `std::env::var_os` calls libc `getenv`, and
+        // macOS's `getenv` cuts a name at its first `=` before searching
+        // -- so there `var_os("A=B")` matches a real `A` once one is set.
+        // glibc and musl never match such a name. The validity check now
+        // runs *before* that lookup, so the entry is still reported
+        // invalid (one warning, named only by the key) rather than
+        // silently treated as already set; on Linux this test still
+        // checks that the warning fires.
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         install_thread_local_warn_logger();
         CAPTURED_WARNINGS.with(|c| c.borrow_mut().clear());
 
         unsafe { std::env::set_var("A", "unrelated-real-value-473") };
+        #[cfg(target_os = "macos")]
         assert!(
             std::env::var_os("A=B").is_some(),
             "this test's premise -- this platform's own getenv matches an \
