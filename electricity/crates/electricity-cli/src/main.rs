@@ -28,6 +28,8 @@ use std::process::ExitCode;
 use electricity::CancellationToken;
 use electricity::run::{RunRequest, RunResult, Signal};
 
+mod user_env;
+
 const USAGE: &str = "\
 Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json]
                     [--pretty] [--live-state state.json] [--events events.jsonl]
@@ -600,6 +602,14 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
 }
 
 fn run_action(run_args: RunArgs) -> ExitCode {
+    // Issue #468: `cof`'s own root callback loads the user's private
+    // `.env` once, before any config resolution, for every subcommand
+    // -- the one place in this binary's lifetime `user_env::
+    // load_user_env` can mutate the process environment and still be
+    // sound (before the signal-handling thread below, or anything
+    // else, ever exists).
+    user_env::load_user_env();
+
     // PR #441 review finding 5: armed *before* config load (issue
     // #431's own step 1), on a dedicated OS thread with its own Tokio
     // runtime -- responsive to a signal even while this thread is deep
@@ -744,6 +754,11 @@ fn main() -> ExitCode {
         }
         Action::Run(run_args) => run_action(run_args),
         Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
+            // Issue #468: before `dump_ir`'s own config resolution,
+            // same as `run_action`'s own call -- `--dump-ir` never
+            // spawns another thread, so this is sound wherever it runs
+            // in this synchronous branch.
+            user_env::load_user_env();
             let inputs = match electricity::parse_inputs(&raw_inputs) {
                 Ok(inputs) => inputs,
                 Err(message) => {

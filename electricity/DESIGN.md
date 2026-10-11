@@ -2089,6 +2089,19 @@ Explicit config file only — no discovery, no `cof trust` (Decisions, §1). Bot
 and the orchestration file are operator-chosen and therefore trusted; electricity never
 evaluates any notion of document trust at run time.
 
+**The user's private `.env`** (issue #468). Before resolving the config file, the `electricity`
+binary's own startup ports `cli/config.py::load_user_env`: it loads the private `.env` file
+`cof setup` writes next to the global config (`~/.config/circuitry/.env`) into the process
+environment — the one file every `cof` entry point already loads this way, so a provider API key
+or other variable it holds reaches an `electricity` run exactly as it would a `cof run` of the
+same document. A variable already set in the real environment always wins; a file not owned by
+the current user, or writable by group or others, is refused (one `WARNING:` naming the `chmod
+600` fix); a merely group/world-*readable* file still loads, with a softer warning; an unreadable
+or undecodable file is skipped, with a warning. Parsing matches `python-dotenv`'s own
+`dotenv_values` (quoting, escapes, `export `, comments, multi-line values, `${VAR}`
+interpolation). Only the binary's own startup does this — the `electricity` library crate, like
+`circuitry.api`, never loads it; an embedding program owns its own environment.
+
 **Keys that change run behavior** (runtime-semantics §5, condensed):
 
 | Key | Effect |

@@ -566,12 +566,32 @@ fn signal_from_token(token: &CancellationToken) -> Option<Signal> {
 
 /// The current process environment, as [`electricity_config::resolve_config`]'s
 /// own `CIRCUITRY_*`-overlay parameter -- the one place this crate
-/// reads `std::env::vars()` for that, so [`config_error`] and
+/// reads the process environment for that, so [`config_error`] and
 /// [`run_orchestration`] always resolve the exact same config for the
 /// exact same *config_path*, never drifting apart on what counts as
 /// "the environment" between the two.
+///
+/// Reads `std::env::vars_os()`, not `std::env::vars()` (issue #468's
+/// startup-crash comment): `vars()` panics on any variable whose name
+/// or value isn't valid Unicode, so a single stray non-UTF-8 variable
+/// anywhere in the environment -- unrelated to this run, and not even
+/// one `resolve_config` would ever look at -- would exit every
+/// `electricity` run with code 101 before it did anything at all. `cof`
+/// reads the same environment without trouble, because Python decodes
+/// `os.environ` with `surrogateescape`, never raising. Only `CIRCUITRY_*`
+/// names matter to `resolve_config`, so a non-UTF-8 name or value is
+/// simply dropped here rather than surrogate-escaped to match Python
+/// byte for byte -- a `CIRCUITRY_*` override is always meant to be read
+/// back as text, so a non-UTF-8 one could never have been a real config
+/// override to begin with.
 fn current_env_vars() -> std::collections::HashMap<String, String> {
-    std::env::vars().collect()
+    std::env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            let value = value.into_string().ok()?;
+            Some((key, value))
+        })
+        .collect()
 }
 
 /// *config_path*'s own resolved config, or its config error text on
