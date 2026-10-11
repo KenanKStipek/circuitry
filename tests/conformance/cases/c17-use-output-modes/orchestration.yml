@@ -1,0 +1,33 @@
+name: c17-use-output-modes
+effects:
+  - type: use
+    name: explicit
+    inline: |
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: explicit-hit}
+    outputs:
+      result:
+        path: prime.inner.value
+  - type: use
+    name: auto
+    inline: |
+      interface:
+        outputs:
+          result:
+            path: prime.inner.value
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: auto-hit}
+  - type: use
+    name: full_namespace
+    inline: |
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: full-namespace-hit}
