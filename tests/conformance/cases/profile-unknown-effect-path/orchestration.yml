@@ -1,0 +1,6 @@
+name: profile-unknown-effect-path
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: unreachable}

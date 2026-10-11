@@ -1,0 +1,1 @@
+Warning: prompt 'greeting' has image assets, but adapter 'scripted' cannot send images; it will run without them

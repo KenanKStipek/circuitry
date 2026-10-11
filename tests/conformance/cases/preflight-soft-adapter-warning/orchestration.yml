@@ -1,0 +1,9 @@
+name: preflight-soft-adapter-warning
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    provider: scripted
+    on_error: skip
+    template: "say hello"

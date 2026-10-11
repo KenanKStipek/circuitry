@@ -1,0 +1,9 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), cli/allowlist.py::profile_provider_denials",
+  "description": "A profile's per-effect `provider` override names an adapter config.json's `enabled_adapters` doesn't list: checked on its own, before the run starts, since a profile swaps an effect's adapter after the document itself was already checked.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}
