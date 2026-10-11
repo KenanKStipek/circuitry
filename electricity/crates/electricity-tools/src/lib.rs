@@ -36,6 +36,7 @@ pub mod subprocess_tool;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
 pub mod uuid;
+pub mod validate_yaml;
 
 /// The one canonical Python-exception-class-name enum every crate that
 /// needs to report one shares -- `electricity_value::pycompat::PyExc`'s
