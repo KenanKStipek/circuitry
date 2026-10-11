@@ -228,6 +228,35 @@ def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
     assert meta["retries_used"] == 1
 
 
+def test_effect_complete_observer_sees_retries_used_on_exhausted_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#421 P2-6: retries_used is already on the node by the time
+    effect_complete fires, even on the exhausted-retries failure path —
+    pins the ordering `fire_effect_complete` relies on."""
+    plugin = MagicMock()
+    plugin.execute.side_effect = RuntimeError("always fails")
+    _patch_plugin(monkeypatch, plugin)
+
+    captured: dict = {}
+
+    def _observer(path: str, node: dict) -> None:
+        if path == "x":
+            captured.update(node)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = Store({}, effect_complete=_observer)
+    with pytest.raises(RuntimeError, match="always fails"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    assert captured["meta"]["retries_used"] == 1
+
+
 def test_tool_a_single_failed_attempt_leaves_retries_used_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

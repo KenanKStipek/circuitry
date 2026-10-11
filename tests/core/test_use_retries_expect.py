@@ -262,6 +262,46 @@ def test_use_a_single_failed_attempt_leaves_retries_used_absent(
     assert "retries_used" not in store.state["run_child"]["meta"]
 
 
+def test_effect_complete_observer_sees_retries_used_on_exhausted_retry(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#421 P2-6: retries_used is already on the node by the time
+    effect_complete fires, even on the exhausted-retries failure path --
+    pins the ordering `fire_effect_complete` relies on."""
+    child_path = _write_orch(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "fail",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    _patch_sleep(monkeypatch, lambda s: None)
+
+    captured: dict = {}
+
+    def _observer(path: str, node: dict) -> None:
+        if path == "run_child":
+            captured.update(node)
+
+    defn = UseDefinition(
+        name="run_child",
+        path=str(child_path),
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = Store({}, effect_complete=_observer)
+    with pytest.raises(Exception, match="fail"):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    assert captured["meta"]["retries_used"] == 1
+
+
 def test_use_missing_path_is_not_retried(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing child file fails the exact same way on every attempt —
     retrying it only burns the backoff wait for nothing (#273 review,

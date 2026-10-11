@@ -187,6 +187,31 @@ def test_exhausting_retries_still_records_retries_used() -> None:
     assert store.get("prime.task.meta.error") is not None
 
 
+def test_effect_complete_observer_sees_retries_used_on_exhausted_retry() -> None:
+    """#421 P2-6: retries_used is already on the node by the time
+    effect_complete fires, even on the exhausted-retries failure path —
+    pins the ordering `fire_effect_complete` relies on."""
+    root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
+    adapter = ScriptedRetryAdapter(
+        failures=[
+            RetryInfo(retryable=True, status=503),
+            RetryInfo(retryable=True, status=503),
+        ]
+    )
+    captured: dict = {}
+
+    def _observer(path: str, node: dict) -> None:
+        if path == "prime.task":
+            captured.update(node)
+
+    store = Store({}, effect_complete=_observer)
+
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert captured["meta"]["retries_used"] == 1
+
+
 def test_created_at_is_the_first_attempts_start_on_success_and_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
