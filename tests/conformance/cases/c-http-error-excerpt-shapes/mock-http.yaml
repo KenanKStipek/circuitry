@@ -34,3 +34,10 @@
     headers:
       Content-Type: application/json
     body: '{"errors": [{"msg": "graphql style"}]}'
+- request:
+    method: GET
+    path: /not-json
+  response:
+    status: 404
+    reason: Not Found
+    body: "plain text error, not json at all"

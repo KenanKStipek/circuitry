@@ -29,3 +29,9 @@ effects:
     params:
       url: "{{input.base_url}}/unrecognized"
       fail_on_error: false
+  - type: tool
+    name: not_json
+    provider: http
+    params:
+      url: "{{input.base_url}}/not-json"
+      fail_on_error: false
