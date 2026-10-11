@@ -1,0 +1,10 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3 / Section 5.4",
+  "description": "A literal path: use effect inside a tree each loop's body with max_concurrency, each concurrent pass's child getting its own per-pass inputs from the loop's own item binding -- no false cycle between sibling passes using the identical child document.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "known_divergence": {
+    "location": "prime.meta.adapter",
+    "electricity_value": "_noop"
+  }
+}
