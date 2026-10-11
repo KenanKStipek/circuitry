@@ -275,7 +275,8 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             // accepted the same way `cof run` would accept it, and so
             // the refusal carries the same name a caller's own registry
             // lookup would miss on.
-            let normalized_provider = tool.provider.trim().to_lowercase();
+            let normalized_provider =
+                electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
             if !supported.providers.contains(&normalized_provider.as_str()) {
                 return refusal(
                     path,

@@ -131,7 +131,7 @@ pub fn resolve_plugin<'a>(
     provider: &str,
     runtime_config: &Value,
 ) -> Result<ResolvedPlugin<'a>, electricity_tools::ToolError> {
-    let normalized = provider.trim().to_lowercase();
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     if let Some(plugin) = registry.get(&normalized) {
         return Ok(ResolvedPlugin::Registered(plugin));
     }
@@ -162,7 +162,7 @@ pub async fn run_tool(
     token: &CancellationToken,
     armed: bool,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
-    let normalized = provider.trim().to_lowercase();
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
     let call = ToolCall {
         timeout_seconds,
@@ -253,7 +253,7 @@ fn allowed_tools(runtime_config: &Value) -> Option<Vec<String>> {
 /// exact `AllowlistError` text once *provider* (canonicalised the way
 /// `build_plugin` canonicalises it) isn't in the run's `enabled_tools`.
 fn require_tool(provider: &str, runtime_config: &Value) -> Result<(), String> {
-    let normalized = provider.trim().to_lowercase();
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let Some(allowed) = allowed_tools(runtime_config) else {
         return Ok(());
     };

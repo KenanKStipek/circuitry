@@ -281,7 +281,7 @@ impl AdapterRegistry {
         adapter_name: &str,
         runtime_config: &Value,
     ) -> Result<Box<dyn Adapter>, AdapterError> {
-        let normalized = adapter_name.trim().to_lowercase();
+        let normalized = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
         let builder = self.builders.get(normalized.as_str()).ok_or_else(|| {
             let supported = crate::adapter_names::ADAPTER_NAMES.join(", ");
             AdapterError {

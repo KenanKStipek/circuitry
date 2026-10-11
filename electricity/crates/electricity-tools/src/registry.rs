@@ -72,7 +72,7 @@ pub fn build_plugin(
     plugin_name: &str,
     runtime_config: &Value,
 ) -> Result<Box<dyn ToolPlugin>, ToolError> {
-    let normalized = plugin_name.trim().to_lowercase();
+    let normalized = electricity_value::pycompat::py_strip(plugin_name).to_lowercase();
     let table = builders();
     let builder = table.get(normalized.as_str()).ok_or_else(|| {
         let supported = crate::plugin_names::PLUGIN_NAMES.join(", ");
@@ -103,6 +103,16 @@ mod tests {
     #[test]
     fn build_plugin_normalizes_whitespace_and_case() {
         let plugin = build_plugin(" JSON ", &Value::None).unwrap();
+        assert_eq!(plugin.name(), "json");
+    }
+
+    #[test]
+    fn build_plugin_strips_c0_control_whitespace_rusts_trim_does_not() {
+        // Review P2-f on PR #454: `plugins/factory.py::build_plugin`'s
+        // own `.strip().lower()` strips C0 control whitespace
+        // (`\x1c`-`\x1f`) Rust's `str::trim` does not -- `py_strip` is
+        // the shared port of that exact whitespace set.
+        let plugin = build_plugin("\u{1c}JSON\u{1d}", &Value::None).unwrap();
         assert_eq!(plugin.name(), "json");
     }
 
