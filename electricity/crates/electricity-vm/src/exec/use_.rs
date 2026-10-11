@@ -2,9 +2,14 @@
 //! only; lane I fills the body. Issue #449's gate lane, item 8: routed
 //! from [`crate::exec::execute_op`] once
 //! [`electricity_bytecode::refusal::Supported::use_`] is `true`.
-//! [`run_isolated`] is shared with M1-L2's decomposition lane (the same
-//! "run a child document with its own store, grafted back under the
-//! parent" primitive `core/use.py::_run_isolated` is).
+//! [`run_isolated`] is shared with M1-L2's decomposition lane -- the
+//! same "run a child document with its own store, grafted back under
+//! the parent" primitive, though `core/use.py` has no `_run_isolated`
+//! function of its own to port this from (M1 lane I prerequisites,
+//! issue #448, item U5: an earlier revision of this doc comment
+//! claimed one): the logic is inline in `UseRuntime.execute`
+//! (`core/use.py:960-968` builds the child `Store` directly, no
+//! helper call).
 //!
 //! Review P2-7 on PR #454's second review: the child's own root
 //! container (`core/use.py`'s own `_CHILD_ROOT`, `"prime"`) fires no
@@ -96,21 +101,33 @@ pub(crate) async fn execute_use(
     )))
 }
 
-/// `core/use.py::_run_isolated` -- runs *program* against a fresh,
-/// isolated [`Store`] (never the parent's own), namespacing its own
-/// events/scripted-adapter keys under *namespace_path*. Shared by
-/// `use` (lane I) and decomposition (lane L2).
+/// Runs *program* against a fresh, isolated [`Store`] seeded with
+/// *initial_state* (never the parent's own store) -- there is no
+/// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
+/// builds its own child `Store` inline (`core/use.py:960-968`), with no
+/// separate function of its own. *initial_state* is that same shape,
+/// `{"input": <rendered+checked inputs>}` for a `use` effect -- the
+/// caller seeds it (lane I renders/checks `use.inputs` first, exactly
+/// as `core/use.py::UseRuntime.execute` does, then builds this value),
+/// not this function, since a decomposition child (lane L2) may seed
+/// something else entirely. No `namespace_path` parameter: it
+/// duplicated `frame.nested`'s own prefix (M1 lane I prerequisites,
+/// issue #448, item U5) -- *frame* already carries the child's own
+/// absolute path in the parent document (`Frame::nested`'s own doc
+/// comment), the one thing a `namespace_path: &str` of this function's
+/// own could ever have named. Shared by `use` (lane I) and
+/// decomposition (lane L2).
 pub async fn run_isolated(
     program: &electricity_bytecode::Program,
+    _initial_state: electricity_value::Value,
     _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,
-    namespace_path: &str,
 ) -> Result<Store, VmError> {
     Err(VmError::NotImplemented(format!(
-        "{namespace_path}: isolated sub-document execution is not supported by this build of \
-         electricity yet (M1-I/M1-L2, document {:?})",
+        "isolated sub-document execution is not supported by this build of electricity yet \
+         (M1-I/M1-L2, document {:?})",
         program.document.as_ref().map(|d| &d.path_as_given)
     )))
 }
