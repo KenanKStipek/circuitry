@@ -19,9 +19,10 @@ use crate::keys::{App, Dialog, Pane, visible_rows};
 /// `RunningOrQueued` have no glyph of their own in that table — `?`
 /// for an abort (nothing else in the set means "unknown"), and the
 /// same `◐`/`◌` a confirmed running/queued row uses for a guess at
-/// one (review finding 16: `row_line` draws no separate "likely"/"≤"
-/// text of its own, so a guess currently looks identical to the real
-/// thing).
+/// one. `row_line`'s own style ([`status_style`], review finding 16
+/// on #458's comment 3) is what tells a guess apart from the real
+/// thing instead: dim and italic, rather than a second glyph
+/// DESIGN.md's table has no room for.
 fn status_glyph(kind: StatusKind) -> char {
     match kind {
         StatusKind::Pending => '·',
@@ -49,6 +50,21 @@ fn status_color(kind: StatusKind) -> Color {
     }
 }
 
+/// `status_color`'s own `Style`, with `LikelyRunning`'s guess
+/// (DESIGN.md §2.1 rule 7's "likely" statuses: a row inferred from
+/// the run's own exit, never actually observed running) additionally
+/// dim and italic -- visibly distinct from a *confirmed* `Running`
+/// row, which keeps the plain, full-brightness style (review finding
+/// 16 on #458's comment 3).
+fn status_style(kind: StatusKind) -> Style {
+    let style = Style::default().fg(status_color(kind));
+    if kind == StatusKind::LikelyRunning {
+        style.add_modifier(Modifier::DIM | Modifier::ITALIC)
+    } else {
+        style
+    }
+}
+
 fn format_duration(secs: f64) -> String {
     if secs < 60.0 {
         format!("{secs:.1}s")
@@ -61,10 +77,7 @@ fn row_line(row: &Row, selected: bool) -> Line<'static> {
     let indent = "  ".repeat(row.depth.saturating_sub(1));
     let glyph = status_glyph(row.status.kind);
     let mut spans = vec![
-        Span::styled(
-            format!("{indent}{glyph} "),
-            Style::default().fg(status_color(row.status.kind)),
-        ),
+        Span::styled(format!("{indent}{glyph} "), status_style(row.status.kind)),
         Span::raw(row.label.clone()),
     ];
     if let Some(progress) = &row.loop_progress {
@@ -464,6 +477,55 @@ mod golden_tests {
         PlanTree::from_program(&program)
     }
 
+    /// A named *static* tree dynamic (`fan`, `max_concurrency 1`,
+    /// two branches `a`/`b`) -- unlike `sample_plan`'s own `each` loop
+    /// (a data-dependent pass count the compiler can't enumerate
+    /// ahead of time), both branches have a real path of their own in
+    /// the plan, so an unobserved one still gets its own row (review
+    /// finding 3 on #458's comment 3: a queued ◌ row).
+    fn tree_dynamic_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let fan_path = root_path.clone().push_name("fan");
+        let branch_a = fan_path.clone().push_name("a");
+        let branch_b = fan_path.clone().push_name("b");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: fan_path,
+                    name: Some("fan".to_string()),
+                    kind: NodeKind::Control(Region::Parallel {
+                        branches: vec![
+                            tool(branch_a, "a", OnError::Fail),
+                            tool(branch_b, "b", OnError::Fail),
+                        ],
+                        max_concurrency: Some(1),
+                        stop_on_error: false,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn snapshot(
         plan: &PlanTree,
@@ -473,6 +535,26 @@ mod golden_tests {
         engine: &str,
         selected: &str,
     ) -> String {
+        snapshot_with_log(plan, model, state, process, engine, selected, &[])
+    }
+
+    /// [`snapshot`], with the log pane given real lines (review
+    /// finding 3 on #458's comment 3: every golden here left it
+    /// empty) -- `snapshot` itself is just this with none. `log_lines`
+    /// is the plain, already-formatted `mm:ss.s text` strings `draw`
+    /// itself takes (`do_run`'s own `log_lines: Vec<String>`), not
+    /// `render::build`'s own `log: &[LogLine]` -- the TUI's log pane
+    /// never reads the latter.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_with_log(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+        log_lines: &[String],
+    ) -> String {
         let rendered = render::build(
             "do-thing.yml",
             engine,
@@ -481,6 +563,7 @@ mod golden_tests {
             state,
             process,
             5.0,
+            "2026-01-01T00:00:05Z",
             &[],
         );
         let details = render::details_for(selected, plan, state);
@@ -489,7 +572,7 @@ mod golden_tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &app, state))
+            .draw(|f| draw(f, &rendered, Some(&details), log_lines, &app, state))
             .unwrap();
         terminal.backend().to_string()
     }
@@ -587,6 +670,55 @@ mod golden_tests {
             ProcessState::Running,
             "cof",
             "prime.fan",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Review finding 3 on #458's comment 3: a queued ◌ row, with
+    /// `fan`'s own `max_concurrency 1` keeping `b` from running
+    /// alongside `a`.
+    #[test]
+    fn queued_row_under_a_concurrency_bound() {
+        let plan = tree_dynamic_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null},
+                "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "provider": "shell"}}
+            }
+        }});
+        let text = snapshot(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.fan.b",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Review finding 3 on #458's comment 3: the log pane with real
+    /// lines, not left empty the way every other golden here leaves
+    /// it.
+    #[test]
+    fn log_pane_with_lines() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let log_lines = vec![
+            "00:00.0 ▶ prime.a  tool".to_string(),
+            "00:00.5 ✓ prime.a  0.5s  ok".to_string(),
+        ];
+        let text = snapshot_with_log(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &log_lines,
         );
         insta::assert_snapshot!(text);
     }

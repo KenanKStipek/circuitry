@@ -25,8 +25,15 @@ libc = "0.2"
 signal-hook = "0.3"
 chrono = "0.4"
 indexmap = "2"
+# config_discovery's own project-config trust digest (matches
+# cli/config_trust.py's SHA-256, already used the same way by
+# electricity-compiler's own prompt-file confinement).
+sha2 = "0.10"
+# plan::compile_with_discovery writes its own discovered config to a
+# throwaway file for `compile`'s existing `Some(path)` branch to read
+# (electricity::check_options takes a path, never a parsed value).
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 electricity-value = { path = "../../../electricity/crates/electricity-value" }
 insta = "1"

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use support::{
     SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled,
-    wait_with_timeout, write_doc,
+    wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -293,14 +293,19 @@ fn a_forwarded_sigint_still_restores_the_terminal() {
     // 1.5s and 3s) -- the *actual* signal osp's own render loop is
     // ready matters, not a guess at how long getting there takes.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    // `support::SIGNAL_DELAY` on top of the pattern wait: osp's own
-    // TUI is ready as soon as the alternate screen appears, but `cof`
-    // (a separate, independently cold-starting Python process) still
-    // needs its own moment to install its own `SIGINT` handling --
-    // skipping this was observed to occasionally have `cof` itself
-    // exit 1 (not "Interrupted") when the signal arrived during its
-    // own early start-up instead.
-    std::thread::sleep(SIGNAL_DELAY);
+    // Waits for cof's own start event on the running step, rather
+    // than a fixed delay after the pattern wait above (issue #433's
+    // comments: the same flakiness #444 already removed from
+    // e2e_cof.rs/e2e_electricity.rs this way) -- a fixed delay long
+    // enough to cover `cof`'s own cold start installing its own
+    // `SIGINT` handling was still observed to occasionally lose the
+    // race under load, with `cof` exiting 1 (not "Interrupted") when
+    // the signal arrived during its own early start-up instead.
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGINT);
     }
@@ -362,7 +367,11 @@ fn a_forwarded_sigterm_in_the_tui_exits_143() {
     let pid = child.id() as i32;
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
@@ -416,7 +425,11 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
     let pid = child.id() as i32;
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     unsafe {
         libc::kill(pid, libc::SIGHUP);
     }
@@ -471,7 +484,11 @@ fn ctrl_c_byte_in_the_tui_cancels_and_exits_130() {
     );
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
     send_bytes(&mut master, b"\x03");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
