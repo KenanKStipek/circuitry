@@ -24,6 +24,7 @@ cases/<name>/
   expected.pretty.json      # only when case.json sets "also_pretty": true
   expected.out.json         # failure cases only -- the --out `cof run` still writes on a load/check failure
   expected.events.jsonl     # success cases only -- the --events stream `cof run` wrote for this case
+  expected.warnings.txt    # always written (empty when there are none) -- cof run's own stderr WARNING:/ERROR: lines (issue #442)
   expected.http_requests.json # only when case.json sets "mock_http_fixture" -- every request the mock
                             # server actually received, in arrival order
 ```
@@ -45,6 +46,7 @@ cases/<name>/
 | `sort_http_requests` | bool, default `false` -- a tree-flow case whose concurrent branches may dispatch their own HTTP calls in a different wall-clock order on either engine; compares the recorded requests re-ordered by their own canonical JSON form instead of arrival order, see "Mock HTTP server" below |
 | `known_divergence` | a deliberate, temporary engine disagreement — `{"location": "<dotted state path>", "electricity_value": <value>}`; see "Known divergence" below |
 | `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`prompt`/`shell`/`http`/...); see "Running it" below |
+| `sort_warnings` | a case whose document dispatches a tree `dynamic` — `expected.warnings.txt` is written, and compared, as a sorted set rather than `cof run`'s own real order, since two branches' own warnings can land in either relative order between runs |
 
 `harness.load_case` rejects an unknown `case.json` key and an `expect`/
 `engines`/`error_compare`/`known_divergence`/`electricity_preview_ok` value
@@ -88,6 +90,16 @@ contract both engines commit to byte for byte (electricity/DESIGN.md §6.9,
 payload, never on stderr; only a config error (never a case this suite
 exercises, since every case's `config.json`, if any, is valid) prints a
 bare `Error: <text>` line on stderr instead.
+
+Both runners also compare `harness.warning_lines(result.stderr)` against
+the committed `expected.warnings.txt` (issue #442's "Warning lines on
+stderr" item) — Circuitry's own `logging`-module `WARNING:`/`ERROR:` lines
+(`core/dynamic.py`/`core/conditional.py`'s on_error/`finally:` degradation
+warnings, `cli/config.py`'s "Unknown environment" warning, and
+`cli/live_state.py`/`cli/events.py`'s mid-run write-failure warnings), not
+the unrelated `Warning:`/`Error:` lines above. A chain's own warnings keep
+`cof run`'s real order; `sort_warnings` compares them as a sorted set
+instead, for a tree `dynamic` case where real order can vary run to run.
 
 ## Scripted model replies
 

@@ -78,6 +78,20 @@ def _redact_and_reserialize(
     return text.encode("utf-8")
 
 
+def _warnings_text(stderr: str, metadata: dict[str, Any]) -> bytes:
+    """`expected.warnings.txt` (issue #442's "Warning lines on stderr"
+    item): one line per `harness.warning_lines` entry, sorted when
+    `case.json` sets `sort_warnings` (a tree `dynamic` case, where two
+    branches' own warnings can land in either relative order between
+    runs) -- always written, even empty, so a case that stops producing
+    a warning it used to is caught by `--check` the same way any other
+    stale expected file is, rather than leaving a no-longer-applicable
+    file silently uncompared.
+    """
+    lines = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    text = "".join(f"{line}\n" for line in lines)
+    return text.encode("utf-8")
+
 
 def _generate_success(
     case_dir: Path,
@@ -119,6 +133,7 @@ def _generate_success(
         # directory could leak into (`tests/conformance/normalize.py`'s
         # events comparator normalizes these at comparison time instead).
         "expected.events.jsonl": events_path.read_bytes(),
+        "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
     if metadata.get("also_pretty"):
         pretty_home = tmp_root / "home-pretty"
@@ -189,6 +204,7 @@ def _generate_failure(
         "expected.out.json": _redact_and_reserialize(
             out_path.read_bytes(), pretty=False, replacements=replacements
         ),
+        "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
 
 

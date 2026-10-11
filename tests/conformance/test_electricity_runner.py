@@ -58,6 +58,19 @@ def _case_ids() -> list[str]:
     return [d.name for d in CASE_DIRS]
 
 
+def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
+    """`tests/conformance/test_python_runner.py`'s own counterpart --
+    electricity's `WARNING:`/`ERROR:` stderr lines against the same
+    committed `expected.warnings.txt` (issue #442's "Warning lines on
+    stderr" item)."""
+    actual = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
+    expected = [line for line in expected_text.splitlines() if line]
+    assert actual == expected, (
+        f"{case_dir.name}: stderr warning lines mismatch\n  got: {actual}\n  want: {expected}"
+    )
+
+
 @pytest.fixture(scope="session")
 def electricity_binary() -> Path | None:
     """Build the `electricity` binary once per test session. Returns
@@ -200,6 +213,8 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     harness.assert_no_leftover_replies(
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
+
+    _assert_warnings_match(case_dir, metadata, result.stderr)
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (

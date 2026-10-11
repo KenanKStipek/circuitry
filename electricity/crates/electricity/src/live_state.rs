@@ -193,8 +193,19 @@ impl LiveStateMirror {
         }
         self.pending.set(false);
         self.next_due.set(Some(now + self.interval));
-        if write_atomic(&self.path, &render_state(&snapshot(), false)).is_err() {
+        if let Err(err) = write_atomic(&self.path, &render_state(&snapshot(), false)) {
             self.had_failure.set(true);
+            // `cli/live_state.py::LiveStateMirror._write`'s own
+            // `logger.warning("Could not write --live-state %s: %s",
+            // self._path, exc)`, once per failed write (issue #442) --
+            // the OS-specific suffix is Rust's own `io::Error::Display`,
+            // not byte-for-byte Python's `OSError.__str__` (same
+            // long-standing divergence as `electricity-compiler`'s own
+            // prompt-file read errors).
+            log::warn!(
+                "Could not write --live-state {}: {err}",
+                self.path.display()
+            );
         }
     }
 
@@ -204,8 +215,12 @@ impl LiveStateMirror {
     /// whole lifetime -- mid-run or this one -- failed, so the caller
     /// can fold that into one warning on the run's result.
     pub fn close(&self, state: &Value) -> bool {
-        if write_atomic(&self.path, &render_state(state, false)).is_err() {
+        if let Err(err) = write_atomic(&self.path, &render_state(state, false)) {
             self.had_failure.set(true);
+            log::warn!(
+                "Could not write --live-state {}: {err}",
+                self.path.display()
+            );
         }
         self.had_failure.get()
     }

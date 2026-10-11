@@ -616,6 +616,7 @@ dependencies = [
  "electricity-value",
  "electricity-vm",
  "indexmap",
+ "log",
  "serde_json",
  "tokio",
  "uuid",
@@ -667,6 +668,7 @@ dependencies = [
  "electricity-json",
  "electricity-value",
  "indexmap",
+ "log",
  "regex",
 ]
 
@@ -737,6 +739,7 @@ dependencies = [
  "electricity-value",
  "futures",
  "indexmap",
+ "log",
  "rand",
  "tokio",
 ]
