@@ -1,0 +1,14 @@
+{"v":1,"seq":0,"ts":"2026-10-11T17:00:51.987Z","ev":"run_start","run_id":"80fa6c48-10bc-4328-8dbe-c98969f80787","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":80370}
+{"v":1,"seq":1,"ts":"2026-10-11T17:00:51.991Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T17:00:51.991Z","ev":"start","id":1,"path":"prime.class_range"}
+{"v":1,"seq":3,"ts":"2026-10-11T17:00:51.991Z","ev":"end","id":1,"path":"prime.class_range","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T17:00:51.991Z","ev":"start","id":2,"path":"prime.class_range_negated"}
+{"v":1,"seq":5,"ts":"2026-10-11T17:00:51.992Z","ev":"end","id":2,"path":"prime.class_range_negated","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T17:00:51.992Z","ev":"start","id":3,"path":"prime.class_negated_word_shortcut"}
+{"v":1,"seq":7,"ts":"2026-10-11T17:00:51.992Z","ev":"end","id":3,"path":"prime.class_negated_word_shortcut","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-11T17:00:51.992Z","ev":"start","id":4,"path":"prime.ignorecase_ascii_folds_plain_letters"}
+{"v":1,"seq":9,"ts":"2026-10-11T17:00:51.992Z","ev":"end","id":4,"path":"prime.ignorecase_ascii_folds_plain_letters","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-11T17:00:51.992Z","ev":"start","id":5,"path":"prime.must_advance_alternation"}
+{"v":1,"seq":11,"ts":"2026-10-11T17:00:51.992Z","ev":"end","id":5,"path":"prime.must_advance_alternation","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-10-11T17:00:51.992Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":13,"ts":"2026-10-11T17:00:51.992Z","ev":"run_end","ok":true}

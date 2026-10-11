@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (regex parameter checks, exact text) plus issue #479's own retried-failure test ('A retried failure', meta.retries_used)",
+  "description": "Every params-level ValueError the plugin raises (missing/empty/non-string pattern, non-string input, unknown mode, flags must be a list, an unknown flag naming the original item's own repr, replacement required for sub) absorbed by on_error: continue, each compared byte for byte (Circuitry's own messages, never a third-party one). A bad replacement-escape text propagates with no `regex: invalid pattern: ` prefix (the template is parsed at sub call time, not compile time). A deterministically failing effect with retries: {max_attempts: 2, backoff_ms: 0} gives meta.retries_used: 1 -- every regex failure is retryable, the non-HTTP-family default.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
