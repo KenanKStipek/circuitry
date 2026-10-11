@@ -481,6 +481,18 @@ impl RunObserver for Observer<'_> {
             mirror.mark_pending();
         }
     }
+
+    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+        if let Some(mirror) = self.live_state {
+            mirror.graft_child_write(node_path, snapshot);
+        }
+    }
+
+    fn clear_graft(&self, node_path: &EffectPath) {
+        if let Some(mirror) = self.live_state {
+            mirror.clear_graft(node_path);
+        }
+    }
 }
 
 /// `state.setdefault("runtime", {}).setdefault("last_run", {})`, then
