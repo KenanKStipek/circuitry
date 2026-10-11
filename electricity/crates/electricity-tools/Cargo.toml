@@ -17,6 +17,17 @@ test-tools = []
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
+# `http_error_excerpt`'s own `redact()` call (`plugins/base.py::
+# http_error_excerpt`'s own doc comment: the deny-list, not an
+# unredacted raw body, ever reaches a failure message) -- the same
+# crate `electricity-vm`'s `exec/tool.rs` already redacts `meta.raw`/
+# `meta.params_rendered` with.
+electricity-redaction = { path = "../electricity-redaction" }
+# `http.rs`'s own header map (insertion order matters for `Request.
+# add_header`'s own capitalize-collapse, "a later one wins, never
+# moved" -- the same ordered-map guarantee `electricity-value`'s own
+# `Dict` already relies on this crate for).
+indexmap = "2"
 async-trait = "0.1"
 # `regex` (plugins/regex.py, #448 decision 7): a Python-`re`-syntax
 # translation layer over `fancy-regex`, the engine already pinned in

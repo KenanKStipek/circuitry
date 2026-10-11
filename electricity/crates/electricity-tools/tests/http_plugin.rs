@@ -1,0 +1,342 @@
+//! `HttpPlugin::execute` against a raw loopback server -- the end-to-
+//! end shape the conformance harness (Python side) exercises too, but
+//! pinned here against hand-written wire responses for cases the
+//! mock harness can't express yet (redirects, duplicate headers, a
+//! non-UTF-8 body).
+
+use electricity_tools::{CheckResult, ToolCall, ToolPlugin};
+use electricity_value::{CancellationToken, Dict, Value};
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
+fn dict_get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.as_dict()?.get(&Value::Str(key.to_string()))
+}
+
+fn params(entries: Vec<(&str, Value)>) -> Value {
+    let mut d = Dict::new();
+    for (k, v) in entries {
+        d.insert(Value::Str(k.to_string()), v);
+    }
+    Value::Dict(d)
+}
+
+static NONE: Value = Value::None;
+
+fn call(token: &CancellationToken) -> ToolCall<'_> {
+    ToolCall {
+        timeout_seconds: 5,
+        config: &NONE,
+        token,
+        armed: false,
+    }
+}
+
+fn respond_once(response: &'static [u8]) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(response);
+    });
+    addr
+}
+
+fn record_request(
+    response: &'static [u8],
+) -> (std::net::SocketAddr, std::sync::mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+        let _ = stream.write_all(response);
+    });
+    (addr, rx)
+}
+
+#[tokio::test]
+async fn a_plain_get_returns_the_parsed_json_body() {
+    let addr = respond_once(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"ok\": true}\n",
+    );
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    assert_eq!(dict_get(&result.value, "ok"), Some(&Value::Bool(true)));
+    let status = dict_get(&result.raw, "status").unwrap();
+    assert_eq!(status, &Value::from(200i64));
+}
+
+#[tokio::test]
+async fn a_404_is_a_returned_failure_with_an_excerpt() {
+    let body = b"{\"error\": {\"message\": \"nope\"}}";
+    let response = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.as_bytes(), body].concat();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(&full);
+    });
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(!result.ok);
+    assert_eq!(result.stderr.as_deref(), Some("HTTP 404: Not Found: nope"));
+}
+
+#[tokio::test]
+async fn fail_on_error_false_keeps_ok_true_on_a_500() {
+    let addr = respond_once(
+        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("fail_on_error", Value::Bool(false)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    assert!(result.stderr.is_some());
+}
+
+#[tokio::test]
+async fn a_post_to_a_303_follows_as_a_get_with_no_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let addr_str = addr.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+            .unwrap();
+        let resp = format!(
+            "HTTP/1.1 303 See Other\r\nLocation: http://{addr_str}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = stream.write_all(resp.as_bytes());
+
+        let (mut stream2, _) = listener.accept().unwrap();
+        let n2 = stream2.read(&mut buf).unwrap();
+        tx.send(String::from_utf8_lossy(&buf[..n2]).to_string())
+            .unwrap();
+        let _ = stream2
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+    });
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/start"))),
+            ("method", Value::Str("POST".to_string())),
+            ("body", Value::Str("payload".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    let first = rx.recv().unwrap();
+    assert!(first.starts_with("POST /start"));
+    assert!(first.contains("payload"));
+    let second = rx.recv().unwrap();
+    assert!(second.starts_with("GET /next"));
+    assert!(
+        !second.contains("content-length") && !second.to_lowercase().contains("content-length")
+    );
+}
+
+#[tokio::test]
+async fn a_post_to_a_307_is_a_success_with_stderr_set() {
+    let addr = respond_once(
+        b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://example.invalid/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("method", Value::Str("POST".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some("HTTP 307: Temporary Redirect")
+    );
+}
+
+#[tokio::test]
+async fn query_params_with_doseq_append_to_an_existing_query_string() {
+    let (addr, rx) =
+        record_request(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let token = CancellationToken::new();
+    let mut query = Dict::new();
+    query.insert(
+        Value::Str("tag".to_string()),
+        Value::List(vec![
+            Value::Str("a".to_string()),
+            Value::Str("b".to_string()),
+        ]),
+    );
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/path?existing=1"))),
+            ("params", Value::Dict(query)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    let request_text = rx.recv().unwrap();
+    assert!(request_text.starts_with("GET /path?existing=1&tag=a&tag=b"));
+}
+
+#[tokio::test]
+async fn a_json_body_sets_content_type_and_length() {
+    let (addr, rx) =
+        record_request(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let token = CancellationToken::new();
+    let mut body = Dict::new();
+    body.insert(Value::Str("a".to_string()), Value::from(1i64));
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("method", Value::Str("POST".to_string())),
+            ("json", Value::Dict(body)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok);
+    let request_text = rx.recv().unwrap();
+    assert!(request_text.contains("content-type: application/json"));
+    assert!(request_text.contains("{\"a\": 1}"));
+}
+
+#[tokio::test]
+async fn parse_json_on_a_non_json_body_raises_with_the_decode_text() {
+    let addr =
+        respond_once(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nnot json");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("parse", Value::Str("json".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.message
+            .starts_with("HttpPlugin: parse='json' but response is not JSON:")
+    );
+}
+
+#[tokio::test]
+async fn a_non_utf8_body_decodes_with_replacement_characters() {
+    let body: &[u8] = b"\xff\xfe";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.as_bytes(), body].concat();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(&full);
+    });
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    let text = dict_get(&result.raw, "body").unwrap();
+    assert_eq!(text, &Value::Str("\u{fffd}\u{fffd}".to_string()));
+}
+
+#[tokio::test]
+async fn a_connection_refused_raises_the_wrapped_runtime_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let token = CancellationToken::new();
+    let url = format!("http://{addr}/");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(url.clone()))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.message
+            .starts_with(&format!("HTTP request to {url} failed:"))
+    );
+    assert_eq!(err.cause, electricity_tools::ErrorCause::NoReply);
+}
+
+#[tokio::test]
+async fn a_blank_url_is_a_value_error() {
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str("   ".to_string()))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin requires params['url'] as a non-empty string."
+    );
+}
+
+#[test]
+fn check_is_trivially_ok() {
+    let check: CheckResult = electricity_tools::http::HttpPlugin.check();
+    assert!(check.ok);
+}
