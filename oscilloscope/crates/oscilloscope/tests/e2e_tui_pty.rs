@@ -12,19 +12,20 @@
 
 mod support;
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Write;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use support::{
-    SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process, e2e_enabled,
-    wait_for_step_start, wait_with_timeout, write_doc,
+    ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
+    e2e_enabled, wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 /// Opens a fresh pty pair, unlocked and granted, ready for a child to
@@ -47,6 +48,43 @@ fn open_pty() -> (File, PathBuf) {
         .to_str()
         .expect("ptsname is valid UTF-8")
         .to_string();
+
+    // A freshly opened pty's own window size defaults to 0x0 until
+    // something sets it -- crossterm's own `terminal::size()` reads
+    // exactly this, so without it every frame a TUI draws lays out
+    // into a zero-area buffer and writes nothing at all beyond the
+    // alternate-screen/cursor sequences every test here already
+    // checks (#494's own regression tests, further down this file,
+    // need the header's actual text, not just those). `TIOCSWINSZ`
+    // on the master fd alone fails ENOTTY on macOS -- it has to go
+    // through an open slave fd, but the size itself belongs to the
+    // pty, not that one fd, so it's still in effect once this one
+    // closes again.
+    {
+        let slave = File::options()
+            .read(true)
+            .write(true)
+            .open(&slave_path)
+            .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+        let ws = libc::winsize {
+            ws_row: 40,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+            panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+        }
+        // Not closed: on macOS, the slave side's open-file count
+        // dropping to zero even briefly -- closing this one before
+        // `spawn_osp_on_pty` opens its own three, moments later --
+        // signals a hangup the master side sees as an immediate EOF,
+        // which silently ended `drain_continuously`'s own read loop
+        // before osp ever wrote a single byte. Leaking this one fd
+        // for the rest of the test binary's own short life keeps the
+        // slave's own open count never reaching zero in between.
+        std::mem::forget(slave);
+    }
 
     let master = unsafe { File::from_raw_fd(master_fd as RawFd) };
     (master, PathBuf::from(slave_path))
@@ -129,6 +167,20 @@ fn spawn_osp_on_pty(
     slave_path: &std::path::Path,
     args: &[&OsStr],
 ) -> std::process::Child {
+    spawn_osp_on_pty_with_env(home, slave_path, args, &[])
+}
+
+/// [`spawn_osp_on_pty`], with extra environment variables set on the
+/// spawned `osp` before it starts -- the final-drain regression test
+/// below (#494) needs its own fake engine on `PATH` and a few
+/// variables that fake engine itself reads, neither of which any
+/// other caller here needs.
+fn spawn_osp_on_pty_with_env(
+    home: &TestHome,
+    slave_path: &std::path::Path,
+    args: &[&OsStr],
+    extra_env: &[(&str, &OsStr)],
+) -> std::process::Child {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_osp"));
     cmd.args(args);
     cmd.env("HOME", home.path());
@@ -148,6 +200,9 @@ fn spawn_osp_on_pty(
         "CI",
     ] {
         cmd.env_remove(key);
+    }
+    for (key, value) in extra_env {
+        cmd.env(key, value);
     }
     cmd.stdin(stdio_from_slave(slave_path));
     cmd.stdout(stdio_from_slave(slave_path));
@@ -577,6 +632,242 @@ fn osp_watch_renders_in_the_tui_and_exits_cleanly() {
     assert!(
         rendered.contains("\u{1b}[?1049l"),
         "expected an alternate-screen exit sequence; got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// A fake engine standing in for a real `cof`/`electricity`, used
+/// only by the two regression tests below (#494): parses out the one
+/// flag `osp` always passes regardless of engine or capability
+/// detection, `--out <path>`, sleeps long enough that `osp`'s own TUI
+/// loop has certainly already polled this run's directory at least
+/// once while it was still empty, then writes `events.jsonl`/
+/// `state.live.json`/the `--out` file itself all at once and exits --
+/// exactly the shape DESIGN.md §1.1 describes for a real engine
+/// ("writes its last events and its final state and exits at once"),
+/// with no real `cof`/`electricity` build needed on `PATH` at all.
+/// Its own content comes entirely from three environment variables
+/// (`OSP_DOUBLE_EVENTS`/`OSP_DOUBLE_STATE`/`OSP_DOUBLE_EXIT`) a test
+/// sets before spawning `osp`, so one script serves both an ok and a
+/// failed run.
+const ENGINE_DOUBLE_SCRIPT: &str = r#"#!/bin/sh
+set -eu
+if [ "${1:-}" = "--help" ]; then
+  printf '%s\n' "usage: --events PATH --live-state PATH"
+  exit 0
+fi
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--out" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+if [ -z "$out" ]; then
+  exit 2
+fi
+run_dir=$(dirname "$out")
+sleep "${OSP_DOUBLE_DELAY_S:-0.3}"
+printf '%s' "$OSP_DOUBLE_EVENTS" > "$run_dir/events.jsonl"
+printf '%s' "$OSP_DOUBLE_STATE" > "$run_dir/state.live.json"
+printf '%s' "$OSP_DOUBLE_STATE" > "$out"
+exit "${OSP_DOUBLE_EXIT:-0}"
+"#;
+
+/// Writes [`ENGINE_DOUBLE_SCRIPT`] to `bin_dir/name`, executable.
+fn write_engine_double(bin_dir: &Path, name: &str) -> PathBuf {
+    let path = bin_dir.join(name);
+    std::fs::write(&path, ENGINE_DOUBLE_SCRIPT).expect("write engine double");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// `PATH`, with `bin_dir` prepended -- so `ElectricityEngine::detect`/
+/// `command` find the engine double in `bin_dir` ahead of any real
+/// `electricity` build that happens to also be on this machine's own
+/// `PATH`.
+fn path_with(bin_dir: &Path) -> OsString {
+    let mut paths = vec![bin_dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths).expect("join PATH")
+}
+
+/// Issue #494: `run_tui`'s own loop used to stop polling the instant
+/// `try_wait` first reported the engine's exit, so a fast-exiting
+/// engine's last events and final write -- already sitting on disk
+/// by the time `try_wait` can possibly see the exit at all, since a
+/// process's own writes always happen-before its own exit -- were
+/// simply never read again. The header kept showing the run
+/// `aborted`, with `effects 0/1`, forever (nothing left running to
+/// ever change it) -- reproduced here with a fake engine (no real
+/// `cof`/`electricity` needed) that writes a complete, successful
+/// final state only after `osp` has certainly already polled this
+/// run's own, still-empty directory at least once.
+#[test]
+fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    write_engine_double(bin_dir.path(), "electricity");
+
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let events = concat!(
+        "{\"v\":1,\"seq\":0,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n",
+        "{\"v\":1,\"seq\":1,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n",
+        "{\"v\":1,\"seq\":2,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.hello\",\"ok\":true,\"ms\":1}\n",
+        "{\"v\":1,\"seq\":3,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_end\",\"ok\":true}\n",
+    );
+    let state = concat!(
+        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2024-01-01T00:00:00Z\",",
+        "\"totals\":{\"wall_time_s\":0.01,\"effects_run\":2,\"tokens_sent\":0,\"tokens_received\":0,\"cost_usd\":0.0}}},",
+        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:00:00Z\",\"error\":null,\"flow\":\"chain\"},",
+        "\"hello\":{\"value\":\"hi\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:00:00Z\",\"exit_code\":0,\"provider\":\"shell\",\"stdout\":\"hi\\n\",\"stderr\":\"\",\"error\":null}}}}",
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let path_env = path_with(bin_dir.path());
+    let child = spawn_osp_on_pty_with_env(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--engine"),
+            OsStr::new("electricity"),
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+        ],
+        &[
+            ("PATH", path_env.as_os_str()),
+            ("OSP_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSP_DOUBLE_STATE", OsStr::new(state)),
+            ("OSP_DOUBLE_EXIT", OsStr::new("0")),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // The engine double sleeps 0.3s before writing anything at all
+    // (comfortably more than one of the TUI's own ~30ms poll ticks),
+    // then writes and exits in one burst -- a further 1.5s here gives
+    // the fix's own drain every chance to have already run and the
+    // TUI to have redrawn with it before this reads the pty's buffer.
+    std::thread::sleep(Duration::from_millis(1500));
+    send_bytes(&mut master, b"q");
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osp should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        !rendered.contains("aborted"),
+        "the TUI showed the finished run as aborted instead of ok; got:\n{rendered:?}"
+    );
+    assert!(
+        rendered.contains("effects 1/1"),
+        "the TUI never showed every effect counted (effects 1/1); got:\n{rendered:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// [`a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted`], for
+/// a run that failed instead -- the same gap must not turn a real
+/// `failed` ending into `aborted` either.
+#[test]
+fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    write_engine_double(bin_dir.path(), "electricity");
+
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: boom\n    type: tool\n    provider: shell\n    params:\n      command: ls\n      args: [\"/nonexistent-osp-494-path\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let events = concat!(
+        "{\"v\":1,\"seq\":0,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n",
+        "{\"v\":1,\"seq\":1,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.boom\"}\n",
+        "{\"v\":1,\"seq\":2,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.boom\",\"ok\":false,\"ms\":1,\"error\":\"/bin/ls failed (exit 1): ls: cannot access\"}\n",
+        "{\"v\":1,\"seq\":3,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_end\",\"ok\":false,\"error\":\"boom: /bin/ls failed (exit 1)\"}\n",
+    );
+    let state = concat!(
+        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2024-01-01T00:00:00Z\",",
+        "\"totals\":{\"wall_time_s\":0.01,\"effects_run\":1,\"tokens_sent\":0,\"tokens_received\":0,\"cost_usd\":0.0}}},",
+        "\"prime\":{\"value\":false,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:00:00Z\",\"error\":\"boom: /bin/ls failed (exit 1)\"},",
+        "\"boom\":{\"value\":null,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:00:00Z\",\"exit_code\":null,\"provider\":\"shell\",\"stdout\":null,\"stderr\":null,\"error\":\"/bin/ls failed (exit 1)\"}}}}",
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let path_env = path_with(bin_dir.path());
+    let child = spawn_osp_on_pty_with_env(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--engine"),
+            OsStr::new("electricity"),
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+        ],
+        &[
+            ("PATH", path_env.as_os_str()),
+            ("OSP_DOUBLE_EVENTS", OsStr::new(events)),
+            ("OSP_DOUBLE_STATE", OsStr::new(state)),
+            ("OSP_DOUBLE_EXIT", OsStr::new("1")),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(1500));
+    send_bytes(&mut master, b"q");
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(status.code(), Some(1), "got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        !rendered.contains("aborted"),
+        "the TUI showed the finished run as aborted instead of failed; got:\n{rendered:?}"
+    );
+    // The header's own status span (`Color::Red` for `RunStatus::
+    // Failed`), the same specific check the ok test above makes.
+    assert!(
+        rendered.contains("\u{1b}[38;5;1;49mfailed"),
+        "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
 
     assert_no_leftover_process(work.path());

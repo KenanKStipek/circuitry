@@ -636,35 +636,36 @@ fn finish_run(
 ) -> u8 {
     let exit_status = child.wait().unwrap_or(exit_status);
 
-    // Drain what's left after the engine exited: its last stderr lines,
-    // and the final live-state write (DESIGN.md §1.1: `run_end`, when
-    // present, lands after it).
+    // Drain what's left after the engine exited: its last stderr
+    // lines, then the same shared final drain every path that
+    // reaches a run's end now takes (#494) -- keeps tailing events
+    // and the live state until a pass yields nothing new, then reads
+    // the authoritative `--out` file once more, which also covers the
+    // two cases that read alone can't: the engine failed before
+    // writing any state at all (a validation error, printed as cof's
+    // own pre-execution JSON on stdout, DESIGN.md §4.1), or the run
+    // was genuinely aborted (a second signal, SIGKILL, a crash) with
+    // no final write.
     for line in stderr_rx.try_iter() {
         print_line(out, clock, None, &format!("engine: {line}"));
     }
-    drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
+    let (lines, final_state) = drain_until_ended(
+        &spec.out_path(),
+        live_poller,
+        events_tailer,
+        differ,
+        model,
+        plan,
+    );
+    for line in lines {
+        print_line(out, clock, line.ts.as_deref(), &line.text);
+    }
 
     // M1: the run's own summary line is computed exactly once, here,
     // after every other line this run will ever produce has already
     // been printed -- `Differ::finish` never emits it mid-run, and a
     // per-tick heuristic no longer exists to race state and events
-    // (two independently polled files) against each other. Try the
-    // authoritative `--out` file once more first -- the live-state
-    // poller's own last `drain` above can miss the very last write if
-    // it lands between two polls -- which also covers the two cases
-    // `finish` itself can't: the engine failed before writing any
-    // state at all (a validation error, printed as cof's own
-    // pre-execution JSON on stdout, DESIGN.md §4.1), or the run was
-    // genuinely aborted (a second signal, SIGKILL, a crash) with no
-    // final write.
-    let final_state = std::fs::read(spec.out_path())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    if let Some(state) = &final_state {
-        for line in differ.diff(state, plan) {
-            print_line(out, clock, line.ts.as_deref(), &line.text);
-        }
-    }
+    // (two independently polled files) against each other.
     let summary = final_state
         .as_ref()
         .and_then(|state| differ.finish(state, failure_reason_fallback(run_dir, model).as_deref()))
@@ -1085,6 +1086,31 @@ fn run_tui(
         if exit_status.is_none() {
             if let Ok(Some(status)) = child.try_wait() {
                 exit_status = Some(status);
+                // #494: the engine already exited, but its last
+                // events and its final live-state write (DESIGN.md
+                // §1.1) can still land after the poll above that just
+                // caught `try_wait`'s own exit -- drain once more,
+                // before the next render rebuild, through the same
+                // final read `finish_run` takes, so this loop's own
+                // post-exit screen can't show the run `aborted` with
+                // every write already sitting on disk.
+                let (lines, state) = drain_until_ended(
+                    &spec.out_path(),
+                    &mut live_poller,
+                    &mut events_tailer,
+                    &mut differ,
+                    &mut model,
+                    &plan,
+                );
+                for line in &lines {
+                    push_log_line(
+                        &mut log_lines,
+                        format_log_line(&mut clock, line.ts.as_deref(), &line.text),
+                    );
+                }
+                if let Some(state) = state {
+                    current_state = Some(state);
+                }
                 dirty = true;
                 if leave_once_exited {
                     break;
@@ -1274,6 +1300,55 @@ fn drain_observations(
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
     state
+}
+
+/// The drain every path that reaches a run's end takes, once, before
+/// it ever rebuilds a render state or prints a final summary (#494):
+/// keeps calling [`observe_tick`] until a pass yields no new lines —
+/// the engine has already exited (or, for `osp watch`, gone away) by
+/// the time a caller gets here, so its last events and its final
+/// live-state write are already on disk; this just keeps polling
+/// until nothing new turns up, rather than stopping after the single
+/// pass that used to miss them when they all landed between two
+/// polls. Then takes the same authoritative final read `finish_run`
+/// and `finish_watch` always took straight from `out_path` (DESIGN.md
+/// §1.1: `--out`/`state.json`, written once, after the live-state
+/// poller's own last write) — `differ.diff` is idempotent against a
+/// snapshot it has already seen in full, so re-diffing it here even
+/// when the live-state poller already caught the very same write
+/// produces no duplicate lines. `run_tui`'s own loop used to keep
+/// polling only while `exit_status.is_none()`, so a fast-exiting
+/// engine's last events and final write landed after the last poll
+/// that would ever read them, and the TUI kept showing the run
+/// `aborted` with the engine already gone; calling this the moment
+/// each caller first observes the run has ended closes that gap for
+/// every one of them, through the one read they all now share.
+fn drain_until_ended(
+    out_path: &Path,
+    live_poller: &mut LiveStatePoller,
+    events_tailer: &mut EventsTailer,
+    differ: &mut Differ,
+    model: &mut RunModel,
+    plan: &PlanTree,
+) -> (
+    Vec<oscilloscope_core::diff::LogLine>,
+    Option<serde_json::Value>,
+) {
+    let mut lines = Vec::new();
+    loop {
+        let (tick_lines, _) = observe_tick(live_poller, events_tailer, differ, model, plan);
+        if tick_lines.is_empty() {
+            break;
+        }
+        lines.extend(tick_lines);
+    }
+    let final_state = std::fs::read(out_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    if let Some(state) = &final_state {
+        lines.extend(differ.diff(state, plan));
+    }
+    (lines, final_state)
 }
 
 /// `do_watch`'s own plain stop-condition loop, shared with `run_tui_
@@ -1612,7 +1687,27 @@ fn run_tui_watch(
                 dirty = true;
             }
             if !ended && model.run_ended_by_events() {
-                let (more_lines, state) = observe_tick(
+                ended = true;
+            }
+            if !ended {
+                if let Some(pid) = model.run_start_pid() {
+                    if !oscilloscope_core::supervise::process_alive(pid) {
+                        ended = true;
+                    }
+                }
+            }
+            if ended {
+                // #494: the same shared final drain every path that
+                // reaches a run's end takes, regardless of which of
+                // the three stop conditions above just tripped --
+                // drains events and the live state until a pass
+                // yields nothing new, then reads `state.json` once
+                // more as the authoritative final write, so this
+                // loop's own post-exit screen can't show a dead-pid
+                // or events-only ending as `aborted` with every write
+                // already sitting on disk.
+                let (more_lines, state) = drain_until_ended(
+                    &run_dir.join("state.json"),
                     &mut live_poller,
                     &mut events_tailer,
                     &mut differ,
@@ -1628,16 +1723,6 @@ fn run_tui_watch(
                 if let Some(state) = state {
                     last_state = Some(state);
                 }
-                ended = true;
-            }
-            if !ended {
-                if let Some(pid) = model.run_start_pid() {
-                    if !oscilloscope_core::supervise::process_alive(pid) {
-                        ended = true;
-                    }
-                }
-            }
-            if ended {
                 dirty = true;
             }
         }
@@ -1811,13 +1896,25 @@ fn finish_watch(
         return 0;
     }
 
-    let final_state = std::fs::read(run_dir.join("state.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    // #494: the same shared final drain every path that reaches a
+    // run's end takes, before the one authoritative read every
+    // ending (osp run's `finish_run` included) takes from its own
+    // `--out`/`state.json` -- by this point the run has already been
+    // judged ended by one of `run_tui_watch`/`supervise_plain_watch`'s
+    // three stop conditions, so draining until a pass yields nothing
+    // new can't spin on a still-writing engine.
+    let (lines, final_state) = drain_until_ended(
+        &run_dir.join("state.json"),
+        live_poller,
+        events_tailer,
+        differ,
+        model,
+        plan,
+    );
+    for line in lines {
+        print_line(out, clock, line.ts.as_deref(), &line.text);
+    }
     if let Some(state) = &final_state {
-        for line in differ.diff(state, plan) {
-            print_line(out, clock, line.ts.as_deref(), &line.text);
-        }
         *last_state = Some(state.clone());
     }
     let summary = final_state
@@ -2152,6 +2249,165 @@ mod tests {
         assert!(
             text.contains("■ detached (the run is still going)"),
             "{text:?}"
+        );
+    }
+
+    #[test]
+    fn drain_until_ended_shows_ok_with_every_effect_counted_after_a_fast_exit() {
+        // #494: an engine double that writes its last events and its
+        // final state only *after* the last observation this test
+        // takes before calling the fix under test -- exactly the
+        // shape DESIGN.md §1.1 describes for a real engine ("writes
+        // its last events and its final state and exits at once").
+        // `run_tui`'s own loop used to never observe anything again
+        // once it had seen the engine's exit; `drain_until_ended` is
+        // the one read every path that reaches a run's end now takes
+        // instead.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = PlanTree::empty();
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+
+        // A tick taken while the run directory is still empty -- the
+        // same as every tick `run_tui`'s own loop takes while the
+        // engine is still running.
+        let (lines, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        assert!(lines.is_empty());
+        assert!(state.is_none());
+
+        // The engine writes everything and exits, strictly after
+        // that last observation -- nothing else polls these files
+        // again in between, exactly like the real gap (#494).
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n\
+             {\"v\":1,\"seq\":1,\"ts\":\"t\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.hello\"}\n\
+             {\"v\":1,\"seq\":2,\"ts\":\"t\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.hello\",\"ok\":true,\"ms\":1}\n\
+             {\"v\":1,\"seq\":3,\"ts\":\"t\",\"ev\":\"run_end\",\"ok\":true}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("state.json"),
+            r#"{"runtime":{"last_run":{"completed_at":"t","totals":{"wall_time_s":0.01}}},"prime":{"value":true,"meta":{"completed_at":"t","error":null},"hello":{"value":"hi\n","meta":{"completed_at":"t","error":null,"exit_code":0,"provider":"shell"}}}}"#,
+        )
+        .unwrap();
+
+        let spec = RunSpec {
+            orchestration: dir.path().join("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: dir.path().to_path_buf(),
+        };
+
+        let (_lines, final_state) = drain_until_ended(
+            &spec.out_path(),
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        let state = final_state.expect("drain_until_ended should read the final --out write");
+
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "electricity",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: false,
+                has_failure_reason: false,
+            },
+            0.1,
+            "2024-01-01T00:00:00Z",
+            &[],
+        );
+        assert_eq!(render_state.header.status, RunStatus::Ok);
+        assert_eq!(render_state.header.effects_done, 1);
+    }
+
+    #[test]
+    fn drain_until_ended_shows_failed_with_the_error_after_a_fast_exit() {
+        // [`drain_until_ended_shows_ok_with_every_effect_counted_after_a_fast_exit`],
+        // for a run that failed instead.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = PlanTree::empty();
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+
+        let (lines, state) = observe_tick(
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        assert!(lines.is_empty());
+        assert!(state.is_none());
+
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n\
+             {\"v\":1,\"seq\":1,\"ts\":\"t\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.boom\"}\n\
+             {\"v\":1,\"seq\":2,\"ts\":\"t\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.boom\",\"ok\":false,\"ms\":1,\"error\":\"boom failed\"}\n\
+             {\"v\":1,\"seq\":3,\"ts\":\"t\",\"ev\":\"run_end\",\"ok\":false,\"error\":\"boom: boom failed\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("state.json"),
+            r#"{"runtime":{"last_run":{"completed_at":"t","totals":{"wall_time_s":0.01}}},"prime":{"value":false,"meta":{"completed_at":"t","error":"boom: boom failed"},"boom":{"value":null,"meta":{"completed_at":"t","error":"boom failed","provider":"shell"}}}}"#,
+        )
+        .unwrap();
+
+        let spec = RunSpec {
+            orchestration: dir.path().join("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: dir.path().to_path_buf(),
+        };
+
+        let (_lines, final_state) = drain_until_ended(
+            &spec.out_path(),
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        let state = final_state.expect("drain_until_ended should read the final --out write");
+
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "electricity",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: true,
+                has_failure_reason: true,
+            },
+            0.1,
+            "2024-01-01T00:00:00Z",
+            &[],
+        );
+        assert_eq!(render_state.header.status, RunStatus::Failed);
+        assert_eq!(render_state.header.effects_done, 1);
+        assert_eq!(
+            oscilloscope_core::model::run_error(&state).as_deref(),
+            Some("boom: boom failed")
         );
     }
 
