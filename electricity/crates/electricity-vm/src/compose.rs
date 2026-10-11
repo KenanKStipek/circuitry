@@ -404,6 +404,25 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
         }
         base
     }
+
+    /// Overrides the default (`lookup`-and-check) impl: a hidden
+    /// binding is always a plain `String` already held in *hidden* --
+    /// resolving one through `self.lookup` costs nothing *inner*-side
+    /// (no store access at all), so only the fall-through branch (the
+    /// first segment isn't a hidden key) needs to reach *inner* at all,
+    /// and it does so through *inner*'s own `contains`, never `lookup`
+    /// (review finding 1 on issue #492's PR: the inherited default would
+    /// otherwise call `self.lookup`, which falls through to `inner.
+    /// lookup`, which -- for a store-backed `inner` whose path resolves
+    /// onto a `Slot::Node` with no segments left -- materializes that
+    /// whole subtree just to answer a presence check).
+    fn contains(&self, key: &str) -> bool {
+        let first = key.split('.').next().expect("split yields at least one segment");
+        if self.hidden.contains_key(first) {
+            return matches!(self.lookup(key), Ok(Some(_)));
+        }
+        self.inner.contains(key)
+    }
 }
 
 /// Renders *template* with `{{> name}}` partials spliced in from
@@ -837,16 +856,22 @@ mod tests {
     fn a_hidden_binding_shadows_a_same_named_top_level_key() {
         let declared_prompts = indexmap::IndexMap::new();
         let effect_names = BTreeSet::new();
-        // Two effect references on purpose: the first one minted
-        // becomes `__circuitry_partial_0__`, which can never collide
-        // with a real top-level key -- this test instead proves the
-        // *shadowing* mechanism directly, by reading the same resolved
-        // text back out through the hidden overlay's own `{{.}}` root
-        // rather than relying on a key name collision that can't
-        // actually arise from this module's own synthetic keys.
-        let ctx = ctx_with_prime(vec![("reply", effect_node(Value::from("hi")))]);
+        // A *real*, pre-existing top-level key already named
+        // `__circuitry_partial_0__` -- the first effect reference this
+        // template resolves mints exactly that key, so the shallow
+        // `{**ctx, **extra}` merge (`HiddenOverlay::lookup`) must have
+        // the hidden binding win outright over *this* ctx entry, not
+        // merely over a key the overlay's own synthetic naming could
+        // never collide with.
+        let mut ctx = ctx_with_prime(vec![("reply", effect_node(Value::from("hidden")))]);
+        if let Value::Dict(top) = &mut ctx {
+            top.insert(
+                Value::from("__circuitry_partial_0__"),
+                Value::from("shadowed-out"),
+            );
+        }
         let rendered = render_with_composition(
-            "{{> reply}}-{{> reply}}",
+            "{{> reply}}:{{__circuitry_partial_0__}}",
             &ctx,
             &declared_prompts,
             &effect_names,
@@ -855,7 +880,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(rendered, "hi-hi");
+        assert_eq!(rendered, "hidden:hidden");
     }
 
     #[test]
@@ -864,7 +889,7 @@ mod tests {
         let effect_names = BTreeSet::new();
         let ctx = ctx_with_prime(vec![("reply", effect_node(Value::from("hi")))]);
         let rendered = render_with_composition(
-            "{{> reply}}{{#prime}}seen{{/prime}}",
+            "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}",
             &ctx,
             &declared_prompts,
             &effect_names,
@@ -873,7 +898,53 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(rendered, "hiseen");
+        // `{{#.}}` at the root pushes `HiddenOverlay::whole()` itself as
+        // the new nearest scope -- the only way to prove the hidden key
+        // the overlay splices in is actually reachable through
+        // `whole()`, not only through `lookup`.
+        assert_eq!(rendered, "hi[hi]");
+    }
+
+    #[test]
+    fn hidden_overlay_contains_never_materializes_a_store_backed_loop_node() {
+        use crate::Store;
+        use crate::exec::CtxSource;
+        use crate::exec::live_scope::LiveRoot;
+
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        // A named-loop-shaped node: large enough that a full
+        // `Store::snapshot` of it would be a real cost, not just
+        // incidentally harmless -- the same shape review finding 1 on
+        // issue #492's PR names ("a `prime.<head>` node can be a loop
+        // with thousands of passes").
+        let named_loop = store
+            .ensure_dict(&prime, Value::from("named_loop"))
+            .unwrap();
+        for i in 0..200 {
+            let pass = store
+                .ensure_dict(&named_loop, Value::from(format!("iter_{i}")))
+                .unwrap();
+            store.set_leaf(&pass, Value::from("padding"), Value::from("x".repeat(64)));
+        }
+        let chain: crate::exec::CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let live_root = LiveRoot::new(&chain, &store);
+
+        let mut hidden = IndexMap::new();
+        hidden.insert("__circuitry_partial_0__".to_string(), "x".to_string());
+        let overlay = HiddenOverlay {
+            hidden: &hidden,
+            inner: &live_root,
+        };
+
+        assert!(overlay.contains("prime.named_loop"));
+        assert!(!overlay.contains("prime.missing"));
+        assert!(overlay.contains("__circuitry_partial_0__"));
+        assert_eq!(
+            store.snapshot_call_count(),
+            0,
+            "a presence check must never materialize the whole loop subtree"
+        );
     }
 
     #[test]
@@ -951,6 +1022,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rendered, "<X><Y>");
+    }
+
+    #[test]
+    fn a_chain_charged_to_exactly_the_cap_succeeds() {
+        // `a: "{{> b}}", b: "x" * 4_194_304` -- `b`'s own resolved text
+        // (length N) is charged once as `prompts.a`'s own nested-fragment
+        // charge, then charged *again* as `template`'s own charge when
+        // `a` itself resolves (the documented double counting: a
+        // fragment nested one level deep is charged once per level on
+        // its way back out) -- N + N lands at exactly 8388608, the cap
+        // itself, which must still succeed (`> MAX_EXPANDED_CHARS`, not
+        // `>=`). Confirmed against Python's own `render_with_composition`
+        // first: identical outcome, both engines.
+        const N: usize = 4 * 1024 * 1024;
+        let mut declared_prompts = indexmap::IndexMap::new();
+        declared_prompts.insert("a".to_string(), "{{> b}}".to_string());
+        declared_prompts.insert("b".to_string(), "x".repeat(N));
+        let effect_names = BTreeSet::new();
+        let ctx = dict(vec![("prime", dict(vec![]))]);
+        let rendered = render_with_composition(
+            "{{> a}}",
+            &ctx,
+            &declared_prompts,
+            &effect_names,
+            "template",
+            &PlainCtx,
+            true,
+        )
+        .unwrap();
+        assert_eq!(rendered.len(), N);
+    }
+
+    #[test]
+    fn a_chain_charged_one_character_over_the_cap_fails_with_the_exact_text() {
+        // The same shape, one character longer -- N + N lands at
+        // 8388610, one over the cap, which must fail at the *outer*
+        // charge (`a`'s own, labelled "template") with exactly Python's
+        // own text. Confirmed against Python's own
+        // `render_with_composition` first: identical outcome.
+        const N: usize = 4 * 1024 * 1024 + 1;
+        let mut declared_prompts = indexmap::IndexMap::new();
+        declared_prompts.insert("a".to_string(), "{{> b}}".to_string());
+        declared_prompts.insert("b".to_string(), "x".repeat(N));
+        let effect_names = BTreeSet::new();
+        let ctx = dict(vec![("prime", dict(vec![]))]);
+        let err = render_with_composition(
+            "{{> a}}",
+            &ctx,
+            &declared_prompts,
+            &effect_names,
+            "template",
+            &PlainCtx,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "template: '{{> name}}' expansion produced over 8388608 characters — \
+             likely runaway nested declared-prompt growth."
+        );
     }
 
     #[test]
@@ -1039,16 +1170,35 @@ mod tests {
 #[cfg(test)]
 mod golden_corpus_live_root {
     use super::render_with_composition;
-    use crate::Store;
+    use crate::{NodeRef, Store};
     use crate::exec::CtxSource;
     use crate::exec::live_scope::LiveRoot;
     use electricity_template::{JsonAwareCtx, PlainCtx};
-    use electricity_value::{Dict, Value};
+    use electricity_value::Value;
     use indexmap::IndexMap;
     use serde::Deserialize;
     use std::collections::BTreeSet;
 
-    fn corpus() -> serde_json::Value {
+    /// A case's own `ctx` is captured as the original JSON bytes
+    /// (`Box<RawValue>`, never `serde_json::Value`) and parsed here
+    /// through `electricity-json`'s own hand-rolled reader instead --
+    /// unconditionally order-preserving, with no `serde_json` feature
+    /// (this crate's own `Cargo.toml` comment on its `serde_json`
+    /// dev-dependency explains why `preserve_order` isn't that feature).
+    fn value_from_raw(raw: &serde_json::value::RawValue) -> Value {
+        electricity_json::loads(raw.get()).expect("corpus JSON is valid")
+    }
+
+    #[derive(Deserialize)]
+    struct FileCorpus {
+        compose_cases: Vec<ComposeCase>,
+    }
+
+    /// Deserializes straight from the file's own text, not through an
+    /// intermediate `serde_json::Value` -- a `Box<RawValue>` field only
+    /// keeps its original byte order when the `Deserializer` driving it
+    /// still has the source bytes.
+    fn load_corpus() -> FileCorpus {
         let text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/golden/compose_corpus.json"
@@ -1057,35 +1207,10 @@ mod golden_corpus_live_root {
         serde_json::from_str(&text).expect("compose_corpus.json is valid JSON")
     }
 
-    fn json_to_value(v: &serde_json::Value) -> Value {
-        match v {
-            serde_json::Value::Null => Value::None,
-            serde_json::Value::Bool(b) => Value::Bool(*b),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Value::from(i)
-                } else {
-                    Value::Float(n.as_f64().expect("a JSON number is representable as f64"))
-                }
-            }
-            serde_json::Value::String(s) => Value::Str(s.clone()),
-            serde_json::Value::Array(items) => {
-                Value::List(items.iter().map(json_to_value).collect())
-            }
-            serde_json::Value::Object(map) => {
-                let mut dict = Dict::new();
-                for (k, v) in map {
-                    dict.insert(Value::Str(k.clone()), json_to_value(v));
-                }
-                Value::Dict(dict)
-            }
-        }
-    }
-
     #[derive(Deserialize)]
     struct ComposeCase {
         template: String,
-        ctx: serde_json::Value,
+        ctx: Box<serde_json::value::RawValue>,
         declared: IndexMap<String, String>,
         known_effect_names: Vec<String>,
         label: String,
@@ -1106,21 +1231,35 @@ mod golden_corpus_live_root {
         .map_err(|err| err.to_string())
     }
 
-    /// Writes *ctx*'s own top-level keys as plain leaves under *store*'s
-    /// root. [`LiveRoot`]'s own lookup falls through to
-    /// [`electricity_template::step`] the moment it reaches a leaf
-    /// [`Value`], so a plain top-level leaf here exercises exactly the
-    /// same per-segment contract the eager, plain-`Value`-rooted path
-    /// uses from that point on -- the comparison is meaningful starting
-    /// from a *different* top-level entry point (a live chain over a
-    /// store, not an already-materialized `Value`), which is the one
-    /// thing issue #463's own seam actually changed.
-    fn seed_store_from_ctx(store: &Store, ctx: &serde_json::Value) {
-        let serde_json::Value::Object(map) = ctx else {
+    /// Writes *ctx*'s own dict-valued entries (recursively, including
+    /// nested dicts at any depth) as real [`Store::ensure_dict`] nodes,
+    /// everything else as a plain leaf -- so this replay's own `prime.
+    /// <head>` is a genuine [`crate::Slot::Node`], the same shape a real
+    /// run's store has, not a single [`Value`] leaf holding the whole
+    /// subtree as one already-materialized dict. [`LiveRoot`]'s own
+    /// `contains`/`lookup` only actually walk live nodes (`Store::peek`,
+    /// never a `materialize`/`snapshot`) when there's a live node under
+    /// them to walk through in the first place -- a flat top-level leaf
+    /// here would make every one of this replay's own cases resolve
+    /// through [`electricity_template::step`] from the very first
+    /// segment on, the same as the eager, plain-`Value`-rooted path,
+    /// never actually exercising [`LiveRoot`]'s own node-walking branches
+    /// at all (issue #492 review finding 7).
+    fn seed_store_from_ctx(store: &Store, parent: &NodeRef, value: &Value) {
+        let Value::Dict(dict) = value else {
             return;
         };
-        for (key, value) in map {
-            store.set_leaf(&store.root, Value::Str(key.clone()), json_to_value(value));
+        for (key, child_value) in dict {
+            let Value::Str(key) = key else { continue };
+            match child_value {
+                Value::Dict(_) => {
+                    let child = store
+                        .ensure_dict(parent, Value::Str(key.clone()))
+                        .expect("a fresh key never collides with a non-dict sibling");
+                    seed_store_from_ctx(store, &child, child_value);
+                }
+                other => store.set_leaf(parent, Value::Str(key.clone()), other.clone()),
+            }
         }
     }
 
@@ -1156,17 +1295,15 @@ mod golden_corpus_live_root {
 
     #[test]
     fn compose_cases_match_between_a_plain_value_root_and_a_live_root() {
-        let corpus = corpus();
-        let cases: Vec<ComposeCase> =
-            serde_json::from_value(corpus["compose_cases"].clone()).expect("compose_cases decode");
-        assert!(!cases.is_empty());
-        for case in &cases {
+        let corpus = load_corpus();
+        assert!(!corpus.compose_cases.is_empty());
+        for case in &corpus.compose_cases {
             let known: BTreeSet<String> = case.known_effect_names.iter().cloned().collect();
-            let eager_root = json_to_value(&case.ctx);
+            let eager_root = value_from_raw(&case.ctx);
             let eager = run_case(case, &eager_root, &known);
 
             let store = Store::new();
-            seed_store_from_ctx(&store, &case.ctx);
+            seed_store_from_ctx(&store, &store.root, &eager_root);
             let chain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
             let lazy_root = LiveRoot::new(&chain, &store);
             let lazy = run_case(case, &lazy_root, &known);

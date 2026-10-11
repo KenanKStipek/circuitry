@@ -19,41 +19,42 @@
 //! [`Value`] snapshot can never reproduce.
 
 use electricity_template::{JsonAwareCtx, PlainCtx, ScopeRoot};
-use electricity_value::{Dict, Value};
+use electricity_value::Value;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
-fn corpus() -> serde_json::Value {
+/// A case's own `ctx` is captured as the original JSON bytes
+/// (`Box<RawValue>`, never `serde_json::Value`) and parsed here through
+/// `electricity-json`'s own hand-rolled reader instead -- the only
+/// parser in this dependency graph that's order-preserving unconditionally,
+/// with no `serde_json` feature (`preserve_order` would do it too, but
+/// `cargo test --workspace`'s own feature unification would then also
+/// flip it on for every other crate's `serde_json::Value`, which is
+/// exactly the bug this crate's own `Cargo.toml` comment on its
+/// `serde_json` dev-dependency documents).
+fn value_from_raw(raw: &serde_json::value::RawValue) -> Value {
+    electricity_json::loads(raw.get()).expect("corpus JSON is valid")
+}
+
+#[derive(Deserialize)]
+struct FileCorpus {
+    escape_cases: Vec<EscapeCase>,
+    compose_cases: Vec<ComposeCase>,
+}
+
+/// Deserializes straight from the file's own text, not through an
+/// intermediate `serde_json::Value` -- a `Box<RawValue>` field only
+/// keeps its original byte order when the `Deserializer` driving it
+/// still has the source bytes, which `serde_json::from_value` (fed an
+/// already-built, already-reordered `Value`) does not.
+fn load_corpus() -> FileCorpus {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/golden/compose_corpus.json"
     ))
     .expect("compose_corpus.json exists -- run electricity/scripts/generate_compose_corpus.py");
     serde_json::from_str(&text).expect("compose_corpus.json is valid JSON")
-}
-
-fn json_to_value(v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Null => Value::None,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::from(i)
-            } else {
-                Value::Float(n.as_f64().expect("a JSON number is representable as f64"))
-            }
-        }
-        serde_json::Value::String(s) => Value::Str(s.clone()),
-        serde_json::Value::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
-        serde_json::Value::Object(map) => {
-            let mut dict = Dict::new();
-            for (k, v) in map {
-                dict.insert(Value::Str(k.clone()), json_to_value(v));
-            }
-            Value::Dict(dict)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -63,7 +64,7 @@ fn json_to_value(v: &serde_json::Value) -> Value {
 #[derive(Deserialize)]
 struct EscapeCase {
     template: String,
-    ctx: serde_json::Value,
+    ctx: Box<serde_json::value::RawValue>,
     label: String,
     escape: bool,
     ok: Option<String>,
@@ -72,12 +73,10 @@ struct EscapeCase {
 
 #[test]
 fn escape_cases_match_pythons_render_template() {
-    let corpus = corpus();
-    let cases: Vec<EscapeCase> =
-        serde_json::from_value(corpus["escape_cases"].clone()).expect("escape_cases decode");
-    assert!(!cases.is_empty());
-    for case in cases {
-        let root = json_to_value(&case.ctx);
+    let corpus = load_corpus();
+    assert!(!corpus.escape_cases.is_empty());
+    for case in corpus.escape_cases {
+        let root = value_from_raw(&case.ctx);
         let result = electricity_template::render_template_with_root_and_escape(
             &case.template,
             &root,
@@ -111,7 +110,7 @@ fn escape_cases_match_pythons_render_template() {
 #[derive(Deserialize)]
 pub(crate) struct ComposeCase {
     pub(crate) template: String,
-    pub(crate) ctx: serde_json::Value,
+    pub(crate) ctx: Box<serde_json::value::RawValue>,
     pub(crate) declared: IndexMap<String, String>,
     pub(crate) known_effect_names: Vec<String>,
     pub(crate) label: String,
@@ -166,13 +165,11 @@ fn run_compose_case<R: ScopeRoot>(
 
 #[test]
 fn compose_cases_match_pythons_render_with_composition() {
-    let corpus = corpus();
-    let cases: Vec<ComposeCase> =
-        serde_json::from_value(corpus["compose_cases"].clone()).expect("compose_cases decode");
-    assert!(!cases.is_empty());
-    for case in &cases {
+    let corpus = load_corpus();
+    assert!(!corpus.compose_cases.is_empty());
+    for case in &corpus.compose_cases {
         let known: BTreeSet<String> = case.known_effect_names.iter().cloned().collect();
-        let root = json_to_value(&case.ctx);
+        let root = value_from_raw(&case.ctx);
         let result = run_compose_case(case, &root, &known);
         match result {
             Ok(text) => assert_eq!(

@@ -1499,6 +1499,7 @@ pub async fn run_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::CtxSource;
     use crate::observer::NullObserver;
     use electricity_bytecode::{LeafKind, NodeKind};
     use electricity_config::ComplexitySettings;
@@ -1634,6 +1635,304 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 .borrow()
                 .contains_key(&Value::Str("inner".to_string())),
             "the collected record must be the real child node, graftable by the caller"
+        );
+    }
+
+    /// A minimal, leaked `RunContext` carrying *declared_prompts*/
+    /// *effect_names* -- the two inputs this module's own composition
+    /// tests (`{{> name}}` through `use.inline`/`use.inputs`, issue
+    /// #492 review finding 5) actually vary; every other field is the
+    /// same inert M0-H shape `attempt_once`'s own existing test above
+    /// builds by hand.
+    fn run_ctx_for_composition<'a>(
+        declared_prompts: &'a indexmap::IndexMap<String, String>,
+        effect_names: &'a BTreeSet<String>,
+    ) -> RunContext<'a> {
+        let registry: &'a electricity_tools::ToolRegistry =
+            Box::leak(Box::new(electricity_tools::ToolRegistry::new()));
+        let limiter: &'a crate::Limiter = Box::leak(Box::new(crate::Limiter::new()));
+        let runtime_config: &'a Value = Box::leak(Box::new(Value::None));
+        let adapters: &'a crate::adapter::AdapterRegistry =
+            Box::leak(Box::new(crate::adapter::AdapterRegistry::new()));
+        let complexity: &'a ComplexitySettings = Box::leak(Box::new(ComplexitySettings::default()));
+        let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
+        RunContext {
+            registry,
+            limiter,
+            model: "",
+            adapter: "_noop",
+            runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts,
+            effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_child_inline_composes_with_the_inline_label_and_escapes_only_its_own_tags() {
+        // `voice`'s own tags are rewritten to no-escape (`{{&input.x}}`)
+        // before splicing, so they stay unescaped under `use.inline`'s
+        // own `escape: true` (runtime-semantics.md §3.4) -- but a
+        // *direct* tag in the same template (`{{input.y}}`, never
+        // wrapped in a declared prompt) still escapes under that same
+        // flag.
+        let mut declared_prompts = indexmap::IndexMap::new();
+        declared_prompts.insert("voice".to_string(), "<b>{{input.x}}</b>".to_string());
+        let effect_names = BTreeSet::new();
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+
+        let mut input = Dict::new();
+        input.insert(Value::from("x"), Value::from("<i>hi</i>"));
+        input.insert(Value::from("y"), Value::from("<i>hi2</i>"));
+        let mut top = Dict::new();
+        top.insert(Value::from("input"), Value::Dict(input));
+        top.insert(Value::from("prime"), Value::Dict(Dict::new()));
+        let ctx = Value::Dict(top);
+
+        let source = UseSource::Inline(electricity_bytecode::TemplateText::new(
+            "description: \"{{> voice}}|{{input.y}}\"\neffects: []\n".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let loaded = match load_child("step", &source, true, &ctx, &run_ctx).await {
+            Ok(loaded) => loaded,
+            Err(e) => panic!("expected load_child to succeed, got: {e}"),
+        };
+        let description = loaded
+            .document
+            .as_dict()
+            .and_then(|d| d.get(&Value::from("description")))
+            .and_then(|v| match v {
+                Value::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(description, "<b><i>hi</i></b>|&lt;i&gt;hi2&lt;/i&gt;");
+    }
+
+    #[tokio::test]
+    async fn load_child_inline_attributes_a_composition_error_to_the_inline_label() {
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+        let ctx = Value::Dict({
+            let mut top = Dict::new();
+            top.insert(Value::from("prime"), Value::Dict(Dict::new()));
+            top
+        });
+        let source = UseSource::Inline(electricity_bytecode::TemplateText::new(
+            "description: \"{{> nope}}\"\neffects: []\n".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let err = match load_child("step", &source, true, &ctx, &run_ctx).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected load_child to fail"),
+        };
+        assert_eq!(
+            err,
+            "inline: '{{> nope}}' does not name a declared prompt or effect."
+        );
+    }
+
+    #[tokio::test]
+    async fn attempt_once_renders_inputs_with_a_declared_prompt_and_an_effect_reference() {
+        // `voice`'s own `{{input.x}}` tag stays unescaped (spliced in as
+        // `{{&input.x}}`); `already_ran`'s own resolved value is spliced
+        // through a no-escape hidden binding (`{{{__circuitry_partial_
+        // N__}}}`) and is *also* never re-rendered or escaped -- both
+        // true regardless of `use.inputs`'s own `escape: true`
+        // (runtime-semantics.md §3.4).
+        let mut declared_prompts = indexmap::IndexMap::new();
+        declared_prompts.insert("voice".to_string(), "<b>{{input.x}}</b>".to_string());
+        let mut effect_names = BTreeSet::new();
+        effect_names.insert("already_ran".to_string());
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        let already_ran = store
+            .ensure_dict(&prime, Value::from("already_ran"))
+            .unwrap();
+        store.set_leaf(&already_ran, Value::from("value"), Value::from("<i>v</i>"));
+        store.set_leaf(&already_ran, Value::from("meta"), Value::Dict(Dict::new()));
+        let mut input = Dict::new();
+        input.insert(Value::from("x"), Value::from("<i>hi</i>"));
+        store.set_leaf(&store.root, Value::from("input"), Value::Dict(input));
+        let chain: CtxChain = vec![CtxSource::Live(Rc::clone(&store.root))];
+        let ctx = LiveRoot::new(&chain, &store);
+
+        let mut inputs = indexmap::IndexMap::new();
+        inputs.insert(
+            Value::from("greeting"),
+            electricity_bytecode::ParamNode::Template(electricity_bytecode::TemplateText::new(
+                "{{> voice}}|{{> already_ran}}".to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+        );
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                "effects: []\n".to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: Some(electricity_bytecode::ParamNode::Map(inputs)),
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 1,
+                backoff_ms: 0,
+            },
+            expect: None,
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let effect_node = store
+            .ensure_dict(&prime, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        match attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &ctx,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            false,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(AttemptProblem::NotRetried { message, .. }) => {
+                panic!("expected attempt_once to succeed, got: {message}")
+            }
+            Err(_) => panic!("expected attempt_once to succeed"),
+        }
+
+        let rendered_inputs = match meta_node.borrow().get(&Value::Str("inputs".to_string())) {
+            Some(Slot::Value(Value::Dict(d))) => d.clone(),
+            other => panic!("expected a dict leaf, got {other:?}"),
+        };
+        assert_eq!(
+            rendered_inputs.get(&Value::from("greeting")),
+            Some(&Value::from("<b><i>hi</i></b>|<i>v</i>"))
+        );
+    }
+
+    #[tokio::test]
+    async fn attempt_once_attributes_an_input_composition_error_to_its_own_dotted_label() {
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+
+        let store = Store::new();
+        let ctx = Value::Dict({
+            let mut top = Dict::new();
+            top.insert(Value::from("prime"), Value::Dict(Dict::new()));
+            top
+        });
+
+        let mut inputs = indexmap::IndexMap::new();
+        inputs.insert(
+            Value::from("greeting"),
+            electricity_bytecode::ParamNode::Template(electricity_bytecode::TemplateText::new(
+                "{{> nope}}".to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+        );
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                "effects: []\n".to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: Some(electricity_bytecode::ParamNode::Map(inputs)),
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 1,
+                backoff_ms: 0,
+            },
+            expect: None,
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let effect_node = store
+            .ensure_dict(&store.root, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        let message = match attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &ctx,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            false,
+        )
+        .await
+        {
+            Err(AttemptProblem::NotRetried { message, .. }) => message,
+            Err(_) => panic!("expected AttemptProblem::NotRetried"),
+            Ok(()) => panic!("expected attempt_once to fail"),
+        };
+        assert_eq!(
+            message,
+            "inputs.greeting: '{{> nope}}' does not name a declared prompt or effect."
         );
     }
 

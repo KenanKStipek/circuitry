@@ -1,0 +1,12 @@
+name: yield-sibling-in-tree-dynamic
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: yield
+        name: first
+        template: "v1"
+      - type: yield
+        name: second
+        template: "[{{> fan.first}}]"

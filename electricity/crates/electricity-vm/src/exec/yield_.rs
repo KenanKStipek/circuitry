@@ -68,6 +68,27 @@ impl<R: ScopeRoot> ScopeRoot for InputsOverlay<'_, R> {
         }
         base
     }
+
+    /// Overrides the default (`lookup`-and-check) impl: *inputs*' own
+    /// top-level keys are already-materialized literal `Value`s held
+    /// right here, so resolving one through `self.lookup` costs nothing
+    /// *inner*-side (no store access at all) -- only the fall-through
+    /// branch (the first segment isn't an `inputs` key) needs to reach
+    /// *inner* at all, and it does so through *inner*'s own `contains`,
+    /// never `lookup` (review finding 1 on issue #492's PR: the
+    /// inherited default would otherwise call `self.lookup`, which
+    /// falls through to `inner.lookup`, which -- for a store-backed
+    /// *inner* whose path resolves onto a `Slot::Node` with no segments
+    /// left, e.g. `{{> named_loop.x}}`'s own `prime.named_loop` presence
+    /// check -- materializes that whole subtree, a named loop's every
+    /// pass included, just to answer a yes/no question).
+    fn contains(&self, key: &str) -> bool {
+        let first = key.split('.').next().expect("split yields at least one segment");
+        if self.inputs.contains_key(&Value::Str(first.to_string())) {
+            return matches!(self.lookup(key), Ok(Some(_)));
+        }
+        self.inner.contains(key)
+    }
 }
 
 /// Runs a `yield` effect: renders *yield_op*'s own `template` (with
@@ -153,6 +174,18 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
     let instance = observer.effect_start(&effect_path);
     observer.write();
 
+    // `if self.dry_run: node["value"] = None; meta["completed_at"] =
+    // _now_iso(); ...; return` -- a dry run never renders and never
+    // touches `meta.error`/`on_error`, the same shape `exec::use_`'s
+    // own dry-run branch already gives `execute_use`.
+    if run_ctx.dry_run {
+        set_leaf(store, &effect_node, "value", Value::None);
+        set_leaf(store, &meta_node, "completed_at", now_iso());
+        observer.effect_complete(&effect_path, instance, None);
+        observer.write();
+        return Ok(());
+    }
+
     let label = format!("yield '{name}' template");
     let escape = matches!(yield_op.template.escape, Escape::Html);
     // `effective_ctx = dict(ctx); effective_ctx.update(self.defn.inputs)`
@@ -207,10 +240,17 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
                 Value::Str(s) => std::mem::take(s),
                 other => other.py_str(),
             };
-            set_leaf(store, &meta_node, "error", Value::Str(redacted));
+            set_leaf(store, &meta_node, "error", Value::Str(redacted.clone()));
             set_leaf(store, &meta_node, "completed_at", now_iso());
             set_leaf(store, &effect_node, "value", Value::None);
-            observer.effect_complete(&effect_path, instance, Some(&message));
+            // `--events`'s own end `error` is this *redacted* text, the
+            // same one `meta.error` just got -- cof's own `--events`
+            // builds its end event's `error` from `meta.error`
+            // (`cli/events.py`), never the raw exception text, so a
+            // secret-shaped message must never reach the event stream
+            // even though `Raised` below still carries it unredacted
+            // (review finding 2 on issue #492's PR).
+            observer.effect_complete(&effect_path, instance, Some(&redacted));
             observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Raised {
@@ -443,6 +483,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_dry_run_never_renders_and_leaves_value_none() {
+        let (_, prime, result) = {
+            let store = Store::new();
+            let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+            let registry = ToolRegistry::new();
+            let limiter = crate::Limiter::new();
+            let runtime_config = Value::None;
+            let declared_prompts = indexmap::IndexMap::new();
+            let mut effect_names = std::collections::BTreeSet::new();
+            effect_names.insert("say".to_string());
+            let base_run_ctx = default_run_ctx(
+                &registry,
+                &limiter,
+                &runtime_config,
+                &declared_prompts,
+                &effect_names,
+            );
+            let run_ctx = RunContext {
+                dry_run: true,
+                ..base_run_ctx
+            };
+            let mut op = yield_node("say", OnError::Fail);
+            op.kind = NodeKind::Leaf(Box::new(LeafKind::Yield(yield_op_leaf(
+                // A template that would fail if it were ever rendered --
+                // proof that a dry run skips the render entirely, the
+                // same way `exec::use_`'s own dry-run branch does.
+                "{{> nope}}",
+                None,
+            ))));
+            let LeafKind::Yield(yield_op) = (match &op.kind {
+                NodeKind::Leaf(leaf) => leaf.as_ref(),
+                NodeKind::Control(_) => unreachable!(),
+            }) else {
+                unreachable!()
+            };
+            let frame = Frame::root();
+            let token = CancellationToken::new();
+            let observer = NullObserver;
+            let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+            let result = execute_yield(
+                &op, yield_op, &store, &prime, &chain, &frame, &run_ctx, &observer, &token,
+            )
+            .await;
+            (store, prime, result)
+        };
+        result.unwrap();
+        let node = match prime.borrow().get(&Value::from("say")) {
+            Some(Slot::Node(n)) => n.clone(),
+            _ => panic!("expected a dict node"),
+        };
+        assert_eq!(leaf_value(&node, "value"), Some(Value::None));
+        let meta = match node.borrow().get(&Value::from("meta")) {
+            Some(Slot::Node(n)) => n.clone(),
+            _ => panic!("expected a dict node"),
+        };
+        assert_eq!(leaf_value(&meta, "error"), Some(Value::None));
+        assert!(leaf_value(&meta, "completed_at").is_some());
+        assert_ne!(leaf_value(&meta, "completed_at"), Some(Value::None));
+    }
+
+    #[tokio::test]
     async fn a_self_reference_resolves_to_its_own_current_value() {
         // The node already exists (with `value: None`) by the time the
         // template renders, so `{{> self}}` resolves to that -- `""`,
@@ -458,6 +559,117 @@ mod tests {
         assert_eq!(leaf_value(&node, "value"), Some(Value::from("[]")));
     }
 
+    #[test]
+    fn inputs_overlay_contains_never_materializes_a_store_backed_loop_node() {
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        // A named-loop-shaped node: large enough that a full
+        // `Store::snapshot` of it would be a real cost, not just
+        // incidentally harmless (review finding 1 on issue #492's PR).
+        let named_loop = store
+            .ensure_dict(&prime, Value::from("named_loop"))
+            .unwrap();
+        for i in 0..200 {
+            let pass = store
+                .ensure_dict(&named_loop, Value::from(format!("iter_{i}")))
+                .unwrap();
+            store.set_leaf(&pass, Value::from("padding"), Value::from("x".repeat(64)));
+        }
+        let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let live_root = LiveRoot::new(&chain, &store);
+        let mut inputs = Dict::new();
+        inputs.insert(Value::from("extra"), Value::from("v"));
+        let overlay = InputsOverlay {
+            inputs: &inputs,
+            inner: &live_root,
+        };
+
+        assert!(overlay.contains("prime.named_loop"));
+        assert!(!overlay.contains("prime.missing"));
+        assert!(overlay.contains("extra"));
+        assert_eq!(
+            store.snapshot_call_count(),
+            0,
+            "a presence check must never materialize the whole loop subtree"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_yield_inputs_presence_check_never_materializes_a_named_loop() {
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        // `{{> named_loop.x}}`'s own presence check probes exactly
+        // `prime.named_loop` -- padded with many passes so a
+        // `Store::snapshot` of the whole subtree (the pre-fix bug: the
+        // `InputsOverlay`'s own missing `contains` override falling
+        // through to `LiveRoot::lookup`, which materializes a `Slot::
+        // Node` the moment no path segment is left) would be a real,
+        // detectable cost, not an incidental one.
+        let named_loop = store
+            .ensure_dict(&prime, Value::from("named_loop"))
+            .unwrap();
+        for i in 0..200 {
+            let pass = store
+                .ensure_dict(&named_loop, Value::from(format!("iter_{i}")))
+                .unwrap();
+            store.set_leaf(&pass, Value::from("padding"), Value::from("x".repeat(64)));
+        }
+        let x_node = store.ensure_dict(&named_loop, Value::from("x")).unwrap();
+        store.set_leaf(&x_node, Value::from("value"), Value::from("hi"));
+        store.set_leaf(&x_node, Value::from("meta"), Value::Dict(Dict::new()));
+
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let declared_prompts = indexmap::IndexMap::new();
+        let mut effect_names = std::collections::BTreeSet::new();
+        effect_names.insert("named_loop".to_string());
+        effect_names.insert("say".to_string());
+        let run_ctx = default_run_ctx(
+            &registry,
+            &limiter,
+            &runtime_config,
+            &declared_prompts,
+            &effect_names,
+        );
+
+        let mut inputs = indexmap::IndexMap::new();
+        inputs.insert(Value::from("other"), Value::from("v"));
+        let mut op = yield_node("say", OnError::Fail);
+        op.kind = NodeKind::Leaf(Box::new(LeafKind::Yield(yield_op_leaf(
+            "{{> named_loop.x}}",
+            Some(electricity_bytecode::ParamNode::Literal(Value::Dict(
+                inputs,
+            ))),
+        ))));
+        let LeafKind::Yield(yield_op) = (match &op.kind {
+            NodeKind::Leaf(leaf) => leaf.as_ref(),
+            NodeKind::Control(_) => unreachable!(),
+        }) else {
+            unreachable!()
+        };
+        let frame = Frame::root();
+        let token = CancellationToken::new();
+        let observer = NullObserver;
+        let chain: CtxChain = vec![CtxSource::Live(std::rc::Rc::clone(&store.root))];
+        let result = execute_yield(
+            &op, yield_op, &store, &prime, &chain, &frame, &run_ctx, &observer, &token,
+        )
+        .await;
+        result.unwrap();
+        assert_eq!(
+            store.snapshot_call_count(),
+            0,
+            "a yield with raw inputs must never materialize the whole loop subtree \
+             just to resolve a {{> name}} presence check"
+        );
+        let node = match prime.borrow().get(&Value::from("say")) {
+            Some(Slot::Node(n)) => n.clone(),
+            _ => panic!("expected a dict node"),
+        };
+        assert_eq!(leaf_value(&node, "value"), Some(Value::from("hi")));
+    }
+
     // -----------------------------------------------------------------
     // Replays `yield_cases` from `electricity/scripts/
     // generate_compose_corpus.py`'s own `tests/golden/compose_corpus.json`
@@ -469,29 +681,16 @@ mod tests {
     // `pub(crate)`, unreachable from an external integration-test crate.
     // -----------------------------------------------------------------
 
-    fn json_to_value(v: &serde_json::Value) -> Value {
-        match v {
-            serde_json::Value::Null => Value::None,
-            serde_json::Value::Bool(b) => Value::Bool(*b),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Value::from(i)
-                } else {
-                    Value::Float(n.as_f64().expect("a JSON number is representable as f64"))
-                }
-            }
-            serde_json::Value::String(s) => Value::Str(s.clone()),
-            serde_json::Value::Array(items) => {
-                Value::List(items.iter().map(json_to_value).collect())
-            }
-            serde_json::Value::Object(map) => {
-                let mut dict = Dict::new();
-                for (k, v) in map {
-                    dict.insert(Value::Str(k.clone()), json_to_value(v));
-                }
-                Value::Dict(dict)
-            }
-        }
+    /// A corpus case's own JSON fields that need their dict order
+    /// preserved (`inputs`/`extra_ctx`/`pre_value`/`node`) are captured
+    /// as the original bytes (`Box<RawValue>`, never `serde_json::
+    /// Value`) and parsed here through `electricity-json`'s own
+    /// hand-rolled reader instead -- unconditionally order-preserving,
+    /// with no `serde_json` feature (`electricity-vm`'s own `Cargo.toml`
+    /// comment on its `serde_json` dev-dependency explains why
+    /// `preserve_order` isn't that feature).
+    fn value_from_raw(raw: &serde_json::value::RawValue) -> Value {
+        electricity_json::loads(raw.get()).expect("corpus JSON is valid")
     }
 
     const TS_PLACEHOLDER: &str = "<ts>";
@@ -518,14 +717,19 @@ mod tests {
     struct YieldCorpusCase {
         name: String,
         template: String,
-        inputs: Option<indexmap::IndexMap<String, serde_json::Value>>,
+        inputs: Option<Box<serde_json::value::RawValue>>,
         on_error: String,
         declared: indexmap::IndexMap<String, String>,
         known_effect_names: Vec<String>,
-        extra_ctx: serde_json::Map<String, serde_json::Value>,
-        pre_value: Option<serde_json::Value>,
-        node: serde_json::Value,
+        extra_ctx: Box<serde_json::value::RawValue>,
+        pre_value: Option<Box<serde_json::value::RawValue>>,
+        node: Box<serde_json::value::RawValue>,
         raised: Option<RaisedInfo>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FileCorpus {
+        yield_cases: Vec<YieldCorpusCase>,
     }
 
     #[derive(serde::Deserialize, Debug)]
@@ -550,25 +754,32 @@ mod tests {
             "/tests/golden/compose_corpus.json"
         ))
         .expect("compose_corpus.json exists -- run electricity/scripts/generate_compose_corpus.py");
-        let corpus: serde_json::Value =
+        let corpus: FileCorpus =
             serde_json::from_str(&text).expect("compose_corpus.json is valid JSON");
-        let cases: Vec<YieldCorpusCase> =
-            serde_json::from_value(corpus["yield_cases"].clone()).expect("yield_cases decode");
-        assert!(!cases.is_empty());
+        assert!(!corpus.yield_cases.is_empty());
 
-        for case in cases {
+        for case in corpus.yield_cases {
             let store = Store::new();
             let prime = store
                 .ensure_dict(&store.root, Value::from("prime"))
                 .unwrap();
             if let Some(pre) = &case.pre_value {
                 let mut node = Dict::new();
-                node.insert(Value::from("value"), json_to_value(pre));
+                node.insert(Value::from("value"), value_from_raw(pre));
                 node.insert(Value::from("meta"), Value::Dict(Dict::new()));
                 store.set_leaf(&prime, Value::from(case.name.as_str()), Value::Dict(node));
             }
-            for (key, value) in &case.extra_ctx {
-                store.set_leaf(&store.root, Value::Str(key.clone()), json_to_value(value));
+            // `match &mut ... { Value::Dict(d) => mem::take(d), ... }`, not
+            // a move-out pattern -- `Value`'s own `Drop` impl forbids
+            // partially moving a variant's payload out of an owned value
+            // (same fix as `params.rs`/`render.rs`'s own identical comment).
+            let mut extra_ctx_value = value_from_raw(&case.extra_ctx);
+            let extra_ctx = match &mut extra_ctx_value {
+                Value::Dict(dict) => std::mem::take(dict),
+                _ => panic!("extra_ctx is always a JSON object"),
+            };
+            for (key, value) in &extra_ctx {
+                store.set_leaf(&store.root, key.clone(), value.clone());
             }
 
             let registry = ToolRegistry::new();
@@ -580,10 +791,11 @@ mod tests {
                 default_run_ctx(&registry, &limiter, &runtime_config, &case.declared, &known);
 
             let inputs = case.inputs.as_ref().map(|raw| {
-                let mut dict = Dict::new();
-                for (k, v) in raw {
-                    dict.insert(Value::Str(k.clone()), json_to_value(v));
-                }
+                let mut raw_value = value_from_raw(raw);
+                let dict = match &mut raw_value {
+                    Value::Dict(dict) => std::mem::take(dict),
+                    _ => panic!("inputs is always a JSON object"),
+                };
                 electricity_bytecode::ParamNode::Literal(Value::Dict(dict))
             });
             let mut op = yield_node(&case.name, on_error_from_str(&case.on_error));
@@ -628,7 +840,7 @@ mod tests {
                 _ => panic!("expected a dict node for case {:?}", case.name),
             };
             let actual_node = scrub_timestamps(store.snapshot(&node));
-            let expected_node = json_to_value(&case.node);
+            let expected_node = value_from_raw(&case.node);
             assert_eq!(actual_node, expected_node, "case {:?}", case.name);
         }
     }

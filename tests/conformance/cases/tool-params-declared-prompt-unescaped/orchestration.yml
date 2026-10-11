@@ -1,0 +1,10 @@
+name: tool-params-declared-prompt-unescaped
+prompts:
+  labeled: "value={{input.x}}"
+effects:
+  - type: tool
+    name: echoed
+    provider: json
+    params:
+      mode: stringify
+      input: {text: "{{> labeled}}"}
