@@ -1,8 +1,8 @@
 //! Generated, checked-in source -- never hand-edit a file under here;
 //! re-run its own `electricity/scripts/generate_*.py` instead.
 
-mod unicode_alnum_ranges;
 pub(crate) mod python_codec_names;
+mod unicode_alnum_ranges;
 
 /// Whether `c` is alphanumeric per CPython's `str.isalnum()` -- true for
 /// `isalpha()` (Unicode category Lu/Ll/Lt/Lm/Lo), `isdecimal()`/
