@@ -167,7 +167,75 @@ exposes the unused counts via `ScriptedAdapter.leftover_replies()` for a conform
 harness, which built the instance itself, to call after the run and fail the *case* on
 anything left over.
 
-## 7. Example
+## 7. The leftover-replies export (for a subprocess harness)
+
+A conformance harness that runs `cof run` as a subprocess (`tests/conformance/harness.py`)
+has no handle to the adapter instance it built — only the subprocess's exit code,
+stdout/stderr, and `--out` state — so it cannot call `leftover_replies()` directly
+after the run the way an in-process test (`tests/adapters/test_scripted.py`) can.
+Both engines export leftover counts the same way:
+
+- **Variable**: `CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE`, naming a filesystem
+  path. Never read when unset — an ordinary run (including every real use of this
+  adapter outside a conformance harness) pays nothing for this, and nothing is
+  written.
+- **When it is written**: once, at process exit, regardless of whether the run
+  itself succeeded or failed. Every scripted-adapter instance registers itself
+  the moment it *loads* its replies file — `_ensure_loaded`, called by both
+  `check()` (a preflight-only instance) and the first `generate()` dispatch,
+  under the instance's own lock so two threads racing to build and dispatch
+  the same fresh instance can never register it twice. A fallback chain, or
+  more than one `runtime.adapters.*` block naming `scripted`, can build more
+  than one instance; instances never share a queue — each loads its own,
+  independent copy of every path's replies from the same file.
+
+  At exit, every registered instance's own remaining count at each path
+  (`0` for a path it has fully consumed, not omitted) is merged by taking the
+  **minimum remaining count across every instance that holds that path** —
+  never summed. For a path configured with `n` replies, the number actually
+  used by the run is the most any *single* instance consumed from it, so the
+  unused count is `n` minus that, which is exactly the lowest remaining count
+  left on any one instance's own queue. Summing instead double-counts: two
+  instances that each consumed a different half of a path's replies would
+  wrongly report the whole path as unused, since each instance's own leftover
+  count (what *it* didn't touch) gets added to the other's. Taking the
+  minimum also means a preflight-only instance — whose queue is always full,
+  since it never consumes anything — can never pull a path's reported count
+  back up: its own vote is always at least as high as any instance that
+  actually dispatched, so it never dominates the minimum, and a path nothing
+  ever consumed still correctly reports its full count as leftover with no
+  consuming instance in the picture at all.
+- **File format**: a single JSON object, `{"<path>": <count>, ...}`, holding
+  only paths with a nonzero merged count — the same mapping
+  `leftover_replies()` itself returns, as plain JSON (no YAML fallback; this
+  file is only ever machine-written and machine-read, never hand-authored).
+  Written as `{}` when every registered instance's queues were fully
+  consumed. An **absent** file means no instance ever registered at all —
+  either nothing in the run ever actually loaded this replies file (a
+  document whose only reference to the `scripted` adapter sits under a
+  branch preflight doesn't statically see, or a replies file configured but
+  never referenced by anything in the document), or the engine running it
+  doesn't implement this export. Either way, a harness must not treat an
+  absent file as "nothing left over": it means nothing was *consumed*, so
+  every reply the case's own replies file configures is left over — a
+  harness computes that total by parsing the replies file itself, with the
+  identical loader this adapter uses (`total_replies_by_path` in
+  `circuitry.adapters.scripted`), never by defaulting to an empty object.
+- **Failure behaviour**: the write itself is best-effort — if it fails (an
+  unwritable path, a vanished parent directory), that failure is never allowed to
+  mask the run's own outcome; it does not raise past the process's own exit code.
+  A harness that relies on this file checks for its existence/validity itself
+  rather than trusting a non-zero exit code to imply it was skipped.
+
+Circuitry's own implementation (`circuitry.adapters.scripted`) hangs this off
+`atexit`, scoped to the `ScriptedAdapter` class alone (nothing else in the
+process is affected) — electricity's own test-only `scripted` adapter (lane F1,
+§448) implements an equivalent exit-time hook reading the identical variable
+name, registering at load time, and merging by minimum remaining count the
+same way, so one harness-side check (`tests/conformance/harness.py`) works
+unmodified against either engine's subprocess.
+
+## 8. Example
 
 ```yaml
 prime.left:
