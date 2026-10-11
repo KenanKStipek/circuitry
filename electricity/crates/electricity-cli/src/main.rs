@@ -520,6 +520,27 @@ fn install_warning_logger() {
     log::set_max_level(log::LevelFilter::Warn);
 }
 
+/// #471 review finding 2, belt and braces: `user_env::load_user_env`
+/// already checks a key/value before ever calling `std::env::set_var`
+/// (the one call in this binary's startup path that could panic with
+/// a `.env` value in its own message, `failed to set environment
+/// variable {key:?} to {value:?}`), so this should never actually
+/// fire for that reason -- but a panic anywhere else on the startup
+/// path, before `main` has done anything else, would otherwise print
+/// through Rust's default hook, which includes the panic's own
+/// payload verbatim. Installed first, before even
+/// [`install_warning_logger`], so nothing between process start and
+/// here can panic through the default hook instead. The payload is
+/// never inspected, let alone printed, downcast to `&str` or not --
+/// only the location, which is this binary's own source, never a
+/// `.env` value.
+fn install_secret_safe_panic_hook() {
+    std::panic::set_hook(Box::new(|info| match info.location() {
+        Some(location) => write_stderr(&format!("electricity panicked at {location}\n")),
+        None => write_stderr("electricity panicked\n"),
+    }));
+}
+
 /// `electricity`'s own non-TTY stdout contract (issue #431's "CLI
 /// output" decision, "Same as `cof` when stdout is not a terminal"):
 /// success with `--out` prints nothing; success without `--out` prints
@@ -602,14 +623,6 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
 }
 
 fn run_action(run_args: RunArgs) -> ExitCode {
-    // Issue #468: `cof`'s own root callback loads the user's private
-    // `.env` once, before any config resolution, for every subcommand
-    // -- the one place in this binary's lifetime `user_env::
-    // load_user_env` can mutate the process environment and still be
-    // sound (before the signal-handling thread below, or anything
-    // else, ever exists).
-    user_env::load_user_env();
-
     // PR #441 review finding 5: armed *before* config load (issue
     // #431's own step 1), on a dedicated OS thread with its own Tokio
     // runtime -- responsive to a signal even while this thread is deep
@@ -736,6 +749,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    install_secret_safe_panic_hook();
     install_warning_logger();
     // `args_os` + lossy conversion instead of `args()`, which panics on a
     // non-UTF-8 argument.
@@ -743,7 +757,26 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    match classify(&args) {
+    let action = classify(&args);
+    // Issue #468: `cof`'s own root callback (`cli/app.py::_root`) loads
+    // the user's private `.env` for every subcommand, *before* that
+    // subcommand's own argument parsing can fail with a usage error --
+    // Click has already run the group callback by the time a
+    // subcommand's own missing/invalid argument raises (#471 review
+    // finding 7). The one exception is `-V`/`-h`: `_root`'s `--version`
+    // callback is `is_eager=True`, short-circuiting before `_root`'s
+    // own body -- `cof --version` never loads the file or prints its
+    // warnings, so neither does this. Loading here, once, before
+    // `Action` is even matched on, also replaces the two separate
+    // `user_env::load_user_env()` calls `run_action`/`Action::DumpIr`
+    // used to make themselves -- still before the signal-handling
+    // thread or the Tokio runtime [`run_action`] goes on to create,
+    // the one place in this binary's lifetime mutating the process
+    // environment from a single thread is always sound.
+    if !matches!(action, Action::Version | Action::Help) {
+        user_env::load_user_env();
+    }
+    match action {
         Action::Version => {
             write_stdout(&format!("{}\n", electricity::version_string()));
             ExitCode::SUCCESS
@@ -754,11 +787,6 @@ fn main() -> ExitCode {
         }
         Action::Run(run_args) => run_action(run_args),
         Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
-            // Issue #468: before `dump_ir`'s own config resolution,
-            // same as `run_action`'s own call -- `--dump-ir` never
-            // spawns another thread, so this is sound wherever it runs
-            // in this synchronous branch.
-            user_env::load_user_env();
             let inputs = match electricity::parse_inputs(&raw_inputs) {
                 Ok(inputs) => inputs,
                 Err(message) => {

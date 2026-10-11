@@ -26,6 +26,31 @@
 //! variables` leaves adjustable -- so a `${VAR}` reference resolves
 //! against the real environment overridden by any name already
 //! resolved earlier in the same file, in file order.
+//!
+//! [`dotenv_values`] -- this module's own entry point -- first runs
+//! [`normalize_newlines`] on *text*, reproducing `DotEnv._get_stream`'s
+//! own `open(self.dotenv_path, encoding=self.encoding)`: a Python text
+//! file, opened with the default `newline=None`, translates `\r\n`
+//! and a lone `\r` to `\n` as it reads, before `Reader` ever sees a
+//! single character. `load_user_env`'s own `dotenv_values(path)` call
+//! always goes through that file-path branch, never the raw-`stream`
+//! one (which skips the translation) -- this port's sole caller reads
+//! the file itself and hands over already-decoded text, so it has to
+//! do the same translation explicitly, or a multi-line quoted value
+//! saved on Windows (or any text with a lone `\r`) would carry a
+//! stray `\r` cof's own copy never has.
+//!
+//! Every place the reference matches `\s`, or `[^\S\r\n]` (its own
+//! negation), [`is_py_whitespace`]'s doc comment has the exact 29
+//! codepoints that means, re-derived against the pinned Python/`re`
+//! version rather than assumed: it is not Rust's `char::is_whitespace`
+//! (missing four C0 control codes, `\x1c`-`\x1f`) and not `regex`'s own
+//! Unicode `\s` either (same four missing, scoped to the `White_Space`
+//! property). A key like `A\x1fB` -- containing one of those four --
+//! is whitespace to Python's own parser (so `A\x1fB=1` fails to parse
+//! as a binding, `unquoted_key`'s own `[^=\#\s]+` stopping dead at
+//! `A`, with no `=` immediately after) and must be whitespace here
+//! too, or this port would load a key cof's own copy silently drops.
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -66,27 +91,95 @@ fn anchored(pattern: &str) -> Regex {
     Regex::new(&format!("^(?:{pattern})")).expect("valid regex literal")
 }
 
+/// `\r\n` or a lone `\r`, translated to `\n` -- `open(path,
+/// encoding=...)`'s own universal-newline read, this module's doc
+/// comment has the full reasoning. Order matters: `\r\n` must collapse
+/// to a single `\n` first, or the lone-`\r` pass below would leave the
+/// line doubled (`\r\n` -> `\n\n`).
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// Every codepoint Python's `re.match(r"\s", ...)` (`re.UNICODE`, the
+/// implicit default `dotenv/parser.py`'s own `make_regex` always uses)
+/// and `str.isspace()` agree is whitespace: the six ASCII controls
+/// (`\t\n\x0b\x0c\r`, plus the four C0 separators `\x1c`-`\x1f` most
+/// whitespace definitions skip), the space itself, NEL (`\u0085`), and
+/// the Unicode `Zs`-category separators (NBSP, the `\u2000`-`\u200a`
+/// family, line/paragraph separator, narrow/medium-mathematical space,
+/// ideographic space) -- enumerated once by brute-force probing every
+/// codepoint against the pinned CPython version, not read out of any
+/// Unicode property table, since Python's own `\s` isn't exactly one
+/// (`electricity/scripts/generate_dotenv_corpus.py`'s own whitespace
+/// probe keeps that enumeration honest against a version bump). Rust's
+/// `char::is_whitespace` and `regex`'s own Unicode `\s` both use the
+/// `White_Space` Unicode property instead, which omits the four C0
+/// separators -- the one place this set and that property disagree.
+fn is_py_whitespace(c: char) -> bool {
+    matches!(c, '\u{9}'..='\u{d}' | '\u{1c}'..='\u{20}' | '\u{85}' | '\u{a0}')
+        || matches!(
+            c,
+            '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}'
+        )
+        || matches!(c, '\u{202f}' | '\u{205f}' | '\u{3000}')
+}
+
+/// `str.rstrip()` with no arguments, scoped to [`is_py_whitespace`] --
+/// `parse_unquoted_value`'s own final step. The value it trims never
+/// holds `\r`/`\n` (captured by `_unquoted_value`'s own `[^\r\n]*`,
+/// before this ever runs), so trimming the full whitespace set here
+/// rather than excluding those two changes nothing in practice; this
+/// just avoids a second, narrower constant no call site would ever need.
+fn py_trim_end(s: &str) -> &str {
+    s.trim_end_matches(is_py_whitespace)
+}
+
+/// A regex character class matching exactly [`is_py_whitespace`]'s own
+/// set, built once -- every pattern below that stands in for `\s` (or
+/// its negation, `[^\S\r\n]`) is built from this string rather than
+/// `regex`'s own `\s`, which disagrees on the four C0 separators (see
+/// [`is_py_whitespace`]). `\x1c-\x1f` is a range between two `\xHH`
+/// escapes (exactly two hex digits each); everything above `\x7f`
+/// needs the brace form (`\u{HHHH}`).
+const PY_WS_CLASS: &str = r"\t\n\x0b\x0c\r\x1c-\x1f \u{0085}\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+
+/// [`PY_WS_CLASS`] less `\r`/`\n` -- `[^\S\r\n]`, `dotenv/parser.py`'s
+/// own negation of `\s` to mean "whitespace that isn't a newline".
+const PY_WS_CLASS_NO_NEWLINE: &str = r"\t\x0b\x0c\x1c-\x1f \u{0085}\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+
 fn patterns() -> &'static Patterns {
     static PATTERNS: OnceLock<Patterns> = OnceLock::new();
     PATTERNS.get_or_init(|| Patterns {
-        // `_whitespace`/`_multiline_whitespace` in dotenv/parser.py --
-        // `\s` already spans newlines, so the two patterns (one is
-        // `re.MULTILINE`, which only changes `^`/`$`, present nowhere
-        // in either) are identical; one pattern covers both call sites.
-        whitespace: anchored(r"[^\S\r\n]*"),
-        export: anchored(r"(?:export[^\S\r\n]+)?"),
+        // `_whitespace` in dotenv/parser.py is `[^\S\r\n]*` (never
+        // consumes a newline); `_multiline_whitespace` is `\s*` under
+        // `re.MULTILINE` (which only changes `^`/`$`, matched nowhere
+        // in either pattern), so it *does* consume one -- a blank line
+        // simply vanishes before `parse_key` ever runs. This port uses
+        // `[^\S\r\n]*` at both call sites instead: at
+        // `_multiline_whitespace`'s own site (the very start of
+        // `parse_binding`), a blank line is left for `parse_key` to
+        // fail on (`unquoted_key`'s `[^=\#\s]+` can't match a leading
+        // newline), which falls through to `error_binding`'s own
+        // `_rest_of_line` read -- consuming exactly the same text
+        // `_multiline_whitespace` would have, just one read later. The
+        // two patterns would only ever disagree if a key could start
+        // with `\r`/`\n`, which no unquoted or single-quoted key
+        // pattern allows.
+        whitespace: anchored(&format!("[{PY_WS_CLASS_NO_NEWLINE}]*")),
+        export: anchored(&format!("(?:export[{PY_WS_CLASS_NO_NEWLINE}]+)?")),
         single_quoted_key: anchored(r"'([^']+)'"),
-        unquoted_key: anchored(r"([^=\#\s]+)"),
-        equal_sign: anchored(r"(=[^\S\r\n]*)"),
+        unquoted_key: anchored(&format!("([^=\\#{PY_WS_CLASS}]+)")),
+        equal_sign: anchored(&format!("(=[{PY_WS_CLASS_NO_NEWLINE}]*)")),
         single_quoted_value: anchored(r"(?s)'((?:\\.|[^'\\])*)'"),
         double_quoted_value: anchored(r#"(?s)"((?:\\.|[^"\\])*)""#),
         unquoted_value: anchored(r"([^\r\n]*)"),
-        comment: anchored(r"(?:[^\S\r\n]*#[^\r\n]*)?"),
-        end_of_line: anchored(r"[^\S\r\n]*(?:\r\n|\n|\r|$)"),
+        comment: anchored(&format!("(?:[{PY_WS_CLASS_NO_NEWLINE}]*#[^\\r\\n]*)?")),
+        end_of_line: anchored(&format!("[{PY_WS_CLASS_NO_NEWLINE}]*(?:\\r\\n|\\n|\\r|$)")),
         rest_of_line: anchored(r"[^\r\n]*(?:\r\n|\n|\r)?"),
         double_quote_escapes: Regex::new(r#"\\[\\'"abfnrtv]"#).expect("valid regex literal"),
         single_quote_escapes: Regex::new(r"\\[\\']").expect("valid regex literal"),
-        unquoted_trailing_comment: Regex::new(r"\s+#.*").expect("valid regex literal"),
+        unquoted_trailing_comment: Regex::new(&format!("[{PY_WS_CLASS}]+#.*"))
+            .expect("valid regex literal"),
         posix_variable: Regex::new(r"\$\{(?P<name>[^}:]*)(?::-(?P<default>[^}]*))?\}")
             .expect("valid regex literal"),
     })
@@ -267,7 +360,7 @@ fn parse_value(text: &str, cursor: &mut usize) -> Result<String, ()> {
                 Some(m) => &part[..m.start()],
                 None => part,
             };
-            Ok(truncated.trim_end().to_string())
+            Ok(py_trim_end(truncated).to_string())
         }
     }
 }
@@ -277,7 +370,9 @@ fn parse_value(text: &str, cursor: &mut usize) -> Result<String, ()> {
 /// first position but taking the later value. The UTF-8 BOM, if
 /// present, is stripped once up front (`Reader.__init__`'s own
 /// `removeprefix("\ufeff")`) -- nothing else in this module reads
-/// *text* before this does.
+/// *text* before this does. *text* is expected already
+/// newline-normalized ([`dotenv_values`] is the only caller, and does
+/// that first) -- `parse` on its own never sees a `\r`.
 pub fn parse(text: &str) -> RawValues {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut result: RawValues = IndexMap::new();
@@ -350,11 +445,13 @@ pub fn interpolate(raw: RawValues, real_env: &HashMap<String, String>) -> RawVal
     resolved
 }
 
-/// `dotenv.dotenv_values(path)` -- [`parse`] then [`interpolate`]
-/// against *real_env* (the real process environment, as
-/// `cli/config.py::load_user_env`'s own caller has it).
+/// `dotenv.dotenv_values(path)` -- [`normalize_newlines`], then
+/// [`parse`], then [`interpolate`] against *real_env* (the real
+/// process environment, as `cli/config.py::load_user_env`'s own
+/// caller has it).
 pub fn dotenv_values(text: &str, real_env: &HashMap<String, String>) -> RawValues {
-    interpolate(parse(text), real_env)
+    let text = normalize_newlines(text);
+    interpolate(parse(&text), real_env)
 }
 
 #[cfg(test)]
@@ -434,5 +531,29 @@ mod tests {
         let values = dotenv_values("FOO='unterminated\nBAR=baz\n", &env(&[]));
         assert_eq!(values.get("FOO"), None);
         assert_eq!(values.get("BAR"), Some(&Some("baz".to_string())));
+    }
+
+    #[test]
+    fn crlf_inside_a_multiline_quoted_value_is_normalized_to_lf() {
+        let values = dotenv_values("K=\"a\r\nb\"\r\n", &env(&[]));
+        assert_eq!(values.get("K"), Some(&Some("a\nb".to_string())));
+    }
+
+    #[test]
+    fn lone_cr_inside_a_quoted_value_is_also_normalized() {
+        let values = dotenv_values("K='x\ry'\n", &env(&[]));
+        assert_eq!(values.get("K"), Some(&Some("x\ny".to_string())));
+    }
+
+    #[test]
+    fn a_literal_backslash_just_before_crlf_leaves_the_backslash_and_normalizes_the_newline() {
+        let values = dotenv_values("K=\"a\\\r\nb\"\r\n", &env(&[]));
+        assert_eq!(values.get("K"), Some(&Some("a\\\nb".to_string())));
+    }
+
+    #[test]
+    fn a_c0_separator_in_an_unquoted_key_is_whitespace_like_python_and_drops_the_line() {
+        let values = dotenv_values("A\u{1f}B=1\n", &env(&[]));
+        assert!(values.is_empty());
     }
 }

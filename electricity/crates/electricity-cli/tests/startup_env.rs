@@ -131,3 +131,57 @@ fn a_non_utf8_environment_variable_does_not_stop_the_dump_ir_path_either() {
     );
     assert!(output.status.success(), "stderr: {stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_environment_variable_does_not_stop_the_private_dotenv_from_loading() {
+    // #471 review finding 8: every test above leaves no `.env` in its
+    // temp `HOME`, so `user_env::load_user_env_at`'s own `vars_os()`
+    // snapshot (taken for `${VAR}` interpolation) is never actually
+    // exercised with a non-UTF-8 entry in it -- this one puts a real
+    // `.env` there too.
+    let home = TempHome::new("non-utf8-with-dotenv");
+    let case_dir = home.path.join("case");
+    fs::create_dir_all(&case_dir).unwrap();
+    let home_dir = home.path.join("home");
+    let config_dir = home_dir.join(".config").join("circuitry");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    fs::write(
+        case_dir.join("orchestration.yml"),
+        "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    )
+    .unwrap();
+    fs::write(case_dir.join("config.json"), "{}").unwrap();
+
+    let env_path = config_dir.join(".env");
+    fs::write(&env_path, "STARTUP_468_FROM_FILE=loaded\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&env_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let non_utf8_value = OsStr::from_bytes(&[0xff]);
+
+    let mut cmd = Command::new(bin());
+    cmd.env_clear();
+    cmd.env("HOME", &home_dir);
+    cmd.env("PATH", env::var("PATH").unwrap_or_default());
+    cmd.env("Z_468_NON_UTF8", non_utf8_value);
+    cmd.current_dir(&case_dir);
+    cmd.arg("config.json").arg("orchestration.yml");
+
+    let output = cmd.output().expect("electricity should run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_ne!(
+        output.status.code(),
+        Some(101),
+        "electricity panicked with a non-UTF-8 variable and a real .env present; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "panicked; stderr: {stderr}"
+    );
+    assert!(output.status.success(), "stderr: {stderr}");
+}

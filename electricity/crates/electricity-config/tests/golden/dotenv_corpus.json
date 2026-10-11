@@ -337,5 +337,51 @@
     "expect": {
       "A": "xy"
     }
+  },
+  {
+    "name": "crlf_inside_a_multiline_quoted_value",
+    "text": "K=\"a\r\nb\"\r\n",
+    "real_env": {},
+    "expect": {
+      "K": "a\nb"
+    }
+  },
+  {
+    "name": "lone_cr_inside_a_single_quoted_value",
+    "text": "K='x\ry'\n",
+    "real_env": {},
+    "expect": {
+      "K": "x\ny"
+    }
+  },
+  {
+    "name": "backslash_immediately_before_crlf_in_a_quoted_value",
+    "text": "K=\"a\\\r\nb\"\r\n",
+    "real_env": {},
+    "expect": {
+      "K": "a\\\nb"
+    }
+  },
+  {
+    "name": "c0_separator_in_an_unquoted_key_is_whitespace",
+    "text": "A\u001fB=1\n",
+    "real_env": {},
+    "expect": {}
+  },
+  {
+    "name": "c0_separator_before_the_equals_sign",
+    "text": "FOO\u001f=bar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "c0_separator_after_the_equals_sign",
+    "text": "FOO=\u001fbar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
   }
 ]

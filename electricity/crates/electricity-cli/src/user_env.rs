@@ -55,24 +55,17 @@ pub struct UserEnvResult {
 
 /// `$HOME/.config/circuitry/.env` -- `cli/config.py::GLOBAL_CONFIG_DIR`
 /// (`Path.home() / ".config" / "circuitry"`) joined with
-/// `_user_env_path`'s own `.env` filename. `None` when `HOME` isn't
-/// set or is empty: electricity narrows Python's own `Path.home()`
-/// fallback (a `pwd`-database lookup when `HOME` is absent) to this
-/// one environment variable, the only source any test or manual run in
-/// this workspace ever sets it from (and the only one a non-interactive
-/// process can rely on without a C library call this crate has no
-/// other reason to need).
+/// `_user_env_path`'s own `.env` filename. `None` when neither `HOME`
+/// nor a `/etc/passwd` entry for the current uid gives one.
+/// `std::env::home_dir()` is `Path.home()`'s own fallback order on
+/// Unix: `HOME` if set and non-empty, else a `getpwuid_r` lookup --
+/// matching `os.path.expanduser("~")` (what `Path.home()` calls), not
+/// just this one environment variable (#471 review finding 7: under
+/// `env -i`, with `HOME` unset entirely, cof's own fallback still
+/// finds a home directory; electricity's used to return `None` there).
 pub fn user_env_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    if home.is_empty() {
-        return None;
-    }
-    Some(
-        PathBuf::from(home)
-            .join(".config")
-            .join("circuitry")
-            .join(".env"),
-    )
+    let home = std::env::home_dir()?;
+    Some(home.join(".config").join("circuitry").join(".env"))
 }
 
 /// Python's `oct(mode)` -- `0o`, then the permission bits in octal, no
@@ -88,13 +81,16 @@ fn mode_octal(mode: u32) -> String {
 /// at all today (DESIGN.md's M1 decisions), but this split is kept the
 /// same shape as the reference's own for any other non-Unix target a
 /// future cross-compile might add.
+/// The pure part of [`permission_refusal`]'s check -- *mode* already
+/// masked to the low 12 bits, *file_uid*/*current_uid* already read
+/// (by [`permission_refusal`]'s own `stat`/`getuid`, or a test's
+/// literal values) -- so a unit test can exercise an owner mismatch
+/// without ever needing a file this process doesn't own (#471 review
+/// finding 3: `getuid()` called *inside* the old single function left
+/// no seam for that).
 #[cfg(unix)]
-fn permission_refusal(metadata: &std::fs::Metadata, path: &Path) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-    let mode = metadata.mode() & 0o7777;
-    // SAFETY: `getuid` has no preconditions and never fails.
-    let current_uid = unsafe { libc::getuid() };
-    let owned_by_user = metadata.uid() == current_uid;
+fn unsafe_reason(mode: u32, file_uid: u32, current_uid: u32, path: &Path) -> Option<String> {
+    let owned_by_user = file_uid == current_uid;
     let group_or_other_writable = mode & 0o022 != 0;
     if !owned_by_user || group_or_other_writable {
         Some(format!(
@@ -107,6 +103,15 @@ fn permission_refusal(metadata: &std::fs::Metadata, path: &Path) -> Option<Strin
     } else {
         None
     }
+}
+
+#[cfg(unix)]
+fn permission_refusal(metadata: &std::fs::Metadata, path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let mode = metadata.mode() & 0o7777;
+    // SAFETY: `getuid` has no preconditions and never fails.
+    let current_uid = unsafe { libc::getuid() };
+    unsafe_reason(mode, metadata.uid(), current_uid, path)
 }
 
 #[cfg(unix)]
@@ -187,13 +192,39 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
         log::warn!("{warning}");
     }
 
-    let text = match std::fs::read(path) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => {
+    // `DotEnv._get_stream`'s own `_is_file_or_fifo` check: neither a
+    // directory nor (on this platform) a FIFO at *path* is ever opened
+    // for reading at all -- `_get_stream` falls through to
+    // `io.StringIO("")` instead, so a directory there parses as an
+    // empty file (`loaded: true`, nothing supplied) rather than the
+    // `OSError` a real `fs::read` on a directory raises (#471 review
+    // finding 6: that would print its own spurious "could not be
+    // read" warning cof never does).
+    let text = if metadata.is_dir() {
+        String::new()
+    } else {
+        match std::fs::read(path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(_) => {
+                    let warning = format!(
+                        "{} could not be read (UnicodeDecodeError); skipping it.",
+                        path.display()
+                    );
+                    log::warn!("{warning}");
+                    return UserEnvResult {
+                        path: path.to_path_buf(),
+                        loaded: false,
+                        warning: Some(warning),
+                        ..Default::default()
+                    };
+                }
+            },
+            Err(err) => {
                 let warning = format!(
-                    "{} could not be read (UnicodeDecodeError); skipping it.",
-                    path.display()
+                    "{} could not be read ({}); skipping it.",
+                    path.display(),
+                    os_error_class_name(&err),
                 );
                 log::warn!("{warning}");
                 return UserEnvResult {
@@ -203,20 +234,6 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
                     ..Default::default()
                 };
             }
-        },
-        Err(err) => {
-            let warning = format!(
-                "{} could not be read ({}); skipping it.",
-                path.display(),
-                os_error_class_name(&err),
-            );
-            log::warn!("{warning}");
-            return UserEnvResult {
-                path: path.to_path_buf(),
-                loaded: false,
-                warning: Some(warning),
-                ..Default::default()
-            };
         }
     };
 
@@ -259,6 +276,30 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
             continue;
         }
         let Some(value) = value else { continue };
+        // `std::env::set_var` panics on a key that is empty or
+        // contains `=`/NUL, or a value containing NUL -- `cof`'s own
+        // `os.environ[key] = value` instead raises a `ValueError`
+        // ("illegal environment variable name" / "embedded null
+        // byte"), which `load_user_env` never catches, so cof fails
+        // the whole command too. Neither side's error text ever names
+        // the *value* -- but `set_var`'s panic message does (`failed
+        // to set environment variable {key:?} to {value:?}`), and with
+        // no custom panic hook that would reach stderr verbatim (#471
+        // review finding 2: a secret leak). A single-quoted key can
+        // contain `=` (`'A=B'=secret`), and a literal NUL byte decodes
+        // as valid UTF-8 inside a quoted or unquoted value -- both
+        // reachable from a real file, not just a hostile one. Skipped,
+        // not propagated as a hard failure: naming only the key keeps
+        // every other line in the same file loading, the same
+        // robustness this function already gives an unreadable or
+        // undecodable file.
+        if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
+            let warning =
+                format!("{key:?} is not a valid environment variable name or value; skipping it.");
+            log::warn!("{warning}");
+            skipped.push(key);
+            continue;
+        }
         // SAFETY: called once, at the very start of `main`, before the
         // signal-handling thread or the Tokio runtime exist -- the one
         // point in this binary's lifetime where mutating the process
@@ -368,6 +409,69 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn group_only_writable_is_refused() {
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("unsafe-mode-group-only");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, "FOO=bar\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o620)).unwrap();
+
+        let result = load_user_env_at(&path);
+        assert!(!result.loaded);
+        assert!(std::env::var("FOO").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_only_writable_is_refused() {
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("unsafe-mode-world-only");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, "FOO=bar\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o602)).unwrap();
+
+        let result = load_user_env_at(&path);
+        assert!(!result.loaded);
+        assert!(std::env::var("FOO").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_reason_refuses_an_owner_mismatch_even_at_a_safe_mode() {
+        // #471 review finding 3's own probe: #468 requires this case,
+        // and `permission_refusal`'s own `getuid()` call left no way to
+        // supply a different uid without owning two real uids --
+        // `unsafe_reason` takes both as plain arguments instead.
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        let reason = unsafe_reason(0o600, 1000, 2000, path);
+        assert!(reason.unwrap().contains("not safe to load"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_reason_refuses_group_only_writable() {
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        let reason = unsafe_reason(0o620, 1000, 1000, path);
+        assert!(reason.unwrap().contains("not safe to load"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_reason_refuses_world_only_writable() {
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        let reason = unsafe_reason(0o602, 1000, 1000, path);
+        assert!(reason.unwrap().contains("not safe to load"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_reason_allows_an_owned_unwritable_file() {
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        assert_eq!(unsafe_reason(0o600, 1000, 1000, path), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn group_or_world_readable_loads_with_a_softer_warning() {
         let _guard = ENV_MUTATION_LOCK.lock().unwrap();
         let dir = ScratchDir::new("readable-warning");
@@ -399,6 +503,61 @@ mod tests {
         let warning = result.warning.expect("an unreadable file still warns");
         assert!(warning.contains("could not be read"));
         assert!(std::env::var("FOO").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_at_the_path_parses_as_empty_not_an_os_error() {
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("directory-env");
+        let path = dir.0.join(".env");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = load_user_env_at(&path);
+        assert!(result.loaded);
+        assert!(result.supplied.is_empty());
+        let warning = result.warning.expect("a readable directory still warns");
+        assert!(warning.contains("group/world-readable"));
+        assert!(!warning.contains("could not be read"));
+    }
+
+    #[test]
+    fn a_single_quoted_key_containing_equals_is_skipped_not_set() {
+        // #471 review finding 2's own probe: `std::env::set_var` panics
+        // on a key containing `=`, and the panic message would include
+        // the value -- this must never reach `set_var` at all.
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("secret-leak-key-equals");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, "'A=B'=s3cr3t-probe\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = load_user_env_at(&path);
+        assert!(result.loaded);
+        assert!(result.supplied.is_empty());
+        assert_eq!(result.skipped, vec!["A=B".to_string()]);
+        assert!(std::env::var("A=B").is_err());
+    }
+
+    #[test]
+    fn a_nul_byte_in_a_value_is_skipped_not_set() {
+        // #471 review finding 2's other probe: a raw NUL decodes as
+        // valid UTF-8, but `std::env::set_var` panics on one in a
+        // value, again printing the value in its own panic message.
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("secret-leak-nul-value");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, b"K_468_NUL=ab\x00cd\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = load_user_env_at(&path);
+        assert!(result.loaded);
+        assert!(result.supplied.is_empty());
+        assert_eq!(result.skipped, vec!["K_468_NUL".to_string()]);
+        assert!(std::env::var("K_468_NUL").is_err());
     }
 
     #[test]
@@ -433,5 +592,31 @@ mod tests {
             std::env::remove_var("USER_468_NAME");
             std::env::remove_var("GREETING_468");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_real_non_utf8_value_still_wins_over_the_file() {
+        // #471 review finding 8: the real environment wins on
+        // `var_os`, never on whether the real value happens to decode
+        // as UTF-8 -- the same reasoning `real_env`'s own doc comment
+        // gives for using `var_os` here rather than a `HashMap` lookup.
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        let dir = ScratchDir::new("non-utf8-precedence");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, "NON_UTF8_468=from_file\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let non_utf8 = OsStr::from_bytes(&[0x66, 0x6f, 0xff, 0x6f]);
+        unsafe { std::env::set_var("NON_UTF8_468", non_utf8) };
+
+        let result = load_user_env_at(&path);
+        assert!(result.loaded);
+        assert_eq!(result.skipped, vec!["NON_UTF8_468".to_string()]);
+        assert!(result.supplied.is_empty());
+        assert_eq!(std::env::var_os("NON_UTF8_468").as_deref(), Some(non_utf8));
+        unsafe { std::env::remove_var("NON_UTF8_468") };
     }
 }

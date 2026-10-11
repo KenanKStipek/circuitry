@@ -17,10 +17,10 @@ Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,16 +37,33 @@ OUTPUT = (
 
 
 def case(name: str, text: str, *, real_env: dict[str, str] | None = None) -> dict[str, Any]:
-    """One `dotenv_values` case. `dotenv_values` interpolates `${VAR}`
-    against the *real* `os.environ` -- reproduced here by temporarily
-    overlaying *real_env* onto it so interpolation resolves the same
-    way `load_user_env`'s own call would, without ever touching this
-    process's actual environment beyond the scope of one case."""
+    """One `dotenv_values` case, run exactly the way `cli/config.py::
+    load_user_env`'s own `dotenv_values(path)` call does: a real file on
+    disk, read by `dotenv_values` itself rather than handed a `stream=`
+    -- `DotEnv._get_stream`'s file-path branch opens it with
+    `open(path, encoding=...)`, a text-mode read that translates
+    `\\r\\n`/a lone `\\r` to `\\n` before the parser ever sees a
+    character. A `stream=io.StringIO(text)` call skips that translation
+    entirely, so it could never catch the Rust port missing it (#471
+    review finding 1) -- this always goes through a real file instead.
+
+    `dotenv_values` interpolates `${VAR}` against the *real* `os.environ`
+    -- reproduced here by temporarily overlaying *real_env* onto it so
+    interpolation resolves the same way `load_user_env`'s own call
+    would, without ever touching this process's actual environment
+    beyond the scope of one case."""
     saved = dict(os.environ)
     try:
         os.environ.clear()
         os.environ.update(real_env or {})
-        values = dotenv_values(stream=io.StringIO(text))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / ".env"
+            # Binary write: the exact bytes *text* encodes to, with no
+            # write-side newline translation of its own, so a `\\r\\n"
+            # or lone `\\r" in *text* survives to the read side above
+            # unchanged.
+            path.write_bytes(text.encode("utf-8"))
+            values = dotenv_values(path)
     finally:
         os.environ.clear()
         os.environ.update(saved)
@@ -134,6 +151,25 @@ def build_cases() -> list[dict[str, Any]]:
     cases.append(case("value_containing_equals_sign", "FOO=bar=baz=qux\n"))
     cases.append(case("multiple_variables_in_one_value", "A=1\nB=2\nC=${A}-${B}\n"))
     cases.append(case("unset_variable_in_middle_of_text", "A=${B}x${C:-y}\n"))
+
+    # #471 review finding 1: CRLF and lone-CR newlines inside a quoted
+    # value, only reachable now that `case()` reads through a real file
+    # (see its own docstring) rather than an untranslated `StringIO`.
+    cases.append(case("crlf_inside_a_multiline_quoted_value", 'K="a\r\nb"\r\n'))
+    cases.append(case("lone_cr_inside_a_single_quoted_value", "K='x\ry'\n"))
+    cases.append(
+        case(
+            "backslash_immediately_before_crlf_in_a_quoted_value",
+            'K="a\\\r\nb"\r\n',
+        )
+    )
+
+    # #471 review finding 7: the four C0 separators `\x1c`-`\x1f` count
+    # as whitespace to Python's `\s`/`str.isspace()`, so each of these
+    # should parse exactly as it would with an ordinary space there.
+    cases.append(case("c0_separator_in_an_unquoted_key_is_whitespace", "A\x1fB=1\n"))
+    cases.append(case("c0_separator_before_the_equals_sign", "FOO\x1f=bar\n"))
+    cases.append(case("c0_separator_after_the_equals_sign", "FOO=\x1fbar\n"))
 
     return cases
 
