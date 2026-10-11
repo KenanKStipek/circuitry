@@ -1406,6 +1406,30 @@ above, and the `except BaseException` around `finally:` in `core/dynamic.py`
 §6.4) handles SIGTERM identically to SIGINT with zero additional branching —
 only the **exit code** differs (§8.4).
 
+**electricity-only: mid-run refusal (M1 lane I, no Python equivalent).**
+Circuitry never refuses content — every effect type above either runs or
+raises a real error. electricity's own `use` (§5.3) compiles its child
+document only once the run actually reaches it, so the up-front refusal
+walker (§8.2's own electricity-only preflight-refusal note)
+can never see that child's content ahead of time — the same gap applies to
+an inline `use`'s own rendered YAML, a reflector's generated effects, and a
+decomposition plan, wherever a later lane compiles one of those into
+something it then executes. `electricity_vm::VmError::Refused` is
+electricity's own answer: the VM checks a freshly compiled child the same
+way the top-level document was already checked, and refuses it the same
+way if it finds something unsupported, but only once execution actually
+reaches it, not before the run starts. It carries the `Refusal` found plus
+the child document's own label, and behaves like a cancellation for every
+container it passes through — bypassing `on_error`/retries entirely, never
+wrapped with an effect-path prefix — except that `finally:` still runs (a
+capability refusal is not a signal arriving mid-effect; nothing stops
+`finally:` itself from completing normally) and the run's own exit
+code/text is an ordinary failure (exit 1, `--out`/`--events`/`--live-state`
+written as for any other failed run), never the signal-only wording this
+section and §8.4 reserve for `VmError::Cancelled`. The refused effect's own
+`meta.error` is the same preview-marker text an up-front refusal would show
+(`electricity_bytecode::format_refused_child`), naming the child document.
+
 ---
 
 ## 7. Concurrency

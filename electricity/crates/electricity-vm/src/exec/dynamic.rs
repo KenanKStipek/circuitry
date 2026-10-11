@@ -251,7 +251,7 @@ pub(crate) fn execute_dynamic<'a>(
         observer.effect_complete(&effect_path, instance, reported_error.as_deref());
 
         if let Some(be) = body_exc {
-            let is_cancellation = matches!(be, VmError::Cancelled);
+            let is_cancellation = matches!(be, VmError::Cancelled | VmError::Refused { .. });
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(be);
             }
@@ -267,7 +267,7 @@ pub(crate) fn execute_dynamic<'a>(
             return Ok(());
         }
         if let Some(fe) = finally_exc {
-            let is_cancellation = matches!(fe, VmError::Cancelled);
+            let is_cancellation = matches!(fe, VmError::Cancelled | VmError::Refused { .. });
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(fe);
             }

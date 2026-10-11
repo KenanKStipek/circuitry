@@ -223,7 +223,7 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 /// always propagates unwrapped here too.
 pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
-        VmError::Cancelled => err,
+        VmError::Cancelled | VmError::Refused { .. } => err,
         // A typed tool failure keeps its own `cause` through the wrap --
         // `message` grows the label prefix, and `py_class` becomes
         // `RuntimeError` (review finding 1 on PR #454: #442's own tree

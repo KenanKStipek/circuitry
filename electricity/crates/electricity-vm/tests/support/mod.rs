@@ -24,7 +24,7 @@
 
 use electricity_bytecode::{
     Condition, DocumentInfo, EffectPath, LeafKind, NodeKind, OnError, Op, ParamNode, Program,
-    Region, RetryPolicy, ToolOp,
+    Region, RetryPolicy, ToolOp, UseOp, UseSource,
 };
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
@@ -107,6 +107,31 @@ pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, Para
             group: None,
         }))),
         on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    }
+}
+
+/// A `use` leaf whose own `source` matches `exec::use_::execute_use`'s
+/// own test-only sentinel path -- its stub recognizes it and returns
+/// `electricity_vm::VmError::Refused` (M1 lane I prerequisites, issue
+/// #448, item U3) instead of its ordinary `NotImplemented`, so a test
+/// can exercise that variant's propagation through a real, compiled
+/// `Op` tree.
+pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
+    Op {
+        path,
+        name: Some(name.to_string()),
+        kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            source: UseSource::Path("__test_only_refused__".to_string()),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+        }))),
+        on_error,
         labels: None,
         enabled: true,
     }

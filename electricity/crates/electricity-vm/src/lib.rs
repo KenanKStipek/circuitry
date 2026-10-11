@@ -208,6 +208,32 @@ pub enum VmError {
     /// variant only ever signals *that* cancellation happened here, not with
     /// what signal.
     Cancelled,
+    /// A `use` child, compiled at run time (so lane A's own static
+    /// walker could never see it ahead of time), is itself unsupported
+    /// once `electricity_bytecode::first_unsupported` runs against its
+    /// freshly-compiled `Program` -- M1 lane I's own mid-run refusal
+    /// (new: Python has no such case, since it never refuses content at
+    /// all). *refusal* is what that walker found; *child_label* names
+    /// the child document the same way a `use` effect's own `meta`
+    /// already would (`core/use.py`'s *label* -- the resolved path, or
+    /// `"inline"`). Bypasses `on_error`/retries entirely and is never
+    /// wrapped with an effect-path prefix through a chain/tree container,
+    /// exactly like [`VmError::Cancelled`] -- a capability refusal is no
+    /// more a degradable failure than a cancellation is. Unlike
+    /// `Cancelled`, this carries its own full text (`Display`, via
+    /// [`electricity_bytecode::format_refused_child`]), since there is no
+    /// run-level signal to format it from afterward -- the caller that
+    /// first finds it (`exec::use_::execute_use`, lane I) writes that
+    /// same text to the refused `use` effect's own `meta.error` before
+    /// returning it, and `electricity` (lib)'s own run wiring reports it
+    /// as the run's ordinary failure text (exit 1, `--out`/`--events`/
+    /// `--live-state` written as for any other failed run -- it is not
+    /// `VmError::Cancelled`, so run wiring's own cancellation-only special
+    /// case never applies to it).
+    Refused {
+        refusal: electricity_bytecode::Refusal,
+        child_label: String,
+    },
     /// Lane B's own execution loop isn't implemented yet (a `loop`/
     /// `mode: model` `if` -- refused before the run starts by lane A's
     /// `first_unsupported` in a real document, but the interpreter still
@@ -268,6 +294,14 @@ impl fmt::Display for VmError {
         match self {
             VmError::Raised { message, .. } => write!(f, "{message}"),
             VmError::Cancelled => write!(f, "cancelled"),
+            VmError::Refused {
+                refusal,
+                child_label,
+            } => write!(
+                f,
+                "{}",
+                electricity_bytecode::format_refused_child(child_label, refusal)
+            ),
             VmError::NotImplemented(message) => write!(f, "{message}"),
             VmError::Message(message) => write!(f, "{message}"),
         }

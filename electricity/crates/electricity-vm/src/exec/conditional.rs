@@ -321,7 +321,7 @@ async fn decide_and_run<'a>(
             }
             Err(e) => {
                 failure = Some(match e {
-                    VmError::Cancelled => e,
+                    VmError::Cancelled | VmError::Refused { .. } => e,
                     other => match &child_op.name {
                         Some(name) => VmError::Message(format!("{name}: {other}")),
                         None => other,
@@ -335,8 +335,9 @@ async fn decide_and_run<'a>(
     if let Some(err) = failure {
         // Python's own outer `except Exception` (never `BaseException`)
         // around the whole branch loop: a cancellation propagates raw,
-        // with no `value`/`meta.error` write at all.
-        if matches!(err, VmError::Cancelled) {
+        // with no `value`/`meta.error` write at all -- same for
+        // `VmError::Refused` (M1 lane I, new: no Python equivalent).
+        if matches!(err, VmError::Cancelled | VmError::Refused { .. }) {
             return Err(err);
         }
         if let Some((node, meta)) = named {

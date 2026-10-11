@@ -24,6 +24,50 @@ use crate::exec::CtxChain;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Op, UseOp};
 
+/// Test-only sentinel for [`test_only_refused`] -- never a real `use`
+/// effect's own `path:` (the compiler rejects a non-existent file
+/// outright were this ever reached through a real document; no
+/// document in this workspace's own test corpus names a file this way
+/// either). Not `#[cfg(test)]`: an integration test under `tests/`
+/// links this crate built in its ordinary, non-test configuration (only
+/// the crate's own unit-test binary ever sets `cfg(test)`), so a
+/// sentinel gated that way would be invisible to exactly the chain/
+/// `on_error`/`finally:` test this exists for.
+const TEST_ONLY_REFUSED_SENTINEL: &str = "__test_only_refused__";
+
+/// A canned [`VmError::Refused`] for *use_op* when its own `source` is
+/// [`TEST_ONLY_REFUSED_SENTINEL`] -- the one way this crate's own test
+/// suite can exercise [`VmError::Refused`]'s propagation (unwrapped
+/// through `wrap_effect_error`, never absorbed by `on_error`, `finally:`
+/// still running) through a real, compiled `Op` tree and [`crate::
+/// execute_root`], before lane I's real `execute_use` body exists to
+/// produce one for real (M1 lane I prerequisites, issue #448, item U3).
+/// Lane I deletes this -- its own real body decides when a freshly
+/// compiled child is refused, the same way the top-level document
+/// already was before the run started. Inert for any real `use`
+/// effect: no document in this workspace's own test corpus names a
+/// `path:` this way, and `use` is refused before any real run reaches
+/// this function at all while `Supported::use_` stays `false`.
+fn test_only_refused(use_op: &UseOp) -> Option<VmError> {
+    let UseOp {
+        source: electricity_bytecode::UseSource::Path(path),
+        ..
+    } = use_op
+    else {
+        return None;
+    };
+    if path != TEST_ONLY_REFUSED_SENTINEL {
+        return None;
+    }
+    Some(VmError::Refused {
+        refusal: electricity_bytecode::Refusal {
+            path: electricity_bytecode::EffectPath::root().push_name("step"),
+            reason: electricity_bytecode::RefusalReason::Loop,
+        },
+        child_label: path.clone(),
+    })
+}
+
 /// Runs a `use` effect: resolves *use_op*'s own `source` (a path, a
 /// named orchestration, or inline YAML), compiles it, and runs it
 /// isolated ([`run_isolated`], called with `frame.nested(&op.path)` --
@@ -34,7 +78,7 @@ use electricity_bytecode::{Op, UseOp};
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_use(
     op: &Op,
-    _use_op: &UseOp,
+    use_op: &UseOp,
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
@@ -43,6 +87,9 @@ pub(crate) async fn execute_use(
     _observer: &dyn RunObserver,
     _token: &CancellationToken,
 ) -> Result<(), VmError> {
+    if let Some(refused) = test_only_refused(use_op) {
+        return Err(refused);
+    }
     Err(VmError::NotImplemented(format!(
         "{}: `use` is not supported by this build of electricity yet (M1-I)",
         op.path
