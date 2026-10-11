@@ -6,5 +6,4 @@ effects:
     retries: {max_attempts: 2, backoff_ms: 0}
     on_error: continue
     params:
-      command: cat
-      args: ["/definitely/does/not/exist/c-shell-retry"]
+      command: rm
