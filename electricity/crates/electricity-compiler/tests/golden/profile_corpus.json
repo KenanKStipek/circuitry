@@ -142,6 +142,42 @@
     }
   },
   {
+    "name": "zero_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "0\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "empty_string_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "''\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
     "name": "empty_mapping_root",
     "kind": "parse_profile_document",
     "input": {
@@ -825,6 +861,261 @@
     }
   },
   {
+    "name": "schema_type_error_on_model",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - model: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_out",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "out: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - out: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_inputs",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - inputs: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_persistence",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "persistence: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - persistence: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_routing_int_is_invalid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    routing: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize/routing: 1 is not valid under any of the given schemas",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_under_persistence_fails_type_not_required",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "persistence: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - persistence: datetime.date(2024, 1, 1) is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_under_an_effects_path_fails_type_not_additional_properties",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  x: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/x: datetime.date(2024, 1, 1) is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_bytes_marker_under_inputs_fails_type_not_object",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs: !!binary aGk=\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - inputs: b'hi' is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_nan_marker_on_adapter_fails_type_not_string",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: .nan\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - adapter: nan is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_on_model_fails_type_not_string",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - model: datetime.date(2024, 1, 1) is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_int_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  1: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/1: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_date_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_naive_datetime_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01 00:00:00: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01 00:00:00: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_aware_datetime_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01T00:00:00Z: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01 00:00:00+00:00: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
     "name": "named_dynamic_with_named_child",
     "kind": "collect_effect_paths",
     "input": {
@@ -1065,6 +1356,121 @@
         "r.t"
       ],
       "condition_paths": []
+    }
+  },
+  {
+    "name": "unnamed_reflector_contributes_no_segment",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "reflector",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "unnamed_loop_contributes_no_segment_or_condition",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "loop",
+            "while": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "body": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "conditional_alias_behaves_like_if",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "conditional",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ],
+            "else": [
+              {
+                "type": "tool",
+                "name": "b",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "c",
+        "c.a",
+        "c.b"
+      ],
+      "condition_paths": [
+        "c.condition",
+        "c.if"
+      ]
     }
   },
   {
@@ -2061,6 +2467,74 @@
     }
   },
   {
+    "name": "nested_condition_target_uses_the_last_dot_rsplit",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d.c.if"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "name": "d",
+            "effects": [
+              {
+                "type": "if",
+                "name": "c",
+                "if": {
+                  "mode": "cel",
+                  "expr": "true"
+                },
+                "then": [
+                  {
+                    "type": "tool",
+                    "name": "t",
+                    "provider": "json",
+                    "params": {
+                      "mode": "stringify",
+                      "input": 1
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): d.c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. d.c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  },
+  {
     "name": "matching_named_band",
     "kind": "validate_profile_routing_pins",
     "input": {
@@ -2384,6 +2858,55 @@
     },
     "expect": {
       "ok": true
+    }
+  },
+  {
+    "name": "pin_checked_through_resolve_complexity_settings_even_when_routing_disabled",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "missing"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": false,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": "heavy"
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'summarize' -> 'missing'. Valid band names: heavy",
+      "mode": "exact"
     }
   },
   {
@@ -3276,7 +3799,8 @@
       },
       "profile_name": "demo",
       "missing": false,
-      "file_text": "adapter: openai\nmodel: gpt-4\ninputs:\n  x: 1\neffects:\n  summarize:\n    model: override\n"
+      "file_text": "adapter: openai\nmodel: gpt-4\ninputs:\n  x: 1\neffects:\n  summarize:\n    model: override\n",
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": true,
@@ -3324,6 +3848,85 @@
             }
           ]
         ]
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "openai"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "gpt-4"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "x"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "summarize"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "override"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
       }
     }
   },
@@ -3336,7 +3939,8 @@
       },
       "profile_name": "demo",
       "missing": false,
-      "file_text": ""
+      "file_text": "",
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": true,
@@ -3351,6 +3955,11 @@
       "effects": {
         "t": "dict",
         "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": []
       }
     }
   },
@@ -3363,7 +3972,8 @@
       },
       "profile_name": "demo",
       "missing": true,
-      "file_text": null
+      "file_text": null,
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": false,
@@ -3381,7 +3991,8 @@
       },
       "profile_name": "demo",
       "missing": false,
-      "file_text": "adapter: 5\n"
+      "file_text": "adapter: 5\n",
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": false,
@@ -3409,12 +4020,70 @@
       },
       "profile_name": "demo",
       "missing": false,
-      "file_text": "effects:\n  bogus:\n    model: x\n"
+      "file_text": "effects:\n  bogus:\n    model: x\n",
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": false,
       "error_class": "ProfileValidationError",
       "error": "Profile 'demo' references unknown effect path(s): bogus. Valid effect paths: summarize",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_malformed_yaml",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "adapter: [unterminated\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ParserError",
+      "error": "while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 10:\n    adapter: [unterminated\n             ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^",
+      "mode": "location"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_invalid_utf8",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": null,
+      "file_bytes_hex": "616461707465723a20ff0a"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "UnicodeDecodeError",
+      "error": "'utf-8' codec can't decode byte 0xff in position 9: invalid start byte",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_a_non_mapping_root",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "- 1\n- 2\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} must be a mapping/object at the root.",
       "mode": "exact"
     }
   },
@@ -3447,7 +4116,8 @@
       },
       "profile_name": "demo",
       "missing": false,
-      "file_text": "effects:\n  c.if:\n    enabled: false\n"
+      "file_text": "effects:\n  c.if:\n    enabled: false\n",
+      "file_bytes_hex": null
     },
     "expect": {
       "ok": false,

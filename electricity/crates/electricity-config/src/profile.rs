@@ -17,7 +17,8 @@
 
 use crate::complexity::RoutingSettings;
 use crate::util::is_truthy;
-use electricity_value::{Dict, Value};
+use electricity_value::pycompat::py_strip;
+use electricity_value::{CompareError, Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -91,7 +92,7 @@ fn effect_type_of(dict: &Dict) -> String {
     } else {
         String::new()
     };
-    raw.trim().to_lowercase()
+    py_strip(&raw).to_lowercase()
 }
 
 /// `effect["name"]` if it is a `str`, else `""` -- the name stays
@@ -148,7 +149,7 @@ fn collect_effect_paths_inner(
         };
         let effect_type = effect_type_of(dict);
         let name = effect_name_raw(dict);
-        let has_name = !name.trim().is_empty();
+        let has_name = !py_strip(name).is_empty();
         let own_path = if !scope.is_empty() && has_name {
             format!("{scope}.{name}")
         } else if has_name {
@@ -237,6 +238,13 @@ pub fn collect_orchestration_condition_paths(document: &Value) -> BTreeSet<Strin
 
 /// `condition_target_message`: the refusal text for a profile override
 /// aimed at a container's condition rather than an effect.
+///
+/// # Panics
+///
+/// Panics if `targeted` is empty, the same as Python's `ordered[0]`
+/// raising `IndexError` there -- every caller only reaches this
+/// function with a non-empty `targeted` (`validate_effect_paths`'s own
+/// emptiness check gates the call).
 pub fn condition_target_message(targeted: &[String], profile_name: &str) -> String {
     let mut ordered: Vec<&str> = targeted.iter().map(String::as_str).collect();
     ordered.sort_unstable();
@@ -280,13 +288,7 @@ fn py_sort_values(mut values: Vec<Value>) -> Result<Vec<Value>, String> {
         match values[1].py_partial_cmp(&values[0]) {
             Ok(Some(std::cmp::Ordering::Less)) => values.swap(0, 1),
             Ok(_) => {}
-            Err(_) => {
-                return Err(format!(
-                    "'<' not supported between instances of '{}' and '{}'",
-                    values[1].type_name(),
-                    values[0].type_name()
-                ));
-            }
+            Err(err) => return Err(py_sort_type_error_text(err)),
         }
         return Ok(values);
     }
@@ -302,17 +304,27 @@ fn py_sort_values(mut values: Vec<Value>) -> Result<Vec<Value>, String> {
                     j -= 1;
                 }
                 Ok(_) => break,
-                Err(_) => {
-                    return Err(format!(
-                        "'<' not supported between instances of '{}' and '{}'",
-                        values[j].type_name(),
-                        values[j - 1].type_name()
-                    ));
-                }
+                Err(err) => return Err(py_sort_type_error_text(err)),
             }
         }
     }
     Ok(values)
+}
+
+/// The exact `TypeError` text CPython's `sorted()` raises for a
+/// [`CompareError`]: the usual `'<' not supported between instances of
+/// '{left}' and '{right}'` for two truly unrelated types, but CPython's
+/// own distinct text for a naive/aware `datetime.datetime` mismatch or a
+/// `datetime.date`/`datetime.datetime` mismatch -- neither of those two
+/// is phrased as a `'<'` complaint, so [`CompareError`]'s own `Display`
+/// is used unchanged for them.
+fn py_sort_type_error_text(err: CompareError) -> String {
+    match err {
+        CompareError::IncomparableTypes { left, right } => {
+            format!("'<' not supported between instances of '{left}' and '{right}'")
+        }
+        other => other.to_string(),
+    }
 }
 
 /// `", ".join(unknown)` -- CPython's own `TypeError` text the moment it
@@ -688,6 +700,46 @@ mod tests {
             err.0,
             "'<' not supported between instances of 'int' and 'str'"
         );
+    }
+
+    #[test]
+    fn validate_effect_paths_naive_and_aware_datetime_keys_raise_cpythons_own_text() {
+        use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
+        let doc = doc_with_effects(vec![]);
+        let mut effects_dict = Dict::new();
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let naive = NaiveDateTime::new(d, Default::default());
+        effects_dict.insert(
+            Value::DateTime(naive, None),
+            Value::Dict(dict_from_pairs(vec![("enabled", Value::Bool(false))])),
+        );
+        effects_dict.insert(
+            Value::DateTime(naive, Some(FixedOffset::east_opt(0).unwrap())),
+            Value::Dict(dict_from_pairs(vec![("enabled", Value::Bool(false))])),
+        );
+        let err = validate_effect_paths(&Value::Dict(effects_dict), &doc, "demo").unwrap_err();
+        assert_eq!(
+            err.0,
+            "can't compare offset-naive and offset-aware datetimes"
+        );
+    }
+
+    #[test]
+    fn validate_effect_paths_date_and_datetime_keys_raise_cpythons_own_text() {
+        use chrono::{NaiveDate, NaiveDateTime};
+        let doc = doc_with_effects(vec![]);
+        let mut effects_dict = Dict::new();
+        let d = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        effects_dict.insert(
+            Value::Date(d),
+            Value::Dict(dict_from_pairs(vec![("enabled", Value::Bool(false))])),
+        );
+        effects_dict.insert(
+            Value::DateTime(NaiveDateTime::new(d, Default::default()), None),
+            Value::Dict(dict_from_pairs(vec![("enabled", Value::Bool(false))])),
+        );
+        let err = validate_effect_paths(&Value::Dict(effects_dict), &doc, "demo").unwrap_err();
+        assert_eq!(err.0, "can't compare datetime.datetime to datetime.date");
     }
 
     #[test]

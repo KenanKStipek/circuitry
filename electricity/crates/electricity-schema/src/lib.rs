@@ -667,12 +667,12 @@ fn decode_non_string_key_segment(segment: &str) -> String {
 /// marker's own repr text is all this crate has by the time a location
 /// is rendered).
 ///
-/// **Known gap:** an *aware* `datetime.datetime` (one whose repr carries
-/// a trailing `tzinfo=...`) keeps its repr form rather than rendering
-/// the UTC-offset suffix `str()` would add -- not reachable through the
-/// bundled profile schema today (no property accepts a free-form
-/// mapping whose *key* could plausibly be a timezone-aware date-time),
-/// so narrowing this further is deferred rather than guessed at.
+/// An aware `datetime.datetime` (one whose repr carries a trailing
+/// `tzinfo=...`) *is* reachable here: `effects` validates with
+/// `additionalProperties` over arbitrary keys, so `effects: {<aware
+/// datetime>: {}}` fails `minProperties` at a key segment. Its `str()`
+/// adds the `tzinfo`'s own UTC-offset suffix (`±HH:MM[:SS]`), computed
+/// by [`tzinfo_offset_seconds`] and [`iso_offset`] below.
 fn python_str_of_marker_repr(repr_text: &str) -> String {
     if let Some(args) = repr_text
         .strip_prefix("datetime.date(")
@@ -687,23 +687,79 @@ fn python_str_of_marker_repr(repr_text: &str) -> String {
         .strip_prefix("datetime.datetime(")
         .and_then(|rest| rest.strip_suffix(')'))
     {
-        if !args.contains("tzinfo=") {
-            let parts = parse_decimal_args(args);
-            if parts.len() >= 3 {
-                let (y, m, d) = (parts[0], parts[1], parts[2]);
-                let h = parts.get(3).copied().unwrap_or(0);
-                let mi = parts.get(4).copied().unwrap_or(0);
-                let s = parts.get(5).copied().unwrap_or(0);
-                let us = parts.get(6).copied().unwrap_or(0);
-                return if us == 0 {
-                    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
-                } else {
-                    format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}")
-                };
+        // The `tzinfo=...` keyword argument, when present, is always
+        // the repr's last component (`datetime_repr`'s own
+        // construction), so splitting on its literal `, tzinfo=`
+        // marker -- rather than a naive comma split, which would also
+        // split the timedelta's own nested `days=`/`seconds=` args --
+        // cleanly separates the positional fields from it.
+        let (positional, tzinfo) = match args.find(", tzinfo=") {
+            Some(idx) => (&args[..idx], Some(&args[idx + ", tzinfo=".len()..])),
+            None => (args, None),
+        };
+        let parts = parse_decimal_args(positional);
+        if parts.len() >= 3 {
+            let (y, m, d) = (parts[0], parts[1], parts[2]);
+            let h = parts.get(3).copied().unwrap_or(0);
+            let mi = parts.get(4).copied().unwrap_or(0);
+            let s = parts.get(5).copied().unwrap_or(0);
+            let us = parts.get(6).copied().unwrap_or(0);
+            let mut rendered = if us == 0 {
+                format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+            } else {
+                format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}")
+            };
+            if let Some(tzinfo_repr) = tzinfo {
+                if let Some(total_seconds) = tzinfo_offset_seconds(tzinfo_repr) {
+                    rendered.push_str(&iso_offset(total_seconds));
+                }
             }
+            return rendered;
         }
     }
     repr_text.to_string()
+}
+
+/// Python's `_format_offset` (`±HH:MM[:SS]`): ported locally from
+/// `electricity_value::datetime_repr`'s own private `iso_offset` (that
+/// module isn't `pub`, and this crate doesn't depend on
+/// `electricity-value` for its own sake), for the one caller above that
+/// renders an aware `datetime.datetime` marker's `str()` form.
+fn iso_offset(total_seconds: i64) -> String {
+    let sign = if total_seconds < 0 { '-' } else { '+' };
+    let abs = total_seconds.unsigned_abs();
+    let (hh, mm, ss) = (abs / 3600, (abs % 3600) / 60, abs % 60);
+    if ss == 0 {
+        format!("{sign}{hh:02}:{mm:02}")
+    } else {
+        format!("{sign}{hh:02}:{mm:02}:{ss:02}")
+    }
+}
+
+/// The UTC-offset total seconds a `tzinfo=...` repr argument encodes:
+/// `datetime.timezone.utc` is zero; `datetime.timezone(datetime.
+/// timedelta(...))` sums its `days=`/`seconds=` keyword arguments (the
+/// only two `electricity_value::datetime_repr::timezone_repr`/
+/// `timedelta_repr` ever emit for a whole-second UTC offset -- never
+/// `microseconds=`, and never both omitted at once).
+fn tzinfo_offset_seconds(tzinfo_repr: &str) -> Option<i64> {
+    if tzinfo_repr == "datetime.timezone.utc" {
+        return Some(0);
+    }
+    let args = tzinfo_repr
+        .strip_prefix("datetime.timezone(datetime.timedelta(")
+        .and_then(|rest| rest.strip_suffix("))"))?;
+    let mut days = 0i64;
+    let mut seconds = 0i64;
+    for part in args.split(',') {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("days=") {
+            days = v.parse().ok()?;
+        } else if let Some(v) = part.strip_prefix("seconds=") {
+            seconds = v.parse().ok()?;
+        }
+    }
+    Some(days * 86_400 + seconds)
 }
 
 /// Every comma-separated argument in a `datetime.date(...)`/`datetime.
@@ -969,8 +1025,6 @@ mod tests {
 
     #[test]
     fn profile_non_string_date_key_location_renders_str_not_repr() {
-        let marker_key = non_string_key_marker("datetime.date(2024, 1, 1)");
-        let doc = json!({"inputs": {marker_key: "x"}});
         // Not a schema failure on its own (inputs is free-form) -- probe
         // the decoder directly instead of through a real error path.
         assert_eq!(
@@ -979,7 +1033,42 @@ mod tests {
             )),
             "2024-01-01"
         );
-        let _ = doc;
+    }
+
+    #[test]
+    fn profile_aware_datetime_key_location_renders_the_utc_offset_suffix() {
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)"
+            )),
+            "2024-01-01 00:00:00+00:00"
+        );
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))"
+            )),
+            "2024-01-01 03:04:05+05:30"
+        );
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66585)))"
+            )),
+            "2024-01-01 03:04:05-05:30:15"
+        );
+    }
+
+    #[test]
+    fn profile_aware_datetime_key_is_reachable_through_effects_minproperties() {
+        let marker_key =
+            non_string_key_marker("datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)");
+        let doc = json!({"effects": {marker_key: {}}});
+        let errors = profile_errors(&doc);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.location == "effects/2024-01-01 00:00:00+00:00"),
+            "{errors:?}"
+        );
     }
 
     #[test]

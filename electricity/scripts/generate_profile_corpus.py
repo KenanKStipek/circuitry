@@ -44,7 +44,11 @@ from pathlib import Path
 from typing import Any
 
 from circuitry.cli import profiles
-from circuitry.cli.complexity_config import ComplexityBand, RoutingSettings
+from circuitry.cli.complexity_config import (
+    ComplexityBand,
+    RoutingSettings,
+    resolve_complexity_settings,
+)
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -267,6 +271,29 @@ def routing_pins_case(
     name: str, *, effects: dict[str, Any], bands: list[ComplexityBand], profile_name: str = "demo"
 ) -> dict[str, Any]:
     routing = RoutingSettings(enabled=True, bands=tuple(bands))
+    return _routing_pins_case_with(name, effects=effects, routing=routing, profile_name=profile_name)
+
+
+def routing_pins_case_via_resolve(
+    name: str,
+    *,
+    effects: dict[str, Any],
+    complexity_block: dict[str, Any],
+    profile_name: str = "demo",
+) -> dict[str, Any]:
+    """Like :func:`routing_pins_case`, but *routing* comes from a synthetic
+    ``runtime.complexity`` block run through ``resolve_complexity_settings`` --
+    the real path the run wiring (lane R) takes, rather than a
+    hand-built `RoutingSettings`."""
+    settings = resolve_complexity_settings({"complexity": complexity_block})
+    return _routing_pins_case_with(
+        name, effects=effects, routing=settings.routing, profile_name=profile_name
+    )
+
+
+def _routing_pins_case_with(
+    name: str, *, effects: dict[str, Any], routing: RoutingSettings, profile_name: str
+) -> dict[str, Any]:
     try:
         profiles.validate_profile_routing_pins(effects, routing=routing, profile_name=profile_name)
     except Exception as exc:
@@ -321,6 +348,7 @@ def load_profile_case(
     *,
     root: Path,
     file_text: str | None = None,
+    file_bytes: bytes | None = None,
     document: dict[str, Any],
     profile_name: str = "demo",
     missing: bool = False,
@@ -329,7 +357,11 @@ def load_profile_case(
     case_dir = root / name
     case_dir.mkdir(parents=True)
     path = case_dir / f"{profile_name}.yml"
-    if not missing:
+    if missing:
+        pass
+    elif file_bytes is not None:
+        path.write_bytes(file_bytes)
+    else:
         path.write_text(file_text or "", encoding="utf-8")
     derived_name = _profile_name_from_path(path)
 
@@ -349,6 +381,8 @@ def load_profile_case(
             "out": settings.out,
             "inputs": encode(settings.inputs),
             "effects": encode(settings.effects),
+            "persistence": encode(settings.persistence) if settings.persistence is not None else None,
+            "raw": encode(settings.raw),
         }
 
     return {
@@ -359,6 +393,7 @@ def load_profile_case(
             "profile_name": profile_name,
             "missing": missing,
             "file_text": file_text,
+            "file_bytes_hex": file_bytes.hex() if file_bytes is not None else None,
         },
         "expect": expect,
     }
@@ -385,6 +420,8 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
     cases.append(parse_case("null_root_becomes_empty_mapping", root=root, file_text="null\n"))
     cases.append(parse_case("false_root_becomes_empty_mapping", root=root, file_text="false\n"))
     cases.append(parse_case("empty_list_root_becomes_empty_mapping", root=root, file_text="[]\n"))
+    cases.append(parse_case("zero_root_becomes_empty_mapping", root=root, file_text="0\n"))
+    cases.append(parse_case("empty_string_root_becomes_empty_mapping", root=root, file_text="''\n"))
     cases.append(parse_case("empty_mapping_root", root=root, file_text="{}\n"))
     cases.append(parse_case("non_empty_list_root_is_rejected", root=root, file_text="- 1\n- 2\n"))
     cases.append(parse_case("scalar_root_is_rejected", root=root, file_text="hello\n"))
@@ -560,6 +597,112 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
         )
     )
 
+    # --- schema: `type` on every property, not just `adapter` ---
+    cases.append(
+        parse_case("schema_type_error_on_model", root=root, file_text="model: 5\n", mode="schema")
+    )
+    cases.append(
+        parse_case("schema_type_error_on_out", root=root, file_text="out: 5\n", mode="schema")
+    )
+    cases.append(
+        parse_case("schema_type_error_on_inputs", root=root, file_text="inputs: 5\n", mode="schema")
+    )
+    cases.append(
+        parse_case("schema_type_error_on_effects", root=root, file_text="effects: 5\n", mode="schema")
+    )
+    cases.append(
+        parse_case(
+            "schema_type_error_on_persistence",
+            root=root,
+            file_text="persistence: 5\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_routing_int_is_invalid",
+            root=root,
+            file_text="effects:\n  summarize:\n    routing: 1\n",
+            mode="schema",
+        )
+    )
+
+    # --- schema markers: the spurious-marker filter under `effects`/
+    # `persistence`, not just the `inputs` case above; a non-JSON scalar
+    # at a `type: string` position; non-string-key locations ---
+    cases.append(
+        parse_case(
+            "schema_date_marker_under_persistence_fails_type_not_required",
+            root=root,
+            file_text="persistence: 2024-01-01\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_date_marker_under_an_effects_path_fails_type_not_additional_properties",
+            root=root,
+            file_text="effects:\n  x: 2024-01-01\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_bytes_marker_under_inputs_fails_type_not_object",
+            root=root,
+            file_text="inputs: !!binary aGk=\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_nan_marker_on_adapter_fails_type_not_string",
+            root=root,
+            file_text="adapter: .nan\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_date_marker_on_model_fails_type_not_string",
+            root=root,
+            file_text="model: 2024-01-01\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_non_string_int_key_location_under_effects",
+            root=root,
+            file_text="effects:\n  1: {}\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_non_string_date_key_location_under_effects",
+            root=root,
+            file_text="effects:\n  2024-01-01: {}\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_non_string_naive_datetime_key_location_under_effects",
+            root=root,
+            file_text="effects:\n  2024-01-01 00:00:00: {}\n",
+            mode="schema",
+        )
+    )
+    cases.append(
+        parse_case(
+            "schema_non_string_aware_datetime_key_location_under_effects",
+            root=root,
+            file_text="effects:\n  2024-01-01T00:00:00Z: {}\n",
+            mode="schema",
+        )
+    )
+
     # --- collect_orchestration_effect_paths / condition_paths ---
     cases.append(
         collect_case(
@@ -638,6 +781,42 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             document={
                 "effects": [
                     {"type": "reflector", "name": "r", "effects": [_tool("t")]},
+                ]
+            },
+        )
+    )
+    cases.append(
+        collect_case(
+            "unnamed_reflector_contributes_no_segment",
+            document={
+                "effects": [
+                    {"type": "reflector", "effects": [_tool("t")]},
+                ]
+            },
+        )
+    )
+    cases.append(
+        collect_case(
+            "unnamed_loop_contributes_no_segment_or_condition",
+            document={
+                "effects": [
+                    {"type": "loop", "while": {"mode": "cel", "expr": "true"}, "body": [_tool("t")]},
+                ]
+            },
+        )
+    )
+    cases.append(
+        collect_case(
+            "conditional_alias_behaves_like_if",
+            document={
+                "effects": [
+                    {
+                        "type": "conditional",
+                        "name": "c",
+                        "if": {"mode": "cel", "expr": "true"},
+                        "then": [_tool("a")],
+                        "else": [_tool("b")],
+                    }
                 ]
             },
         )
@@ -817,6 +996,28 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             document={"effects": []},
         )
     )
+    cases.append(
+        validate_effect_paths_case(
+            "nested_condition_target_uses_the_last_dot_rsplit",
+            effects={"d.c.if": {"enabled": False}},
+            document={
+                "effects": [
+                    {
+                        "type": "dynamic",
+                        "name": "d",
+                        "effects": [
+                            {
+                                "type": "if",
+                                "name": "c",
+                                "if": {"mode": "cel", "expr": "true"},
+                                "then": [_tool("t")],
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+    )
 
     # --- validate_profile_routing_pins ---
     cases.append(
@@ -869,6 +1070,18 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             "non_dict_override_is_skipped",
             effects={"summarize": "not-a-dict"},
             bands=[],
+        )
+    )
+    cases.append(
+        routing_pins_case_via_resolve(
+            "pin_checked_through_resolve_complexity_settings_even_when_routing_disabled",
+            effects={"summarize": {"routing": "missing"}},
+            complexity_block={
+                "routing": {
+                    "enabled": False,
+                    "bands": [{"model": "big", "name": "heavy"}],
+                }
+            },
         )
     )
 
@@ -964,6 +1177,31 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
             root=root,
             file_text="effects:\n  bogus:\n    model: x\n",
             document={"effects": [_tool("summarize")]},
+        )
+    )
+    cases.append(
+        load_profile_case(
+            "end_to_end_fails_at_malformed_yaml",
+            root=root,
+            file_text="adapter: [unterminated\n",
+            document={"effects": []},
+            mode="location",
+        )
+    )
+    cases.append(
+        load_profile_case(
+            "end_to_end_fails_at_invalid_utf8",
+            root=root,
+            file_bytes=b"adapter: \xff\n",
+            document={"effects": []},
+        )
+    )
+    cases.append(
+        load_profile_case(
+            "end_to_end_fails_at_a_non_mapping_root",
+            root=root,
+            file_text="- 1\n- 2\n",
+            document={"effects": []},
         )
     )
     cases.append(

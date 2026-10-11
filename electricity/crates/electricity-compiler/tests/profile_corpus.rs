@@ -182,29 +182,33 @@ fn assert_error_matches(mode: &str, expected: &str, actual: &ProfileError, path:
 
 /// Schema-failure comparison: the header and each line's own location
 /// are exact; the message past the location, and multi-error line
-/// order, are third-party `jsonschema` text (compared as a location
-/// set only -- see the M1-J1 ruling).
+/// order, are third-party `jsonschema` text (compared as a *sorted*
+/// `Vec` of locations, not a set -- see the M1-J1 ruling: line *order*
+/// isn't comparable across engines, but the line *count* is, so a
+/// spurious extra error at a location a real one also occupies must
+/// still fail this).
 fn assert_schema_error_matches(expected: &str, actual: &str) {
     let (expected_header, expected_rest) = expected.split_once(":\n").unwrap_or((expected, ""));
     let (actual_header, actual_rest) = actual.split_once(":\n").unwrap_or((actual, ""));
     assert_eq!(expected_header, actual_header, "schema error header");
 
     let locations = |text: &str| -> Vec<String> {
-        text.lines()
+        let mut locs: Vec<String> = text
+            .lines()
             .map(|line| {
                 let line = line.strip_prefix("  - ").unwrap_or(line);
                 line.split_once(": ")
                     .map(|(loc, _)| loc.to_string())
                     .unwrap_or_else(|| line.to_string())
             })
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
+            .collect();
+        locs.sort();
+        locs
     };
     assert_eq!(
         locations(expected_rest),
         locations(actual_rest),
-        "schema error location set"
+        "schema error location multiset"
     );
 }
 
@@ -412,6 +416,19 @@ fn run_load_profile(case: &Json, root: &Path) {
             );
             let expected_effects = decode_effects_index_map(&expect["effects"]);
             assert_eq!(settings.effects, expected_effects);
+
+            match &expect["persistence"] {
+                Json::Null => assert_eq!(settings.persistence, None),
+                tagged => {
+                    let decoded = decode_tagged(tagged);
+                    let expected = decoded
+                        .as_dict()
+                        .expect("persistence tagged value is not a dict")
+                        .clone();
+                    assert_eq!(settings.persistence, Some(expected));
+                }
+            }
+            assert_eq!(settings.raw, decode_tagged(&expect["raw"]));
         }
         (Err(err), false) => {
             let mode = expect["mode"].as_str().unwrap_or("exact");

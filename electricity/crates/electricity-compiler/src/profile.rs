@@ -48,6 +48,12 @@ fn name_repr(name: &str) -> String {
 /// `.` segments, strips a trailing `/`, keeps `..` unresolved. Ported
 /// locally (not reused from `load.rs`'s own private copy, a different
 /// lane's file) for every `{path}` in this module's own messages.
+///
+/// One narrow divergence: `PurePosixPath` keeps exactly two leading
+/// slashes (POSIX reserves `//foo` as implementation-defined), but this
+/// collapses any run of leading slashes to one, like every other run.
+/// `--profile` paths this double-slash-prefixed are not a realistic
+/// case to begin with, so this isn't corrected.
 fn pathlib_str(path: &Path) -> String {
     use std::path::Component;
     let mut is_absolute = false;
@@ -217,12 +223,13 @@ pub fn parse_profile_document(path: &Path, name: &str) -> Result<Value, ProfileE
     let instance = to_schema_instance(&value);
     let mut errors = electricity_schema::profile_errors(&instance);
     if !errors.is_empty() {
-        // Python sorts by `str(err)` (third-party `jsonschema` text) --
-        // not reproducible here (DESIGN.md §1, the M1-J1 ruling); sort
-        // by `(location, message)` instead, the closest Rust analogue,
-        // and treat a multi-error failure as a set of lines plus the
-        // exact header when comparing (never by this order itself).
-        errors.sort_by(|a, b| (&a.location, &a.message).cmp(&(&b.location, &b.message)));
+        // Python sorts by `str(err)` (third-party `jsonschema` text,
+        // which starts with the message) -- not reproducible here
+        // (DESIGN.md §1, the M1-J1 ruling); sort by `(message,
+        // location)` instead, the closest Rust analogue, and treat a
+        // multi-error failure as a set of lines plus the exact header
+        // when comparing (never by this order itself).
+        errors.sort_by(|a, b| (&a.message, &a.location).cmp(&(&b.message, &b.location)));
         let lines: Vec<String> = errors
             .iter()
             .map(|e| format!("  - {}", e.describe()))
@@ -300,8 +307,65 @@ mod tests {
         let dir = TempDir::new("missing");
         let path = dir.join("nope.yml");
         let err = parse_profile_document(&path, "nope").unwrap_err();
-        assert!(err.0.starts_with("Profile 'nope' not found: "));
-        assert!(err.0.ends_with("does not exist or is not a file."));
+        assert_eq!(
+            err.0,
+            format!(
+                "Profile 'nope' not found: {} does not exist or is not a file.",
+                pathlib_str(&path)
+            )
+        );
+    }
+
+    #[test]
+    fn pathlib_str_collapses_repeated_slashes() {
+        assert_eq!(pathlib_str(Path::new("a//b")), "a/b");
+    }
+
+    #[test]
+    fn pathlib_str_drops_dot_segments() {
+        assert_eq!(pathlib_str(Path::new("./a")), "a");
+    }
+
+    #[test]
+    fn pathlib_str_strips_a_trailing_slash() {
+        assert_eq!(pathlib_str(Path::new("a/b/")), "a/b");
+    }
+
+    #[test]
+    fn pathlib_str_keeps_parent_dir_segments_unresolved() {
+        assert_eq!(pathlib_str(Path::new("a/../b")), "a/../b");
+    }
+
+    #[test]
+    fn pathlib_str_of_an_empty_path_is_a_single_dot() {
+        assert_eq!(pathlib_str(Path::new("")), ".");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_file_reports_the_io_error_reason() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("unreadable");
+        let path = dir.join("p.yml");
+        fs::write(&path, "adapter: openai\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = parse_profile_document(&path, "p");
+        let expected_reason = fs::read(&path).err().map(|e| e.to_string());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let Some(expected_reason) = expected_reason else {
+            // Running as root (common in a container): permission bits
+            // don't block the read, so there is no I/O error to assert
+            // against -- skip rather than assert a false negative.
+            return;
+        };
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.0,
+            format!(
+                "Profile 'p' at {} could not be read: {expected_reason}",
+                pathlib_str(&path)
+            )
+        );
     }
 
     #[test]
