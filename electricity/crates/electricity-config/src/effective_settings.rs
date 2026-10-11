@@ -23,6 +23,7 @@
 use crate::complexity::{RoutingSettings, resolve_complexity_settings};
 use crate::config::{CircuitryConfig, ConfigError};
 use crate::merge::merge_runtime;
+use crate::profile::ProfileSettings;
 use crate::util::get;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -30,12 +31,14 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// `cli/effective_settings.py::EffectiveSettings`, narrowed to the
-/// fields this module's own callers need: no `complexity`/`model_locked`
-/// fields of their own (M0-H runs no prompt effect, so nothing routes a
-/// model or reads the resolved band table -- [`resolve_complexity_
-/// settings`] still *validates* the block, and still feeds the model-
-/// routing precedence below, even though its own typed result is
-/// discarded once validation passes).
+/// fields this module's own callers need: no `complexity` field of its
+/// own (M0-H runs no prompt effect, so nothing reads the resolved band
+/// table -- [`resolve_complexity_settings`] still *validates* the
+/// block, and still feeds the model-routing precedence below, even
+/// though its own typed result is discarded once validation passes).
+/// `model_locked` (issue #495, lane R) is real: a profile's run-level
+/// `model:` is the one tier electricity's own `effective_settings` can
+/// pin ahead of the router (there is still no `--model` CLI tier).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EffectiveSettings {
     pub model: Option<String>,
@@ -56,6 +59,11 @@ pub struct EffectiveSettings {
     /// in that order.
     pub sources: IndexMap<String, String>,
     pub warnings: Vec<String>,
+    /// `True` only when `sources["model"] == "profile"` at the point
+    /// the router precedence is applied -- `_apply_router_precedence`'s
+    /// own `locked` flag, narrowed the same way `sources["model"]`
+    /// itself is (no `cli` tier here).
+    pub model_locked: bool,
 }
 
 /// `ORCHESTRATION_RUNTIME_KEYS`.
@@ -273,20 +281,27 @@ fn record_complexity_sources(
     );
 }
 
-/// `_apply_router_precedence`, with `model_locked` always `false` (there
-/// is no `cli`/`profile` tier here for `sources["model"]` to ever equal,
-/// so the "respect an explicit pin" branch never applies).
+/// `_apply_router_precedence`. `locked` is `sources["model"] ==
+/// "profile"` at the point this runs (there is still no `cli` tier
+/// here) -- a locked model that also respects an explicit pin
+/// (`routing.respect_explicit`, the default) is never overridden by
+/// the router.
 fn apply_router_precedence(
     sources: &mut IndexMap<String, String>,
     model: Option<String>,
     routing: &RoutingSettings,
-) -> Option<String> {
+) -> (Option<String>, bool) {
+    let locked = sources.get("model").map(String::as_str) == Some("profile");
     if !routing.enabled || routing.bands.is_empty() {
-        return model;
+        return (model, locked);
+    }
+    if locked && routing.respect_explicit {
+        return (model, locked);
     }
     sources.insert("model".to_string(), "router".to_string());
     // Validation guarantees a non-empty table ends in the catch-all.
-    model.or_else(|| routing.bands.last().map(|band| band.model.clone()))
+    let model = model.or_else(|| routing.bands.last().map(|band| band.model.clone()));
+    (model, locked)
 }
 
 /// `resolve_effective_settings`, as narrowed by this module's own doc
@@ -301,50 +316,86 @@ pub fn effective_settings(
     document: &Value,
     document_name: Option<&str>,
 ) -> Result<EffectiveSettings, ConfigError> {
+    effective_settings_with_profile(config, document, document_name, None)
+}
+
+/// [`effective_settings`], with a loaded `--profile` layered in at
+/// Python's own `profile > orchestration > config > default`
+/// precedence (issue #495, lane R) -- there is still no `cli` tier
+/// (electricity has no `--model`/`--adapter`/`--out` override flags of
+/// its own), so `profile` is the only rank above `orchestration` for
+/// `model`/`adapter`, and the only rank above `default` for `out`.
+pub fn effective_settings_with_profile(
+    config: &CircuitryConfig,
+    document: &Value,
+    document_name: Option<&str>,
+    profile: Option<&ProfileSettings>,
+) -> Result<EffectiveSettings, ConfigError> {
     let empty = Dict::new();
     let doc_dict = document.as_dict().unwrap_or(&empty);
     let mut sources: IndexMap<String, String> = IndexMap::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    // model: orchestration > config > default (no `cli`/`profile` tier).
-    let mut model = match get(doc_dict, "model") {
-        Some(value) if !matches!(value, Value::None) => {
-            sources.insert("model".to_string(), "orchestration".to_string());
-            Some(value.py_str())
+    // model: profile > orchestration > config > default.
+    let model = if let Some(value) = profile.and_then(|p| p.model.as_ref()) {
+        sources.insert("model".to_string(), "profile".to_string());
+        Some(value.clone())
+    } else {
+        match get(doc_dict, "model") {
+            Some(value) if !matches!(value, Value::None) => {
+                sources.insert("model".to_string(), "orchestration".to_string());
+                Some(value.py_str())
+            }
+            _ => match &config.default_model {
+                Some(value) => {
+                    sources.insert("model".to_string(), "config".to_string());
+                    Some(value.clone())
+                }
+                None => {
+                    sources.insert("model".to_string(), "default".to_string());
+                    None
+                }
+            },
         }
-        _ => match &config.default_model {
-            Some(value) => {
-                sources.insert("model".to_string(), "config".to_string());
-                Some(value.clone())
-            }
-            None => {
-                sources.insert("model".to_string(), "default".to_string());
-                None
-            }
-        },
     };
 
-    // adapter: orchestration > config > default.
-    let adapter = match get(doc_dict, "adapter") {
-        Some(value) if !matches!(value, Value::None) => {
-            sources.insert("adapter".to_string(), "orchestration".to_string());
-            Some(value.py_str())
+    // adapter: profile > orchestration > config > default.
+    let adapter = if let Some(value) = profile.and_then(|p| p.adapter.as_ref()) {
+        sources.insert("adapter".to_string(), "profile".to_string());
+        Some(value.clone())
+    } else {
+        match get(doc_dict, "adapter") {
+            Some(value) if !matches!(value, Value::None) => {
+                sources.insert("adapter".to_string(), "orchestration".to_string());
+                Some(value.py_str())
+            }
+            _ => match &config.default_adapter {
+                Some(value) => {
+                    sources.insert("adapter".to_string(), "config".to_string());
+                    Some(value.clone())
+                }
+                None => {
+                    sources.insert("adapter".to_string(), "default".to_string());
+                    None
+                }
+            },
         }
-        _ => match &config.default_adapter {
-            Some(value) => {
-                sources.insert("adapter".to_string(), "config".to_string());
-                Some(value.clone())
-            }
-            None => {
-                sources.insert("adapter".to_string(), "default".to_string());
-                None
-            }
-        },
     };
 
-    // `out` has no config/document tier of its own (this module's own
-    // doc comment); always the "default" (no file written) entry.
-    sources.insert("out".to_string(), "default".to_string());
+    // out: profile > default -- there is still no config/document tier
+    // (this module's own doc comment); electricity's own `--out` CLI
+    // flag ranks above this, applied by `electricity` (lib)'s own run
+    // wiring after this returns.
+    let out = match profile.and_then(|p| p.out.as_ref()) {
+        Some(value) => {
+            sources.insert("out".to_string(), "profile".to_string());
+            Some(PathBuf::from(value))
+        }
+        None => {
+            sources.insert("out".to_string(), "default".to_string());
+            None
+        }
+    };
 
     let orch_plugins = orchestration_plugins(doc_dict)?;
     let orch_runtime = orchestration_runtime(doc_dict)?;
@@ -387,7 +438,7 @@ pub fn effective_settings(
     // runtime: config's own block deep-merged with the orchestration's
     // (trusted, so kept whole).
     let orch_runtime_value = Value::Dict(orch_runtime.clone());
-    let runtime = merge_runtime(config.runtime.as_ref(), Some(&orch_runtime_value));
+    let mut runtime = merge_runtime(config.runtime.as_ref(), Some(&orch_runtime_value));
     sources.insert(
         "runtime".to_string(),
         if !orch_runtime.is_empty() {
@@ -434,10 +485,28 @@ pub fn effective_settings(
         }
     }
 
-    // persistence: only ever recorded when the orchestration or config
-    // actually carries an object there -- Circuitry's own function never
-    // adds a "default" entry for it either.
-    if matches!(get(&orch_runtime, "persistence"), Some(Value::Dict(_))) {
+    // persistence: a profile's own `persistence:` block replaces
+    // (never merges with) whatever the orchestration/config supplied
+    // -- backends take disjoint config keys, so a partial overlay
+    // would produce a chimera. `enabled` defaults to `true` for a
+    // profile-supplied block: naming a backend in a profile is the
+    // opt-in. Otherwise, only ever recorded when the orchestration or
+    // config actually carries an object there -- Circuitry's own
+    // function never adds a "default" entry for it either.
+    if let Some(profile_persistence) = profile.and_then(|p| p.persistence.as_ref()) {
+        let mut block = profile_persistence.clone();
+        block
+            .entry(Value::Str("enabled".to_string()))
+            .or_insert(Value::Bool(true));
+        let mut runtime_dict = runtime
+            .as_ref()
+            .and_then(Value::as_dict)
+            .cloned()
+            .unwrap_or_default();
+        runtime_dict.insert(Value::Str("persistence".to_string()), Value::Dict(block));
+        runtime = Some(Value::Dict(runtime_dict));
+        sources.insert("persistence".to_string(), "profile".to_string());
+    } else if matches!(get(&orch_runtime, "persistence"), Some(Value::Dict(_))) {
         sources.insert("persistence".to_string(), "orchestration".to_string());
     } else if config
         .runtime
@@ -461,16 +530,17 @@ pub fn effective_settings(
         get(&orch_runtime, "complexity"),
     );
 
-    model = apply_router_precedence(&mut sources, model, &complexity.routing);
+    let (model, model_locked) = apply_router_precedence(&mut sources, model, &complexity.routing);
 
     Ok(EffectiveSettings {
         model,
         adapter,
-        out: None,
+        out,
         plugins,
         runtime,
         sources,
         warnings,
+        model_locked,
     })
 }
 
@@ -638,5 +708,153 @@ mod tests {
                 .unwrap();
         assert_eq!(settings.model, Some("router-model".to_string()));
         assert_eq!(settings.sources.get("model").unwrap(), "router");
+    }
+
+    fn empty_profile() -> ProfileSettings {
+        ProfileSettings {
+            name: "p".to_string(),
+            path: PathBuf::from("p.yml"),
+            adapter: None,
+            model: None,
+            out: None,
+            inputs: Dict::new(),
+            effects: IndexMap::new(),
+            persistence: None,
+            raw: Value::Dict(Dict::new()),
+        }
+    }
+
+    #[test]
+    fn a_profile_model_outranks_the_orchestrations_own() {
+        let config = CircuitryConfig::default();
+        let profile = ProfileSettings {
+            model: Some("profile-model".to_string()),
+            ..empty_profile()
+        };
+        let settings = effective_settings_with_profile(
+            &config,
+            &doc(vec![("model", Value::from("doc-model"))]),
+            None,
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(settings.model, Some("profile-model".to_string()));
+        assert_eq!(settings.sources.get("model").unwrap(), "profile");
+        assert!(settings.model_locked);
+    }
+
+    #[test]
+    fn a_profile_adapter_outranks_the_orchestrations_own() {
+        let config = CircuitryConfig::default();
+        let profile = ProfileSettings {
+            adapter: Some("scripted".to_string()),
+            ..empty_profile()
+        };
+        let settings = effective_settings_with_profile(
+            &config,
+            &doc(vec![("adapter", Value::from("openai"))]),
+            None,
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(settings.adapter, Some("scripted".to_string()));
+        assert_eq!(settings.sources.get("adapter").unwrap(), "profile");
+    }
+
+    #[test]
+    fn a_profile_out_is_the_resolved_out_when_no_cli_out_is_given() {
+        let config = CircuitryConfig::default();
+        let profile = ProfileSettings {
+            out: Some("profile-out.json".to_string()),
+            ..empty_profile()
+        };
+        let settings =
+            effective_settings_with_profile(&config, &doc(vec![]), None, Some(&profile)).unwrap();
+        assert_eq!(settings.out, Some(PathBuf::from("profile-out.json")));
+        assert_eq!(settings.sources.get("out").unwrap(), "profile");
+    }
+
+    #[test]
+    fn without_a_profile_model_locked_is_false_and_out_is_default() {
+        let config = CircuitryConfig::default();
+        let settings = effective_settings(&config, &doc(vec![]), None).unwrap();
+        assert!(!settings.model_locked);
+        assert_eq!(settings.out, None);
+        assert_eq!(settings.sources.get("out").unwrap(), "default");
+    }
+
+    #[test]
+    fn a_profile_persistence_block_replaces_the_merged_one_and_defaults_enabled() {
+        let config = CircuitryConfig::default();
+        let mut profile_persistence = Dict::new();
+        profile_persistence.insert(Value::Str("backend".to_string()), Value::from("sqlite"));
+        profile_persistence.insert(Value::Str("db_path".to_string()), Value::from("p.db"));
+        let profile = ProfileSettings {
+            persistence: Some(profile_persistence),
+            ..empty_profile()
+        };
+        let mut orch_persistence = Dict::new();
+        orch_persistence.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        orch_persistence.insert(Value::Str("backend".to_string()), Value::from("sqlite"));
+        orch_persistence.insert(Value::Str("db_path".to_string()), Value::from("orch.db"));
+        let mut orch_runtime = Dict::new();
+        orch_runtime.insert(
+            Value::Str("persistence".to_string()),
+            Value::Dict(orch_persistence),
+        );
+        let settings = effective_settings_with_profile(
+            &config,
+            &doc(vec![("runtime", Value::Dict(orch_runtime))]),
+            None,
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(settings.sources.get("persistence").unwrap(), "profile");
+        let persistence = settings
+            .runtime
+            .as_ref()
+            .and_then(Value::as_dict)
+            .and_then(|r| get(r, "persistence"))
+            .and_then(Value::as_dict)
+            .unwrap();
+        assert_eq!(get(persistence, "db_path"), Some(&Value::from("p.db")));
+        assert_eq!(get(persistence, "enabled"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn a_locked_model_respecting_an_explicit_pin_is_not_overridden_by_the_router() {
+        let config = CircuitryConfig::default();
+        let profile = ProfileSettings {
+            model: Some("pinned-model".to_string()),
+            ..empty_profile()
+        };
+        let mut scoring = Dict::new();
+        scoring.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        let mut catch_all = Dict::new();
+        catch_all.insert(Value::Str("model".to_string()), Value::from("router-model"));
+        let mut routing = Dict::new();
+        routing.insert(Value::Str("enabled".to_string()), Value::Bool(true));
+        routing.insert(
+            Value::Str("bands".to_string()),
+            Value::List(vec![Value::Dict(catch_all)]),
+        );
+        let mut complexity = Dict::new();
+        complexity.insert(Value::Str("scoring".to_string()), Value::Dict(scoring));
+        complexity.insert(Value::Str("routing".to_string()), Value::Dict(routing));
+        let mut runtime = Dict::new();
+        runtime.insert(
+            Value::Str("complexity".to_string()),
+            Value::Dict(complexity),
+        );
+        let settings = effective_settings_with_profile(
+            &config,
+            &doc(vec![("runtime", Value::Dict(runtime))]),
+            None,
+            Some(&profile),
+        )
+        .unwrap();
+        assert_eq!(settings.model, Some("pinned-model".to_string()));
+        assert_eq!(settings.sources.get("model").unwrap(), "profile");
+        assert!(settings.model_locked);
     }
 }

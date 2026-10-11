@@ -222,11 +222,11 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         ])
         .output()
         .unwrap();
-    // `--profile` refuses with the preview marker before anything else
-    // runs (profiles are M1-J1/J2) -- exit 1, every time, regardless of
-    // whether the document itself would otherwise run. An ordinary run
-    // failure's own error lives in the stdout JSON payload, not stderr
-    // (PR #441 review finding 4, K1).
+    // `--profile` is now a real path (issue #495, lane R): `p` doesn't
+    // exist relative to this process's own cwd, so the run fails with
+    // electricity's own not-found text (DESIGN §6.11) -- exit 1, the
+    // ordinary run-failure JSON payload on stdout, not stderr (PR #441
+    // review finding 4, K1).
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -234,7 +234,7 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         payload["error"]
             .as_str()
             .unwrap()
-            .contains("is a preview and cannot run orchestrations yet")
+            .contains("Profile 'p' not found")
     );
 }
 

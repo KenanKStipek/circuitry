@@ -27,6 +27,10 @@ pub struct RunRequest {
     pub pretty: bool,
     pub live_state_path: Option<PathBuf>,
     pub events_path: Option<PathBuf>,
+    /// `--profile <path>` (issue #495, lane R) -- an explicit path
+    /// only (DESIGN §1, §6.11: no name discovery, no
+    /// `--profile-from-state`).
+    pub profile_path: Option<PathBuf>,
     /// `true` only for a CLI-driven run (`ToolCall::armed`'s own doc
     /// comment, `electricity_tools::ToolCall`) -- a run option on
     /// *this* struct, not a literal `run_orchestration` hard-codes
@@ -46,6 +50,13 @@ pub struct RunRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunResult {
     pub ok: bool,
+    /// A loaded profile's own `out:` (issue #495, lane R) -- honoured
+    /// by the caller (`electricity-cli`'s own `main`) only when no
+    /// `--out` was given; `None` whenever this run never resolved a
+    /// profile, or resolved one with no `out:` of its own, or failed
+    /// before effective settings were ever computed (that failure's
+    /// own `--out` is the plain `--out` only, DESIGN §6.11).
+    pub out_path: Option<PathBuf>,
     /// The final saved state (`core/saved_state.py`'s own shape) --
     /// present whenever `--out`/stdout would have written one.
     pub state: Option<Value>,

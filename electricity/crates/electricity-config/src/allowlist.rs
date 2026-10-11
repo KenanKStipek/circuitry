@@ -69,7 +69,7 @@ pub fn tool_denial(name: &str, allowed: Option<&[String]>) -> Option<String> {
 /// interpolation (`f"... (enabled: {allowed})"`, where `allowed` is a
 /// Python `list[str]`, formatted with `str()`, which for a list defers
 /// to each element's own `repr()`).
-fn format_list(items: &[String]) -> String {
+pub(crate) fn format_list(items: &[String]) -> String {
     let inner = items
         .iter()
         .map(|s| Value::Str(s.clone()).py_repr())
@@ -79,7 +79,7 @@ fn format_list(items: &[String]) -> String {
 }
 
 /// `allowlist.py::_provider_token_to_adapter`.
-fn provider_token_to_adapter(token: &str) -> Option<String> {
+pub(crate) fn provider_token_to_adapter(token: &str) -> Option<String> {
     let parsed = token.trim();
     if parsed.is_empty() {
         return None;
@@ -240,6 +240,41 @@ pub fn check_allowlist(document: &Value, config: &CircuitryConfig) -> Vec<String
     )
 }
 
+/// `allowlist_gate.py::require_adapter`: *name*, canonicalised the way
+/// `build_adapter` canonicalises it (`.strip().lower()`), must be in
+/// *allowed* (`None` is default-open) -- lane R's own run-default
+/// adapter resolution, right before the build (`cli/runtime_shim.py:917`).
+pub fn require_adapter(name: &str, allowed: Option<&[String]>) -> Result<(), String> {
+    let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
+    match adapter_denial(&normalized, allowed) {
+        Some(denial) => Err(denial),
+        None => Ok(()),
+    }
+}
+
+/// `allowlist.py::profile_provider_denials`: a profile's per-effect
+/// `provider` overrides are checked on their own, since a profile swaps
+/// an effect's adapter after the document itself was already checked.
+/// *effects* is `ProfileSettings::effects`, already sorted by
+/// `IndexMap`'s own insertion order from the raw YAML -- Python's own
+/// `sorted(effects)` reorders by path, so this sorts explicitly too.
+pub fn profile_provider_denials(
+    effects: &indexmap::IndexMap<String, Dict>,
+    enabled_adapters: Option<&[String]>,
+) -> Vec<String> {
+    let mut paths: Vec<&String> = effects.keys().collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let token = get(&effects[path], "provider").and_then(Value::as_str)?;
+            let name = provider_token_to_adapter(token)?;
+            let denial = adapter_denial(&name, enabled_adapters)?;
+            Some(format!("profile override for '{path}': {denial}"))
+        })
+        .collect()
+}
+
 /// `allowlist_gate.py::ALLOWLISTS_KEY`'s own value shape
 /// (`{"adapters": [...] | None, "tools": [...] | None}`) --
 /// `install_allowlists`'s own run-time write, here as a typed pair
@@ -289,6 +324,49 @@ mod tests {
     fn a_default_open_allowlist_denies_nothing() {
         assert_eq!(adapter_denial("openai", None), None);
         assert_eq!(tool_denial("shell", None), None);
+    }
+
+    #[test]
+    fn require_adapter_normalizes_before_checking() {
+        let allowed = vec!["scripted".to_string()];
+        assert!(require_adapter(" Scripted ", Some(&allowed)).is_ok());
+        let err = require_adapter("ollama", Some(&allowed)).unwrap_err();
+        assert_eq!(
+            err,
+            "adapter 'ollama' not in enabled_adapters allowlist (enabled: ['scripted'])"
+        );
+    }
+
+    #[test]
+    fn require_adapter_is_default_open_with_no_allowlist() {
+        assert!(require_adapter("anything", None).is_ok());
+    }
+
+    #[test]
+    fn profile_provider_denials_names_the_effect_path() {
+        let mut effects = indexmap::IndexMap::new();
+        let mut override_dict = Dict::new();
+        override_dict.insert(Value::Str("provider".to_string()), Value::from("ollama"));
+        effects.insert("step".to_string(), override_dict);
+        let allowed = vec!["scripted".to_string()];
+        let denials = profile_provider_denials(&effects, Some(&allowed));
+        assert_eq!(
+            denials,
+            vec![
+                "profile override for 'step': adapter 'ollama' not in enabled_adapters allowlist (enabled: ['scripted'])"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn profile_provider_denials_is_empty_when_every_override_is_allowed() {
+        let mut effects = indexmap::IndexMap::new();
+        let mut override_dict = Dict::new();
+        override_dict.insert(Value::Str("provider".to_string()), Value::from("scripted"));
+        effects.insert("step".to_string(), override_dict);
+        let allowed = vec!["scripted".to_string()];
+        assert!(profile_provider_denials(&effects, Some(&allowed)).is_empty());
     }
 
     #[test]

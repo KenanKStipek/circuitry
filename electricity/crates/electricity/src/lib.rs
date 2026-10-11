@@ -17,6 +17,7 @@ use std::path::Path;
 pub mod events;
 pub mod live_state;
 pub mod out;
+pub mod preflight;
 pub mod run;
 pub mod state;
 
@@ -108,6 +109,7 @@ pub fn check_options(
         trust_document: true,
         config_runtime: config_runtime_block(config_path),
         inputs: inputs.clone(),
+        profile_inputs: indexmap::IndexMap::new(),
     }
 }
 
@@ -720,6 +722,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         Ok(cfg) => run_orchestration_with_config(cfg, req, token).await,
         Err(err) => RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(err.0),
             warnings: Vec::new(),
@@ -754,6 +757,14 @@ pub async fn run_orchestration_with_config(
     let store = Store::new();
     state::seed_state(&store, &req.inputs);
 
+    // A loaded `--profile`'s own `out:` (issue #495, lane R) -- `None`
+    // until a profile actually resolves one; every `fail!` from that
+    // point on reports it, matching DESIGN §6.11's "a profile failure's
+    // `--out` is the plain `--out` only" (a failure *before* this is
+    // ever set, including the profile load itself, never has one to
+    // report).
+    let mut resolved_out_path: Option<std::path::PathBuf> = None;
+
     // A pre-execution check failure (every `fail!` call site below)
     // reports the interrupt text/signal instead of the check's own real
     // error whenever *token* was already cancelled by the time the
@@ -783,6 +794,7 @@ pub async fn run_orchestration_with_config(
             };
             return RunResult {
                 ok: false,
+                out_path: resolved_out_path.clone(),
                 state: Some(store.saved(&store.root)),
                 error: Some(error),
                 warnings,
@@ -792,11 +804,12 @@ pub async fn run_orchestration_with_config(
     }
 
     // Step 5: load the document -- a load error still writes --out.
-    let check_options = electricity_compiler::CheckOptions {
+    let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
         config_runtime: cfg.runtime.clone(),
         inputs: req.inputs.clone(),
+        profile_inputs: indexmap::IndexMap::new(),
     };
     let loaded =
         match electricity_compiler::prepare_document(&req.orchestration_path, &check_options) {
@@ -841,17 +854,60 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // `--profile <path>` (issue #495, lane R): loaded right after the
+    // allowlist check and before effective settings (DESIGN §6.11,
+    // `electricity_config::profile`'s own vm-lanes.md row) -- an
+    // explicit path only, never discovered by name. A load/schema/
+    // effect-path-validation failure is the run error, with state
+    // (`fail!`): it has a direct Python equivalent, unlike the two
+    // refusals above.
+    let profile = match &req.profile_path {
+        Some(path) => match electricity_compiler::profile::load_profile(path, &loaded.document) {
+            Ok(profile) => Some(profile),
+            Err(err) => fail!(err.to_string()),
+        },
+        None => None,
+    };
+    if let Some(profile) = &profile {
+        // Profile `inputs:` become the base layer under `-e` (DESIGN
+        // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
+        // own seam) -- re-seeding `state["input"]` again now, the same
+        // way the step-5 reseed above already does, so every failure
+        // from here on reports the profile-layered namespace too, not
+        // only the one `build_input_namespace` (step 10) itself
+        // produces.
+        check_options.profile_inputs = profile
+            .inputs
+            .iter()
+            .filter_map(|(k, v)| k.as_str().map(|k| (k.to_string(), v.clone())))
+            .collect();
+        let (restored_input, _) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        state::replace_input_namespace(&store, restored_input);
+    }
+
     // Step 6 (part 1): effective settings -- model/adapter/plugins/
     // runtime merge and `sources`, *document_name* naming the "Applied
     // host settings" notice exactly as `resolve_effective_settings`'s
-    // own parameter of the same name does.
+    // own parameter of the same name does. `effective_settings_with_
+    // profile` layers a loaded profile's own `model`/`adapter`/`out`/
+    // `persistence` in at Python's own precedence (issue #495).
     let document_name = req.orchestration_path.file_name().and_then(|n| n.to_str());
-    let mut effective =
-        match electricity_config::effective_settings(&cfg, &loaded.document, document_name) {
-            Ok(effective) => effective,
-            Err(err) => fail!(err.0),
-        };
+    let mut effective = match electricity_config::effective_settings_with_profile(
+        &cfg,
+        &loaded.document,
+        document_name,
+        profile.as_ref(),
+    ) {
+        Ok(effective) => effective,
+        Err(err) => fail!(err.0),
+    };
     warnings.extend(effective.warnings.clone());
+    // A loaded profile's own `out:` (DESIGN §6.11) -- the plain `--out`
+    // still outranks it (set below, at the same point the existing
+    // `sources["out"] = "cli"` override already runs); every `fail!`
+    // from here on reports whichever of the two actually applies.
+    resolved_out_path = effective.out.clone();
 
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
     // the concurrency-config-error check, persistence validation
@@ -864,6 +920,40 @@ pub async fn run_orchestration_with_config(
     // a step-10 failure itself.
     if let Err(err) = electricity_compiler::pre_input_checks(&loaded, effective.runtime.as_ref()) {
         fail!(err.to_string());
+    }
+
+    // Profile routing pins and provider denials (issue #495, lane R):
+    // run only when `profile.effects` is non-empty, after concurrency
+    // and persistence validation (`pre_input_checks` bundles complexity,
+    // concurrency and persistence into one call -- not this lane's own
+    // seam to split, so this sits after all three rather than strictly
+    // between concurrency and persistence as `cli/runtime_shim.py` has
+    // it; the PR body records this divergence, visible only when a
+    // document fails both at once).
+    if let Some(profile) = &profile {
+        if !profile.effects.is_empty() {
+            let routing =
+                electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
+                    .map(|c| c.routing)
+                    .unwrap_or_default();
+            if let Err(err) = electricity_config::validate_profile_routing_pins(
+                &profile.effects,
+                &routing,
+                &profile.name,
+            ) {
+                fail!(err.to_string());
+            }
+            let profile_denials = electricity_config::profile_provider_denials(
+                &profile.effects,
+                cfg.enabled_adapters.as_deref(),
+            );
+            if !profile_denials.is_empty() {
+                fail!(format!(
+                    "Allowlist enforcement failed: {}",
+                    profile_denials.join("; ")
+                ));
+            }
+        }
     }
 
     // After step 9's own validation: a document/config that actually
@@ -880,6 +970,7 @@ pub async fn run_orchestration_with_config(
     if persistence_is_configured(effective.runtime.as_ref()) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_config_refusal("runtime.persistence")),
             warnings,
@@ -895,6 +986,7 @@ pub async fn run_orchestration_with_config(
             .join(", ");
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
             warnings,
@@ -1117,6 +1209,7 @@ pub async fn run_orchestration_with_config(
     if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_refusal(&refusal)),
             warnings,
@@ -1140,6 +1233,7 @@ pub async fn run_orchestration_with_config(
     ) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(refusal),
             warnings,
@@ -1147,24 +1241,114 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // `cli/runtime_shim.py::run`'s own `_require_resolved_settings`,
-    // deferred to the same relative position ("right before the
-    // adapter is actually built" -- there is no real adapter object to
-    // build yet here, every capability `has_prompt_effects` can see is
-    // still refused above, but the *name* still has to resolve and
-    // fail exactly like `cof run` the moment it doesn't, now that a
-    // `use` document can actually reach this far). Order matters:
-    // Python checks `effective.adapter` first, so a document missing
-    // both reports only the adapter error. `fail!` (not a bare
-    // `state: None` `RunResult`, unlike the two refusals just above,
-    // which are electricity-only preview concepts with no Python
-    // equivalent): this failure has a direct one, and `cof run` writes
-    // `--out` with whatever state existed when it raised.
-    let resolved_adapter_name: String = if has_prompt_effects(&program.root) {
+    // Lane J2's own per-effect profile overrides stand-in (issue
+    // #495, settled ruling 2): until that lane lands, a profile whose
+    // `effects` map is non-empty is refused (preview marker, no
+    // state) here -- the same relative position Python's own profile-
+    // effect-overrides step (#448's run-order list, step 11) sits at,
+    // after the structural/refusal walkers above and before
+    // `needs_real_adapter` below.
+    if let Some(profile) = &profile {
+        if !profile.effects.is_empty() {
+            return RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(format_config_refusal("a profile's per-effect overrides")),
+                warnings,
+                signal: None,
+            };
+        }
+    }
+
+    // Step 12: `needs_real_adapter`/`resolved_adapter` -- a *lenient*
+    // name only (`effective.adapter or ""`, Python's own `:842-856`):
+    // the strict check (`_require_resolved_settings`) is deferred past
+    // preflight below, matching Python's own order, so an unknown
+    // document-level `adapter:` fails with preflight's text, not an
+    // early "no adapter resolved" error it would never actually hit
+    // either (the name *is* present, just unbuildable -- issue #235).
+    let needs_real_adapter = has_prompt_effects(&program.root);
+    let resolved_adapter_name: String = if needs_real_adapter {
+        effective.adapter.clone().unwrap_or_default()
+    } else {
+        "_noop".to_string()
+    };
+
+    // Review P2-3 on PR #454's second review: `electricity_adapters::
+    // build_registry()` replaces a direct `AdapterRegistry::new()`
+    // call -- lane F1/F2's own PR only ever adds a builder line
+    // inside `build_registry()`'s own crate, never touches this file.
+    // Lane F1 (issue #478) has registered `scripted` and `host_claude`
+    // there; moved up from its old position (next to `RunContext`'s
+    // own construction) so preflight and the real adapter build below
+    // can both use it.
+    let adapters = electricity_adapters::build_registry();
+
+    // Settled ruling 3 (issue #495): refuse the whole run, no state,
+    // for any adapter name preflight would check (the document's own
+    // top-level `adapter:`/prompt `provider:`) that Circuitry itself
+    // supports but this build cannot build at all -- never an ordinary
+    // preflight failure. The config's own `default_adapter` is never
+    // walked here (preflight never checks it either); that case is
+    // [`preflight::PlaceholderAdapter`]'s own job, below.
+    if let Some(name) = preflight::unbuildable_known_adapter(&loaded.document, &adapters) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("adapter '{name}'"))),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Step 13: preflight -- always runs (settled ruling 1: no
+    // `--skip-preflight`/`--dry-run` in electricity's own CLI shape).
+    // `config.runtime`, never the merged `effective.runtime` (a
+    // document-level `runtime.adapters.scripted.replies_file` is
+    // invisible to preflight but used by the run).
+    let preflight_results =
+        preflight::run_preflight(&loaded.document, cfg.runtime.as_ref(), &adapters).await;
+    let (hard_results, soft_results) = electricity_config::preflight::classify_preflight_results(
+        &loaded.document,
+        preflight_results,
+        electricity_vm::adapter_names::ADAPTER_NAMES,
+    );
+    let preflight_errors = electricity_config::preflight::format_preflight_errors(&hard_results);
+    if !preflight_errors.is_empty() {
+        fail!(format!(
+            "Preflight failed: {}. Re-run with --skip-preflight to bypass.",
+            preflight_errors.join("; ")
+        ));
+    }
+    warnings.extend(electricity_config::preflight::format_preflight_warnings(
+        &soft_results,
+    ));
+    warnings.extend(preflight::image_asset_warnings(
+        &loaded.document,
+        &resolved_adapter_name,
+        effective.runtime.as_ref(),
+        &adapters,
+    ));
+
+    // Step 14: the adapter build. `cli/runtime_shim.py::run`'s own
+    // `_require_resolved_settings`, deferred to this same relative
+    // position (right before the adapter is actually built) -- Python
+    // checks `effective.adapter` first, so a document missing both
+    // reports only the adapter error. `fail!` (not a bare `state: None`
+    // `RunResult`, unlike every refusal above, which are electricity-
+    // only preview concepts with no Python equivalent): this failure
+    // has a direct one, and `cof run` writes `--out` with whatever
+    // state existed when it raised.
+    let (default_adapter, adapter_timeout_seconds): (
+        Rc<dyn electricity_vm::adapter::Adapter>,
+        u32,
+    ) = if needs_real_adapter {
         let Some(adapter_name) = effective.adapter.as_deref().filter(|s| !s.is_empty()) else {
             fail!(format!(
                 "No adapter resolved for orchestration {}. Set 'adapter' in the orchestration \
-                 or 'default_adapter' in config.json. (adapter source: {})",
+                     or 'default_adapter' in config.json. (adapter source: {})",
                 out::python_path_str(&req.orchestration_path),
                 effective
                     .sources
@@ -1181,7 +1365,7 @@ pub async fn run_orchestration_with_config(
         {
             fail!(format!(
                 "No model resolved for orchestration {}. Set 'model' in the orchestration or \
-                 'default_model' in config.json. (model source: {})",
+                     'default_model' in config.json. (model source: {})",
                 out::python_path_str(&req.orchestration_path),
                 effective
                     .sources
@@ -1190,10 +1374,45 @@ pub async fn run_orchestration_with_config(
                     .unwrap_or("None")
             ));
         }
-        adapter_name.to_string()
+        if let Err(denial) =
+            electricity_config::require_adapter(adapter_name, cfg.enabled_adapters.as_deref())
+        {
+            fail!(denial);
+        }
+        let adapter: Rc<dyn electricity_vm::adapter::Adapter> = match adapters
+            .build(adapter_name, &runtime_config_value)
+        {
+            Ok(built) => Rc::from(built),
+            Err(err) => {
+                let normalized = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+                let known_but_unbuildable = electricity_vm::adapter_names::ADAPTER_NAMES
+                    .contains(&normalized.as_str())
+                    && !adapters.supported_names().contains(&normalized);
+                if known_but_unbuildable {
+                    // Settled ruling 3: reachable only when a
+                    // `use` effect alone makes `needs_real_
+                    // adapter` true (a real `prompt`/model-
+                    // condition effect is still refused
+                    // outright, so `generate` is never
+                    // actually called on this placeholder in
+                    // this milestone).
+                    Rc::new(preflight::PlaceholderAdapter::new(normalized))
+                } else {
+                    fail!(err.message);
+                }
+            }
+        };
+        let timeout = electricity_config::configured_timeout_seconds(
+            adapter_name,
+            effective.runtime.as_ref(),
+        )
+        .and_then(|seconds| u32::try_from(seconds).ok())
+        .unwrap_or(120);
+        (adapter, timeout)
     } else {
-        "_noop".to_string()
+        (Rc::new(electricity_vm::adapter::NoopAdapter), 120)
     };
+    let model_locked = effective.model_locked;
 
     // Step 16: the live-state mirror (first write synchronous and
     // fatal), then EventLog + run_start.
@@ -1232,13 +1451,6 @@ pub async fn run_orchestration_with_config(
 
     let model = effective.model.clone().unwrap_or_default();
     let registry = tool_registry();
-    // Review P2-3 on PR #454's second review: `electricity_adapters::
-    // build_registry()` replaces a direct `AdapterRegistry::new()`
-    // call here, so lane F1/F2's own PR only ever adds a builder line
-    // inside `build_registry()`'s own crate, never touches this file
-    // to wire a real registry into the run. Lane F1 (issue #478) has
-    // since registered `scripted` and `host_claude` there.
-    let adapters = electricity_adapters::build_registry();
     let orchestration_dir: &Path = program
         .document
         .as_ref()
@@ -1259,9 +1471,9 @@ pub async fn run_orchestration_with_config(
         dry_run: false,
         armed: req.armed,
         adapters: &adapters,
-        default_adapter: Rc::new(electricity_vm::adapter::NoopAdapter),
-        model_locked: false,
-        adapter_timeout_seconds: 120,
+        default_adapter,
+        model_locked,
+        adapter_timeout_seconds,
         complexity: &complexity,
         decomposition_depth: 0,
         orchestration_dir,
@@ -1380,6 +1592,7 @@ pub async fn run_orchestration_with_config(
 
     RunResult {
         ok,
+        out_path: resolved_out_path,
         state: Some(final_state),
         error,
         warnings,
