@@ -7,13 +7,16 @@
 //! parent" primitive `core/use.py::_run_isolated` is).
 
 use crate::exec::CtxChain;
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Op, UseOp};
 
 /// Runs a `use` effect: resolves *use_op*'s own `source` (a path, a
 /// named orchestration, or inline YAML), compiles it, and runs it
-/// isolated ([`run_isolated`]) before grafting its outputs back under
-/// *parent*.
+/// isolated ([`run_isolated`], called with `frame.nested(&op.path)` --
+/// the child program's own compiled paths start fresh at `prime`, with
+/// no idea of the parent's own absolute position, exactly the case
+/// [`Frame::nested`]'s own doc comment calls out) before grafting its
+/// outputs back under *parent*.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_use(
     op: &Op,
@@ -21,6 +24,7 @@ pub(crate) async fn execute_use(
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,
@@ -37,6 +41,7 @@ pub(crate) async fn execute_use(
 /// `use` (lane I) and decomposition (lane L2).
 pub async fn run_isolated(
     program: &electricity_bytecode::Program,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,

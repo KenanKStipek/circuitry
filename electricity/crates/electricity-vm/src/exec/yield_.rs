@@ -4,7 +4,7 @@
 //! [`electricity_bytecode::refusal::Supported::yield_`] is `true`.
 
 use crate::exec::CtxChain;
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Op, YieldOp};
 
 /// Runs a `yield` effect: renders *yield_op*'s own `template` (with
@@ -18,6 +18,7 @@ pub(crate) async fn execute_yield(
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,

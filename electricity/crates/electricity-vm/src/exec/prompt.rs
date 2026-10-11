@@ -4,7 +4,7 @@
 //! [`electricity_bytecode::refusal::Supported::prompt`] is `true`.
 
 use crate::exec::CtxChain;
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Op, PromptOp};
 
 /// Runs *prompt* (a `prompt` effect's own compiled fields) against
@@ -13,6 +13,9 @@ use electricity_bytecode::{Op, PromptOp};
 /// `inputs:`/adapter `params:` are read from **raw** (never rendered --
 /// the IR snapshot test in `electricity-compiler`'s own test suite pins
 /// that the compiler already keeps both as `ParamNode::Literal`).
+/// *frame* is [`crate::Frame::effect_path`]'s own input for this
+/// prompt's own retry/fallback chain -- `crate::adapter::CallContext::path`
+/// (the scripted adapter's own reply-queue key).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_prompt(
     op: &Op,
@@ -20,6 +23,7 @@ pub(crate) async fn execute_prompt(
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,

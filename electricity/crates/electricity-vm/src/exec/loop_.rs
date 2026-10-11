@@ -4,12 +4,17 @@
 //! [`electricity_bytecode::refusal::Supported::loop_`] is `true`.
 
 use crate::exec::CtxChain;
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{LoopFlow, LoopSpec, Op, Region};
 use electricity_value::Value;
 
 /// Runs a `loop` effect's own `each:`/`while:` body, chain or tree, as
-/// many passes as *spec*/*max_iterations*/*min_iterations* allow.
+/// many passes as *spec*/*max_iterations*/*min_iterations* allow. Each
+/// pass resolves its own [`electricity_bytecode::LoopId`] placeholder
+/// with [`Frame::with_pass`] -- never [`Frame::nested`] -- including a
+/// concurrent `flow: tree` pass, whose own concurrent instances that
+/// resolution alone already tells apart (`crate::frame`'s own module
+/// doc comment).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_loop(
     op: &Op,
@@ -23,6 +28,7 @@ pub(crate) async fn execute_loop(
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,

@@ -9,7 +9,7 @@
 //! `max_iterations`/`max_effects`).
 
 use crate::exec::CtxChain;
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Op, ReflectorOp};
 
 #[allow(clippy::too_many_arguments)]
@@ -19,6 +19,7 @@ pub(crate) async fn execute_reflector(
     _store: &Store,
     _parent: &NodeRef,
     _ctx_chain: &CtxChain,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _observer: &dyn RunObserver,
     _token: &CancellationToken,

@@ -36,7 +36,7 @@ use super::{
     BoxExecFuture, CtxChain, CtxSource, effect_label, execute_op, interrupted_text, key,
     normalize_labels, store_err, wrap_effect_error,
 };
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{LoopFlow, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use futures::StreamExt;
@@ -67,11 +67,13 @@ pub(crate) fn now_iso() -> String {
 /// always get *ctx_chain* extended with one more [`CtxSource::Live`]
 /// entry for *parent* (never collapsed into a `Value` here: see this
 /// module's own doc comment on why that has to stay live).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_dynamic<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -102,7 +104,8 @@ pub(crate) fn execute_dynamic<'a>(
             .map_err(store_err)?;
         write_dynamic_meta_start(store, &meta_node, run_ctx, flow, op.labels.as_ref());
 
-        let instance = observer.effect_start(&op.path);
+        let effect_path = frame.effect_path(&op.path);
+        let instance = observer.effect_start(&effect_path);
 
         // *ctx_chain* for this dynamic's own children always extends the
         // *inherited* chain with one more live entry for *parent* -- the
@@ -128,6 +131,7 @@ pub(crate) fn execute_dynamic<'a>(
                     &dyn_node,
                     name,
                     &child_chain,
+                    frame,
                     run_ctx,
                     observer,
                     token,
@@ -147,6 +151,7 @@ pub(crate) fn execute_dynamic<'a>(
                     store,
                     &dyn_node,
                     &child_chain,
+                    frame,
                     run_ctx,
                     observer,
                     token,
@@ -190,6 +195,7 @@ pub(crate) fn execute_dynamic<'a>(
                         &dyn_node,
                         name,
                         &child_chain,
+                        frame,
                         run_ctx,
                         observer,
                         &finally_token,
@@ -232,7 +238,7 @@ pub(crate) fn execute_dynamic<'a>(
         };
         store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
 
-        observer.effect_complete(&op.path, instance, reported_error.as_deref());
+        observer.effect_complete(&effect_path, instance, reported_error.as_deref());
 
         if let Some(be) = body_exc {
             let is_cancellation = matches!(be, VmError::Cancelled);
@@ -319,6 +325,7 @@ fn execute_chain<'a>(
     write_node: &'a NodeRef,
     container_name: &'a str,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -329,7 +336,7 @@ fn execute_chain<'a>(
                 return Err(VmError::Cancelled);
             }
             let result = execute_op(
-                child_op, store, write_node, ctx_chain, run_ctx, observer, token,
+                child_op, store, write_node, ctx_chain, frame, run_ctx, observer, token,
             )
             .await;
             // `core/dynamic.py`'s own chain loop calls `store.on_write`
@@ -363,6 +370,7 @@ fn execute_tree<'a>(
     store: &'a Store,
     dyn_node: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -376,8 +384,13 @@ fn execute_tree<'a>(
         let concurrency = std::cmp::min(max_workers, n);
         // `RunObserver::dispatch`'s own declared parameter order is
         // `(path, branches, concurrency)` (`observer.rs`) -- *n* (the
-        // total) first, *concurrency* second.
-        observer.dispatch(&op.path, n, concurrency);
+        // total) first, *concurrency* second. Each branch is named
+        // distinctly by the document itself (lane A's own `Frame`
+        // module doc comment: unlike a loop's own `flow: tree` pass,
+        // an ordinary `dynamic` tree branch's compiled path is already
+        // globally unique), so *frame* passes straight through to every
+        // branch unchanged, never through `Frame::nested`.
+        observer.dispatch(&frame.effect_path(&op.path), n, concurrency);
 
         if n == 0 {
             return Ok(());
@@ -420,6 +433,7 @@ fn execute_tree<'a>(
                         store,
                         branch_node,
                         tree_chain,
+                        frame,
                         run_ctx,
                         observer,
                         token,

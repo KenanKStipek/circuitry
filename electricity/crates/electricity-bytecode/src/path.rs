@@ -69,17 +69,42 @@ impl EffectPath {
     /// first such [`LoopId`] rather than silently emitting a path with a
     /// placeholder still in it or panicking.
     pub fn concretize(&self, pass_indices: &HashMap<LoopId, u32>) -> Result<String, LoopId> {
-        let mut parts = Vec::with_capacity(self.0.len());
+        Ok(self.resolve_passes(pass_indices)?.to_string())
+    }
+
+    /// [`EffectPath::concretize`], structured rather than joined --
+    /// every [`PathSegment::Pass`] placeholder replaced by the
+    /// [`PathSegment::Name`] `concretize` would have formatted it as
+    /// (`iter_<N>`), so the result never carries a `Pass` segment.
+    /// `electricity_vm::Frame::effect_path` (issue #449's gate lane,
+    /// review findings 2/8 on PR #454) uses this instead of
+    /// `concretize` so it can compose a `use`/decomposition child's own
+    /// nesting prefix onto the result by segment, not by string
+    /// surgery.
+    pub fn resolve_passes(&self, pass_indices: &HashMap<LoopId, u32>) -> Result<EffectPath, LoopId> {
+        let mut segments = Vec::with_capacity(self.0.len());
         for segment in &self.0 {
             match segment {
-                PathSegment::Name(name) => parts.push(name.clone()),
+                PathSegment::Name(name) => segments.push(PathSegment::Name(name.clone())),
                 PathSegment::Pass(loop_id) => {
                     let index = pass_indices.get(loop_id).ok_or(*loop_id)?;
-                    parts.push(format!("iter_{index}"));
+                    segments.push(PathSegment::Name(format!("iter_{index}")));
                 }
             }
         }
-        Ok(parts.join("."))
+        Ok(EffectPath(segments))
+    }
+
+    /// `core/effect_identity.py::_without_child_root` -- *self* with one
+    /// leading `_CHILD_ROOT` (`"prime"`) segment stripped, if present;
+    /// every [`EffectPath`] a compiled [`crate::Program`] ever produces
+    /// starts with one (`EffectPath::root`), so this is only ever a
+    /// no-op for a path that was already relative on its own account.
+    pub fn without_child_root(&self) -> EffectPath {
+        match self.0.first() {
+            Some(PathSegment::Name(name)) if name == "prime" => EffectPath(self.0[1..].to_vec()),
+            _ => self.clone(),
+        }
     }
 }
 
@@ -153,6 +178,33 @@ mod tests {
         let path = EffectPath::root().push_pass(loop_id);
         let err = path.concretize(&HashMap::new()).unwrap_err();
         assert_eq!(err, loop_id);
+    }
+
+    #[test]
+    fn resolve_passes_mirrors_concretize_as_an_effect_path() {
+        let loop_id = LoopId(0);
+        let path = EffectPath::root()
+            .push_name("shots")
+            .push_pass(loop_id)
+            .push_name("describe");
+        let mut passes = HashMap::new();
+        passes.insert(loop_id, 2u32);
+        assert_eq!(
+            path.resolve_passes(&passes).unwrap().to_string(),
+            path.concretize(&passes).unwrap()
+        );
+    }
+
+    #[test]
+    fn without_child_root_strips_a_leading_prime_segment() {
+        let path = EffectPath::root().push_name("answer");
+        assert_eq!(path.without_child_root().to_string(), "answer");
+    }
+
+    #[test]
+    fn without_child_root_of_the_bare_root_is_empty() {
+        let path = EffectPath::root();
+        assert_eq!(path.without_child_root().0, Vec::new());
     }
 
     #[test]

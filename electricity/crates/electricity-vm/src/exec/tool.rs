@@ -64,7 +64,7 @@ use crate::params::{
 };
 #[cfg(test)]
 use crate::store::Slot;
-use crate::{CancellationToken, RunContext, RunObserver, VmError};
+use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
 use electricity_tools::{ToolCall, ToolRegistry};
 use electricity_value::{Dict, Value};
@@ -420,6 +420,7 @@ pub async fn execute_tool(
     store: &crate::Store,
     parent: &crate::NodeRef,
     ctx: &Value,
+    frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
@@ -454,7 +455,8 @@ pub async fn execute_tool(
     // start/complete pair unbalanced, exactly as Python's own
     // `AllowlistError` (never caught, so `fire_effect_complete` is never
     // reached either) does.
-    let instance = observer.effect_start(&op.path);
+    let effect_path = frame.effect_path(&op.path);
+    let instance = observer.effect_start(&effect_path);
 
     let max_attempts = tool.retries.max_attempts.max(1);
     let base_backoff_ms = tool.retries.backoff_ms;
@@ -717,7 +719,7 @@ pub async fn execute_tool(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            observer.effect_complete(&op.path, instance, Some(&message));
+            observer.effect_complete(&effect_path, instance, Some(&message));
             // The final store write for this effect (whichever
             // `on_error` branch below actually returns) -- same
             // contract as the per-attempt reset's own `observer.
@@ -738,7 +740,7 @@ pub async fn execute_tool(
                 Value::from(i64::from(attempt_index)),
             );
         }
-        observer.effect_complete(&op.path, instance, None);
+        observer.effect_complete(&effect_path, instance, None);
         observer.write();
         return Ok(());
     }
@@ -922,6 +924,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -988,6 +991,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1031,6 +1035,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1084,6 +1089,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &observer,
             &token,
@@ -1135,6 +1141,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1188,6 +1195,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1231,6 +1239,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1279,6 +1288,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1349,6 +1359,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1405,6 +1416,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1457,6 +1469,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1531,6 +1544,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &observer,
                 &token,
@@ -1649,6 +1663,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1722,6 +1737,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1792,6 +1808,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1879,6 +1896,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -1936,6 +1954,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2008,6 +2027,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2065,6 +2085,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2127,6 +2148,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2195,6 +2217,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,

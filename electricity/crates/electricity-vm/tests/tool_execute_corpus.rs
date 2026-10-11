@@ -302,6 +302,7 @@ async fn golden_corpus_execute_tool() {
             &store,
             &store.root,
             &ctx,
+            &electricity_vm::Frame::root(),
             &run_ctx,
             &NullObserver,
             &token,

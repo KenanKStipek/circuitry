@@ -21,6 +21,7 @@
 pub mod adapter;
 pub mod compose;
 pub mod exec;
+pub mod frame;
 pub mod limiter;
 pub mod observer;
 pub mod params;
@@ -48,6 +49,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 pub use adapter::Adapter;
+pub use frame::Frame;
 
 /// Everything [`execute_root`]'s own tree-walking interpreter (lane B)
 /// and [`exec::tool::run_tool`] (through it) need that isn't the store,
@@ -221,11 +223,13 @@ pub async fn execute_root(
         Value::None => Vec::new(),
         other => vec![exec::CtxSource::Frozen(other.clone())],
     };
+    let frame = Frame::root();
     exec::dynamic::execute_dynamic(
         &program.root,
         store,
         &store.root,
         &chain,
+        &frame,
         run_ctx,
         observer,
         token,

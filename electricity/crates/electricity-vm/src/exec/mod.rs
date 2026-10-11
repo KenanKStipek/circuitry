@@ -19,7 +19,7 @@ pub mod tool;
 pub mod use_;
 pub mod yield_;
 
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
 use electricity_bytecode::{LeafKind, NodeKind, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -251,11 +251,13 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// refused before a real run ever starts (lane A's `first_unsupported`),
 /// so reaching one here is a defect, not a reachable document shape --
 /// reported as [`VmError::NotImplemented`] rather than panicking.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_op<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -265,18 +267,20 @@ pub(crate) fn execute_op<'a>(
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
                 LeafKind::Tool(tool_op) => {
                     let ctx = live_ctx(ctx_chain, store);
-                    tool::execute_tool(op, tool_op, store, parent, &ctx, run_ctx, observer, token)
-                        .await
+                    tool::execute_tool(
+                        op, tool_op, store, parent, &ctx, frame, run_ctx, observer, token,
+                    )
+                    .await
                 }
                 LeafKind::Prompt(prompt_op) => {
                     prompt::execute_prompt(
-                        op, prompt_op, store, parent, ctx_chain, run_ctx, observer, token,
+                        op, prompt_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
                 }
                 LeafKind::Use(use_op) => {
                     use_::execute_use(
-                        op, use_op, store, parent, ctx_chain, run_ctx, observer, token,
+                        op, use_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
                 }
@@ -287,6 +291,7 @@ pub(crate) fn execute_op<'a>(
                         store,
                         parent,
                         ctx_chain,
+                        frame,
                         run_ctx,
                         observer,
                         token,
@@ -295,7 +300,7 @@ pub(crate) fn execute_op<'a>(
                 }
                 LeafKind::Yield(yield_op) => {
                     yield_::execute_yield(
-                        op, yield_op, store, parent, ctx_chain, run_ctx, observer, token,
+                        op, yield_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
                 }
@@ -303,13 +308,15 @@ pub(crate) fn execute_op<'a>(
             NodeKind::Control(region) => match region {
                 Region::If { .. } => {
                     conditional::execute_conditional(
-                        op, store, parent, ctx_chain, run_ctx, observer, token,
+                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
                 }
                 Region::Block { .. } | Region::Parallel { .. } | Region::TryFinally { .. } => {
-                    dynamic::execute_dynamic(op, store, parent, ctx_chain, run_ctx, observer, token)
-                        .await
+                    dynamic::execute_dynamic(
+                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                    )
+                    .await
                 }
                 Region::Loop {
                     spec,
@@ -332,6 +339,7 @@ pub(crate) fn execute_op<'a>(
                         store,
                         parent,
                         ctx_chain,
+                        frame,
                         run_ctx,
                         observer,
                         token,

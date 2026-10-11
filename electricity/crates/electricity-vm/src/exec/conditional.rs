@@ -10,7 +10,7 @@
 
 use super::dynamic::now_iso;
 use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -27,11 +27,13 @@ use std::collections::HashSet;
 /// anything *outside* its own branch loop). [`decide_and_run`] resolves
 /// this chain itself, fresh, every time it is actually needed -- never
 /// once, up front -- see that function's own doc comment for why.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_conditional<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -54,7 +56,8 @@ pub(crate) fn execute_conditional<'a>(
                 let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
                 write_conditional_meta_start(store, &meta, cond, *threshold, op.labels.as_ref());
 
-                let instance = observer.effect_start(&op.path);
+                let effect_path = frame.effect_path(&op.path);
+                let instance = observer.effect_start(&effect_path);
                 let result = decide_and_run(
                     op,
                     cond,
@@ -64,6 +67,7 @@ pub(crate) fn execute_conditional<'a>(
                     &node,
                     Some((&node, &meta)),
                     ctx_chain,
+                    frame,
                     run_ctx,
                     observer,
                     token,
@@ -77,13 +81,13 @@ pub(crate) fn execute_conditional<'a>(
                 // still returns `Ok`) and for an interrupted branch
                 // (`decide_and_run` returns `Err(Cancelled)`, but
                 // meta.error is never written for a cancellation).
-                observer.effect_complete(&op.path, instance, node_error(store, &meta).as_deref());
+                observer.effect_complete(&effect_path, instance, node_error(store, &meta).as_deref());
                 result
             }
             None => {
                 decide_and_run(
-                    op, cond, then_, else_, store, parent, None, ctx_chain, run_ctx, observer,
-                    token,
+                    op, cond, then_, else_, store, parent, None, ctx_chain, frame, run_ctx,
+                    observer, token,
                 )
                 .await
             }
@@ -186,6 +190,7 @@ async fn decide_and_run<'a>(
     branch_parent: &'a NodeRef,
     named: Option<(&'a NodeRef, &'a NodeRef)>,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -253,6 +258,7 @@ async fn decide_and_run<'a>(
             store,
             branch_parent,
             &step_chain,
+            frame,
             run_ctx,
             observer,
             token,

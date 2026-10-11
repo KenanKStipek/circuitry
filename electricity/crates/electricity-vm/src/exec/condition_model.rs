@@ -13,8 +13,8 @@
 //! `true`.
 
 use crate::adapter::GenerateResult;
-use crate::{CancellationToken, RunContext, VmError};
-use electricity_bytecode::TemplateText;
+use crate::{CancellationToken, Frame, RunContext, VmError};
+use electricity_bytecode::{EffectPath, TemplateText};
 use electricity_value::Value;
 
 /// A model-mode `if`'s/`while`'s own answer: `core/answers.py::
@@ -27,10 +27,16 @@ pub struct ModelConditionOutcome {
 }
 
 /// Renders *template*, dispatches it through *run_ctx*'s own default
-/// adapter, and parses the reply as a yes/no answer.
+/// adapter, and parses the reply as a yes/no answer. *path* is this
+/// transparent condition's own container path (`Frame::effect_path`'s
+/// result, `None` passed to `core/effect_identity.py::call_path` for a
+/// transparent `if`/`while`) -- lane G2's own
+/// `crate::adapter::CallContext::path` once it wires this stub in.
 pub async fn evaluate_model_condition(
     template: &TemplateText,
     _ctx: &Value,
+    _path: &EffectPath,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _token: &CancellationToken,
 ) -> Result<ModelConditionOutcome, VmError> {
@@ -47,10 +53,14 @@ pub struct ModelExpectOutcome {
     pub generated: GenerateResult,
 }
 
+/// *path* is the `tool`/`prompt` effect's own path this `expect:`
+/// belongs to -- [`evaluate_model_condition`]'s own doc comment.
 pub async fn evaluate_model_expect(
     template: &TemplateText,
     _value: &Value,
     _ctx: &Value,
+    _path: &EffectPath,
+    _frame: &Frame,
     _run_ctx: &RunContext<'_>,
     _token: &CancellationToken,
 ) -> Result<ModelExpectOutcome, VmError> {
