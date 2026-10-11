@@ -34,14 +34,24 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   project, environment) exactly as `cof run` would. The plan osp compiles
   from the document uses the same `config.json`/`-e` pair passed on the
   command line (`electricity::check_options`, the exact options a real
-  `electricity <config> <doc> -e k=v...` run would check it against) —
-  **osp does not reproduce `cof`'s own config discovery**, so a document
-  that relies on a `group:`/`concurrency_groups` defined only in the
-  global or project `circuitry.config.json` layer, not in an explicit
-  `config.json` given here, still falls back to no plan, on either engine.
-  `osp watch --plan do-thing.yml` takes its own `--config`/`-e` for the
-  same reason, independent of whatever the watched run itself was started
-  with.
+  `electricity <config> <doc> -e k=v...` run would check it against). With
+  no `config.json` given here either, osp now mirrors `cof`'s own
+  discovery for the plan too: `CIRCUITRY_CONFIG`, if set, replaces
+  discovery entirely (the same precedence `cof run` itself uses);
+  otherwise the global config (`~/.config/circuitry/config.json`) and a
+  *trusted* project `circuitry.config.json`/`config.json` found in osp's
+  own working directory are deep-merged the same way `cof run` layers
+  them (`cof trust` still governs whether a discovered project config
+  applies at all). A document whose plan depends on a
+  `group:`/`concurrency_groups` defined only there no longer falls back
+  to no plan. `CIRCUITRY_*` per-setting environment overlays
+  (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, ...) still apply on top once
+  there's a file for them to layer onto, the same as `cof run`. An
+  explicit `config.json` given here already wins over all of the above,
+  same as `cof run` itself. `osp watch --plan do-thing.yml` takes its own
+  `--config`/`-e` for the same reason, independent of whatever the
+  watched run itself was started with, and gets the same discovery with
+  neither.
 - `--engine electricity` needs a config (electricity has no config
   discovery yet). For a document outside electricity's current scope, it
   shows electricity's own preview-marker refusal and exit code, the same
@@ -63,12 +73,18 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   stops the watch.
 - A document that fails to compile (or an engine whose compiler is still a
   stub) falls back to a plan-free run: rows come only from what's observed.
-- `osp watch <dir>` without `--plan` cannot yet tell an `if`/loop container
-  from a leaf by its own `meta` shape the instant its *first* observation
-  arrives, so a container can briefly print its own `▶`/`✓` the way a live
-  `osp <doc>` run of the same document never does (it already has a
-  compiled plan from the start). Pass `--plan do-thing.yml` to `osp watch`
-  for the same output a live run gives.
+- `osp watch <dir>` without `--plan` detects an `if`/loop container from
+  the freshest state it has for that path (`meta.mode` for an `if`,
+  `meta.flow` for a dynamic) before printing an event line for it, even
+  within the very same poll tick its own state first appears in -- the
+  case that matters when `watch` attaches to a run already under way or
+  already finished. A container whose own `start` event is tailed in a
+  *live* run before its state has been written even once yet (no entry
+  for that path at all, same tick or earlier) still can't be told from a
+  leaf, so it can briefly print its own `▶`/`✓` the way a live `osp <doc>`
+  run of the same document never does (it already has a compiled plan
+  from the start). Pass `--plan do-thing.yml` to `osp watch` for the same
+  output a live run gives.
 - The first Ctrl-C forwards `SIGINT` to the engine's process group and logs
   a cancelling notice; a second forwards it again; still running 10s later,
   `osp` sends `SIGKILL`. `SIGTERM`/`SIGHUP` are forwarded the same way. `osp`

@@ -151,10 +151,25 @@ pub fn wait_with_timeout_capturing_stdout(
         let _ = stdout_pipe.read_to_string(&mut buf);
         let _ = tx.send(buf);
     });
+    // Issue #433's comments: every caller of this helper spawns an
+    // `osp` whose own stderr is piped too (`osp_command`), and this
+    // helper otherwise never reads it -- a child that writes more
+    // than a pipe buffer's worth to stderr would block on the write
+    // end forever, with no timeout of its own. Drained on its own
+    // thread and discarded; a caller that needs the text itself uses
+    // `wait_with_timeout_capturing_stdout_and_stderr` instead.
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let (stderr_done_tx, stderr_done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        let _ = stderr_done_tx.send(());
+    });
     let status = wait_with_timeout(child, timeout);
     let stdout = rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|_| String::from("<stdout reader thread did not finish>"));
+    let _ = stderr_done_rx.recv_timeout(Duration::from_secs(5));
     (status, stdout)
 }
 
@@ -258,6 +273,44 @@ pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// never appears in a process's own argv, so a `pgrep -f` against it
 /// can never match anything regardless of whether a process actually
 /// survived (#424 review finding F10).
+/// Every `osp-<pid>-<nanos>` entry directly under the real temp
+/// directory right now (`unique_run_dir`'s own default-`--out-dir`
+/// naming) -- a before/after diff around one test's own osp spawn(s)
+/// (comment 1 on #433), rather than a bare "is it empty" check on the
+/// whole temp directory, since other processes on the same machine
+/// may have their own `osp-*` directories there at the same time.
+pub fn snapshot_osp_dirs() -> std::collections::HashSet<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("osp-"))
+        })
+        .collect()
+}
+
+/// Asserts this test's own osp spawn(s) left no *new* `osp-*` run
+/// directory behind in the real temp directory, compared to a
+/// [`snapshot_osp_dirs`] taken before they ran -- every e2e test that
+/// spawns `osp run` passes its own `--out-dir` precisely so this never
+/// finds one; it exists to catch a future test that forgets to.
+pub fn assert_no_new_osp_dirs(before: &std::collections::HashSet<PathBuf>) {
+    let after = snapshot_osp_dirs();
+    let new: Vec<&PathBuf> = after.difference(before).collect();
+    assert!(
+        new.is_empty(),
+        "this test left new osp-* run director{} behind in {:?}: {new:?} \
+         -- every osp run in an e2e test must pass its own --out-dir",
+        if new.len() == 1 { "y" } else { "ies" },
+        std::env::temp_dir()
+    );
+}
+
 pub fn assert_no_leftover_process(needle: &Path) {
     std::thread::sleep(Duration::from_millis(300));
     let ps = Command::new("pgrep")
