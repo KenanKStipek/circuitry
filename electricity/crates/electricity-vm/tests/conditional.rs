@@ -9,7 +9,7 @@ use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
     CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic, json_registry,
-    json_tool_leaf, model_if, run_ctx, tool_leaf, tree_dynamic,
+    json_tool_leaf, model_if, refused_use_leaf, run_ctx, tool_leaf, tree_dynamic,
 };
 
 fn root_path() -> EffectPath {
@@ -171,6 +171,66 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
                 Some(format!("prime: inner: {TOOL_FAIL_TEXT}"))
             ),
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_refused_branch_inside_a_named_if_still_writes_meta_and_fires_the_end_event() {
+    // Orchestrator ruling R1 on PR #462: `VmError::Refused` is fatal
+    // for *control* (never absorbed by `on_error`, never retried) but
+    // recorded exactly like an ordinary failure for *recording*
+    // purposes -- `value`/`meta.error` (the refusal text, with no name
+    // prefix added), `completed_at`, and the `end` event's own error
+    // text -- on every container on the path to it, a named `if`
+    // included (`VmError::is_fatal`'s own doc comment).
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![cel_if(
+            root_path().push_name("gate"),
+            Some("gate"),
+            "true",
+            OnError::Fail,
+            vec![refused_use_leaf(
+                root_path().push_name("gate").push_name("child"),
+                "child",
+                OnError::Fail,
+            )],
+            None,
+        )],
+    );
+    let (store, observer, result) = run(root).await;
+    let err = result.expect_err("a refused branch must still fail the run");
+    assert!(matches!(err, VmError::Refused { .. }), "got {err:?}");
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let gate = as_dict(get(prime, "gate").unwrap());
+    let meta = as_dict(get(gate, "meta").unwrap());
+    let error_text = match get(meta, "error") {
+        Some(Value::Str(text)) => text.clone(),
+        other => panic!("expected a string meta.error, got {other:?}"),
+    };
+    assert!(
+        error_text.contains("use child __test_only_refused__"),
+        "meta.error must carry the refusal text with no name prefix: {error_text}"
+    );
+    assert!(
+        matches!(get(meta, "completed_at"), Some(Value::Str(_))),
+        "completed_at must be set, not left null: {:?}",
+        get(meta, "completed_at")
+    );
+
+    let events = observer.events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::Complete(path, Some(text))
+                if path == "prime.gate" && text.contains("use child __test_only_refused__")
+        )),
+        "the end event must report the refusal text: {events:?}"
     );
 }
 

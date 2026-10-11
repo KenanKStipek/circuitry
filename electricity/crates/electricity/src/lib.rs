@@ -160,7 +160,7 @@ pub fn dump_ir(
 // run_orchestration -- issue #431's run-wiring steps 1-19
 // ---------------------------------------------------------------------
 
-use electricity_bytecode::{EffectPath, Refusal, RefusalReason, first_unsupported};
+use electricity_bytecode::{EffectPath, first_unsupported, format_refusal};
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
@@ -217,45 +217,6 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
         registry.register(Box::new(electricity_tools::test_tools::FailTool));
     }
     registry
-}
-
-/// `electricity_bytecode::RefusalReason` -> the human-readable half of
-/// the refusal message [`format_refusal`] builds (issue #431's gate
-/// lane: "the refusal message keeps the existing preview marker phrase
-/// and adds the effect path and the reason").
-fn refusal_reason_text(reason: &RefusalReason) -> String {
-    match reason {
-        RefusalReason::Prompt => "a prompt effect".to_string(),
-        RefusalReason::Loop => "a loop effect".to_string(),
-        RefusalReason::Use => "a use effect".to_string(),
-        RefusalReason::Reflector => "a reflector effect".to_string(),
-        RefusalReason::Yield => "a yield effect".to_string(),
-        RefusalReason::ModelCondition => "an if/while condition in mode: model".to_string(),
-        RefusalReason::ModelExpect => "an expect: in mode: model".to_string(),
-        RefusalReason::DeclaredPrompts => "a document that declares prompts:".to_string(),
-        RefusalReason::UnsupportedToolProvider(provider) => {
-            format!("a tool effect with provider {provider:?}")
-        }
-        RefusalReason::PartialReference => "an unexpanded {{> name}} partial reference".to_string(),
-        RefusalReason::DocumentAdapter(adapter) => format!(
-            "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
-        ),
-        RefusalReason::ComplexityEnabled => {
-            "a run whose effective config enables complexity scoring, routing or decomposition"
-                .to_string()
-        }
-    }
-}
-
-/// The exact text a refusal reports: the preview marker phrase (kept so
-/// the conformance runner's "refusal keeps the preview marker" skip
-/// rule keeps working), the effect path, and the reason.
-fn format_refusal(refusal: &Refusal) -> String {
-    format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: {} is {}; use `cof run` instead",
-        refusal.path,
-        refusal_reason_text(&refusal.reason)
-    )
 }
 
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
@@ -520,6 +481,18 @@ impl RunObserver for Observer<'_> {
             mirror.mark_pending();
         }
     }
+
+    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+        if let Some(mirror) = self.live_state {
+            mirror.graft_child_write(node_path, snapshot);
+        }
+    }
+
+    fn clear_graft(&self, node_path: &EffectPath) {
+        if let Some(mirror) = self.live_state {
+            mirror.clear_graft(node_path);
+        }
+    }
 }
 
 /// `state.setdefault("runtime", {}).setdefault("last_run", {})`, then
@@ -757,8 +730,20 @@ pub async fn run_orchestration_with_config(
 
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
-    // same position `runtime_shim.run` checks it in.
-    let allow_errors = electricity_config::check_allowlist(&loaded.document, &cfg);
+    // same position `runtime_shim.run` checks it in. Lane I
+    // prerequisites (issue #448, item U4(b)): `electricity_compiler::
+    // use_children::allowlist_denials` walks every literal `use` child
+    // reachable from the document too (path and inline alike),
+    // `cli/allowlist.py::check_allowlist`'s own shape -- a document
+    // whose own text is clean but whose `use` child names a denied
+    // adapter/tool is rejected here, by this allowlist's own denial
+    // text, rather than only later by the capability refusal below.
+    let allow_errors = electricity_compiler::use_children::allowlist_denials(
+        &loaded.document,
+        Some(&req.orchestration_path),
+        cfg.enabled_adapters.as_deref(),
+        cfg.enabled_tools.as_deref(),
+    );
     if !allow_errors.is_empty() {
         fail!(format!(
             "Allowlist enforcement failed: {}",
@@ -1028,19 +1013,45 @@ pub async fn run_orchestration_with_config(
     let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
         .unwrap_or_default();
 
+    // This build's own capability set -- resolved once, here, so
+    // `run_ctx.supported` below carries the exact same value the
+    // refusal walker just checked the top-level document against,
+    // rather than a second, possibly-drifting call to `Supported::
+    // current` at the `RunContext` construction site.
+    let supported = electricity_bytecode::Supported::current(extra_supported_providers());
+
     // Lane A's own refusal walker (issue #408's gate lane), wired in
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(
-        &program,
-        complexity.enabled(),
-        &electricity_bytecode::Supported::current(extra_supported_providers()),
-    ) {
+    if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
         return RunResult {
             ok: false,
             state: None,
             error: Some(format_refusal(&refusal)),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Lane I prerequisites (issue #448, item U4(a)): the same walker,
+    // now also run against every literal `use` path child statically
+    // reachable from the document -- a path-`use` child is itself
+    // compiled and checked at run time (lane I), so this is a static
+    // *prediction* of that check, not a replacement for it; inert
+    // under M0 (`use` is refused first, above, before this is ever
+    // reached). No state is written for this refusal either, same as
+    // the top-level one just above.
+    if let Some(refusal) = electricity_compiler::use_children::first_refused_child(
+        &loaded.document,
+        Some(&req.orchestration_path),
+        complexity.enabled(),
+        &supported,
+    ) {
+        return RunResult {
+            ok: false,
+            state: None,
+            error: Some(refusal),
             warnings,
             signal: None,
         };
@@ -1118,6 +1129,7 @@ pub async fn run_orchestration_with_config(
         declared_prompts: &program.prompts,
         effect_names: &program.effect_names,
         display_depth: 0,
+        supported,
     };
 
     // Step 17/18: execute the root, then the success or failure tail.

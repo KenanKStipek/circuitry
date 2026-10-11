@@ -1406,6 +1406,53 @@ above, and the `except BaseException` around `finally:` in `core/dynamic.py`
 §6.4) handles SIGTERM identically to SIGINT with zero additional branching —
 only the **exit code** differs (§8.4).
 
+**electricity-only: mid-run refusal (M1 lane I, no Python equivalent).**
+Circuitry never refuses content — every effect type above either runs or
+raises a real error. electricity's own `use` (§5.3) compiles its child
+document only once the run actually reaches it, so the up-front refusal
+walker can never see that child's content ahead of time. M1 lane I
+prerequisites (issue #448, item U4(a)) narrow that gap for one case only:
+`electricity`'s own run wiring also walks every literal `use: {path:}`
+child statically reachable from the document, compiles each one the same
+way the parent document was compiled, and runs the same up-front refusal
+check against it (`electricity_compiler::use_children::
+first_refused_child`) — a static *prediction*, inert under M0 (`use` is
+refused outright, first, while its own flag is off). An inline `use`'s own
+rendered YAML is explicitly out of scope for that prediction: its final
+content doesn't exist until its own Mustache tags render, so only lane I's
+own per-child runtime check (below) can ever see it, the same gap that
+also applies to a reflector's generated effects and a decomposition plan,
+wherever a later lane compiles one of those into something it then
+executes. `electricity_vm::VmError::Refused` is
+electricity's own answer: the VM checks a freshly compiled child the same
+way the top-level document was already checked, and refuses it the same
+way if it finds something unsupported, but only once execution actually
+reaches it, not before the run starts. It carries the `Refusal` found plus
+the child document's own label.
+
+**Fatal for control, like a cancellation; recorded like an ordinary
+failure, unlike one (orchestrator ruling R1 on PR #462).** Every
+container on the path to a `VmError::Refused` — a named `if`, a `dynamic`
+chain or tree — bypasses `on_error`/retries entirely for it and never
+wraps it with an effect-path prefix, exactly the same as `VmError::
+Cancelled`; a tree branch that refuses also stops that tree from
+dispatching any further queued branches, whatever its own `stop_on_error`
+says. But unlike a cancellation, every one of those containers still
+*records* it exactly as it would an ordinary failure: `value`, `meta.error`
+(the refused effect's own `meta.error` is the same preview-marker text an
+up-front refusal would show, `electricity_bytecode::format_refused_child`,
+naming the child document — never a name-prefixed wrap), `completed_at`,
+and the `end` event's own error text, all written on every container
+above it too, up to and including the document root. `finally:` still
+runs regardless (a capability refusal is not a signal arriving mid-effect;
+nothing stops `finally:` itself from completing normally), and the run's
+own exit code/text is an ordinary failure (exit 1, `--out`/`--events`/
+`--live-state` written as for any other failed run), never the
+signal-only wording this section and §8.4 reserve for `VmError::
+Cancelled`. `electricity_vm::VmError::is_fatal()`'s own doc comment is the
+normative statement of this split; lane H's loop containers and lane I's
+`use` both copy it rather than re-deriving it per effect type.
+
 ---
 
 ## 7. Concurrency

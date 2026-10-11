@@ -320,12 +320,13 @@ async fn decide_and_run<'a>(
                 };
             }
             Err(e) => {
-                failure = Some(match e {
-                    VmError::Cancelled => e,
-                    other => match &child_op.name {
-                        Some(name) => VmError::Message(format!("{name}: {other}")),
-                        None => other,
-                    },
+                failure = Some(if e.is_fatal() {
+                    e
+                } else {
+                    match &child_op.name {
+                        Some(name) => VmError::Message(format!("{name}: {e}")),
+                        None => e,
+                    }
                 });
                 break;
             }
@@ -335,7 +336,16 @@ async fn decide_and_run<'a>(
     if let Some(err) = failure {
         // Python's own outer `except Exception` (never `BaseException`)
         // around the whole branch loop: a cancellation propagates raw,
-        // with no `value`/`meta.error` write at all.
+        // with no `value`/`meta.error` write at all. `VmError::Refused`
+        // (M1 lane I, new: no Python equivalent) is fatal the same way
+        // -- never absorbed, never retried -- but is *not* Cancelled:
+        // orchestrator ruling R1 on PR #462 treats a refusal as a
+        // failure for recording purposes, same as an ordinary one
+        // (`value`/`meta.error`/`completed_at` all written, the `end`
+        // event's own error text read off `meta.error` by the caller's
+        // `node_error` just as for any other failure), and fatal only
+        // for control purposes (`on_error`/retries never catch it, and
+        // it still propagates raw here).
         if matches!(err, VmError::Cancelled) {
             return Err(err);
         }

@@ -25,6 +25,9 @@
 //!   every later lane applies the same one.
 //! - [`refusal`] — [`first_unsupported`]: the first effect path a
 //!   compiled `Program` has that the M0-H VM (issue #431) cannot run.
+//! - [`refusal_text`] — [`refusal_text::format_refusal`]/
+//!   [`refusal_text::format_refused_child`]: the preview-marker text a
+//!   [`refusal::Refusal`] renders as, up front or mid-run.
 //!
 //! # Which Python field lives where
 //!
@@ -80,6 +83,7 @@ pub mod param;
 pub mod path;
 pub mod program;
 pub mod refusal;
+pub mod refusal_text;
 pub mod region;
 pub mod template;
 
@@ -92,5 +96,6 @@ pub use param::ParamNode;
 pub use path::{EffectPath, LoopId, PathSegment};
 pub use program::{DocumentInfo, Program};
 pub use refusal::{Refusal, RefusalReason, Supported, first_unsupported};
+pub use refusal_text::{format_refusal, format_refused_child, refusal_reason_text};
 pub use region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
 pub use template::{Escape, TemplateText};

@@ -170,6 +170,7 @@ pub mod reflector_prime;
 pub mod schema_instance;
 pub mod state_ns;
 pub mod structural;
+pub mod use_children;
 
 pub use compile::compile_document;
 pub use digest::document_content_digest;
