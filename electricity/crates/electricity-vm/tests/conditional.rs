@@ -214,7 +214,7 @@ async fn a_refused_branch_inside_a_named_if_still_writes_meta_and_fires_the_end_
         other => panic!("expected a string meta.error, got {other:?}"),
     };
     assert!(
-        error_text.contains("use child __test_only_refused__"),
+        error_text.contains("use child inline: prime.unsupported is a prompt effect"),
         "meta.error must carry the refusal text with no name prefix: {error_text}"
     );
     assert!(
@@ -228,7 +228,7 @@ async fn a_refused_branch_inside_a_named_if_still_writes_meta_and_fires_the_end_
         events.iter().any(|e| matches!(
             e,
             Event::Complete(path, Some(text))
-                if path == "prime.gate" && text.contains("use child __test_only_refused__")
+                if path == "prime.gate" && text.contains("use child inline: prime.unsupported is a prompt effect")
         )),
         "the end event must report the refusal text: {events:?}"
     );

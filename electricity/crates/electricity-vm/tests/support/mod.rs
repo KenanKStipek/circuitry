@@ -112,23 +112,64 @@ pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, Para
     }
 }
 
-/// A `use` leaf whose own `source` matches `exec::use_::execute_use`'s
-/// own test-only sentinel path -- its stub recognizes it and returns
-/// `electricity_vm::VmError::Refused` (M1 lane I prerequisites, issue
-/// #448, item U3) instead of its ordinary `NotImplemented`, so a test
-/// can exercise that variant's propagation through a real, compiled
-/// `Op` tree.
+/// A `use` leaf whose own inline child names a `prompt` effect --
+/// refused every time (`Supported::prompt` stays `false` until lane G
+/// lands), so `exec::use_::execute_use`'s own real `first_unsupported`
+/// check against the freshly-compiled child produces a real
+/// `electricity_vm::VmError::Refused`, exercising that variant's
+/// propagation through a real, compiled `Op` tree without depending on
+/// a filesystem child or a test-only sentinel (M1 lane I, issue #469 --
+/// replaces the deleted `__test_only_refused__` sentinel in
+/// `exec/use_.rs`).
 pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
+    let inline_yaml = "effects:\n  - type: prompt\n    name: unsupported\n    template: hi\n";
     Op {
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
-            source: UseSource::Path("__test_only_refused__".to_string()),
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
             inputs: None,
             outputs: None,
             validate: true,
             retries: RetryPolicy::default(),
             expect: None,
+            description: None,
+        }))),
+        on_error,
+        labels: None,
+        enabled: true,
+    }
+}
+
+/// A `use` leaf, every field explicit -- the general builder M1 lane
+/// I's own `tests/use_effect.rs` needs, [`refused_use_leaf`]'s own
+/// general form.
+#[allow(clippy::too_many_arguments)]
+pub fn use_leaf(
+    path: EffectPath,
+    name: &str,
+    source: UseSource,
+    inputs: Option<ParamNode>,
+    outputs: Option<IndexMap<String, String>>,
+    validate: bool,
+    retries: RetryPolicy,
+    expect: Option<electricity_bytecode::ExpectCondition>,
+    on_error: OnError,
+) -> Op {
+    Op {
+        path,
+        name: Some(name.to_string()),
+        kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            source,
+            inputs,
+            outputs,
+            validate,
+            retries,
+            expect,
             description: None,
         }))),
         on_error,
@@ -299,6 +340,14 @@ pub enum Event {
     Complete(String, Option<String>),
     Dispatch(String, usize, usize),
     Write,
+    /// [`RunObserver::graft_child_write`] -- the node path, and the
+    /// grafted snapshot rendered through its own `Debug` text (the
+    /// snapshot's exact shape is a child `Store::saved` tree, not
+    /// worth giving `Event` its own `Value`-carrying variant just for
+    /// the handful of tests that look at it at all).
+    Graft(String, String),
+    /// [`RunObserver::clear_graft`].
+    ClearGraft(String),
 }
 
 #[derive(Default)]
@@ -346,6 +395,18 @@ impl RunObserver for RecordingObserver {
 
     fn write(&self) {
         self.events.borrow_mut().push(Event::Write);
+    }
+
+    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+        self.events
+            .borrow_mut()
+            .push(Event::Graft(node_path.to_string(), format!("{snapshot:?}")));
+    }
+
+    fn clear_graft(&self, node_path: &EffectPath) {
+        self.events
+            .borrow_mut()
+            .push(Event::ClearGraft(node_path.to_string()));
     }
 }
 
