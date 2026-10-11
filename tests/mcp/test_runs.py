@@ -1004,3 +1004,48 @@ def test_unnamed_tree_loop_nested_inside_a_named_tree_loop_completes(
         mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r-{pid[:4]}")
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status
+
+
+def test_use_child_with_a_named_tree_loop_completes_without_exception(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """#483: a `use` child's own named `flow: tree` loop fires
+    `concurrent_dispatch`/`branch_settled` through `core/use.py`'s
+    `_namespaced_dispatch_cb`/`_namespaced_branch_settled_cb` wrappers
+    rather than the child store's raw, unwrapped callbacks. `RunManager`
+    ignores the path value either way (`_on_concurrent_dispatch`/
+    `_on_branch_settled` above only ever use the counts), so this only
+    guards against an exception escaping the wrapper and wedging the run —
+    the path value itself is covered by the `use-child-tree-dispatch-paths`
+    conformance case and `tests/core/test_use_dispatch_namespacing.py`."""
+    p = _write_yml(tmp_path, "use_child_tree_loop.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: use
+            name: sub
+            inline: |
+              effects:
+                - type: loop
+                  name: fan
+                  flow: tree
+                  max_concurrency: 2
+                  each:
+                    in: input.items
+                    as: item
+                  body:
+                    - type: prompt
+                      name: step
+                      template: "ask"
+            inputs:
+              items: {from: input.items}
+    """)
+    run = mgr.start_run(
+        orchestration_path=p, initial_state={"items": ["a", "b"]},
+    )
+
+    assert _wait_until(lambda: len(run.pending_prompts) == 2, timeout=2.0)
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r-{pid[:4]}")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status

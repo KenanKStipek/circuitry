@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3 / Section 5.4",
+  "description": "A use child containing a flow: tree loop (#483), run in five positions -- top level, inside a chain each, inside a tree each, inside an if branch, and with an outputs: mapping -- plus a grandchild use and a tree loop nested inside a tree loop within the child. Every dispatch and branch_settled event must carry the absolute path the loop's own start/end events use, never the child store's own unnamespaced prime.<loop> (the rule settled in #470/#475).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

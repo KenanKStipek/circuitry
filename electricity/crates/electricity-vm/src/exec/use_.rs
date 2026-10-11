@@ -78,9 +78,7 @@ use crate::observer::InstanceId;
 use crate::params::ParamsCtx;
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
-use electricity_bytecode::{
-    EffectPath, ExpectCondition, OnError, Op, PathSegment, Program, UseOp, UseSource,
-};
+use electricity_bytecode::{EffectPath, ExpectCondition, OnError, Op, Program, UseOp, UseSource};
 use electricity_value::pycompat::PyExc;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -1368,22 +1366,15 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.effect_complete(path, instance, error);
     }
 
-    // `core/use.py`'s own child `Store` is handed `concurrent_dispatch`
-    // straight from the parent, un-namespaced (`use.py:969`); the path a
-    // dispatch event carries comes from that child store's own
-    // `effect_path`, always `prime.<name>` relative to the child's own
-    // root, never aware of the `use` node it runs under
-    // (`effect_identity.py::nested_container` only ever sets the
-    // call-path contextvar, not `concurrent_dispatch`'s own path
-    // argument). This crate's own child [`Frame`] composes every path
-    // through [`Frame::effect_path`] instead (so every *other* hook
-    // forwards correctly namespaced) -- *dispatch* alone has to be
-    // rewritten back to what the child's own unnamespaced `prime`-
-    // relative path would have been, matching on whole
-    // [`electricity_bytecode::PathSegment`]s rather than string surgery.
+    // A child loop's `dispatch` must carry the same absolute path its
+    // own `start`/`end` events use (#483, matching `core/use.py`'s
+    // `_namespaced_dispatch_cb`) -- and like every other hook here,
+    // *path* already is that path: it comes from this crate's own
+    // child [`Frame`], which composes every path through
+    // [`Frame::effect_path`], already namespaced under the `use` node.
+    // No rewriting needed; forward it unchanged.
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
-        self.parent
-            .dispatch(&self.unnamespace(path), branches, concurrency);
+        self.parent.dispatch(path, branches, concurrency);
     }
 
     fn write(&self) {
@@ -1418,23 +1409,6 @@ impl RunObserver for ChildObserver<'_> {
 
     fn clear_graft(&self, node_path: &EffectPath) {
         self.parent.clear_graft(node_path);
-    }
-}
-
-impl ChildObserver<'_> {
-    /// *path* with this child's own [`ChildObserver::root_path`] prefix
-    /// replaced by a bare [`EffectPath::root`] -- a no-op for a path
-    /// that doesn't start with it (a dispatch from a *nested* `use`'s
-    /// own, already-unnamespaced child, forwarded through unchanged).
-    fn unnamespace(&self, path: &EffectPath) -> EffectPath {
-        let prefix_len = self.root_path.0.len();
-        if path.0.len() >= prefix_len && path.0[..prefix_len] == self.root_path.0[..] {
-            let mut segments = vec![PathSegment::Name("prime".to_string())];
-            segments.extend_from_slice(&path.0[prefix_len..]);
-            EffectPath(segments)
-        } else {
-            path.clone()
-        }
     }
 }
 

@@ -1,0 +1,55 @@
+name: use-child-tree-dispatch-paths
+effects:
+  - type: use
+    name: single
+    path: child.yml
+
+  - type: tool
+    name: items
+    provider: json
+    params: {mode: parse, input: '[1, 2]'}
+
+  - type: loop
+    name: per_item
+    flow: chain
+    each: {in: "prime.items.value", as: "item"}
+    body:
+      - type: use
+        name: sub
+        path: child.yml
+
+  - type: loop
+    name: fanout
+    flow: tree
+    max_concurrency: 2
+    each: {in: "prime.items.value", as: "item"}
+    body:
+      - type: use
+        name: sub2
+        path: child.yml
+
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "true"
+      strict: true
+    then:
+      - type: use
+        name: in_if
+        path: child.yml
+
+  - type: use
+    name: mapped
+    path: child.yml
+    outputs:
+      result:
+        path: prime.fan.value
+
+  - type: use
+    name: grandparent
+    path: grandchild.yml
+
+  - type: use
+    name: nested_tree
+    path: nested_tree_child.yml
