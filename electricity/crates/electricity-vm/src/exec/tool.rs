@@ -464,16 +464,24 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
 /// block, up to and including `rendered = {**top_level, **params}`) can
 /// fail with, already flattened to its own `Display` text -- the only
 /// thing a caller here ever needs it for.
-fn render_tool_call(name: &str, tool: &ToolOp, ctx: &Value) -> Result<Dict, String> {
+fn render_tool_call(
+    name: &str,
+    tool: &ToolOp,
+    ctx: &Value,
+    declared_prompts: &indexmap::IndexMap<String, String>,
+    effect_names: &std::collections::BTreeSet<String>,
+) -> Result<Dict, String> {
     let mut rendered: Dict = Dict::new();
     if let Some(prompt) = &tool.prompt {
-        let text = electricity_template::render_template(
+        let text = crate::compose::render_with_composition(
             &prompt.source,
             ctx,
-            &electricity_template::PlainCtx,
+            declared_prompts,
+            effect_names,
             "prompt",
-        )
-        .map_err(|err| err.to_string())?;
+            &electricity_template::PlainCtx,
+            matches!(prompt.escape, electricity_bytecode::Escape::Html),
+        )?;
         rendered.insert(Value::Str("prompt".to_string()), Value::Str(text));
     }
     if let Some(model) = &tool.model {
@@ -481,10 +489,16 @@ fn render_tool_call(name: &str, tool: &ToolOp, ctx: &Value) -> Result<Dict, Stri
     }
 
     reject_security_sensitive_literal(tool_params_map(&tool.params))?;
-    let mut params = render_params(name, tool_params_map(&tool.params), ctx)
-        .map_err(|err: RenderParamsError| err.to_string())?;
+    let mut params = render_params(
+        name,
+        tool_params_map(&tool.params),
+        ctx,
+        declared_prompts,
+        effect_names,
+    )
+    .map_err(|err: RenderParamsError| err.to_string())?;
     if let Some(params_json) = &tool.params_json {
-        let overlay = render_params_json(&params_json.source, ctx)
+        let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
         params = deep_merge_params(params, overlay);
@@ -597,7 +611,13 @@ pub async fn execute_tool(
 
         let mut failure: Option<electricity_tools::ToolError> = None;
 
-        match render_tool_call(name, tool, ctx) {
+        match render_tool_call(
+            name,
+            tool,
+            ctx,
+            run_ctx.declared_prompts,
+            run_ctx.effect_names,
+        ) {
             Err(message) => {
                 failure = Some(electricity_tools::ToolError::message(message));
             }
