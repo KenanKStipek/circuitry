@@ -1,4 +1,4 @@
-name: c-ffmpeg-filter-vs-flags-divergence
+name: c-ffmpeg-filter-complex-allows-pipe-and-semicolon
 effects:
   - type: tool
     name: result

@@ -11,6 +11,14 @@ use electricity_value::Value;
 use electricity_value::pycompat::py_strip;
 use std::collections::BTreeSet;
 
+// `#[path]`, not a `mod generated;` line in `lib.rs` (review finding 9
+// on PR #467): this is the only module in the crate that needs
+// `is_py_alnum`, so the declaration lives here instead of adding a
+// line to a file `vm-lanes.md` calls final and complete for every
+// lane but the one that owns it.
+#[path = "generated/mod.rs"]
+mod generated;
+
 const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
 
 /// `plugins/shell.py::ShellPlugin` -- the default/pinned allowlist
@@ -85,7 +93,12 @@ impl ToolPlugin for ShellPlugin {
         if !effective.contains(&command) {
             if let Some(pin) = &self.pinned_allowed_commands {
                 if effect_allowed_set.contains(&command) {
-                    let pin_sorted: BTreeSet<String> = pin.iter().cloned().collect();
+                    // `sorted(pin)` -- a Python *list* sort, which keeps
+                    // duplicates (review finding 7 on PR #467); the
+                    // pin itself is a list, never deduplicated into a
+                    // set the way the effective allowlist below is.
+                    let mut pin_sorted = pin.clone();
+                    pin_sorted.sort();
                     return Err(ToolError {
                         py_class: PyExc::PermissionError,
                         message: format!(
@@ -93,7 +106,7 @@ impl ToolPlugin for ShellPlugin {
                              runtime.plugins.shell.allowed_commands pin {}; adding it to \
                              params['allowed_commands'] cannot widen past the pin.",
                             Value::Str(command.clone()).py_repr(),
-                            set_repr(&pin_sorted),
+                            list_repr(&pin_sorted),
                         ),
                         cause: ErrorCause::None,
                     });
@@ -112,8 +125,13 @@ impl ToolPlugin for ShellPlugin {
         }
 
         let args: &[Value] = match get("args") {
-            None | Some(Value::None) => &[],
             Some(Value::List(items)) => items,
+            // `params.get("args") or []` -- any *falsy* value (`None`,
+            // `""`, `false`, `0`, `{}`...), not just a missing/`None`
+            // key, runs with no arguments (review finding 5 on PR #467);
+            // only a *truthy* non-list value is an error.
+            None => &[],
+            Some(v) if !crate::subprocess_tool::is_truthy(v) => &[],
             _ => return Err(value_error("shell: params['args'] must be a list.")),
         };
         for (i, a) in args.iter().enumerate() {
@@ -215,15 +233,19 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
 /// `command.replace("-", "").replace("_", "").isalnum()` -- CPython's
 /// own Unicode `str.isalnum()` (true iff every character is alphabetic,
 /// decimal, digit, or numeric, and there's at least one -- `"".isalnum()`
-/// is `False`). [`crate::generated::is_py_alnum`], not Rust's own,
+/// is `False`). [`generated::is_py_alnum`], not Rust's own,
 /// broader `char::is_alphanumeric` -- see that function's own doc
 /// comment for the confirmed gap between the two.
 fn is_bare_command(command: &str) -> bool {
     let filtered: String = command.chars().filter(|&c| c != '-' && c != '_').collect();
-    !filtered.is_empty() && filtered.chars().all(crate::generated::is_py_alnum)
+    !filtered.is_empty() && filtered.chars().all(generated::is_py_alnum)
 }
 
 fn set_repr(items: &BTreeSet<String>) -> String {
+    Value::List(items.iter().map(|s| Value::from(s.as_str())).collect()).py_repr()
+}
+
+fn list_repr(items: &[String]) -> String {
     Value::List(items.iter().map(|s| Value::from(s.as_str())).collect()).py_repr()
 }
 
@@ -358,6 +380,74 @@ mod tests {
         assert_eq!(err.message, "shell: args[0] contains forbidden char '\\n'.");
     }
 
+    #[tokio::test]
+    async fn a_falsy_non_list_args_value_runs_with_no_arguments() {
+        // `params.get("args") or []` (review finding 5 on PR #467): an
+        // empty string, `false`, `0` and `{}` are all falsy, so each
+        // runs with no arguments, same as an absent/`None` `args`.
+        let token = CancellationToken::new();
+        for falsy in [
+            Value::from(""),
+            Value::Bool(false),
+            Value::from(0i64),
+            Value::Dict(Dict::new()),
+        ] {
+            let plugin = ShellPlugin {
+                pinned_allowed_commands: None,
+            };
+            let result = plugin
+                .execute(
+                    params(vec![("command", Value::from("echo")), ("args", falsy.clone())]),
+                    &call(&token),
+                )
+                .await
+                .unwrap_or_else(|err| panic!("falsy args={falsy:?} must not error: {err}"));
+            assert_eq!(result.value, Value::from("\n"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_truthy_non_list_args_value_is_still_rejected() {
+        let token = CancellationToken::new();
+        let plugin = ShellPlugin {
+            pinned_allowed_commands: None,
+        };
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("command", Value::from("echo")),
+                    ("args", Value::from("nonempty")),
+                ]),
+                &call(&token),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "shell: params['args'] must be a list.");
+    }
+
+    #[tokio::test]
+    async fn the_pin_in_the_denial_message_keeps_duplicates_like_pythons_own_sorted_list() {
+        let token = CancellationToken::new();
+        let plugin = ShellPlugin {
+            pinned_allowed_commands: Some(vec!["ls".to_string(), "ls".to_string()]),
+        };
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("command", Value::from("echo")),
+                    ("allowed_commands", Value::List(vec![Value::from("echo")])),
+                ]),
+                &call(&token),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("pin ['ls', 'ls']"),
+            "message={}",
+            err.message
+        );
+    }
+
     #[derive(serde::Deserialize)]
     struct ShellValidationCase {
         params: std::collections::BTreeMap<String, serde_json::Value>,
@@ -439,5 +529,16 @@ mod tests {
         let result = plugin.check();
         assert!(result.ok);
         assert!(result.missing.is_empty());
+        // Review finding 8 on PR #467: the acceptance criterion is
+        // `check()` matching `ShellPlugin.check` field for field, not
+        // just `ok`/`missing` -- the exact message text too.
+        assert_eq!(
+            result.message,
+            Some(
+                "shell allowlist defaults to read-only commands; pass \
+                 params['allowed_commands'] to broaden per-effect."
+                    .to_string()
+            )
+        );
     }
 }

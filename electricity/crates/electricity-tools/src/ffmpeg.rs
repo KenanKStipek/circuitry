@@ -268,8 +268,15 @@ impl ToolPlugin for FfmpegPlugin {
                     cause: ErrorCause::None,
                 });
             }
-            Err(ProcError::Cancelled) | Err(ProcError::Other(_)) => {
+            Err(ProcError::Cancelled) => {
                 return Err(ToolError::message("cancelled"));
+            }
+            Err(ProcError::Other { py_class, message }) => {
+                return Err(ToolError {
+                    py_class,
+                    message,
+                    cause: ErrorCause::None,
+                });
             }
         };
 

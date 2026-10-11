@@ -139,7 +139,23 @@ pub(crate) fn merged_env(
     if overrides.is_empty() {
         return None;
     }
-    let mut merged: HashMap<String, String> = std::env::vars().collect();
+    // `vars_os()`, not `vars()` -- `std::env::vars()` panics while
+    // iterating the moment any inherited variable isn't valid UTF-8
+    // (review finding 4 on PR #467), reachable whenever a
+    // `runtime.plugins.{awk,imagemagick,ffmpeg}.env` override is
+    // configured at all, on a process whose own environment holds any
+    // such variable (CPython copes by decoding with surrogateescape;
+    // a variable that round-trip only matters if a plugin's own
+    // argv/output ever needed to reproduce its *exact* bytes, which
+    // none of this lane's four tools do). A variable that still isn't
+    // valid UTF-8 after this is simply dropped from the inherited set
+    // rather than panicking -- safe to skip: the overwhelming common
+    // case (every variable is valid UTF-8) is unaffected, and the
+    // configured *overrides* themselves (already `String`, never
+    // `OsString`) are merged in afterwards regardless.
+    let mut merged: HashMap<String, String> = std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect();
     merged.extend(overrides.iter().map(|(k, v)| (k.clone(), v.clone())));
     Some(merged)
 }
@@ -359,8 +375,15 @@ pub(crate) async fn run_binary(
                 cause: ErrorCause::None,
             });
         }
-        Err(ProcError::Cancelled) | Err(ProcError::Other(_)) => {
+        Err(ProcError::Cancelled) => {
             return Err(ToolError::message("cancelled"));
+        }
+        Err(ProcError::Other { py_class, message }) => {
+            return Err(ToolError {
+                py_class,
+                message,
+                cause: ErrorCause::None,
+            });
         }
     };
 
@@ -664,6 +687,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_binary_reports_a_not_a_directory_os_error_for_a_cwd_that_is_a_file() {
+        // Review finding 3 on PR #467: a spawn failure other than a
+        // missing binary (here, `cwd` naming a plain file, not a
+        // directory -- `ENOTDIR`) must surface as its own `OSError`
+        // text/class, never collapse into the same "cancelled" text as
+        // an actually-cancelled run.
+        let token = CancellationToken::new();
+        let tmp = std::env::temp_dir().join(format!(
+            "electricity-tools-not-a-dir-test-{}",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, "").unwrap();
+        let cwd = tmp.to_str().unwrap().to_string();
+        // `armed: false` -- this must hold for an unarmed/embedded call
+        // too, not only a CLI-driven one: `run_tracked` installs its
+        // own `pre_exec` unconditionally, forcing Rust's std off the
+        // `posix_spawn(2)` fast path, which (confirmed directly on this
+        // platform) can only report a generic `NotFound`/`ENOENT` for
+        // *any* `current_dir` failure rather than the real
+        // `NotADirectoryError`/`ENOTDIR`.
+        let err = run_binary(
+            "echo",
+            &[],
+            Some(&cwd),
+            None,
+            None,
+            30,
+            false,
+            "set runtime.plugins.awk.binary",
+            false,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(err.py_class, PyExc::NotADirectoryError);
+        assert!(
+            err.message.contains("Not a directory") && err.message.contains(&cwd),
+            "message={}",
+            err.message
+        );
+        assert_ne!(err.message, "cancelled");
+    }
+
+    #[tokio::test]
     async fn run_binary_rejects_a_null_byte_in_args() {
         let token = CancellationToken::new();
         let err = run_binary(
@@ -703,6 +771,33 @@ mod tests {
         assert_eq!(err.message, "sh failed (exit 1): oops");
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn merged_env_does_not_panic_on_a_non_utf8_inherited_variable() {
+        // Review finding 4 on PR #467: `std::env::vars()` panics while
+        // iterating the moment *any* inherited variable isn't valid
+        // UTF-8, reachable whenever a `runtime.plugins.<name>.env`
+        // override is configured at all.
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: a single-threaded test; `remove_var` on teardown
+        // undoes this before any other test can observe it.
+        unsafe {
+            std::env::set_var(
+                "ELECTRICITY_TOOLS_TEST_BAD_UTF8",
+                std::ffi::OsStr::from_bytes(&[0xff, 0xfe]),
+            );
+        }
+        let mut overrides = HashMap::new();
+        overrides.insert("EXTRA".to_string(), "1".to_string());
+        let result = std::panic::catch_unwind(|| merged_env(Some(&overrides)));
+        unsafe {
+            std::env::remove_var("ELECTRICITY_TOOLS_TEST_BAD_UTF8");
+        }
+        let merged = result.expect("merged_env must not panic on a non-UTF-8 env var").unwrap();
+        assert_eq!(merged.get("EXTRA"), Some(&"1".to_string()));
+        assert!(!merged.contains_key("ELECTRICITY_TOOLS_TEST_BAD_UTF8"));
+    }
+
     #[tokio::test]
     async fn run_binary_captures_the_result_shape_on_success() {
         let token = CancellationToken::new();
@@ -727,5 +822,90 @@ mod tests {
             raw.keys().map(Value::py_str).collect::<Vec<_>>(),
             vec!["args", "cwd", "binary"]
         );
+    }
+
+    #[tokio::test]
+    async fn run_binary_reports_nonzero_exit_falling_back_to_stdout_when_stderr_is_empty() {
+        // `err = (stderr or stdout or "").strip()` -- the fallback half
+        // (issue #459's own test plan: "the stderr-first message and
+        // the fallback to stdout"); the existing
+        // `run_binary_reports_nonzero_exit_using_stderr_then_stdout`
+        // test only ever exercises the stderr-present half.
+        let token = CancellationToken::new();
+        let err = run_binary(
+            "sh",
+            &[Value::from("-c"), Value::from("printf oops; exit 1")],
+            None,
+            None,
+            None,
+            30,
+            false,
+            "set runtime.plugins.awk.binary",
+            false,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "sh failed (exit 1): oops");
+    }
+
+    #[tokio::test]
+    async fn run_binary_reports_not_found_for_a_missing_cwd() {
+        // `plugins/_subprocess.py::run_binary`'s own "a FileNotFoundError
+        // from spawning (missing binary **or a missing cwd**) gives
+        // `binary not found: ...`" bullet (issue #459) -- a missing
+        // `cwd` is `ENOENT`, the same `FileNotFoundError` a missing
+        // binary itself raises, unlike `cwd` naming a *file*
+        // (`ENOTDIR`, review finding 3 on PR #467, its own distinct
+        // `NotADirectoryError` test elsewhere in this module).
+        let token = CancellationToken::new();
+        let missing_dir = std::env::temp_dir().join(format!(
+            "electricity-tools-missing-cwd-test-{}",
+            std::process::id()
+        ));
+        let cwd = missing_dir.to_str().unwrap().to_string();
+        let err = run_binary(
+            "echo",
+            &[],
+            Some(&cwd),
+            None,
+            None,
+            30,
+            false,
+            "set runtime.plugins.awk.binary",
+            false,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "binary not found: 'echo' (install it or set runtime.plugins.awk.binary)."
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_binary_with_allow_nonzero_reports_a_signal_killed_exit_code_as_negative() {
+        // `Completed::exit_code` is `-signum` for a signal-killed child
+        // (issue #459's own "Exit status" bullet) -- `allow_nonzero`
+        // lets this reach the caller instead of raising, the only way
+        // to observe it directly from `run_binary` itself.
+        let token = CancellationToken::new();
+        let result = run_binary(
+            "sh",
+            &[Value::from("-c"), Value::from("kill -TERM $$; sleep 5")],
+            None,
+            None,
+            None,
+            30,
+            true,
+            "set runtime.plugins.awk.binary",
+            false,
+            &token,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(-libc::SIGTERM));
     }
 }

@@ -274,7 +274,7 @@ impl<'a> Supported<'a> {
             declared_prompts: false,
             // lane R (#448)
             preflight: false,
-            // lane C (#459)
+            // lane C (#448)
             tools_process: true,
             // lane D1 (#448)
             tools_stdlib: false,
@@ -531,9 +531,9 @@ mod tests {
         // Review P2-b on PR #454: `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
         // (pinned forever to the exact M0 value by the golden tests
-        // below). Lane C (#459) is the first M1 lane to land, so
-        // `current` and `m0` now diverge on `tools_process` alone --
-        // every other field must still agree field for field.
+        // below) -- now that lane C (#459) has landed, `current` and
+        // `m0` diverge on `tools_process`; every other field must
+        // still agree field for field.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
         assert_eq!(current.prompt, m0.prompt);
