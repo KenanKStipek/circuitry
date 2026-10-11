@@ -148,7 +148,12 @@ async fn a_request_is_sent_with_no_default_headers_added() {
         .skip(1)
         .take_while(|line| !line.is_empty())
         .collect();
-    assert_eq!(header_lines, vec!["host: test"]);
+    // Title-cased on the wire, urllib's own convention (issue #485
+    // probe finding O5), not the header name's own casing as handed
+    // to this function (already title-cased by the caller in
+    // practice, but `hyper`'s own `title_case_headers(true)` is what
+    // actually enforces it here).
+    assert_eq!(header_lines, vec!["Host: test"]);
 }
 
 #[tokio::test]
@@ -265,6 +270,89 @@ async fn a_slow_body_past_the_deadline_times_out() {
 }
 
 #[tokio::test]
+async fn request_header_names_are_title_cased_on_the_wire() {
+    // urllib title-cases every header name it sends
+    // (`http.client.HTTPConnection.putheader`); `hyper`'s own default
+    // is lower-case (issue #485 probe finding O5) -- header *order*
+    // is not required to match.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+        let _ =
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        request_text
+    });
+    let client = http_client::build_client().unwrap();
+    let request = RawRequest {
+        method: "GET".to_string(),
+        target: "/".to_string(),
+        headers: vec![
+            ("Host".to_string(), "test".to_string()),
+            ("X-Custom-Header".to_string(), "v".to_string()),
+        ],
+        body: None,
+    };
+    http_client::send(
+        &client,
+        &target(addr),
+        &request,
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap();
+    let request_text = handle.join().unwrap();
+    assert!(request_text.contains("Host: test"));
+    assert!(request_text.contains("X-Custom-Header: v"));
+}
+
+#[tokio::test]
+async fn a_proxied_https_request_sends_proxy_authorization_on_the_connect_line_only() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    let (tunnel_tx, tunnel_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let tunnel_request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let _ = tunnel_tx.send(tunnel_request);
+        // Refuse the tunnel outright -- this test only pins what the
+        // `CONNECT` line itself carries, never a real TLS handshake
+        // past it.
+        let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    });
+    let client = http_client::build_client().unwrap();
+    let https_target = ConnectTarget {
+        scheme: Scheme::Https,
+        host: "origin.example".to_string(),
+        port: 443,
+        proxy: Some(http_client::ProxyTarget {
+            host: proxy_addr.ip().to_string(),
+            port: proxy_addr.port(),
+            basic_auth: Some("dXNlcjpwYXNz".to_string()),
+        }),
+    };
+    let err = http_client::send(
+        &client,
+        &https_target,
+        &get_request(),
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap_err();
+    // A failed tunnel is a retryable, wrapped `Connect` shape, not
+    // `Other` (issue #485 review finding 7).
+    assert!(matches!(err, SendError::Connect(_)));
+    let tunnel_request = tunnel_rx.recv().unwrap();
+    assert!(tunnel_request.starts_with("CONNECT origin.example:443 HTTP/1.1"));
+    assert!(tunnel_request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
+}
+
+#[tokio::test]
 async fn connection_refused_is_a_connect_error() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -281,6 +369,42 @@ async fn connection_refused_is_a_connect_error() {
     match err {
         SendError::Connect(text) => assert!(text.contains("Errno")),
         other => panic!("expected Connect, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_tls_handshake_that_never_responds_is_a_connect_timeout() {
+    // urllib's own connect-phase timeout (TCP connect, TLS handshake,
+    // the proxy CONNECT tunnel) is the wrapped `SendError::Connect`
+    // shape, never the unwrapped `SendError::Timeout` a status-line/
+    // body-read timeout raises (issue #485 review finding 2) -- a
+    // server that accepts the TCP connection but never speaks TLS
+    // back reproduces the TLS-handshake half of that on loopback.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_secs(5));
+        drop(stream);
+    });
+    let client = http_client::build_client().unwrap();
+    let https_target = ConnectTarget {
+        scheme: Scheme::Https,
+        host: "127.0.0.1".to_string(),
+        port: addr.port(),
+        proxy: None,
+    };
+    let err = http_client::send(
+        &client,
+        &https_target,
+        &get_request(),
+        TimeoutModel::PerOperation(Duration::from_millis(200)),
+    )
+    .await
+    .unwrap_err();
+    match err {
+        SendError::Connect(text) => assert_eq!(text, "timed out"),
+        other => panic!("expected Connect(\"timed out\"), got {other:?}"),
     }
 }
 

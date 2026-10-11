@@ -32,18 +32,14 @@
 //!   cancellation here bypasses `on_error` entirely (see
 //!   [`crate::VmError::Cancelled`]'s own doc comment).
 //!
-//! Deliberately out of scope for M0-H, all because the only provider
-//! this milestone ever dispatches through [`run_tool`] is `json`
-//! (issue #431's Scope section):
-//! - the HTTP-family status-code/`Retry-After` machinery
-//!   (`core/tool.py`'s own `_HTTP_FAMILY_PROVIDERS`/`_is_retryable_failure`)
-//!   -- no HTTP-shaped tool exists yet in this crate's own
-//!   [`electricity_tools::ToolRegistry`], so every failure is simply
-//!   retryable, exactly like any non-HTTP-family Python plugin already
-//!   is;
-//! - `meta.status_code` -- `_HTTP_FAMILY_PROVIDERS`-gated in Python, so
-//!   it stays lane E's own write once an HTTP-shaped provider exists;
-//!   `meta.binary` (`core/tool.py:822-823`) is generic across every
+//! The HTTP-family status-code/`Retry-After` machinery (`core/tool.py`'s
+//! own `_HTTP_FAMILY_PROVIDERS`/`_is_retryable_failure`) is lane E's own
+//! fill (issue #485): [`http_family_provider`] below, `meta.status_code`
+//! and `Retry-After`-aware backoff in [`execute_tool`]'s own result
+//! branch. Still deliberately out of scope for M0-H, all because the
+//! only provider this milestone ever dispatches through [`run_tool`] is
+//! `json` (issue #431's Scope section):
+//! - `meta.binary` (`core/tool.py:822-823`) is generic across every
 //!   provider instead, so this gate wires it here (M1 gate seam S2):
 //!   `json`'s own `ToolResult.raw` never carries a `binary` key, so the
 //!   write is still a no-op for every M0 case;
@@ -182,11 +178,6 @@ const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 
-/// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
-/// is the merged `runtime:` block [`RunContext::runtime_config`] carries;
-/// lane D is the one that ever populates `runtime.tools.timeout_seconds`
-/// in it, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
-/// until then.
 /// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- a local copy, not a call
 /// into `crate::retry`'s own private `is_http_family_provider` (issue
 /// #485's own scope note: `retry.rs` is final except for
@@ -202,6 +193,11 @@ fn http_family_provider(provider: &str) -> bool {
     matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
 }
 
+/// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
+/// is the merged `runtime:` block [`RunContext::runtime_config`] carries;
+/// lane D is the one that ever populates `runtime.tools.timeout_seconds`
+/// in it, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
+/// until then.
 fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
     // `if self.defn.timeout_ms:` -- falsy, so an explicit `timeout_ms: 0`
     // (the compiler already clamps a negative one to 0) falls through to

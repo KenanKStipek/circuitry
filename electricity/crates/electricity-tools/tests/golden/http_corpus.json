@@ -747,6 +747,7 @@
         ]
       },
       "error": null,
+      "error_message": null,
       "result": "010203"
     },
     {
@@ -755,6 +756,7 @@
         "v": []
       },
       "error": null,
+      "error_message": null,
       "result": ""
     },
     {
@@ -772,6 +774,7 @@
         ]
       },
       "error": null,
+      "error_message": null,
       "result": "00ff"
     },
     {
@@ -785,7 +788,8 @@
         ]
       },
       "error": "ValueError",
-      "result": "bytes must be in range(0, 256)"
+      "error_message": "bytes must be in range(0, 256)",
+      "result": ""
     },
     {
       "value": {
@@ -798,7 +802,8 @@
         ]
       },
       "error": "ValueError",
-      "result": "bytes must be in range(0, 256)"
+      "error_message": "bytes must be in range(0, 256)",
+      "result": ""
     },
     {
       "value": {
@@ -806,6 +811,7 @@
         "v": "5"
       },
       "error": null,
+      "error_message": null,
       "result": "0000000000"
     },
     {
@@ -814,6 +820,7 @@
         "v": "0"
       },
       "error": null,
+      "error_message": null,
       "result": ""
     },
     {
@@ -822,7 +829,8 @@
         "v": "-1"
       },
       "error": "ValueError",
-      "result": "negative count"
+      "error_message": "negative count",
+      "result": ""
     },
     {
       "value": {
@@ -830,6 +838,7 @@
         "v": true
       },
       "error": null,
+      "error_message": null,
       "result": "00"
     },
     {
@@ -838,6 +847,7 @@
         "v": false
       },
       "error": null,
+      "error_message": null,
       "result": ""
     },
     {
@@ -846,7 +856,8 @@
         "bits": "3ff8000000000000"
       },
       "error": "TypeError",
-      "result": "cannot convert 'float' object to bytes"
+      "error_message": "cannot convert 'float' object to bytes",
+      "result": ""
     },
     {
       "value": {
@@ -854,14 +865,16 @@
         "v": "not bytes"
       },
       "error": "TypeError",
-      "result": "string argument without an encoding"
+      "error_message": "string argument without an encoding",
+      "result": ""
     },
     {
       "value": {
         "t": "none"
       },
       "error": "TypeError",
-      "result": "cannot convert 'NoneType' object to bytes"
+      "error_message": "cannot convert 'NoneType' object to bytes",
+      "result": ""
     }
   ],
   "request_header_cases": [
@@ -1304,6 +1317,20 @@
       "new_method": null
     }
   ],
+  "redirect_reason_cases": [
+    {
+      "case": "disallowed_scheme",
+      "reason": "Found - Redirection to url 'javascript:alert(1)' is not allowed"
+    },
+    {
+      "case": "max_repeats",
+      "reason": "The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\nFound"
+    },
+    {
+      "case": "max_redirections",
+      "reason": "The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\nFound"
+    }
+  ],
   "proxy_env_cases": [
     {
       "env": [
@@ -1513,6 +1540,185 @@
         "other.com": false,
         "notexample.com": false
       }
+    }
+  ],
+  "end_to_end_cases": [
+    {
+      "case": "empty_reason_phrase",
+      "raised": null,
+      "message": null,
+      "value": "",
+      "raw": {
+        "status": 404,
+        "headers": {
+          "content-length": "0",
+          "connection": "close"
+        },
+        "url": "http://127.0.0.1:__PORT__/",
+        "body": ""
+      },
+      "stderr": "HTTP 404: ",
+      "ok": false,
+      "response_steps": [
+        [
+          "485454502f312e3120343034200d0a436f6e74656e742d4c656e6774683a20300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a",
+          0.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "short_body_is_an_incomplete_read",
+      "raised": "IncompleteRead",
+      "message": "IncompleteRead(5 bytes read, 5 more expected)",
+      "value": null,
+      "raw": null,
+      "stderr": null,
+      "ok": null,
+      "response_steps": [
+        [
+          "485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a2031300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a3132333435",
+          0.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "close_without_response",
+      "raised": "RemoteDisconnected",
+      "message": "Remote end closed connection without response",
+      "value": null,
+      "raw": null,
+      "stderr": null,
+      "ok": null,
+      "response_steps": [
+        [
+          "",
+          0.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "duplicate_response_headers",
+      "raised": null,
+      "message": null,
+      "value": "",
+      "raw": {
+        "status": 200,
+        "headers": {
+          "set-cookie": "a=2",
+          "content-length": "0",
+          "connection": "close"
+        },
+        "url": "http://127.0.0.1:__PORT__/",
+        "body": ""
+      },
+      "stderr": null,
+      "ok": true,
+      "response_steps": [
+        [
+          "485454502f312e3120323030204f4b0d0a5365742d436f6f6b69653a20613d310d0a5365742d436f6f6b69653a20613d320d0a436f6e74656e742d4c656e6774683a20300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a",
+          0.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "non_utf8_body",
+      "raised": null,
+      "message": null,
+      "value": "��",
+      "raw": {
+        "status": 200,
+        "headers": {
+          "content-length": "2",
+          "connection": "close"
+        },
+        "url": "http://127.0.0.1:__PORT__/",
+        "body": "��"
+      },
+      "stderr": null,
+      "ok": true,
+      "response_steps": [
+        [
+          "485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a20320d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0afffe",
+          0.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "a_307_to_a_post_is_a_success_with_stderr_set",
+      "raised": null,
+      "message": null,
+      "value": "",
+      "raw": {
+        "status": 307,
+        "headers": {
+          "location": "http://example.invalid/next",
+          "content-length": "0",
+          "connection": "close"
+        },
+        "url": "http://127.0.0.1:__PORT__/",
+        "body": ""
+      },
+      "stderr": "HTTP 307: Temporary Redirect",
+      "ok": true,
+      "response_steps": [
+        [
+          "485454502f312e31203330372054656d706f726172792052656469726563740d0a4c6f636174696f6e3a20687474703a2f2f6578616d706c652e696e76616c69642f6e6578740d0a436f6e74656e742d4c656e6774683a20300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a",
+          0.0
+        ]
+      ],
+      "params": {
+        "method": "POST"
+      },
+      "timeout_seconds": 1
+    },
+    {
+      "case": "a_body_read_timeout",
+      "raised": "TimeoutError",
+      "message": "timed out",
+      "value": null,
+      "raw": null,
+      "stderr": null,
+      "ok": null,
+      "response_steps": [
+        [
+          "485454502f312e3120323030204f4b0d0a436f6e74656e742d4c656e6774683a2031300d0a436f6e6e656374696f6e3a20636c6f73650d0a0d0a3132333435",
+          0.0
+        ],
+        [
+          "3637383930",
+          2.0
+        ]
+      ],
+      "params": {},
+      "timeout_seconds": 1
+    },
+    {
+      "case": "content_type_json_setdefault_collision",
+      "raised": null,
+      "message": null,
+      "value": null,
+      "raw": null,
+      "stderr": null,
+      "ok": null,
+      "request_header_lines": [
+        "Accept-Encoding: identity",
+        "Content-Length: 8",
+        "Host: 127.0.0.1:__PORT__",
+        "User-Agent: Python-urllib/3.11",
+        "Content-Type: application/json",
+        "Connection: close",
+        "{\"a\": 1}"
+      ]
     }
   ]
 }

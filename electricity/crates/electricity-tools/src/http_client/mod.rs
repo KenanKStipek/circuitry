@@ -90,6 +90,17 @@ pub struct ConnectTarget {
 pub struct ProxyTarget {
     pub host: String,
     pub port: u16,
+    /// The already-base64-encoded `user:password` credentials from
+    /// the proxy URL's own userinfo (`urllib.request._parse_proxy`),
+    /// when present -- sent as `Proxy-Authorization: Basic <this>` on
+    /// the `CONNECT` line for a tunneled `https://` request ([`send`]'s
+    /// own job: urllib's `do_open` pulls `Proxy-Authorization` out of
+    /// the regular header set and *only* ever sends it to the proxy,
+    /// never forwarded to the tunneled origin); a plain `http://`
+    /// proxied request has no tunnel at all, so [`crate::http`] adds
+    /// the same header to the regular request itself instead (that
+    /// request *is* the one sent to the proxy).
+    pub basic_auth: Option<String>,
 }
 
 /// A request already fully built by the caller -- urllib's own
@@ -211,7 +222,18 @@ fn format_connect_error(err: &std::io::Error) -> String {
 /// list of just `http/1.1`, so a server that would otherwise speak h2
 /// over TLS still negotiates down -- #448 decision 1 forbids HTTP/2
 /// outright), no client certificate.
+///
+/// Built once per process and cached in [`CACHED_CLIENT`]: every
+/// caller (one per tool/adapter attempt, even for a plain `http://`
+/// request that never touches TLS at all) shares the one trust-store
+/// read, matching [`HttpClient`]'s own doc comment below.
 pub fn build_client() -> Result<HttpClient, String> {
+    CACHED_CLIENT.get_or_init(build_client_uncached).clone()
+}
+
+static CACHED_CLIENT: std::sync::OnceLock<Result<HttpClient, String>> = std::sync::OnceLock::new();
+
+fn build_client_uncached() -> Result<HttpClient, String> {
     let mut roots = rustls::RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     for err in &native.errors {
@@ -317,14 +339,28 @@ async fn connect(
         Some(proxy) => (proxy.host.as_str(), proxy.port),
         None => (target.host.as_str(), target.port),
     };
+    // A connect-phase timeout is urllib's own `OSError`-wrapped shape
+    // too (`h.request()`'s own `except OSError as err: raise
+    // URLError(err)`, `socket.timeout`'s own `str()` being just `timed
+    // out`), never the unwrapped `TimeoutError` [`send`]'s own
+    // status-line/body-read timeouts raise -- [`SendError::Connect`],
+    // not [`SendError::Timeout`] (issue #485 review finding 2).
     let tcp = tokio::time::timeout(connect_deadline, TcpStream::connect((tcp_host, tcp_port)))
         .await
-        .map_err(|_| SendError::Timeout)
+        .map_err(|_| SendError::Connect("timed out".to_string()))
         .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
     tcp.set_nodelay(true).ok();
 
-    let tcp = if target.proxy.is_some() && target.scheme == Scheme::Https {
-        connect_tunnel(tcp, &target.host, target.port, connect_deadline).await?
+    let tcp = if let Some(proxy) = target.proxy.as_ref().filter(|_| target.scheme == Scheme::Https)
+    {
+        connect_tunnel(
+            tcp,
+            &target.host,
+            target.port,
+            proxy.basic_auth.as_deref(),
+            connect_deadline,
+        )
+        .await?
     } else {
         tcp
     };
@@ -338,7 +374,7 @@ async fn connect(
             })?;
             let tls = tokio::time::timeout(connect_deadline, connector.connect(server_name, tcp))
                 .await
-                .map_err(|_| SendError::Timeout)
+                .map_err(|_| SendError::Connect("timed out".to_string()))
                 .and_then(|r| r.map_err(|e| SendError::Connect(e.to_string())))?;
             Ok(AnyStream::Tls(Box::new(tls)))
         }
@@ -354,13 +390,18 @@ async fn connect_tunnel(
     mut tcp: TcpStream,
     host: &str,
     port: u16,
+    basic_auth: Option<&str>,
     deadline: Duration,
 ) -> Result<TcpStream, SendError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let request = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n");
+    let auth_line = basic_auth
+        .map(|creds| format!("Proxy-Authorization: Basic {creds}\r\n"))
+        .unwrap_or_default();
+    let request =
+        format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{auth_line}\r\n");
     tokio::time::timeout(deadline, tcp.write_all(request.as_bytes()))
         .await
-        .map_err(|_| SendError::Timeout)
+        .map_err(|_| SendError::Connect("timed out".to_string()))
         .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
 
     let mut buf = Vec::new();
@@ -368,7 +409,7 @@ async fn connect_tunnel(
     loop {
         let n = tokio::time::timeout(deadline, tcp.read(&mut chunk))
             .await
-            .map_err(|_| SendError::Timeout)
+            .map_err(|_| SendError::Connect("timed out".to_string()))
             .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
         if n == 0 {
             return Err(SendError::RemoteDisconnected);
@@ -390,7 +431,13 @@ async fn connect_tunnel(
         .map(|code| (200..300).contains(&code))
         .unwrap_or(false);
     if !ok {
-        return Err(SendError::Other(format!(
+        // A failed tunnel is urllib's own `OSError`-wrapped shape too
+        // (`http.client.HTTPConnection._tunnel`'s own `OSError` on a
+        // non-2xx `CONNECT` reply, caught and re-raised as `URLError`
+        // by the same `except OSError` in `h.request()` [`connect`]'s
+        // own doc comment above already describes) -- retryable, not
+        // [`SendError::Other`] (issue #485 review finding 7).
+        return Err(SendError::Connect(format!(
             "proxy CONNECT to {host}:{port} failed: {status_line}"
         )));
     }
@@ -422,9 +469,18 @@ pub async fn send(
 
     let stream = connect(client, target, connect_deadline).await?;
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = tokio::time::timeout(connect_deadline, http1::handshake(io))
+    // urllib title-cases every header name on the wire
+    // (`http.client.HTTPConnection.putheader`'s own
+    // `header.title()`-equivalent, `Accept-Encoding`/`Content-Type`/
+    // an arbitrary `X-Custom-Header` alike); `hyper`'s own default is
+    // lower-case. Header *order* on the wire is not required to
+    // match (the mock harness compares by name, case-insensitively).
+    let handshake = http1::Builder::new()
+        .title_case_headers(true)
+        .handshake(io);
+    let (mut sender, conn) = tokio::time::timeout(connect_deadline, handshake)
         .await
-        .map_err(|_| SendError::Timeout)?
+        .map_err(|_| SendError::Connect("timed out".to_string()))?
         .map_err(|e| SendError::Connect(e.to_string()))?;
     let handle = tokio::spawn(async move {
         let _ = conn.await;
@@ -435,7 +491,18 @@ pub async fn send(
         .method(request.method.as_str())
         .uri(request.target.as_str());
     for (name, value) in &request.headers {
-        builder = builder.header(name.as_str(), value.as_str());
+        // `http.client`'s own `putheader` encode step is latin-1, not
+        // UTF-8: every header value this crate ever builds has
+        // already been checked latin-1-encodable at the caller
+        // (`http.rs`'s own `first_non_latin1_char`), so each `char`'s
+        // own codepoint (<= 0xFF) *is* its one-byte latin-1 encoding
+        // -- `HeaderValue::from_str` would instead UTF-8-encode a
+        // non-ASCII codepoint into two or more bytes, putting the
+        // wrong bytes on the wire (issue #485 review finding 3).
+        let latin1_bytes: Vec<u8> = value.chars().map(|c| c as u8).collect();
+        let header_value = http::HeaderValue::from_bytes(&latin1_bytes)
+            .map_err(|e| SendError::Other(e.to_string()))?;
+        builder = builder.header(name.as_str(), header_value);
     }
     let body = match &request.body {
         Some(bytes) => Full::new(Bytes::from(bytes.clone())).boxed(),
@@ -476,7 +543,16 @@ pub async fn send(
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in response.headers() {
         let name = name.as_str().to_string();
-        let value = String::from_utf8_lossy(value.as_bytes()).into_owned();
+        // `http.client`'s own header decode is latin-1 (`HTTPMessage`
+        // is parsed with `email.parser`'s own `BytesHeaderParser`,
+        // itself latin-1), not UTF-8 -- each byte becomes the
+        // codepoint of that same ordinal, never
+        // `String::from_utf8_lossy`'s multi-byte decode/replacement
+        // (issue #485 review finding 3; this also makes a later
+        // redirect's own `Location` re-quoting agree with urllib's,
+        // since [`http_url::quote`] already treats a codepoint <=
+        // 0xFF as the one byte to percent-encode).
+        let value: String = value.as_bytes().iter().map(|&b| b as char).collect();
         match headers.iter_mut().find(|(k, _)| *k == name) {
             Some(entry) => entry.1 = value,
             None => headers.push((name, value)),
@@ -516,9 +592,13 @@ pub async fn send(
     // already knows this (it tracks the request method internally and
     // treats the body as already complete, zero-length, regardless of
     // the header), so the frame loop above correctly read nothing; this
-    // check would otherwise misreport that as a short body.
+    // check would otherwise misreport that as a short body. `http.
+    // client` makes the same exception for 1xx/204/304 (RFC 9110
+    // §6.4.1/§8.6: a response in any of these classes never has a
+    // body even when `Content-Length` is still present).
+    let never_has_a_body = request.method == "HEAD" || matches!(status, 100..=199 | 204 | 304);
     if let Some(expected) = content_length {
-        if request.method != "HEAD" && body_bytes.len() < expected {
+        if !never_has_a_body && body_bytes.len() < expected {
             return Err(SendError::IncompleteRead {
                 read: body_bytes.len(),
                 expected: expected - body_bytes.len(),

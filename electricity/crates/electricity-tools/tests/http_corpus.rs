@@ -185,6 +185,25 @@ fn utf8_replace_cases_match_cpython() {
 }
 
 #[test]
+fn redirect_reason_cases_match_urllibs_own_text() {
+    let corpus = load_corpus();
+    for case in corpus["redirect_reason_cases"].as_array().unwrap() {
+        let expected = case["reason"].as_str().unwrap();
+        let actual = match case["case"].as_str().unwrap() {
+            "disallowed_scheme" => electricity_tools::http::disallowed_redirect_scheme_reason(
+                "Found",
+                "javascript:alert(1)",
+            ),
+            "max_repeats" | "max_redirections" => {
+                electricity_tools::http::redirect_loop_reason("Found")
+            }
+            other => panic!("unexpected case name {other:?}"),
+        };
+        assert_eq!(actual, expected, "case: {case:?}");
+    }
+}
+
+#[test]
 fn redirect_decision_cases_match_urllibs_own_matrix() {
     let corpus = load_corpus();
     for case in corpus["redirect_decision_cases"].as_array().unwrap() {
@@ -253,25 +272,27 @@ async fn unknown_url_type_cases_match_pythons_valueerror() {
     for case in corpus["unknown_url_type_cases"].as_array().unwrap() {
         let url = case["url"].as_str().unwrap();
         let expected_error = case["error"].as_str();
+        // A case with no expected parse-time `ValueError` carries a
+        // *valid* scheme (`http`/`https`/`ftp`/relative) -- this
+        // corpus section only pins the scheme check itself, never
+        // what happens afterward, and several of its own URLs
+        // (`http://example.com/x`, `https://example.com/x`) name a
+        // real external host. Running `execute` on those would be a
+        // real DNS lookup/connection attempt (this lane's own
+        // network-isolation rule, issue #485 review finding 5) --
+        // skip the call entirely rather than let it reach the
+        // network only to discard the result.
+        let Some(message) = expected_error else {
+            continue;
+        };
         let result = electricity_tools::http::HttpPlugin
             .execute(
                 dict_params(vec![("url", Value::Str(url.to_string()))]),
                 &call(&token),
             )
             .await;
-        match expected_error {
-            Some(message) => {
-                let err = result.expect_err("expected a ValueError");
-                assert_eq!(err.message, message, "case: {case:?}");
-            }
-            None => {
-                // A valid scheme (http/https/ftp/relative) either
-                // succeeds or fails later, for a different reason
-                // (e.g. `ftp://`, which this client doesn't actually
-                // speak) -- this corpus section only pins the *scheme*
-                // check itself, not every URL's own eventual outcome.
-            }
-        }
+        let err = result.expect_err("expected a ValueError");
+        assert_eq!(err.message, message, "case: {case:?}");
     }
 }
 
@@ -306,8 +327,12 @@ async fn bytes_coercion_cases_match_pythons_bytes_ctor() {
             )
             .await;
         match case["error"].as_str() {
-            Some(_) => {
-                result.expect_err("expected a coercion failure");
+            Some(expected_class) => {
+                let err = result.expect_err("expected a coercion failure");
+                assert_eq!(err.py_class.name(), expected_class, "case: {case:?}");
+                if let Some(expected_message) = case["error_message"].as_str() {
+                    assert_eq!(err.message, expected_message, "case: {case:?}");
+                }
             }
             None => {
                 result.expect("expected a successful send");
@@ -364,6 +389,196 @@ async fn request_header_cases_keep_every_user_header_capitalize_collapsed() {
                 request_text.contains(&line),
                 "expected header line {line:?} in request:\n{request_text}"
             );
+        }
+    }
+}
+
+fn read_full_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+        .ok();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header_text = String::from_utf8_lossy(&buf[..pos]);
+                    let content_length: usize = header_text
+                        .lines()
+                        .find_map(|l| {
+                            let (name, value) = l.split_once(':')?;
+                            if name.trim().eq_ignore_ascii_case("content-length") {
+                                value.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    if buf.len() - (pos + 4) >= content_length {
+                        break;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+/// Drives a single accepted connection through *steps* -- each
+/// `(chunk, delay_seconds)` pair sleeps first, when asked, then
+/// writes *chunk*; an empty *chunk* closes the connection without
+/// writing anything. Mirrors `generate_http_corpus.py`'s own
+/// `_respond_steps` exactly, replaying the very bytes
+/// `end_to_end_cases` recorded rather than a hand-copied duplicate of
+/// them.
+fn serve_steps(steps: Vec<(Vec<u8>, f64)>) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        read_full_request(&mut stream);
+        for (chunk, delay) in steps {
+            if delay > 0.0 {
+                std::thread::sleep(std::time::Duration::from_secs_f64(delay));
+            }
+            if chunk.is_empty() {
+                drop(stream);
+                return;
+            }
+            let _ = stream.write_all(&chunk);
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn end_to_end_cases_match_cpython() {
+    let corpus = load_corpus();
+    let token = CancellationToken::new();
+    for case in corpus["end_to_end_cases"].as_array().unwrap() {
+        let name = case["case"].as_str().unwrap();
+
+        if name == "content_type_json_setdefault_collision" {
+            let (addr, rx) = recording_server();
+            let mut body = Dict::new();
+            body.insert(Value::Str("a".to_string()), Value::from(1i64));
+            let mut headers = Dict::new();
+            headers.insert(
+                Value::Str("content-type".to_string()),
+                Value::Str("text/plain".to_string()),
+            );
+            electricity_tools::http::HttpPlugin
+                .execute(
+                    dict_params(vec![
+                        ("url", Value::Str(format!("http://{addr}/"))),
+                        ("method", Value::Str("POST".to_string())),
+                        ("headers", Value::Dict(headers)),
+                        ("json", Value::Dict(body)),
+                    ]),
+                    &call(&token),
+                )
+                .await
+                .expect("expected a successful send");
+            let request_text = String::from_utf8_lossy(&rx.recv().unwrap()).to_string();
+            for line in case["request_header_lines"].as_array().unwrap() {
+                let line = line.as_str().unwrap();
+                // `User-Agent` differs by design (issue #485's own
+                // settled question); `Host` carries this test's own
+                // real port, never the corpus's `__PORT__` placeholder.
+                if line.starts_with("User-Agent:") || line.starts_with("Host:") {
+                    continue;
+                }
+                assert!(
+                    request_text.contains(line),
+                    "expected line {line:?} in request:\n{request_text}"
+                );
+            }
+            continue;
+        }
+
+        let steps: Vec<(Vec<u8>, f64)> = case["response_steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| {
+                let hex = step[0].as_str().unwrap();
+                let delay = step[1].as_f64().unwrap();
+                (decode_hex(hex), delay)
+            })
+            .collect();
+        let addr = serve_steps(steps);
+
+        let mut params_vec = vec![("url", Value::Str(format!("http://{addr}/")))];
+        if let Some(method) = case["params"].get("method").and_then(|v| v.as_str()) {
+            params_vec.push(("method", Value::Str(method.to_string())));
+        }
+        let timeout_seconds = case["timeout_seconds"].as_u64().unwrap() as u32;
+        let call_with_timeout = ToolCall {
+            timeout_seconds,
+            config: &NONE,
+            token: &token,
+            armed: false,
+        };
+        let result = electricity_tools::http::HttpPlugin
+            .execute(dict_params(params_vec), &call_with_timeout)
+            .await;
+
+        match case["raised"].as_str() {
+            Some(expected_class) => {
+                let err = result.expect_err("expected a raised failure");
+                assert_eq!(err.py_class.name(), expected_class, "case: {name}");
+                assert_eq!(
+                    err.message,
+                    case["message"].as_str().unwrap(),
+                    "case: {name}"
+                );
+            }
+            None => {
+                let result = result.expect("expected a returned result");
+                assert_eq!(result.ok, case["ok"].as_bool().unwrap(), "case: {name}");
+                assert_eq!(
+                    result.stderr.as_deref(),
+                    case["stderr"].as_str(),
+                    "case: {name}"
+                );
+                let expected_value = case["value"].as_str().unwrap();
+                assert_eq!(
+                    result.value,
+                    Value::Str(expected_value.to_string()),
+                    "case: {name}"
+                );
+                let raw = result.raw.as_dict().unwrap();
+                let status = raw.get(&Value::Str("status".to_string())).unwrap();
+                assert_eq!(
+                    status,
+                    &Value::from(case["raw"]["status"].as_i64().unwrap()),
+                    "case: {name}"
+                );
+                let url = raw
+                    .get(&Value::Str("url".to_string()))
+                    .unwrap()
+                    .py_str();
+                let expected_url = case["raw"]["url"]
+                    .as_str()
+                    .unwrap()
+                    .replace("__PORT__", &addr.port().to_string());
+                assert_eq!(url, expected_url, "case: {name}");
+                let headers_dict = raw
+                    .get(&Value::Str("headers".to_string()))
+                    .unwrap()
+                    .as_dict()
+                    .unwrap();
+                for (k, v) in case["raw"]["headers"].as_object().unwrap() {
+                    let actual = headers_dict
+                        .get(&Value::Str(k.clone()))
+                        .map(|v| v.py_str());
+                    assert_eq!(actual.as_deref(), v.as_str(), "header {k} in case: {name}");
+                }
+            }
         }
     }
 }

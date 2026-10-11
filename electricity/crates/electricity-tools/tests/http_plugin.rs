@@ -245,7 +245,7 @@ async fn a_json_body_sets_content_type_and_length() {
     .unwrap();
     assert!(result.ok);
     let request_text = rx.recv().unwrap();
-    assert!(request_text.contains("content-type: application/json"));
+    assert!(request_text.contains("Content-Type: application/json"));
     assert!(request_text.contains("{\"a\": 1}"));
 }
 

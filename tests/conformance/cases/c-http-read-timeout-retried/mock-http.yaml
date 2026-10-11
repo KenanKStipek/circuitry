@@ -3,6 +3,7 @@
     path: /slow
   response:
     status: 200
+    reason: OK
     body: "late"
     delay_ms: 1500
 - request:
@@ -10,4 +11,5 @@
     path: /slow
   response:
     status: 200
+    reason: OK
     body: "on time"
