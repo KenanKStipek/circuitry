@@ -1,0 +1,78 @@
+[
+  {
+    "method": "POST",
+    "path": "/start-303",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "content-length",
+        "7"
+      ],
+      [
+        "content-type",
+        "application/x-www-form-urlencoded"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "payload"
+  },
+  {
+    "method": "GET",
+    "path": "/next-303",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  },
+  {
+    "method": "POST",
+    "path": "/start-307",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "content-length",
+        "7"
+      ],
+      [
+        "content-type",
+        "application/x-www-form-urlencoded"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "payload"
+  }
+]

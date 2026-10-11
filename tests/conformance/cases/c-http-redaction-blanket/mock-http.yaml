@@ -1,0 +1,7 @@
+- request:
+    method: POST
+    path: /secret
+  response:
+    status: 200
+    reason: OK
+    body: "ok"

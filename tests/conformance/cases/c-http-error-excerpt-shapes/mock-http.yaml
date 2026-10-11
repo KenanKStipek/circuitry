@@ -1,0 +1,43 @@
+- request:
+    method: GET
+    path: /nested
+  response:
+    status: 404
+    reason: Not Found
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"message": "nested message not found"}}'
+- request:
+    method: GET
+    path: /flat
+  response:
+    status: 404
+    reason: Not Found
+    headers:
+      Content-Type: application/json
+    body: '{"error": "flat error not found"}'
+- request:
+    method: GET
+    path: /message
+  response:
+    status: 404
+    reason: Not Found
+    headers:
+      Content-Type: application/json
+    body: '{"message": "message key not found"}'
+- request:
+    method: GET
+    path: /unrecognized
+  response:
+    status: 404
+    reason: Not Found
+    headers:
+      Content-Type: application/json
+    body: '{"errors": [{"msg": "graphql style"}]}'
+- request:
+    method: GET
+    path: /not-json
+  response:
+    status: 404
+    reason: Not Found
+    body: "plain text error, not json at all"

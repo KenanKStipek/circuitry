@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-11T19:18:27.286Z","ev":"run_start","run_id":"a7d2d012-d6c9-4be0-a9ae-16e013cd64ec","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":3367}
+{"v":1,"seq":1,"ts":"2026-10-11T19:18:27.289Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T19:18:27.289Z","ev":"start","id":1,"path":"prime.default_fails"}
+{"v":1,"seq":3,"ts":"2026-10-11T19:18:27.291Z","ev":"end","id":1,"path":"prime.default_fails","ok":false,"ms":2,"error":"HTTP 500: Internal Server Error: boom"}
+{"v":1,"seq":4,"ts":"2026-10-11T19:18:27.291Z","ev":"start","id":2,"path":"prime.opted_out"}
+{"v":1,"seq":5,"ts":"2026-10-11T19:18:27.292Z","ev":"end","id":2,"path":"prime.opted_out","ok":true,"ms":1}
+{"v":1,"seq":6,"ts":"2026-10-11T19:18:27.292Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":7,"ts":"2026-10-11T19:18:27.292Z","ev":"run_end","ok":true}

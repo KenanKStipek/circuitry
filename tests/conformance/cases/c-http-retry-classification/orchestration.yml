@@ -1,0 +1,32 @@
+name: c-http-retry-classification
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: retry_after_present
+    provider: http
+    retries:
+      max_attempts: 2
+      backoff_ms: 1
+    params:
+      url: "{{input.base_url}}/retry-after-present"
+  - type: tool
+    name: retry_after_absent
+    provider: http
+    retries:
+      max_attempts: 2
+      backoff_ms: 1
+    params:
+      url: "{{input.base_url}}/retry-after-absent"
+  - type: tool
+    name: unauthorized_not_retried
+    on_error: continue
+    provider: http
+    retries:
+      max_attempts: 3
+      backoff_ms: 1
+    params:
+      url: "{{input.base_url}}/unauthorized"

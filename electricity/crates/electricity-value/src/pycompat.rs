@@ -85,6 +85,19 @@ pub enum PyExc {
     /// exception, a `RuntimeError` subclass Python code never confuses
     /// with a plain one (`type(e).__name__` differs).
     ScriptedRepliesError,
+    /// `http.client.RemoteDisconnected` (lane E, issue #485) -- a
+    /// `ConnectionResetError` subclass `urllib.request.urlopen` never
+    /// wraps as a `URLError`: the server closed the connection before
+    /// sending a status line at all.
+    RemoteDisconnected,
+    /// `http.client.IncompleteRead` (lane E, issue #485) -- a short
+    /// body against a `Content-Length` the server itself declared;
+    /// not retried (`cause: ErrorCause::None`), unlike every other
+    /// raised `http` failure.
+    IncompleteRead,
+    /// `http.client.InvalidURL` (lane E, issue #485) -- a request
+    /// target carrying a space or control character.
+    InvalidURL,
 }
 
 impl PyExc {
@@ -112,6 +125,9 @@ impl PyExc {
             PyExc::ReError => "error",
             PyExc::AdapterCallError => "AdapterCallError",
             PyExc::ScriptedRepliesError => "ScriptedRepliesError",
+            PyExc::RemoteDisconnected => "RemoteDisconnected",
+            PyExc::IncompleteRead => "IncompleteRead",
+            PyExc::InvalidURL => "InvalidURL",
         }
     }
 }
@@ -366,10 +382,96 @@ pub fn shlex_quote(s: &str) -> Result<String, String> {
     Ok(format!("'{}'", s.replace('\'', "'\"'\"'")))
 }
 
-/// `urllib.parse.urlencode(params, doseq=...)` -- signature only; lane
-/// E fills the body (the `http` tool's own query-string construction).
-pub fn urlencode(_params: &[(String, Value)], _doseq: bool) -> Result<String, String> {
-    Err("electricity_value::pycompat::urlencode is not implemented yet (lane E)".to_string())
+/// `urllib.parse.quote_plus(s, safe='')`'s own byte-level rule: the
+/// RFC 3986 unreserved set (letters, digits, `_.-~`) plus *safe* pass
+/// through unescaped; a space becomes `+`; everything else is
+/// percent-encoded one byte at a time (a multi-byte UTF-8 character
+/// becomes one `%XX` per byte -- CPython's own `quote`/`quote_plus`
+/// UTF-8-encode a `str` input before this same per-byte rule). Never
+/// fails -- `quote_plus` itself never raises.
+fn quote_plus_bytes(bytes: &[u8], safe: &str) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &b in bytes {
+        if b < 0x80 {
+            let c = b as char;
+            if c.is_ascii_alphanumeric() || "_.-~".contains(c) || safe.contains(c) {
+                out.push(c);
+                continue;
+            }
+            if b == b' ' {
+                out.push('+');
+                continue;
+            }
+        }
+        out.push_str(&format!("%{b:02X}"));
+    }
+    out
+}
+
+fn quote_plus_str(s: &str, safe: &str) -> String {
+    quote_plus_bytes(s.as_bytes(), safe)
+}
+
+/// A `doseq=True` element's own wire text: `quote_via(elt, safe)` for
+/// `bytes` (quoted directly, never stringified -- `str(b"x")` would
+/// give the `b'x'` repr form instead), `quote_via(str(elt), safe, ...)`
+/// for everything else, matching [`Value::py_str`]'s own `str()`.
+fn quote_plus_scalar(value: &Value) -> String {
+    match value {
+        Value::Bytes(b) => quote_plus_bytes(b, ""),
+        other => quote_plus_str(&other.py_str(), ""),
+    }
+}
+
+/// `urllib.parse.urlencode(query, doseq=...)`, `safe=''` (the only form
+/// `plugins/http.py` ever calls) -- *params* is already the `(key,
+/// value)` pairs in a dict's own insertion order, each key already
+/// run through Python's own `str()` by the caller: `Value`'s `Dict`
+/// keys are themselves `Value`s, not `String`s, so stringifying a key
+/// happens once at the call site rather than being re-derived here.
+///
+/// Without `doseq`, every value is `str()`-ed and quoted (CPython's
+/// own non-`doseq` branch). With `doseq`:
+/// - a `str` value is quoted as-is;
+/// - a `bytes` value is quoted directly, not stringified;
+/// - anything `len()`-able in CPython -- here, [`Value::List`] and
+///   [`Value::Dict`] -- emits one `key=value` pair per *element* (a
+///   list's own items; a dict's own **keys**, exactly as iterating a
+///   dict does in Python), an empty collection emitting nothing for
+///   that key;
+/// - every other value (CPython's own `TypeError` from a failed
+///   `len()`: `bool`/`int`/`float`/`None`/a `Value::Date`/`DateTime`)
+///   falls back to the non-`doseq` scalar form.
+///
+/// Always `Ok` -- nothing in this path can fail once *params* is
+/// already a list of `(String, Value)` pairs; kept `Result` so a
+/// future caller that still holds an unkeyed params value has one
+/// seam to extend into without a signature change.
+pub fn urlencode(params: &[(String, Value)], doseq: bool) -> Result<String, String> {
+    let mut pairs: Vec<String> = Vec::new();
+    for (key, value) in params {
+        let quoted_key = quote_plus_str(key, "");
+        if !doseq {
+            pairs.push(format!("{quoted_key}={}", quote_plus_scalar(value)));
+            continue;
+        }
+        match value {
+            Value::Str(s) => pairs.push(format!("{quoted_key}={}", quote_plus_str(s, ""))),
+            Value::Bytes(b) => pairs.push(format!("{quoted_key}={}", quote_plus_bytes(b, ""))),
+            Value::List(items) => {
+                for item in items {
+                    pairs.push(format!("{quoted_key}={}", quote_plus_scalar(item)));
+                }
+            }
+            Value::Dict(entries) => {
+                for (inner_key, _) in entries {
+                    pairs.push(format!("{quoted_key}={}", quote_plus_scalar(inner_key)));
+                }
+            }
+            other => pairs.push(format!("{quoted_key}={}", quote_plus_scalar(other))),
+        }
+    }
+    Ok(pairs.join("&"))
 }
 
 #[cfg(test)]
@@ -582,5 +684,92 @@ mod tests {
     #[test]
     fn shlex_quote_quotes_any_non_ascii_character() {
         assert_eq!(shlex_quote("café"), Ok("'café'".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod urlencode_tests {
+    use super::*;
+    use crate::Dict;
+
+    fn pairs(entries: Vec<(&str, Value)>) -> Vec<(String, Value)> {
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    #[test]
+    fn doseq_scalars_match_pythons_str() {
+        let params = pairs(vec![
+            ("a", Value::from(1i64)),
+            ("b", Value::Bool(true)),
+            ("c", Value::None),
+            ("d", Value::Float(1.5)),
+        ]);
+        assert_eq!(urlencode(&params, true).unwrap(), "a=1&b=True&c=None&d=1.5");
+    }
+
+    #[test]
+    fn doseq_list_emits_one_pair_per_element() {
+        let params = pairs(vec![(
+            "a",
+            Value::List(vec![
+                Value::from(1i64),
+                Value::from(2i64),
+                Value::from(3i64),
+            ]),
+        )]);
+        assert_eq!(urlencode(&params, true).unwrap(), "a=1&a=2&a=3");
+    }
+
+    #[test]
+    fn doseq_empty_list_emits_nothing() {
+        let params = pairs(vec![("a", Value::List(vec![]))]);
+        assert_eq!(urlencode(&params, true).unwrap(), "");
+    }
+
+    #[test]
+    fn doseq_dict_value_iterates_its_keys() {
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("x".to_string()), Value::from(1i64));
+        dict.insert(Value::Str("y".to_string()), Value::from(2i64));
+        let params = pairs(vec![("a", Value::Dict(dict))]);
+        assert_eq!(urlencode(&params, true).unwrap(), "a=x&a=y");
+    }
+
+    #[test]
+    fn reserved_and_non_ascii_characters_are_percent_encoded() {
+        let params = pairs(vec![(
+            "q",
+            Value::Str("hello world/slash~tilde".to_string()),
+        )]);
+        assert_eq!(
+            urlencode(&params, true).unwrap(),
+            "q=hello+world%2Fslash~tilde"
+        );
+        let params = pairs(vec![("q", Value::Str("héllo".to_string()))]);
+        assert_eq!(urlencode(&params, true).unwrap(), "q=h%C3%A9llo");
+    }
+
+    #[test]
+    fn non_doseq_matches_doseq_for_plain_scalars() {
+        let params = pairs(vec![
+            ("a", Value::from(1i64)),
+            ("b", Value::Bool(true)),
+            ("c", Value::None),
+            ("d", Value::Float(1.5)),
+        ]);
+        assert_eq!(
+            urlencode(&params, false).unwrap(),
+            "a=1&b=True&c=None&d=1.5"
+        );
+    }
+
+    #[test]
+    fn bytes_values_are_quoted_directly_not_stringified() {
+        let params = pairs(vec![("a", Value::Bytes(b"bytes val".to_vec()))]);
+        assert_eq!(urlencode(&params, true).unwrap(), "a=bytes+val");
+        assert_eq!(urlencode(&params, false).unwrap(), "a=bytes+val");
     }
 }

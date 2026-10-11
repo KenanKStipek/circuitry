@@ -1,0 +1,17 @@
+name: c-http-redaction-blanket
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: result
+    provider: http
+    params:
+      url: "{{input.base_url}}/secret"
+      method: POST
+      headers:
+        Authorization: "Bearer sk-live-FAKEKEY1234567890abcdef"
+      json:
+        callback: "https://user:pass@example.com/callback"

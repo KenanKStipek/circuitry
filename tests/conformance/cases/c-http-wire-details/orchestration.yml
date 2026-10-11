@@ -1,0 +1,58 @@
+name: c-http-wire-details
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: doseq_query_appends_to_existing
+    provider: http
+    params:
+      url: "{{input.base_url}}/search?existing=1"
+      params:
+        tag: ["a", "b"]
+  - type: tool
+    name: json_body_sets_content_type_and_length
+    provider: http
+    params:
+      url: "{{input.base_url}}/json-body"
+      method: POST
+      json:
+        greeting: "hello"
+  - type: tool
+    name: raw_body_defaults_form_content_type
+    provider: http
+    params:
+      url: "{{input.base_url}}/raw-body"
+      method: POST
+      body: "a=1&b=2"
+  - type: tool
+    name: duplicate_set_cookie_keeps_last_value
+    provider: http
+    params:
+      url: "{{input.base_url}}/cookies"
+  - type: tool
+    name: non_utf8_body_decodes_with_replacement
+    provider: http
+    params:
+      url: "{{input.base_url}}/binary"
+  - type: tool
+    name: head_request_has_no_body
+    provider: http
+    params:
+      url: "{{input.base_url}}/head-me"
+      method: HEAD
+  - type: tool
+    name: parse_json_on_a_non_json_body
+    on_error: continue
+    provider: http
+    params:
+      url: "{{input.base_url}}/not-json"
+      parse: json
+  - type: tool
+    name: parse_auto_falls_back_to_text
+    provider: http
+    params:
+      url: "{{input.base_url}}/not-json"
+      parse: auto

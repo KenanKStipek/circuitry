@@ -1,0 +1,37 @@
+- request:
+    method: GET
+    path: /retry-after-present
+  response:
+    status: 429
+    reason: Too Many Requests
+    headers:
+      Retry-After: "0"
+    body: "slow down"
+- request:
+    method: GET
+    path: /retry-after-present
+  response:
+    status: 200
+    reason: OK
+    body: "ok after retry-after"
+- request:
+    method: GET
+    path: /retry-after-absent
+  response:
+    status: 429
+    reason: Too Many Requests
+    body: "slow down too"
+- request:
+    method: GET
+    path: /retry-after-absent
+  response:
+    status: 200
+    reason: OK
+    body: "ok after plain 429"
+- request:
+    method: GET
+    path: /unauthorized
+  response:
+    status: 401
+    reason: Unauthorized
+    body: "nope"

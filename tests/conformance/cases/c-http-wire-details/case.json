@@ -1,0 +1,8 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §2.6 (http's own wire-level details)",
+  "description": "A query string with doseq appended to a URL that already has '?'; a json body's own Content-Type/Content-Length; a raw string body's default application/x-www-form-urlencoded Content-Type; a duplicate Set-Cookie response header (first position, last value); a non-UTF-8 response body (U+FFFD replacement); a HEAD request (headers but no body, on either side of the wire); parse: json raising on a non-JSON body versus parse: auto falling back to text.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}
