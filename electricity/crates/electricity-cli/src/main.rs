@@ -776,7 +776,7 @@ fn main() -> ExitCode {
     if !matches!(action, Action::Version | Action::Help) {
         user_env::load_user_env();
     }
-    match action {
+    let exit_code = match action {
         Action::Version => {
             write_stdout(&format!("{}\n", electricity::version_string()));
             ExitCode::SUCCESS
@@ -787,25 +787,24 @@ fn main() -> ExitCode {
         }
         Action::Run(run_args) => run_action(run_args),
         Action::DumpIr(config_path, orchestration_path, raw_inputs) => {
-            let inputs = match electricity::parse_inputs(&raw_inputs) {
-                Ok(inputs) => inputs,
+            match electricity::parse_inputs(&raw_inputs) {
+                Ok(inputs) => match electricity::dump_ir(
+                    Path::new(&config_path),
+                    Path::new(&orchestration_path),
+                    &inputs,
+                ) {
+                    Ok(json) => {
+                        write_stdout(&format!("{json}\n"));
+                        ExitCode::SUCCESS
+                    }
+                    Err(message) => {
+                        write_stderr(&format!("{message}\n"));
+                        ExitCode::from(1)
+                    }
+                },
                 Err(message) => {
                     write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
-                    return ExitCode::from(2);
-                }
-            };
-            match electricity::dump_ir(
-                Path::new(&config_path),
-                Path::new(&orchestration_path),
-                &inputs,
-            ) {
-                Ok(json) => {
-                    write_stdout(&format!("{json}\n"));
-                    ExitCode::SUCCESS
-                }
-                Err(message) => {
-                    write_stderr(&format!("{message}\n"));
-                    ExitCode::from(1)
+                    ExitCode::from(2)
                 }
             }
         }
@@ -813,7 +812,21 @@ fn main() -> ExitCode {
             write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
             ExitCode::from(2)
         }
-    }
+    };
+    // The leftover-replies export (electricity/docs/spec/scripted-
+    // replies.md §7, issue #478): Circuitry's own `atexit` hook runs
+    // on every normal interpreter exit -- 0, 1, 2, and the *first*
+    // signal's own handled exit (`cli/interrupts.py`'s cooperative
+    // cancellation, which still reaches `sys.exit`) -- but never on a
+    // *second* SIGINT/SIGTERM's `os._exit`, which skips `atexit`
+    // entirely. This one call site covers the same set: every path
+    // through `main` ends up here (including every signal exit
+    // `run_action` itself returns for, via `exit_code_for`), while a
+    // second signal's own hard exit
+    // (`arm_signals`'s own `std::process::exit` call) never reaches
+    // this function at all.
+    electricity::write_leftover_export();
+    exit_code
 }
 
 #[cfg(test)]

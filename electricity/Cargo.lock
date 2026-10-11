@@ -379,8 +379,13 @@ name = "electricity-adapters"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "electricity-bytecode",
+ "electricity-json",
  "electricity-value",
  "electricity-vm",
+ "electricity-yaml",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

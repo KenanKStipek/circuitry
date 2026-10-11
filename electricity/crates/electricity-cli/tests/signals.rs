@@ -542,3 +542,49 @@ fn the_test_harness_can_spawn_and_signal_a_child_without_hanging() {
     assert!(status.code().is_some() || status.signal().is_some());
     let _ = std::io::stdout().flush();
 }
+
+/// Issue #478's own exit-path wiring: `electricity::write_leftover_export`
+/// runs on a *first* SIGINT's own handled exit (130) exactly as it does
+/// on an ordinary exit 0/1/2 (`cli.rs`'s own coverage) -- the same call
+/// site in `main` covers SIGTERM (143)/SIGHUP (129) too, since all three
+/// signal exits reach it through `run_action`'s own `exit_code_for`, the
+/// same as this one. No document here ever loads a `scripted` adapter
+/// (`prompt` stays refused until lane G), so the export file never
+/// actually appears; this is a regression guard against the hook
+/// panicking or wrongly writing one on a signal exit, not proof the
+/// export carries real content for a signal-interrupted run -- that
+/// end-to-end case is lane G's, once a document can drive the scripted
+/// adapter at all (said in the PR per issue #478's own test-plan note).
+#[test]
+fn a_sigint_exit_also_runs_the_leftover_replies_export_hook_without_panicking() {
+    let home = TempHome::new("sigint-export-hook");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let export = home.path.join("leftover-export.json");
+    let mut cmd = Command::new(bin());
+    cmd.env_clear();
+    cmd.env("HOME", &home.path);
+    cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
+    cmd.env("CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE", &export);
+    cmd.args([config.to_str().unwrap(), doc.to_str().unwrap()]);
+    cmd.args(["--live-state", live_state_path(&home).to_str().unwrap()]);
+    cmd.args(["--out", out.to_str().unwrap()]);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.process_group(0);
+    let mut child = TestChild {
+        child: cmd.spawn().expect("spawn electricity"),
+    };
+    wait_until_running(&home);
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert!(out.exists());
+    assert!(
+        !export.exists(),
+        "no scripted adapter ever loaded, so the export must stay absent"
+    );
+}

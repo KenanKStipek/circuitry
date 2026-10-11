@@ -20,6 +20,11 @@ pub mod out;
 pub mod run;
 pub mod state;
 
+/// `electricity_adapters::write_leftover_export` -- re-exported so
+/// `electricity-cli`'s own exit path (the only caller) doesn't need
+/// its own direct dependency on `electricity-adapters` just for this
+/// one function (issue #478, lane F1).
+pub use electricity_adapters::write_leftover_export;
 pub use electricity_vm::CancellationToken;
 pub use run::{RunRequest, RunResult, Signal};
 
