@@ -37,7 +37,6 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::UnsupportedToolProvider(provider) => {
             format!("a tool effect with provider {provider:?}")
         }
-        RefusalReason::PartialReference => "an unexpanded {{> name}} partial reference".to_string(),
         RefusalReason::DocumentAdapter(adapter) => format!(
             "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
         ),

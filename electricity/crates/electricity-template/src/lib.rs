@@ -380,6 +380,53 @@ pub fn tokens(template: &str) -> Result<Vec<TokenKind>, TokensError> {
     }
 }
 
+/// [`TokensError`], with the tokenizer's own raw (un-joined,
+/// un-whitespace-collapsed) message instead of [`TokenizeFailure::describe`]'s
+/// single-line form -- [`RawTokensError`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RawTokensError {
+    /// A malformed tag, message exactly as chevron's own tokenizer
+    /// raised it (`str(exc)`, not `" ".join(str(exc).split())`).
+    Syntax(String),
+    /// Any other tokenizing failure (in practice, only an empty `{{}}`).
+    Render(String),
+    /// Nested past [`MAX_SECTION_DEPTH`].
+    TooDeeplyNested(usize),
+}
+
+impl std::fmt::Display for RawTokensError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RawTokensError::Syntax(msg) | RawTokensError::Render(msg) => write!(f, "{msg}"),
+            RawTokensError::TooDeeplyNested(depth) => write!(
+                f,
+                "template nesting too deep ({depth} levels, max {MAX_SECTION_DEPTH})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RawTokensError {}
+
+/// [`tokens`], with [`RawTokensError`]'s own un-collapsed message on
+/// failure instead of [`TokensError`]'s -- lane P (#487): a declared
+/// prompt's own run-time `{{> name}}` rewrite (`electricity_vm::compose`)
+/// reports a tokenize failure with chevron's exact exception text
+/// (`core/prompt_compose.py::_unescape_variable_tags`'s own `f"...{exc}"`,
+/// never `_describe`'s whitespace-collapsed form), unlike every
+/// compile-time caller of [`tokens`] (which always wants the collapsed,
+/// single-line form already).
+pub fn tokens_raw(template: &str) -> Result<Vec<TokenKind>, RawTokensError> {
+    match tokenizer::tokenize(template) {
+        Ok(tags) => Ok(tags.into_iter().map(TokenKind::from).collect()),
+        Err(TokenizeError { failure, .. }) => Err(match failure {
+            TokenizeFailure::Syntax(msg) => RawTokensError::Syntax(msg),
+            TokenizeFailure::Index(msg) => RawTokensError::Render(msg),
+            TokenizeFailure::Depth(depth) => RawTokensError::TooDeeplyNested(depth),
+        }),
+    }
+}
+
 /// Render *template* against *root* through *ctx* ([`PlainCtx`] for every
 /// ordinary template site, [`JsonAwareCtx`] only for a tool's
 /// `params_json`, DESIGN.md §3.3). Mirrors
@@ -412,6 +459,29 @@ pub fn render_template_with_root<R: ScopeRoot>(
     ctx: &dyn SpliceCtx,
     label: &str,
 ) -> Result<String, TemplateError> {
+    render_template_with_root_and_escape(template, root, ctx, label, true)
+}
+
+/// [render_template_with_root], with *escape* as an additive option
+/// (#397/#406, lane P): escape = false swaps out chevron's own
+/// HTML-escaper for the duration of this one render and nothing else
+/// -- every other rule in the variable branch, including the dot-
+/// plus-True quirk, keeps applying exactly as it does when escape is
+/// true (render_variable_escaped's own doc comment).
+/// [render_template_with_root] itself is this function called with
+/// escape: true, so every existing caller's own output stays byte for
+/// byte unchanged. Prompt text (a prompt/yield effect's own template/
+/// messages[].content, a declared prompt, a prompt file) renders with
+/// escape: false; everything else (tool params/params_json, use
+/// inputs/inline, asset refs) keeps escape: true (runtime-semantics.md
+/// section 3.4's own table).
+pub fn render_template_with_root_and_escape<R: ScopeRoot>(
+    template: &str,
+    root: &R,
+    ctx: &dyn SpliceCtx,
+    label: &str,
+    escape: bool,
+) -> Result<String, TemplateError> {
     let tokens = match validate_and_reject_partials(template, false) {
         Ok(tokens) => tokens,
         Err(ValidateFailure::Syntax(msg)) => {
@@ -435,10 +505,23 @@ pub fn render_template_with_root<R: ScopeRoot>(
     };
     let tree = render::build_tree(&tokens);
     let scope = render::Scope::root(root);
-    render::render_nodes(&tree, &scope, ctx).map_err(|msg| TemplateError {
+    render::render_nodes(&tree, &scope, ctx, escape).map_err(|msg| TemplateError {
         label: label.to_string(),
         kind: TemplateErrorKind::Render(msg),
     })
+}
+
+/// [render_template], with *escape* as an additive option -- see
+/// [render_template_with_root_and_escape]. [render_template] itself
+/// is this function called with escape: true.
+pub fn render_template_with_escape(
+    template: &str,
+    root: &Value,
+    ctx: &dyn SpliceCtx,
+    label: &str,
+    escape: bool,
+) -> Result<String, TemplateError> {
+    render_template_with_root_and_escape(template, root, ctx, label, escape)
 }
 
 #[cfg(test)]

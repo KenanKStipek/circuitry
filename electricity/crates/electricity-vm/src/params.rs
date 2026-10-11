@@ -298,7 +298,7 @@ pub fn render_params_json<R: ParamsCtx>(
         effect_names,
         "params_json",
         &json_ctx,
-        false,
+        true,
     )
     .map_err(RenderParamsJsonError::Template)?;
     let mut parsed = electricity_json::loads(&rendered_text).map_err(|err| {
@@ -409,16 +409,15 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_leaf_reaches_the_m1_p_stub_error_not_templates_own_rejection() {
-        // Review finding 1's own probe on PR #454: before this fix,
-        // `render_node` called `render_template` directly, so a `{{>
-        // name}}` leaf failed with electricity-template's own
-        // "partials are not supported" malformed-template error
-        // instead of ever reaching `render_with_composition`'s stub --
-        // the walker keeps this unreachable through a real run (a
-        // partial is refused up front), but lane P must be able to
-        // fill this one function's own body without this file's own
-        // signature changing again.
+    fn a_partial_leaf_runs_through_composition_not_templates_own_rejection() {
+        // Review finding 1's own probe on PR #454: `render_node` always
+        // renders a template leaf through `render_with_composition`,
+        // never `render_template` directly, so a `{{> name}}` leaf
+        // reaches real `{{> name}}` expansion (M1-P, #487) rather than
+        // `electricity-template`'s own unconditional partial rejection
+        // -- the walker keeps a document with one refused before a
+        // real run even starts; this file's own render path has never
+        // needed to special-case it.
         let mut params = IndexMap::new();
         params.insert(
             Value::Str("greeting".to_string()),
@@ -434,14 +433,14 @@ mod tests {
         )
         .unwrap_err();
         let message = err.to_string();
-        assert!(
-            message.contains("run-time prompt composition is not supported"),
-            "expected the M1-P stub error, got: {message}"
+        assert_eq!(
+            message,
+            "params.greeting: '{{> greeting}}' does not name a declared prompt or effect."
         );
         assert!(
             !message.contains("partials are not supported"),
             "a partial leaf must reach render_with_composition's own \
-             stub, not electricity-template's partial rejection: {message}"
+             expansion, not electricity-template's partial rejection: {message}"
         );
     }
 
@@ -653,6 +652,32 @@ mod tests {
         assert_eq!(
             rendered.get(&Value::Str("tickers".to_string())),
             Some(&Value::List(vec![Value::from("AAPL"), Value::from("MSFT")]))
+        );
+    }
+
+    #[test]
+    fn params_json_escapes_an_html_special_character_value() {
+        // #487's own settled question: `_render_params_json` calls
+        // `render_with_composition` with no `escape=` override, so its
+        // default `True` applies -- `params_json`'s own `TemplateText`
+        // is `Escape::Html`. A raw `&`/`<`/`>`/`"` value is HTML-escaped
+        // before the JSON parse, same as Python; the parsed value keeps
+        // the escaped text literally (JSON never re-decodes it).
+        let ctx = ctx_from(vec![(
+            "input",
+            ctx_from(vec![("x", Value::from("<b>&\""))]),
+        )]);
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered = render_params_json(
+            "{\"x\": \"{{input.x}}\"}",
+            &ctx,
+            &declared_prompts,
+            &effect_names,
+        )
+        .unwrap();
+        assert_eq!(
+            rendered.get(&Value::Str("x".to_string())),
+            Some(&Value::from("&lt;b&gt;&amp;&quot;"))
         );
     }
 

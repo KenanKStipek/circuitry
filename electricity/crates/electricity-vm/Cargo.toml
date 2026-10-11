@@ -68,7 +68,27 @@ electricity-yaml = { path = "../electricity-yaml" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value` -- the compose golden corpus's own JSON `ctx`/node objects
+# replay as `electricity_value::Dict`, whose own insertion order is part
+# of what a `{{d}}`/`py_repr` splice renders; `serde_json`'s default
+# `Map` is a `BTreeMap` (alphabetical), which would silently reorder a
+# multi-key object on the way in. A `preserve_order` feature would fix
+# that for this crate's own corpus fields, but `cargo test --workspace`
+# unifies dev-dependency features across the whole workspace (Cargo's
+# own feature-unification rule), so it would also switch every *other*
+# crate's `serde_json::Value`/`Map` -- including `electricity-compiler`'s
+# own JSON-schema recursion in `schema_instance.rs` -- onto a heavier,
+# `IndexMap`-backed `Map`, which grows that recursion's own stack frames
+# enough to overflow in `depth_safety`'s 255-level cases (confirmed: the
+# unified binary overflows 3/3 locally; `cargo test -p electricity-compiler`
+# alone, built without this crate's dev-dependencies, does not). `raw_value`
+# carries no such risk (`[features] raw_value = []`, no deps of its own):
+# corpus case structs capture a field needing order as a boxed
+# `serde_json::value::RawValue` (the original JSON bytes, untouched) and
+# re-parse just that slice through `electricity_json::loads`, this
+# crate's own hand-rolled, always order-preserving reader -- never through
+# `serde_json::Value` at all.
+serde_json = { version = "1", features = ["raw_value"] }
 async-trait = "0.1"
 # `test-tools`'s own `flaky_build` builder (S1's own test: a fallible
 # per-attempt plugin *builder*, not just a flaky `execute`) -- only ever

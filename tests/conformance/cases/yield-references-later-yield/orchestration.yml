@@ -1,0 +1,8 @@
+name: yield-references-later-yield
+effects:
+  - type: yield
+    name: before
+    template: "[{{> later}}]"
+  - type: yield
+    name: later
+    template: "ran"

@@ -8,11 +8,14 @@ tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
 **This is a preview.** `electricity <config.json> <orchestration.yml>` runs
-documents built from `tool`, `dynamic`, `if`, `loop` and `use` effects and
-`finally:` blocks, with the `json`, `shell`, `awk`, `imagemagick`, `ffmpeg`,
-`fs`, `env_vars`, `hash`, `uuid` and `clock` tool providers, aiming at the
-same final state, `--live-state` and `--events` output as `cof run`.
-Everything else (prompts and model adapters, reflectors, `yield`, the other
+documents built from `tool`, `dynamic`, `if`, `loop`, `use` and `yield`
+effects and `finally:` blocks, with the `json`, `shell`, `awk`,
+`imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid` and `clock` tool
+providers, aiming at the same final state, `--live-state` and `--events`
+output as `cof run`. A top-level `prompts:` map and `{{> name}}` composition
+run too, in every field that reaches them (a tool's `prompt`/`params`/
+`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s `template`).
+Everything else (prompt effects and model adapters, reflectors, the other
 tool providers, persistence, runtime plugins, complexity routing) is refused
 with a preview message pointing at `cof run`. A document and its literal
 `use` children are checked before the run starts; an inline or templated
