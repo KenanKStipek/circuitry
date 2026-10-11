@@ -7,7 +7,7 @@
 //! token kills every tracked process group at once on `request()`, and
 //! a per-call *timeout* still applies independently.
 
-use electricity_value::CancellationToken;
+use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -61,7 +61,11 @@ impl std::fmt::Display for ProcError {
             ProcError::Timeout {
                 binary,
                 timeout_seconds,
-            } => write!(f, "{binary:?} exceeded timeout of {timeout_seconds}s"),
+            } => write!(
+                f,
+                "{} exceeded timeout of {timeout_seconds}s",
+                Value::Str(binary.clone()).py_repr()
+            ),
             ProcError::Cancelled => write!(f, "cancelled"),
             ProcError::Decode(message) => write!(f, "{message}"),
             ProcError::Other(message) => write!(f, "{message}"),
@@ -97,4 +101,21 @@ pub fn resolve_binary(_binary: &str, _search_path: Option<&Path>) -> Result<Stri
     Err(ProcError::Other(
         "electricity_tools::process::resolve_binary is not implemented yet (lane C)".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_display_quotes_the_binary_like_pythons_own_repr() {
+        // Review finding/P2-d on PR #454: `plugins/_subprocess.py`'s
+        // own `{binary!r}` is single-quoted; Rust's `{:?}` on a `String`
+        // is double-quoted.
+        let err = ProcError::Timeout {
+            binary: "ffmpeg".to_string(),
+            timeout_seconds: 30,
+        };
+        assert_eq!(err.to_string(), "'ffmpeg' exceeded timeout of 30s");
+    }
 }
