@@ -112,7 +112,7 @@ whichever lane gets there first.
 | `electricity-config` | `src/preflight.rs` | `preflight`, `classify_preflight_results`, the formatters | R | Not created yet. |
 | `electricity-yaml` | `src/lib.rs` | `load_plain` (no duplicate-key check, for profiles) | J1 | Additive. |
 | `electricity-template` | `src/lib.rs` | the no-escape render mode | P | Additive (#406). |
-| `electricity` (lib) | `src/run.rs` | run wiring v2 (preflight, adapter resolution, `--profile`) | R | |
+| `electricity` (lib) | `src/lib.rs` | run wiring v2 (preflight, adapter resolution, `--profile`) | R | Review P2-3 on PR #454's second review: this row used to say `src/run.rs`, but the real wiring (`run_orchestration`, the function that builds `adapters`/`default_adapter`/the rest of `RunContext`) lives in `src/lib.rs` -- `src/run.rs` only ever held the `RunRequest`/`RunResult` shapes (this table's own row above, lane A, final). The gate already wired `electricity_adapters::build_registry()` into `adapters` here (P2-3) rather than leaving an empty `AdapterRegistry::new()` for R to replace -- R's own PR fills preflight/`--profile`/real adapter *resolution* (choosing which adapter a given `model:`/`adapter:` combination actually calls), not the registry construction itself. |
 | `electricity-cli` | `src/main.rs` | `--profile <path>` accepted | R | |
 
 ## Reading this table
