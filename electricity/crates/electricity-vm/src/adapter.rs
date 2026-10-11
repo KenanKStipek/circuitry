@@ -235,8 +235,13 @@ impl AdapterRegistry {
         self.builders.insert(name.to_string(), builder);
     }
 
-    /// Every registered name, sorted -- `adapters/factory.py::
-    /// _supported_names`'s own `tuple(sorted(ADAPTER_REGISTRY.keys()))`.
+    /// Every name *this registry* actually has a builder for, sorted --
+    /// what this crate (not Circuitry's own full registry,
+    /// [`crate::adapter_names::ADAPTER_NAMES`]) can build right now.
+    /// Not used by [`AdapterRegistry::build`]'s own unknown-adapter
+    /// message (review finding 4 on PR #454); kept for a caller that
+    /// wants to know what's actually buildable, e.g. a `--list-adapters`
+    /// CLI command.
     pub fn supported_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.builders.keys().cloned().collect();
         names.sort();
@@ -247,6 +252,14 @@ impl AdapterRegistry {
     /// normalized (`.strip().lower()`) before lookup; *runtime_config*
     /// is the merged `runtime:` block, from which this reads
     /// `runtime.adapters.<adapter_name>`.
+    ///
+    /// The unknown-adapter message's own "Supported adapters" list is
+    /// *not* this registry's own key set -- it is
+    /// [`crate::adapter_names::ADAPTER_NAMES`], Circuitry's **full**
+    /// registry (review finding 4 on PR #454: `supported_names` alone
+    /// only ever lists what this one Rust crate has built so far,
+    /// empty through M1-A -- not what `build_adapter`'s own message
+    /// would say for the same *adapter_name*).
     pub fn build(
         &self,
         adapter_name: &str,
@@ -254,7 +267,7 @@ impl AdapterRegistry {
     ) -> Result<Box<dyn Adapter>, AdapterError> {
         let normalized = adapter_name.trim().to_lowercase();
         let builder = self.builders.get(normalized.as_str()).ok_or_else(|| {
-            let supported = self.supported_names().join(", ");
+            let supported = crate::adapter_names::ADAPTER_NAMES.join(", ");
             AdapterError {
                 message: format!(
                     "Unknown adapter: {}. Supported adapters: {supported}. Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution.",
@@ -318,21 +331,38 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_adapter_name_lists_every_supported_name() {
-        let mut registry = AdapterRegistry::new();
-        registry.register(
-            "stub",
-            Box::new(|_cfg| Ok(Box::new(NotImplementedAdapter) as Box<dyn Adapter>)),
-        );
+    fn an_unregistered_adapter_name_lists_pythons_full_registry() {
+        // Review finding 4 on PR #454: the message names Circuitry's
+        // full registry (`adapter_names::ADAPTER_NAMES`), not this
+        // registry's own (possibly empty, as it is through M1-A) set
+        // of registered builders.
+        let registry = AdapterRegistry::new();
         let err = match registry.build("bogus", &Value::None) {
             Err(err) => err,
             Ok(_) => panic!("expected an unknown-adapter error"),
         };
-        assert_eq!(
-            err.message,
-            "Unknown adapter: 'bogus'. Supported adapters: stub. \
-             Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution."
+        assert!(
+            err.message
+                .starts_with("Unknown adapter: 'bogus'. Supported adapters: ")
         );
+        assert!(err.message.contains("ollama"));
+        assert!(err.message.contains("anthropic"));
+        assert!(err.message.ends_with(
+            "Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution."
+        ));
+    }
+
+    #[test]
+    fn an_adapter_circuitry_supports_but_this_crate_cannot_build_yet_is_still_unknown_here() {
+        // `ollama` is in Circuitry's own registry (and so in the
+        // "Supported adapters" list the message above names), but this
+        // crate has no builder for it yet (lane F2).
+        let registry = AdapterRegistry::new();
+        let err = match registry.build("ollama", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an unknown-adapter error"),
+        };
+        assert!(err.message.starts_with("Unknown adapter: 'ollama'."));
     }
 
     #[test]
