@@ -160,7 +160,7 @@ pub fn dump_ir(
 // run_orchestration -- issue #431's run-wiring steps 1-19
 // ---------------------------------------------------------------------
 
-use electricity_bytecode::{EffectPath, Refusal, RefusalReason, first_unsupported};
+use electricity_bytecode::{EffectPath, first_unsupported, format_refusal};
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
@@ -217,45 +217,6 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
         registry.register(Box::new(electricity_tools::test_tools::FailTool));
     }
     registry
-}
-
-/// `electricity_bytecode::RefusalReason` -> the human-readable half of
-/// the refusal message [`format_refusal`] builds (issue #431's gate
-/// lane: "the refusal message keeps the existing preview marker phrase
-/// and adds the effect path and the reason").
-fn refusal_reason_text(reason: &RefusalReason) -> String {
-    match reason {
-        RefusalReason::Prompt => "a prompt effect".to_string(),
-        RefusalReason::Loop => "a loop effect".to_string(),
-        RefusalReason::Use => "a use effect".to_string(),
-        RefusalReason::Reflector => "a reflector effect".to_string(),
-        RefusalReason::Yield => "a yield effect".to_string(),
-        RefusalReason::ModelCondition => "an if/while condition in mode: model".to_string(),
-        RefusalReason::ModelExpect => "an expect: in mode: model".to_string(),
-        RefusalReason::DeclaredPrompts => "a document that declares prompts:".to_string(),
-        RefusalReason::UnsupportedToolProvider(provider) => {
-            format!("a tool effect with provider {provider:?}")
-        }
-        RefusalReason::PartialReference => "an unexpanded {{> name}} partial reference".to_string(),
-        RefusalReason::DocumentAdapter(adapter) => format!(
-            "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
-        ),
-        RefusalReason::ComplexityEnabled => {
-            "a run whose effective config enables complexity scoring, routing or decomposition"
-                .to_string()
-        }
-    }
-}
-
-/// The exact text a refusal reports: the preview marker phrase (kept so
-/// the conformance runner's "refusal keeps the preview marker" skip
-/// rule keeps working), the effect path, and the reason.
-fn format_refusal(refusal: &Refusal) -> String {
-    format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: {} is {}; use `cof run` instead",
-        refusal.path,
-        refusal_reason_text(&refusal.reason)
-    )
 }
 
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
