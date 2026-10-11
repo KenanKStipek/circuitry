@@ -78,12 +78,12 @@
 //!   instead of reproducing chevron's miscount. Needs a list section
 //!   containing an inverted section that reuses the same key.
 //!
-//! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) clones the
-//! `Value` it resolves rather than walking by reference; correct, and
-//! simple, but it means `render_with_pushed_scope` copies the whole scope
-//! stack — root state included — once per list element. No caller exists
-//! yet to measure against; walking by reference instead is a later
-//! optimization, not a correctness fix, and is deliberately deferred.
+//! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) walks the
+//! scope chain and the resolved `Value` by reference, cloning only the
+//! final matched value; `render_with_pushed_scope` pushes a new scope by
+//! borrowing the enclosing chain (`Scope`, a parent-linked stack) rather
+//! than copying it, so a render never copies the outer scopes — root
+//! state included — on a section push or a tag lookup.
 
 mod render;
 mod tokenizer;
@@ -419,8 +419,8 @@ pub fn render_template(
         }
     };
     let tree = render::build_tree(&tokens);
-    let scopes = [root.clone()];
-    render::render_nodes(&tree, &scopes, ctx).map_err(|msg| TemplateError {
+    let scope = render::Scope::root(root);
+    render::render_nodes(&tree, &scope, ctx).map_err(|msg| TemplateError {
         label: label.to_string(),
         kind: TemplateErrorKind::Render(msg),
     })
@@ -574,6 +574,38 @@ mod tests {
             render_template("{{#items}}<{{.}}>{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
             "<1><x>"
         );
+    }
+
+    #[test]
+    fn nested_section_falls_back_to_an_outer_key() {
+        // A name absent from the innermost section's own scope must
+        // still resolve against the enclosing scopes, including the
+        // root -- nearest scope first, the first scope where the full
+        // dotted path resolves wins.
+        let ctx = dict(vec![
+            ("outer", Value::Str("OUTER".to_string())),
+            (
+                "a",
+                dict(vec![("b", dict(vec![("present", Value::Bool(true))]))]),
+            ),
+        ]);
+        let out =
+            render_template("{{#a}}{{#b}}[{{outer}}]{{/b}}{{/a}}", &ctx, &PlainCtx, "t").unwrap();
+        assert_eq!(out, "[OUTER]");
+    }
+
+    #[test]
+    fn a_falsy_but_present_inner_key_shadows_an_outer_truthy_one() {
+        // Chevron never "sees past" a present-but-falsy key to an
+        // outer scope's same name -- the inner, falsy `0` wins over the
+        // outer, truthy `"OUTER"`, even though a plain truthiness check
+        // would prefer the outer value.
+        let ctx = dict(vec![
+            ("x", Value::Str("OUTER".to_string())),
+            ("inner", dict(vec![("x", Value::Int(0.into()))])),
+        ]);
+        let out = render_template("{{#inner}}[{{x}}]{{/inner}}", &ctx, &PlainCtx, "t").unwrap();
+        assert_eq!(out, "[0]");
     }
 
     #[test]
