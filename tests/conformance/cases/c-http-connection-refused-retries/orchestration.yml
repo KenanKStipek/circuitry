@@ -1,0 +1,10 @@
+name: c-http-connection-refused-retries
+effects:
+  - type: tool
+    name: result
+    provider: http
+    retries:
+      max_attempts: 2
+      backoff_ms: 1
+    params:
+      url: "http://127.0.0.1:1/unreachable"
