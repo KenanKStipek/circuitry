@@ -1,0 +1,20 @@
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '[1, 2]'}
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+      strict: true
+    then:
+      - type: loop
+        flow: tree
+        max_concurrency: 2
+        each: {in: "prime.seed.value", as: "item"}
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: "{{item}}"}
