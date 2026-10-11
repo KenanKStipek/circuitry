@@ -1301,17 +1301,16 @@ async fn tree_each_with_zero_passes_and_a_concurrency_cap_still_dispatches_one()
     assert_eq!(observer.dispatches.borrow().as_slice(), &[(0, 1)]);
 }
 
-/// Conformance case `loop-unnamed-each-tree`'s own discovery: cof's
-/// `core/store/store.py::Store.fire_concurrent_dispatch`/`effect_path`
-/// take *name* as `str`, but `LoopRuntime.execute`'s tree-each branch
-/// passes `self.defn.name` -- `None` for an unnamed loop -- straight
-/// through, and `effect_path`'s own f-string literally stringifies
-/// that `None` (`f"{prefix}.{name}"`), landing `"prime.None"` in
-/// `--events`' own `dispatch` path. Reproduced here, not fixed --
-/// "Behaviour must match cof run" -- an unnamed loop's every other
-/// event still carries the plain, unsuffixed enclosing path.
+/// Conformance case `loop-unnamed-each-tree`'s own discovery (#470,
+/// fixed): an unnamed loop has no name of its own for
+/// `Store.fire_concurrent_dispatch` to append, so cof fires the
+/// `dispatch` with the enclosing store's own path -- the container the
+/// passes actually run in -- rather than a literal `"None"` suffix.
+/// An unnamed tree loop at the document root has no further-named
+/// container of its own either, so that path is the root itself,
+/// `"prime"`, same as every other event an unnamed loop fires.
 #[tokio::test]
-async fn unnamed_tree_each_dispatches_with_cofs_own_literal_none_suffix() {
+async fn unnamed_tree_each_dispatches_at_the_enclosing_containers_own_path() {
     let store = Store::new();
     seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
 
@@ -1335,10 +1334,7 @@ async fn unnamed_tree_each_dispatches_with_cofs_own_literal_none_suffix() {
         .await
         .unwrap();
 
-    assert_eq!(
-        observer.paths.borrow().as_slice(),
-        &["prime.None".to_string()]
-    );
+    assert_eq!(observer.paths.borrow().as_slice(), &["prime".to_string()]);
 }
 
 /// Review of #466, finding 5: `_resolve_collection`'s own error text

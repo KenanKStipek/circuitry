@@ -244,6 +244,11 @@ class Store:
 
     def effect_path(self, name: str) -> str:
         """The canonical dotted path of the effect *name* in this store."""
+        if name is None:
+            raise ValueError(
+                "Store.effect_path requires a name; an unnamed container "
+                "has no further-named path of its own -- use own_path"
+            )
         return f"{self._path_prefix}.{name}" if self._path_prefix else name
 
     def fire_effect_start(self, name: str, effect_node: dict[str, Any]) -> None:
@@ -278,16 +283,24 @@ class Store:
         self.effect_complete(self.effect_path(name), effect_result)
 
     def fire_concurrent_dispatch(
-        self, name: str, concurrency: int, total: int
+        self, name: str | None, concurrency: int, total: int
     ) -> None:
         """Notify ``concurrent_dispatch`` (if set) that *name* is about to run
         up to *concurrency* branches at once, out of *total* branches overall
         — called once, before any of them starts, from the same thread that
         submits them to the pool.
+
+        *name* is ``None`` for an unnamed ``flow: tree`` loop (a dynamic is
+        always named) — its branches run directly in this store rather than
+        a further-named child, so the dispatch belongs to this store's own
+        path (:attr:`own_path`), the enclosing container the passes actually
+        run in, rather than ``effect_path``'s literal ``"None"`` suffix if
+        handed straight through (#470).
         """
         if self.concurrent_dispatch is None:
             return
-        self.concurrent_dispatch(self.effect_path(name), concurrency, total)
+        path = self.own_path if name is None else self.effect_path(name)
+        self.concurrent_dispatch(path, concurrency, total)
 
     def fire_branch_settled(self, name: str) -> None:
         """Notify ``branch_settled`` (if set) that one branch of *name*'s
