@@ -1,0 +1,6 @@
+{
+  "spec_case": "PR #480 review findings F1-F4 on issue #479's own translation-layer list: character-class ranges (`[a-z]`, `[^0-9]`), a negated shortcut inside a class (`[\\W]`), IGNORECASE combined with ASCII, and Python's 3.7+ must-advance scan rule (`^|\\w+`)",
+  "description": "Each of these broke an ordinary pattern before the fix: a class range like [a-z] matched only its two endpoints and a literal hyphen; [\\W] behaved like \\w (missing negation); IGNORECASE+ASCII together dropped case-insensitivity entirely; and a non-empty match immediately after an empty one (CPython's own documented example, re.findall(r'^|\\w+', 'two words') == ['', 'two', 'words']) was skipped instead of reported.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

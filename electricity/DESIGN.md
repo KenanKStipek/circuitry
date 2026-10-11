@@ -1493,28 +1493,66 @@ binding, which v1 does not add.
 **M1-D2's own translation layer (issue #479), landed.** `electricity-tools::regex::translate`
 turns Python `re` syntax into `fancy-regex` syntax; most constructs pass through unchanged,
 since `fancy-regex` already parses named groups, atomic groups, possessive quantifiers,
-lookaround, backreferences and conditionals natively the same way Python does. Four documented
-divergences remain, each pinned by a corpus/conformance case rather than left silently
-different:
+lookaround, backreferences and conditionals natively the same way Python does.
+
+Python's own 3.7+ empty-match scan rule is **not** a divergence: a non-empty match may start
+right where a previous empty one ended (CPython's own documented example,
+`re.findall(r'^|\w+', 'two words')` == `['', 'two', 'words']`), where `fancy-regex`'s public API
+has no equivalent of CPython's `must_advance` flag (the one primitive that would give it one,
+`OPTION_SKIPPED_EMPTY_MATCH`, is `pub(crate)` only, internal to its own `Matches` iterator).
+`replace::Scanner` builds the same post-condition itself out of `fancy-regex`'s own public `\G`
+syntax (true only where the *search*, not the match, started) plus a negative lookbehind:
+`(?:ORIGINAL)(?<!\G)` fails whenever the match ends back at the search's own start position —
+exactly "this match was empty and anchored at the forbidden position" — forcing the same
+backtracking CPython's own flag does, built lazily and tried only at that one position.
+
+Similarly, IGNORECASE under `ASCII` (only ASCII letters fold) and the Turkish dotless/dotted
+`i`/`I`/`ı`/`İ` (U+0069/U+0049/U+0131/U+0130) fold group are **not** divergences: CPython folds
+all four of those code points together under `IGNORECASE` (confirmed directly against
+`_sre.unicode_tolower`/`re._casefix._EXTRA_CASES`), where `fancy-regex`'s own Unicode case
+folding keeps the Turkish pair apart from plain ASCII `i`/`I`, and emits no ASCII-only mode at
+all. The translator expands each into an explicit alternation itself
+(`translate::literal_outside_class`/`expand_case_in_class`) rather than leaning on the engine's
+own `i` flag for these specific cases. Everything else under IGNORECASE still folds through
+`fancy-regex`'s own Unicode case folding directly — not independently regenerated and replayed
+codepoint-by-codepoint against CPython 3.11's own fold table in this lane, so treat that as
+confirmed only for the cases this lane's own corpus and conformance suite actually exercise,
+not as an exhaustive claim.
+
+Four documented divergences remain, each pinned by a corpus/conformance case rather than left
+silently different:
 
 - **`\N{NAME}`** (a Unicode character-name escape) has no database to resolve it against and
   fails with the `regex: invalid pattern: ` prefix, the same as any other construct this layer
   can't translate (decision 7 above).
-- **Lookbehind fixed-width.** Python requires every alternation branch of a lookbehind to match
-  the same, finite length; `fancy-regex` is looser. The translator computes a conservative
-  min/max matched-length bound for a lookbehind's own body and rejects anything it can't prove
-  is exactly fixed — stricter than CPython's own, more precise analysis in a case this bound
-  widens through a nested group boundary, never looser.
+- **A backreference inside a lookbehind.** Python accepts `(ab)(?<=\1)` because group 1 is
+  itself fixed-width; the translator's own `Width` analysis tracks each group's width and would
+  accept this too, but `fancy-regex`'s own compiler always reports a backreference as
+  non-constant-width regardless of the referenced group (confirmed in its `analyze.rs`:
+  `Expr::Backref` never sets `const_size`), so it rejects the pattern downstream either way.
 - **The backtrack limit.** `fancy-regex` stops at its own backtrack limit with its own error
   (`regex: backtrack limit exceeded`, a retryable `RuntimeError`, like any other tool failure);
   CPython's `re` has no such limit and would run until the effect itself is killed — the `regex`
   plugin ignores `timeout_seconds` in both engines (#448's "Settled questions").
-- **IGNORECASE and Turkish dotless/dotted I.** `fancy-regex`'s own Unicode case folding is used
-  directly (no per-character expansion table) and confirmed, codepoint by codepoint, against
-  CPython 3.11's own folding (`_sre.unicode_tolower` plus `re._casefix._EXTRA_CASES`) to match
-  everywhere except one group: CPython folds `i`/`I`/`ı`/`İ` (U+0049, U+0069, U+0130, U+0131)
-  together under `IGNORECASE`; `fancy-regex` keeps the Turkish dotless/dotted pair apart from
-  plain ASCII `i`/`I`.
+- **A shortcut class nested inside a user's own class.** `\w`/`\W`/`\s`/`\S`/`\d`/`\D` used on
+  its own, outside a class, is guarded against `fancy-regex`'s own IGNORECASE folding with a
+  local `(?-i:...)` (confirmed directly: without it, `\w` under IGNORECASE alone starts
+  matching U+0345 COMBINING GREEK YPOGEGRAMMENI, which CPython's `\w` never does); the same
+  shortcut nested *inside* a user's own `[...]` (e.g. `[\w.]`) has no such guard, since a group
+  isn't valid syntax inside a character class, and so stays subject to the engine's own folding
+  there.
+
+**Reference version (ruling 2).** electricity matches CPython 3.11's `re` exactly; CI still runs
+`cof` itself on 3.10–3.13, and `re` differs across that range in ways this lane doesn't track:
+3.10 rejects atomic groups (`(?>...)`) and possessive quantifiers (`a*+`/`a++`/`a?+`/`{m,n}+`),
+both new in 3.11; 3.13 renames `re.error` to `PatternError` (`type(exc).__name__`, #442's own
+multi-failure tree text) and adjusts a handful of message texts. None of that is reproduced here.
+
+**Unicode database version.** Python 3.11 ships Unicode 14.0; `\w`/`\s`/`\d` are generated from
+that exact version (`electricity/scripts/generate_regex_unicode_tables.py`), not whatever
+version `fancy-regex`'s own tables carry, so those three classes match 3.11 exactly. `fancy-regex`'s
+own case folding (used directly for everything this translator doesn't expand explicitly) may
+still differ from CPython 3.11's for a code point assigned meaning after Unicode 14.0.
 
 ---
 

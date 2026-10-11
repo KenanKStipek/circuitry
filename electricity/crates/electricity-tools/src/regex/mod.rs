@@ -6,21 +6,32 @@
 //! conformance case rather than left silently different):
 //! - `\N{NAME}` (a full Unicode character-name database) is rejected
 //!   with the invalid-pattern prefix, not resolved;
-//! - a lookbehind/pattern this translator can't prove fixed-width is
-//!   rejected even where CPython's own, more precise analysis would
-//!   accept it (`translate::Width`'s own conservative widening through
-//!   a group boundary);
+//! - a backreference *inside a lookbehind* is always rejected, even
+//!   when the referenced group is itself fixed-width (CPython accepts
+//!   that case) -- not this translator's own analysis (`translate::
+//!   Width` does track each group's own width and uses it for exactly
+//!   this check), but `fancy-regex`'s own compiler, which always
+//!   reports a backreference as non-constant-width regardless
+//!   (confirmed in its `analyze.rs`: `Expr::Backref` never sets
+//!   `const_size`);
 //! - `fancy-regex` hitting its own backtracking limit is reported as a
 //!   `RuntimeError` (`regex: backtrack limit exceeded`), retryable like
 //!   any other tool failure, where CPython's `re` (which ignores this
 //!   plugin's `timeout_seconds`, like every other mode here) would run
 //!   until the effect is killed (#448 decision, "Settled questions");
 //! - IGNORECASE: `fancy-regex`'s own Unicode case folding is used
-//!   directly (confirmed against CPython 3.11's `_sre.unicode_tolower`/
-//!   `re._casefix._EXTRA_CASES` to match everywhere except Turkish
-//!   dotless/dotted I -- `i`/`I`/`ı`/`İ` fold together under CPython,
-//!   but `fancy-regex` keeps `ı` (U+0131) and `İ` (U+0130) apart from
-//!   plain `i`/`I`).
+//!   directly for everything this translator doesn't expand itself
+//!   (`translate::literal_outside_class`/`expand_case_in_class` now
+//!   expand ASCII-mode literals/ranges and the Turkish dotless/dotted
+//!   `ı`/`İ` pair explicitly, rather than leaving the latter a
+//!   divergence);
+//! - a shortcut class (`\w`/`\W`/`\s`/`\S`/`\d`/`\D`) nested *inside*
+//!   a user's own `[...]` stays subject to the engine's own IGNORECASE
+//!   folding (confirmed: it can fold in members CPython's `\w` never
+//!   would, e.g. U+0345); the same shortcut used on its own, outside a
+//!   class, is guarded against this (`translate::unicode_class_text`'s
+//!   own `(?-i:...)` wrapper) -- a group isn't valid syntax inside
+//!   `[...]`, so the guard has nowhere to go there.
 
 pub mod replace;
 pub mod translate;
@@ -28,13 +39,67 @@ pub mod translate;
 use crate::fs::{get, value_error};
 use crate::{CheckResult, ErrorCause, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
+use electricity_value::pycompat::PyExc;
 use electricity_value::{Dict, Value};
 use translate::ResolvedFlags;
 
 pub struct RegexPlugin;
 
+/// `re.compile`'s own prefix (`plugins/regex.py::RegexPlugin.execute`:
+/// `raise ValueError(f"regex: invalid pattern: {exc}") from exc`) --
+/// compile-time only; an execution-time `fancy_regex::Error` goes
+/// through [`exec_error`] instead, which doesn't always agree.
 fn invalid_pattern(message: impl std::fmt::Display) -> ToolError {
     value_error(format!("regex: invalid pattern: {message}"))
+}
+
+/// An error from *running* an already-compiled pattern (`captures`/
+/// `find_iter`/`substitute_n`) -- distinct from a compile-time one
+/// ([`invalid_pattern`]) because `fancy-regex` hitting its own
+/// backtrack limit isn't a pattern-syntax problem Python's `re` would
+/// even notice (it has none, and ignores this plugin's
+/// `timeout_seconds` like every other mode here): the settled
+/// question (issue #479) calls for a `RuntimeError` with electricity's
+/// own text, retryable like any other tool failure, never the
+/// `ValueError`/invalid-pattern wrapping `plugins/regex.py` never
+/// raises for this case either (it can't: CPython's own engine has no
+/// such limit).
+fn exec_error(e: fancy_regex::Error) -> ToolError {
+    match e {
+        fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::BacktrackLimitExceeded) => {
+            ToolError {
+                py_class: PyExc::RuntimeError,
+                message: "regex: backtrack limit exceeded".to_string(),
+                cause: ErrorCause::None,
+            }
+        }
+        fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::StackOverflow) => ToolError {
+            py_class: PyExc::RuntimeError,
+            message: "regex: stack overflow".to_string(),
+            cause: ErrorCause::None,
+        },
+        other => invalid_pattern(other),
+    }
+}
+
+/// `re.sub`'s own template-parse failure (`replace::parse_template`):
+/// propagates unwrapped, as CPython's own bare `re.error` does (issue
+/// #479's "Template errors propagate unwrapped" rule) -- `type(exc).
+/// __name__` is `error` on 3.11
+/// ([`PyExc::ReError`]), except "unknown group name", which CPython
+/// raises as a bare `IndexError` instead (confirmed directly;
+/// `replace.rs`'s own doc comment on that branch).
+fn template_error(message: String) -> ToolError {
+    let py_class = if message.starts_with("unknown group name") {
+        PyExc::IndexError
+    } else {
+        PyExc::ReError
+    };
+    ToolError {
+        py_class,
+        message,
+        cause: ErrorCause::None,
+    }
 }
 
 /// `_resolve_flags`: falsy -> no flags; a non-list -> `ValueError`; each
@@ -154,23 +219,25 @@ impl ToolPlugin for RegexPlugin {
 
         let flags = resolve_flags(get(&params, "flags"))?;
         let translated = translate::translate(&pattern, flags).map_err(invalid_pattern)?;
-        let compiled = fancy_regex::Regex::new(&translated.pattern).map_err(invalid_pattern)?;
+        // `match` anchors the whole pattern at position 0
+        // (`\A(?:...)`, a non-capturing wrapper that keeps every group
+        // number) -- compiled once, same as every other mode (F9:
+        // this translator used to compile the pattern twice for
+        // `match`, once unused).
+        let pattern_text = if mode == "match" {
+            format!("\\A(?:{})", translated.pattern)
+        } else {
+            translated.pattern.clone()
+        };
+        let compiled = fancy_regex::Regex::new(&pattern_text).map_err(invalid_pattern)?;
 
         let value = match mode.as_str() {
-            "match" => {
-                let anchored = fancy_regex::Regex::new(&format!("\\A(?:{})", translated.pattern))
-                    .map_err(invalid_pattern)?;
-                match anchored.captures(&input).map_err(invalid_pattern)? {
-                    Some(caps) => match_or_search_value(&caps),
-                    None => Value::None,
-                }
-            }
-            "search" => match compiled.captures(&input).map_err(invalid_pattern)? {
+            "match" | "search" => match compiled.captures(&input).map_err(exec_error)? {
                 Some(caps) => match_or_search_value(&caps),
                 None => Value::None,
             },
             "findall" => {
-                let matches = replace::find_iter(&compiled, &input).map_err(invalid_pattern)?;
+                let matches = replace::find_iter(&compiled, &input).map_err(exec_error)?;
                 Value::List(matches.iter().map(findall_value).collect())
             }
             "sub" => {
@@ -196,10 +263,10 @@ impl ToolPlugin for RegexPlugin {
                     translated.group_count,
                     &translated.group_names,
                 )
-                .map_err(value_error)?;
+                .map_err(template_error)?;
                 let max = replace::max_replacements(count);
-                let result = replace::substitute_n(&compiled, &template, &input, max)
-                    .map_err(invalid_pattern)?;
+                let result =
+                    replace::substitute_n(&compiled, &template, &input, max).map_err(exec_error)?;
                 Value::Str(result)
             }
             _ => unreachable!(),
@@ -414,6 +481,67 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.message.starts_with("regex: invalid pattern: "));
+    }
+
+    #[tokio::test]
+    async fn match_anchors_a_leading_inline_flag_over_the_whole_pattern() {
+        // issue #479: "Check that a leading global inline flag
+        // (`(?i)...`) still applies to the whole pattern."
+        let result = run(dict(vec![
+            ("pattern", Value::from("(?i)ab")),
+            ("input", Value::from("AB")),
+            ("mode", Value::from("match")),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(result.value, Value::from("AB"));
+    }
+
+    #[tokio::test]
+    async fn backtrack_limit_is_a_runtime_error_not_an_invalid_pattern() {
+        // A synthetic catastrophic-backtracking pattern: `(a+)+`
+        // against a long run of `a`s with no trailing `!`, forced
+        // onto fancy-regex's backtracking VM by the fixed-width
+        // lookbehind (`\b` alone would do it too, but this keeps the
+        // blowup isolated to `(a+)+`).
+        let err = run(dict(vec![
+            ("pattern", Value::from(r"(a+)+(?<=a)!")),
+            ("input", Value::from("a".repeat(35))),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "regex: backtrack limit exceeded");
+        assert_eq!(
+            err.py_class,
+            electricity_value::pycompat::PyExc::RuntimeError
+        );
+    }
+
+    #[tokio::test]
+    async fn sub_template_error_is_re_error_not_value_error() {
+        let err = run(dict(vec![
+            ("pattern", Value::from("a")),
+            ("input", Value::from("a")),
+            ("mode", Value::from("sub")),
+            ("replacement", Value::from(r"\q")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, electricity_value::pycompat::PyExc::ReError);
+        assert_eq!(err.py_class.name(), "error");
+    }
+
+    #[tokio::test]
+    async fn sub_unknown_group_name_in_template_is_index_error() {
+        let err = run(dict(vec![
+            ("pattern", Value::from("(a)")),
+            ("input", Value::from("a")),
+            ("mode", Value::from("sub")),
+            ("replacement", Value::from(r"\g<nope>")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, electricity_value::pycompat::PyExc::IndexError);
     }
 
     #[tokio::test]

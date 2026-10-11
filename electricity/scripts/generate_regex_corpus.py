@@ -128,6 +128,7 @@ def build_cases() -> list[dict]:
     add("sub_non_letter_escape_keeps_backslash", {"pattern": "a", "input": "a", "mode": "sub", "replacement": r"\@"})
     add("sub_backslash_b_is_backspace", {"pattern": "a", "input": "a", "mode": "sub", "replacement": r"\b"})
     add("sub_octal_escape_in_template", {"pattern": "a", "input": "a", "mode": "sub", "replacement": r"\101"})
+    add("sub_g_angle_numeric_reference", {"pattern": "(a)", "input": "a", "mode": "sub", "replacement": r"\g<1>\g<1>"})
 
     # --- Priority 2: \w \s \d Unicode membership -----------------------
     add("word_class_excludes_combining_mark", {"pattern": r"\w", "input": "\u0345", "mode": "findall"})
@@ -139,6 +140,47 @@ def build_cases() -> list[dict]:
     add("negated_word_class", {"pattern": r"\W+", "input": "a b", "mode": "findall"})
     add("word_boundary", {"pattern": r"\bcat\b", "input": "the cat sat", "mode": "search"})
     add("non_word_boundary", {"pattern": r"\Bcat", "input": "concatenate", "mode": "search"})
+    add("word_boundary_empty_matches", {"pattern": r"\b", "input": "ab cd", "mode": "findall"})
+    add("non_word_boundary_on_empty_input", {"pattern": r"\B", "input": "", "mode": "findall"})
+    add("lookahead_empty_matches", {"pattern": r"(?=a)", "input": "aabaa", "mode": "findall"})
+
+    # --- Character-class ranges, nested-set escapes, octal/backspace --
+    add("class_range_lowercase", {"pattern": "[a-z]+", "input": "ABmnZ", "mode": "findall"})
+    add("class_range_negated_digits", {"pattern": "[^0-9]+", "input": "a1b2c", "mode": "findall"})
+    add("class_range_trailing_dash_is_literal", {"pattern": "[a-]+", "input": "a-a", "mode": "findall"})
+    add("class_range_backwards_is_an_error", {"pattern": "[z-a]", "input": "a"})
+    add("class_range_with_ignorecase", {"pattern": "[a-z]+", "input": "AbC", "mode": "findall", "flags": ["IGNORECASE"]})
+    add("class_negated_word_shortcut", {"pattern": r"[\W]+", "input": "a b_c", "mode": "findall"})
+    add("class_whitespace_or_non_whitespace_is_everything", {"pattern": r"[\s\S]+", "input": "a b", "mode": "findall"})
+    add("class_backspace_escape", {"pattern": r"[\b]", "input": "\b", "mode": "search"})
+    add("class_octal_escape_zero", {"pattern": r"[\0]", "input": "\0", "mode": "search"})
+    add("class_octal_escape_three_digit", {"pattern": r"[\101]", "input": "A", "mode": "search"})
+    add("class_octal_escape_one_digit_no_groups", {"pattern": r"[\1]", "input": "\x01", "mode": "search"})
+    add("class_bad_escape_digit_eight", {"pattern": r"[\8]", "input": "8"})
+    add("class_posix_lookalike_is_literal", {"pattern": r"[[:alpha:]]", "input": "a]", "mode": "search"})
+    add("class_set_intersection_lookalike_is_literal", {"pattern": r"[a&&b]", "input": "a&b", "mode": "findall"})
+
+    # --- IGNORECASE + ASCII, Turkish I --------------------------------
+    add("ignorecase_ascii_folds_plain_letters", {"pattern": "abc", "input": "ABC", "mode": "search", "flags": ["IGNORECASE", "ASCII"]})
+    add("ignorecase_turkish_i_dotless", {"pattern": "i", "input": "\u0131", "mode": "search", "flags": ["IGNORECASE"]})
+    add("ignorecase_turkish_i_dotted_capital", {"pattern": "i", "input": "\u0130", "mode": "search", "flags": ["IGNORECASE"]})
+
+    # --- Python 3.7+ empty-match scan rule (must_advance) --------------
+    add("must_advance_alternation_caret_or_word", {"pattern": r"^|\w+", "input": "two words", "mode": "findall"})
+    add("must_advance_bare_alternation_empty_first", {"pattern": "|a", "input": "aaa", "mode": "findall"})
+    add("must_advance_lazy_optional", {"pattern": "a??", "input": "aaa", "mode": "findall"})
+
+    # --- Literal brace, {,} shorthand, backwards brace quantifier -----
+    add("literal_open_brace_not_a_quantifier", {"pattern": "a{", "input": "a{", "mode": "search"})
+    add("brace_bare_comma_means_star", {"pattern": "a{,}", "input": "aaa", "mode": "findall"})
+    add("brace_backwards_quantifier_is_an_error", {"pattern": "a{3,2}", "input": "aaa"})
+
+    # --- Comment transparency, duplicate group names -------------------
+    add("comment_transparent_to_following_quantifier", {"pattern": "a(?#c)*", "input": "aaa", "mode": "match"})
+    add("duplicate_group_name_is_an_error", {"pattern": "(?P<a>x)(?P<a>y)", "input": "xy"})
+
+    # --- ^ after a trailing newline, under MULTILINE --------------------
+    add("caret_multiline_after_trailing_newline", {"pattern": "^", "input": "ab\n", "mode": "findall", "flags": ["MULTILINE"]})
 
     # --- Priority 3: anchors ($ ^ \A \Z) with/without MULTILINE --------
     add("dollar_before_trailing_newline_no_multiline", {"pattern": "a$", "input": "a\n", "mode": "search"})

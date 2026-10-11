@@ -253,11 +253,10 @@ pub fn parse_template(
 /// 3.7+ empty-match rule: an empty match immediately after a non-empty
 /// one is still reported (the module doc comment's own worked example,
 /// `re.sub('x*', '-', 'abxd')` == `'-a-b--d-'`) -- derived here from
-/// the one scan rule both `sub` and `finditer` share (search from
-/// *pos*; always emit; advance by one character past an empty match to
-/// avoid looping forever, by one past the match's end otherwise),
-/// rather than `fancy-regex`'s own iterator (`find_iter`/`replace_all`,
-/// which skip exactly this case).
+/// the one scan rule both `sub` and `finditer` share, via
+/// [`Scanner`], rather than `fancy-regex`'s own iterator
+/// (`find_iter`/`replace_all`, which don't implement Python's 3.7+
+/// rule at all -- see [`Scanner`]'s own doc comment).
 ///
 /// *count* follows CPython's own `Pattern.sub` rule, already applied
 /// at the call site through `electricity_value::pycompat::py_int`:
@@ -286,11 +285,11 @@ pub fn substitute_n(
         return Ok(text.to_string());
     }
     let mut out = String::new();
-    let mut pos = 0usize;
     let mut last_copy = 0usize;
     let mut n = 0usize;
-    while pos <= text.len() && n < max {
-        let Some(caps) = re.captures_from_pos(text, pos)? else {
+    let mut scanner = Scanner::new(re);
+    while n < max {
+        let Some(caps) = scanner.next(text)? else {
             break;
         };
         let m = caps.get(0).expect("the whole match is always present");
@@ -298,14 +297,6 @@ pub fn substitute_n(
         out.push_str(&template.expand(&caps));
         last_copy = m.end();
         n += 1;
-        pos = if m.end() == m.start() {
-            match text[m.end()..].chars().next() {
-                Some(c) => m.end() + c.len_utf8(),
-                None => m.end() + 1,
-            }
-        } else {
-            m.end()
-        };
     }
     out.push_str(&text[last_copy..]);
     Ok(out)
@@ -322,24 +313,107 @@ pub fn find_iter<'t>(
     text: &'t str,
 ) -> Result<Vec<fancy_regex::Captures<'t>>, fancy_regex::Error> {
     let mut out = Vec::new();
-    let mut pos = 0usize;
-    while pos <= text.len() {
-        let Some(caps) = re.captures_from_pos(text, pos)? else {
-            break;
-        };
-        let m = caps.get(0).expect("the whole match is always present");
-        let (start, end) = (m.start(), m.end());
+    let mut scanner = Scanner::new(re);
+    while let Some(caps) = scanner.next(text)? {
         out.push(caps);
-        pos = if end == start {
-            match text[end..].chars().next() {
-                Some(c) => end + c.len_utf8(),
-                None => end + 1,
-            }
-        } else {
-            end
-        };
     }
     Ok(out)
+}
+
+/// Python's 3.7+ scan rule (F4; the module doc comment's own worked
+/// example): a non-empty match may start right where a *previous*
+/// empty match ended, where Rust's own `regex`/`fancy-regex`
+/// iterators always treat that position as forbidden outright and
+/// slide one character past it.
+///
+/// CPython's own engine enforces this with a `must_advance` flag,
+/// checked only as a post-condition at the end of a whole match
+/// attempt, so a backtracking search that would otherwise accept a
+/// zero-width solution at the forbidden position keeps backtracking
+/// into the pattern's other branches instead. `fancy-regex`'s public
+/// API has no equivalent (the one post-condition primitive it does
+/// have for this, `OPTION_SKIPPED_EMPTY_MATCH`, is internal to its own
+/// `Matches` iterator, `pub(crate)` only) -- so this scanner builds the
+/// same post-condition out of `fancy-regex`'s own public `\G` syntax
+/// (true only where the *search* -- not the match -- started) plus a
+/// negative lookbehind: `(?:ORIGINAL)(?<!\G)` fails whenever the match
+/// ends back at the search's own start position, which is exactly
+/// "this match was empty and anchored at the forbidden position",
+/// forcing the same backtracking CPython's `must_advance` does. Only
+/// built the first time it's actually needed (most scans never hit an
+/// empty match at all), and only tried exactly at the forbidden
+/// position -- if it can't find a non-empty match there either
+/// (`\G`'s own scope means a candidate sliding past the forbidden
+/// position trivially satisfies `(?<!\G)`, so a *slid* result is
+/// rejected, not just an empty one), this falls back to CPython's
+/// older rule: advance one character and resume the ordinary,
+/// unconstrained search there.
+struct Scanner<'r> {
+    re: &'r fancy_regex::Regex,
+    forced: Option<fancy_regex::Regex>,
+    pos: usize,
+    forbidden: Option<usize>,
+}
+
+impl<'r> Scanner<'r> {
+    fn new(re: &'r fancy_regex::Regex) -> Self {
+        Scanner {
+            re,
+            forced: None,
+            pos: 0,
+            forbidden: None,
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn next<'t>(
+        &mut self,
+        text: &'t str,
+    ) -> Result<Option<fancy_regex::Captures<'t>>, fancy_regex::Error> {
+        loop {
+            if self.pos > text.len() {
+                return Ok(None);
+            }
+            if self.forbidden == Some(self.pos) {
+                if self.forced.is_none() {
+                    self.forced = Some(fancy_regex::Regex::new(&format!(
+                        "(?:{})(?<!\\G)",
+                        self.re.as_str()
+                    ))?);
+                }
+                let forced = self.forced.as_ref().unwrap();
+                let candidate = forced.captures_from_pos(text, self.pos)?;
+                let accepted = candidate.filter(|caps| {
+                    let m = caps.get(0).expect("the whole match is always present");
+                    m.start() == self.pos && m.end() > self.pos
+                });
+                if let Some(caps) = accepted {
+                    let end = caps.get(0).unwrap().end();
+                    self.forbidden = None;
+                    self.pos = end;
+                    return Ok(Some(caps));
+                }
+                self.forbidden = None;
+                self.pos = advance_one_char(text, self.pos);
+                continue;
+            }
+            let Some(caps) = self.re.captures_from_pos(text, self.pos)? else {
+                return Ok(None);
+            };
+            let m = caps.get(0).expect("the whole match is always present");
+            let (start, end) = (m.start(), m.end());
+            self.pos = end;
+            self.forbidden = if end == start { Some(end) } else { None };
+            return Ok(Some(caps));
+        }
+    }
+}
+
+fn advance_one_char(text: &str, pos: usize) -> usize {
+    match text[pos..].chars().next() {
+        Some(c) => pos + c.len_utf8(),
+        None => pos + 1,
+    }
 }
 
 /// Resolves `count` CPython's own way: `0` means unlimited, a negative
@@ -371,6 +445,45 @@ mod tests {
         let tpl = parse_template("-", gc, &names).unwrap();
         let result = substitute(&re, &tpl, "abxd").unwrap();
         assert_eq!(result, "-a-b--d-");
+    }
+
+    fn matches(pattern: &str, text: &str) -> Vec<String> {
+        let (re, _, _) = compile(pattern);
+        find_iter(&re, text)
+            .unwrap()
+            .iter()
+            .map(|c| c.get(0).unwrap().as_str().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn non_empty_match_can_start_right_after_a_previous_empty_match() {
+        // CPython's own documented 3.7+ example:
+        // `re.findall(r'^|\w+', 'two words')` == `['', 'two', 'words']`.
+        assert_eq!(matches(r"^|\w+", "two words"), vec!["", "two", "words"]);
+    }
+
+    #[test]
+    fn bare_alternation_with_an_empty_branch_first() {
+        // CPython: `re.findall(r'|a', 'aaa')` ==
+        // `['', 'a', '', 'a', '', 'a', '']`.
+        assert_eq!(matches("|a", "aaa"), vec!["", "a", "", "a", "", "a", ""]);
+    }
+
+    #[test]
+    fn lazy_optional_quantifier_still_prefers_non_empty_after_an_empty_match() {
+        // CPython: `re.findall(r'a??', 'aaa')` ==
+        // `['', 'a', '', 'a', '', 'a', '']`.
+        assert_eq!(matches("a??", "aaa"), vec!["", "a", "", "a", "", "a", ""]);
+    }
+
+    #[test]
+    fn word_boundary_empty_matches_never_find_a_non_empty_alternative() {
+        // CPython: `re.findall(r'\b', 'ab cd')` == `['', '', '', '']`
+        // (every one of \b's own matches is inherently zero-width, so
+        // the forced retry always falls through to the advance-by-
+        // one-character fallback).
+        assert_eq!(matches(r"\b", "ab cd"), vec!["", "", "", ""]);
     }
 
     #[test]

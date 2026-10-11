@@ -1588,6 +1588,95 @@
       }
     },
     {
+      "case": "sub_g_angle_numeric_reference",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "aa"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "(a)"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "sub"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "replacement"
+            },
+            {
+              "t": "str",
+              "v": "\\g<1>\\g<1>"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "(a)"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "sub"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
       "case": "word_class_excludes_combining_mark",
       "err": null,
       "is_invalid_pattern": false,
@@ -2339,6 +2428,2400 @@
             },
             {
               "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "word_boundary_empty_matches",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "\\b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "ab cd"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "\\b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "non_word_boundary_on_empty_input",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": []
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "\\B"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": ""
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "\\B"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "lookahead_empty_matches",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "(?=a)"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aabaa"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "(?=a)"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_range_lowercase",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "mn"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-z]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "ABmnZ"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-z]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_range_negated_digits",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[^0-9]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a1b2c"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[^0-9]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_range_trailing_dash_is_literal",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a-a"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a-a"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_range_backwards_is_an_error",
+      "err": "regex: invalid pattern: bad character range z-a at position 1",
+      "is_invalid_pattern": true,
+      "is_re_error": true,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[z-a]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "class_range_with_ignorecase",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "AbC"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-z]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "AbC"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a-z]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_negated_word_shortcut",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": " "
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\W]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a b_c"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\W]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_whitespace_or_non_whitespace_is_everything",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a b"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\s\\S]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\s\\S]+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_backspace_escape",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "\b"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\b]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "\b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\b]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_octal_escape_zero",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "\u0000"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\0]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "\u0000"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\0]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_octal_escape_three_digit",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "A"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\101]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "A"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\101]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_octal_escape_one_digit_no_groups",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "\u0001"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\1]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "\u0001"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\1]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_bad_escape_digit_eight",
+      "err": "regex: invalid pattern: bad escape \\8 at position 1",
+      "is_invalid_pattern": true,
+      "is_re_error": true,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[\\8]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "8"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "class_posix_lookalike_is_literal",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "a]"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[[:alpha:]]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[[:alpha:]]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "class_set_intersection_lookalike_is_literal",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "&"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a&&b]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a&b"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "[a&&b]"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "ignorecase_ascii_folds_plain_letters",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "ABC"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "abc"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "ABC"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                },
+                {
+                  "t": "str",
+                  "v": "ASCII"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "abc"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                },
+                {
+                  "t": "str",
+                  "v": "ASCII"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "ignorecase_turkish_i_dotless",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "ı"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "i"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "ı"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "i"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "ignorecase_turkish_i_dotted_capital",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "İ"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "i"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "İ"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "i"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "IGNORECASE"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "must_advance_alternation_caret_or_word",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "two"
+          },
+          {
+            "t": "str",
+            "v": "words"
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "^|\\w+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "two words"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "^|\\w+"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "must_advance_bare_alternation_empty_first",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "|a"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aaa"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "|a"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "must_advance_lazy_optional",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a??"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aaa"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a??"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "literal_open_brace_not_a_quantifier",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "a{"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a{"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "a{"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a{"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "search"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "brace_bare_comma_means_star",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "aaa"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a{,}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aaa"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a{,}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "brace_backwards_quantifier_is_an_error",
+      "err": "regex: invalid pattern: min repeat greater than max repeat at position 2",
+      "is_invalid_pattern": true,
+      "is_re_error": true,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a{3,2}"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aaa"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "comment_transparent_to_following_quantifier",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "str",
+        "v": "aaa"
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a(?#c)*"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "aaa"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "match"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "a(?#c)*"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "match"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "case": "duplicate_group_name_is_an_error",
+      "err": "regex: invalid pattern: redefinition of group name 'a' as group 2; was group 1 at position 12",
+      "is_invalid_pattern": true,
+      "is_re_error": true,
+      "ok": null,
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "(?P<a>x)(?P<a>y)"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "xy"
+            }
+          ]
+        ]
+      },
+      "raw": null
+    },
+    {
+      "case": "caret_multiline_after_trailing_newline",
+      "err": null,
+      "is_invalid_pattern": false,
+      "is_re_error": false,
+      "ok": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": ""
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      },
+      "params": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "^"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "str",
+              "v": "ab\n"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "MULTILINE"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "pattern"
+            },
+            {
+              "t": "str",
+              "v": "^"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "mode"
+            },
+            {
+              "t": "str",
+              "v": "findall"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "flags"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "MULTILINE"
+                }
+              ]
             }
           ]
         ]

@@ -26,39 +26,6 @@ pub(crate) fn is_py_alnum(c: char) -> bool {
         .is_ok()
 }
 
-fn in_ranges(ranges: &[(u32, u32)], cp: u32) -> bool {
-    ranges
-        .binary_search_by(|&(lo, hi)| {
-            if cp < lo {
-                std::cmp::Ordering::Greater
-            } else if cp > hi {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        })
-        .is_ok()
-}
-
-/// Python `re`'s `\w` under the default (Unicode) mode: `str.isalnum()`
-/// plus `_` (`electricity/scripts/generate_regex_unicode_tables.py`'s
-/// own `WORD_RANGES`, generated from CPython 3.11's Unicode database --
-/// not Rust's own, different `\w` membership).
-pub(crate) fn is_py_word_char(c: char) -> bool {
-    c == '_' || in_ranges(regex_unicode::WORD_RANGES, c as u32)
-}
-
-/// Python `re`'s `\s` under the default (Unicode) mode: `str.isspace()`.
-pub(crate) fn is_py_space_char(c: char) -> bool {
-    in_ranges(regex_unicode::SPACE_RANGES, c as u32)
-}
-
-/// Python `re`'s `\d` under the default (Unicode) mode: Unicode
-/// category `Nd`.
-pub(crate) fn is_py_digit_char(c: char) -> bool {
-    in_ranges(regex_unicode::DIGIT_RANGES, c as u32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
