@@ -33,6 +33,37 @@ fn runtime_error(message: impl Into<String>) -> ToolError {
     }
 }
 
+/// [`SendError`]'s own raise shape (issue #485's own "Raised
+/// failures" section) -- shared between a hard failure from
+/// [`http_client::send`] itself and a deferred
+/// [`http_client::RawResponse::body_error`] a 2xx has no handler to
+/// swallow (review finding 8).
+fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
+    match err {
+        SendError::Connect(reason) => ToolError {
+            py_class: PyExc::RuntimeError,
+            message: format!("HTTP request to {original_url} failed: {reason}"),
+            cause: ErrorCause::NoReply,
+        },
+        SendError::Timeout => ToolError {
+            py_class: PyExc::TimeoutError,
+            message: "timed out".to_string(),
+            cause: ErrorCause::NoReply,
+        },
+        SendError::RemoteDisconnected => ToolError {
+            py_class: PyExc::RemoteDisconnected,
+            message: "Remote end closed connection without response".to_string(),
+            cause: ErrorCause::NoReply,
+        },
+        SendError::IncompleteRead { read, expected } => ToolError {
+            py_class: PyExc::IncompleteRead,
+            message: format!("IncompleteRead({read} bytes read, {expected} more expected)"),
+            cause: ErrorCause::None,
+        },
+        SendError::Other(text) => runtime_error(text),
+    }
+}
+
 /// A scheme `urlopen()` recognizes the syntax of but has no handler
 /// for (`OpenerDirector.open`'s own dispatch, `getattr(handler, name +
 /// "_open")` failing, `unknown_open` raising `URLError('unknown url
@@ -618,16 +649,6 @@ fn out_of_range_port(netloc: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `http.client.HTTPConnection.putrequest`'s own `Host` header: the
-/// port is omitted when it's the scheme's own default.
-fn host_header_value(host: &str, port: u16, scheme: &str) -> String {
-    if port == default_port(scheme) {
-        host.to_string()
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
 /// A header value's own latin-1 encodability -- `http.client`'s own
 /// `putheader` encode step. Returns the first codepoint that doesn't
 /// fit, 0-indexed by Unicode scalar value (`UnicodeEncodeError.start`),
@@ -699,7 +720,34 @@ fn present(value: Option<&Value>) -> Option<&Value> {
 /// (third-party text, not matched byte for byte -- DESIGN.md's own
 /// convention for a third-party error this crate doesn't otherwise
 /// pin).
+/// Python truthiness, for `dict(params.get("headers") or {})`'s own
+/// `or {}` fallback below -- `None`/`False`/a numeric zero/any empty
+/// `str`/`list`/`dict` all take the `{}` branch, never reaching
+/// `dict()` at all (issue #485 review finding 11: a template that
+/// renders `headers:` to `""` is the realistic case this matters
+/// for). Mirrors `electricity_template::render::truthy` exactly;
+/// duplicated rather than shared across the crate boundary for one
+/// small, stable function.
+fn headers_param_is_falsy(value: &Value) -> bool {
+    match value {
+        Value::None => true,
+        Value::Bool(b) => !b,
+        Value::Int(i) => i.is_zero(),
+        Value::Float(f) => *f == 0.0,
+        Value::Str(s) => s.is_empty(),
+        Value::Bytes(b) => b.is_empty(),
+        Value::List(items) => items.is_empty(),
+        Value::Dict(d) => d.is_empty(),
+        Value::Date(_) | Value::DateTime(..) => false,
+    }
+}
+
 fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, ToolError> {
+    if let Some(v) = value {
+        if headers_param_is_falsy(v) {
+            return Ok(Vec::new());
+        }
+    }
     match present(value) {
         None => Ok(Vec::new()),
         Some(Value::Dict(d)) => Ok(d.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
@@ -1121,9 +1169,19 @@ impl ToolPlugin for HttpPlugin {
 
             let mut send_headers = current_headers.clone();
             if !send_headers.contains_key("Host") {
+                // `req.host` verbatim -- the netloc exactly as written
+                // in the URL, userinfo stripped, brackets kept for an
+                // IPv6 literal. urllib never adds or omits a port
+                // here: an explicit `:80`/`:443` that happens to match
+                // the scheme's own default still appears in the
+                // header; an absent port stays absent (issue #485
+                // review finding 10 -- confirmed directly against
+                // CPython, not `host_header_value`'s own default-port
+                // omission, which is `http.client`'s own *connection*
+                // target, a different thing).
                 send_headers.insert(
                     "Host".to_string(),
-                    host_header_value(&host, port, &split.scheme),
+                    netloc_host_as_written(&split.netloc).to_string(),
                 );
             }
             if !send_headers.contains_key("Accept-encoding") {
@@ -1198,7 +1256,7 @@ impl ToolPlugin for HttpPlugin {
                     format!(
                         "{}://{}{}",
                         split.scheme,
-                        host_header_value(&host, port, &split.scheme),
+                        netloc_host_as_written(&split.netloc),
                         target
                     )
                 }
@@ -1220,42 +1278,19 @@ impl ToolPlugin for HttpPlugin {
             }
 
             let response = match send_result {
-                Err(SendError::Connect(reason)) => {
-                    return Err(ToolError {
-                        py_class: PyExc::RuntimeError,
-                        message: format!("HTTP request to {original_url} failed: {reason}"),
-                        cause: ErrorCause::NoReply,
-                    });
-                }
-                Err(SendError::Timeout) => {
-                    return Err(ToolError {
-                        py_class: PyExc::TimeoutError,
-                        message: "timed out".to_string(),
-                        cause: ErrorCause::NoReply,
-                    });
-                }
-                Err(SendError::RemoteDisconnected) => {
-                    return Err(ToolError {
-                        py_class: PyExc::RemoteDisconnected,
-                        message: "Remote end closed connection without response".to_string(),
-                        cause: ErrorCause::NoReply,
-                    });
-                }
-                Err(SendError::IncompleteRead { read, expected }) => {
-                    return Err(ToolError {
-                        py_class: PyExc::IncompleteRead,
-                        message: format!(
-                            "IncompleteRead({read} bytes read, {expected} more expected)"
-                        ),
-                        cause: ErrorCause::None,
-                    });
-                }
-                Err(SendError::Other(text)) => return Err(runtime_error(text)),
+                Err(err) => return Err(send_error_to_tool_error(err, &original_url)),
                 Ok(response) => response,
             };
 
             let status = response.status;
             if (200..300).contains(&status) {
+                // `with urlopen(...) as resp: ... resp.read()` -- a
+                // 2xx has no `except HTTPError` handler of its own to
+                // swallow a body-read failure into, unlike every
+                // other status below (issue #485 review finding 8).
+                if let Some(body_error) = response.body_error.clone() {
+                    return Err(send_error_to_tool_error(body_error, &original_url));
+                }
                 return finalize_response(&parsed, &original_url, response, None);
             }
 
@@ -1433,5 +1468,49 @@ mod proxy_parse_tests {
             netloc_host_as_written("user:pass@example.com:8080"),
             "example.com:8080"
         );
+    }
+
+    #[test]
+    fn netloc_host_as_written_never_drops_an_explicit_default_port() {
+        // `req.host` (`AbstractHTTPHandler.do_request_`'s own `Host`
+        // header) is the netloc exactly as written -- urllib never
+        // omits a port that happens to match the scheme's own default
+        // (confirmed directly against CPython: `http://h:80/` sends
+        // `Host: h:80`, issue #485 review finding 10).
+        assert_eq!(netloc_host_as_written("h:80"), "h:80");
+        assert_eq!(netloc_host_as_written("h"), "h");
+    }
+
+    #[test]
+    fn netloc_host_as_written_keeps_ipv6_brackets() {
+        assert_eq!(netloc_host_as_written("[::1]:8080"), "[::1]:8080");
+        assert_eq!(netloc_host_as_written("[::1]"), "[::1]");
+    }
+}
+
+#[cfg(test)]
+mod headers_param_tests {
+    use super::*;
+
+    #[test]
+    fn a_falsy_headers_value_coerces_to_no_headers_at_all() {
+        for value in [
+            Value::Str(String::new()),
+            Value::Int(electricity_value::IntValue::from(0i64)),
+            Value::Float(0.0),
+            Value::Bool(false),
+        ] {
+            assert_eq!(
+                coerce_headers_param(Some(&value)).unwrap(),
+                Vec::new(),
+                "value: {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truthy_non_mapping_headers_value_still_raises() {
+        let value = Value::Str("ab".to_string());
+        assert!(coerce_headers_param(Some(&value)).is_err());
     }
 }

@@ -197,20 +197,21 @@ async fn a_short_body_against_content_length_is_incomplete_read() {
         // Close early, short of the declared Content-Length.
     });
     let client = http_client::build_client().unwrap();
-    let err = http_client::send(
+    let response = http_client::send(
         &client,
         &target(addr),
         &get_request(),
         TimeoutModel::PerOperation(Duration::from_secs(5)),
     )
     .await
-    .unwrap_err();
-    match err {
-        SendError::IncompleteRead { read, expected } => {
+    .expect("a body-phase failure is reported via body_error, not Err -- issue #485 finding 8");
+    assert!(response.body.is_empty());
+    match response.body_error {
+        Some(SendError::IncompleteRead { read, expected }) => {
             assert_eq!(read, 5);
             assert_eq!(expected, 5);
         }
-        other => panic!("expected IncompleteRead, got {other:?}"),
+        other => panic!("expected Some(IncompleteRead), got {other:?}"),
     }
 }
 
@@ -258,15 +259,16 @@ async fn a_slow_body_past_the_deadline_times_out() {
         let _ = stream.write_all(b"67890");
     });
     let client = http_client::build_client().unwrap();
-    let err = http_client::send(
+    let response = http_client::send(
         &client,
         &target(addr),
         &get_request(),
         TimeoutModel::PerOperation(Duration::from_millis(200)),
     )
     .await
-    .unwrap_err();
-    assert!(matches!(err, SendError::Timeout));
+    .expect("a body-phase failure is reported via body_error, not Err -- issue #485 finding 8");
+    assert!(response.body.is_empty());
+    assert!(matches!(response.body_error, Some(SendError::Timeout)));
 }
 
 #[tokio::test]
@@ -350,6 +352,38 @@ async fn a_proxied_https_request_sends_proxy_authorization_on_the_connect_line_o
     let tunnel_request = tunnel_rx.recv().unwrap();
     assert!(tunnel_request.starts_with("CONNECT origin.example:443 HTTP/1.1"));
     assert!(tunnel_request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
+}
+
+#[tokio::test]
+async fn a_total_timeout_catches_several_under_budget_phases_summing_past_it() {
+    // `TimeoutModel::Total` is one deadline for the *whole* call
+    // (issue #485 review finding 13), not the same duration reapplied
+    // to every phase: a header wait and a body wait each individually
+    // under the total still have to sum under it too. A server that
+    // delays once before the headers and once more before the body,
+    // each delay alone shorter than the total but their sum longer,
+    // only fails if the outer wrapper is real.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = stream.write_all(b"ok");
+    });
+    let client = http_client::build_client().unwrap();
+    let err = http_client::send(
+        &client,
+        &target(addr),
+        &get_request(),
+        TimeoutModel::Total(Duration::from_millis(250)),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, SendError::Timeout), "expected Timeout, got {err:?}");
 }
 
 #[tokio::test]

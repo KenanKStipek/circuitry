@@ -128,6 +128,19 @@ pub struct RawResponse {
     pub reason: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// `None` when the body was read in full. `Some` means the body
+    /// read failed (a status-line/header-phase failure is still a
+    /// plain `Err`, never this): `body` is then always empty
+    /// (urllib's own discarded-partial-read, `except Exception: text
+    /// = ""`, never the bytes actually read so far) and it is this
+    /// response's own caller's job to decide whether that failure
+    /// propagates (a 2xx: `with urlopen(...) as resp: resp.read()`
+    /// has no handler of its own, so it still raises unwrapped) or is
+    /// swallowed into an otherwise-ordinary result (urllib's own
+    /// `except HTTPError` handler, reached by a 4xx/5xx or an
+    /// unfollowed/disallowed 3xx -- `src/http.rs`'s own job, issue
+    /// #485 review finding 8).
+    pub body_error: Option<SendError>,
 }
 
 /// How a timeout applies -- urllib's own per-operation deadline
@@ -147,7 +160,7 @@ pub enum TimeoutModel {
 /// TLS failure); *Timeout*/*RemoteDisconnected*/*IncompleteRead* are
 /// the three raised-but-*unwrapped* shapes, surfacing while waiting
 /// for (or reading) the response rather than while connecting/sending.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SendError {
     /// Formatted as CPython's own `OSError`/`ssl` text would be, by
     /// *location* (ruling 5): `[Errno N] <strerror>` for an OS error,
@@ -448,7 +461,28 @@ async fn connect_tunnel(
 /// *timeout* (urllib's own per-operation model, or curl's own total
 /// one), and returns the full response (status, reason, headers,
 /// body) -- never streamed, never decompressed (#448 decision 1).
+/// `Total` wraps the *entire* call (connect through the last body
+/// byte) in one `tokio::time::timeout`, on top of [`send_inner`]'s
+/// own per-phase deadlines of the same duration -- each phase alone
+/// can never exceed the total, and this outer wrapper is what catches
+/// several phases each individually under the limit but summing past
+/// it (issue #485 review finding 13; this lane's own caller,
+/// `src/http.rs`, never builds `Total`, only lane F2's adapters do).
 pub async fn send(
+    client: &HttpClient,
+    target: &ConnectTarget,
+    request: &RawRequest,
+    timeout: TimeoutModel,
+) -> Result<RawResponse, SendError> {
+    match timeout {
+        TimeoutModel::Total(d) => tokio::time::timeout(d, send_inner(client, target, request, timeout))
+            .await
+            .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::PerOperation(_) => send_inner(client, target, request, timeout).await,
+    }
+}
+
+async fn send_inner(
     client: &HttpClient,
     target: &ConnectTarget,
     request: &RawRequest,
@@ -456,14 +490,6 @@ pub async fn send(
 ) -> Result<RawResponse, SendError> {
     let (connect_deadline, response_deadline, body_deadline) = match timeout {
         TimeoutModel::PerOperation(d) => (d, d, d),
-        // A single total deadline is approximated here as the same
-        // deadline reapplied to each phase, clamped by an overall
-        // wrapper the caller (lane F2, once it exists) is expected to
-        // race separately -- this lane never exercises the `Total`
-        // arm itself (`src/http.rs` always builds `PerOperation`);
-        // kept as a real variant, not a future stub, since the type
-        // is already part of this module's own public shape lane F2
-        // needs.
         TimeoutModel::Total(d) => (d, d, d),
     };
 
@@ -566,10 +592,28 @@ pub async fn send(
 
     let mut incoming: Incoming = response.into_body();
     let mut body_bytes: Vec<u8> = Vec::new();
+    // A failure reading the body -- urllib's own `exc.read()`, called
+    // *lazily* by the plugin's own `except HTTPError` handler only
+    // after the status/headers (and the redirect-follow decision, for
+    // a 3xx) are already known, under `except Exception: text = ""`.
+    // `http.client`'s own `with urlopen(...) as resp: ... resp.read()`
+    // has no such handler for a *2xx* response, so the same failure
+    // there still propagates unwrapped. This function can't tell
+    // which case it is (that's `src/http.rs`'s own job, once it knows
+    // the status and the redirect decision) -- so it never raises on
+    // a body-phase failure once the status line and headers already
+    // arrived; it reports the failure in [`RawResponse::body_error`]
+    // instead and lets the body stand as empty (matching Python's own
+    // discarded-partial-read exactly, never the bytes read so far).
+    let mut body_error: Option<SendError> = None;
     loop {
-        let frame = tokio::time::timeout(body_deadline, incoming.frame())
-            .await
-            .map_err(|_| SendError::Timeout)?;
+        let frame = match tokio::time::timeout(body_deadline, incoming.frame()).await {
+            Ok(frame) => frame,
+            Err(_) => {
+                body_error = Some(SendError::Timeout);
+                break;
+            }
+        };
         match frame {
             None => break,
             Some(Ok(frame)) => {
@@ -578,11 +622,8 @@ pub async fn send(
                 }
             }
             Some(Err(err)) => {
-                return Err(classify_body_phase_error(
-                    err,
-                    body_bytes.len(),
-                    content_length,
-                ));
+                body_error = Some(classify_body_phase_error(err, body_bytes.len(), content_length));
+                break;
             }
         }
     }
@@ -597,13 +638,18 @@ pub async fn send(
     // §6.4.1/§8.6: a response in any of these classes never has a
     // body even when `Content-Length` is still present).
     let never_has_a_body = request.method == "HEAD" || matches!(status, 100..=199 | 204 | 304);
-    if let Some(expected) = content_length {
-        if !never_has_a_body && body_bytes.len() < expected {
-            return Err(SendError::IncompleteRead {
-                read: body_bytes.len(),
-                expected: expected - body_bytes.len(),
-            });
+    if body_error.is_none() {
+        if let Some(expected) = content_length {
+            if !never_has_a_body && body_bytes.len() < expected {
+                body_error = Some(SendError::IncompleteRead {
+                    read: body_bytes.len(),
+                    expected: expected - body_bytes.len(),
+                });
+            }
         }
+    }
+    if body_error.is_some() {
+        body_bytes.clear();
     }
 
     Ok(RawResponse {
@@ -611,6 +657,7 @@ pub async fn send(
         reason,
         headers,
         body: body_bytes,
+        body_error,
     })
 }
 

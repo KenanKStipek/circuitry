@@ -108,6 +108,40 @@ async fn a_404_is_a_returned_failure_with_an_excerpt() {
 }
 
 #[tokio::test]
+async fn a_short_body_on_an_error_response_is_a_returned_failure_not_a_raise() {
+    // urllib's own `except HTTPError` handler reads the error body
+    // lazily, under `except Exception: text = ""` -- a short/failed
+    // read on a 4xx/5xx is a *returned* empty-text result, never a
+    // raised `IncompleteRead` (issue #485 review finding 8; contrast
+    // `a_short_body_against_content_length_is_incomplete_read` in
+    // `http_client_send.rs`, the same short body on a *2xx*, which
+    // does still raise).
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 10\r\nConnection: close\r\n\r\n12345",
+        );
+        // Close early, short of the declared Content-Length.
+    });
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &call(&token),
+    )
+    .await
+    .expect("a short body on an error response is returned, never raised");
+    assert!(!result.ok);
+    assert_eq!(result.stderr.as_deref(), Some("HTTP 404: Not Found"));
+    let body = dict_get(&result.raw, "body").unwrap();
+    assert_eq!(body, &Value::Str(String::new()));
+}
+
+#[tokio::test]
 async fn fail_on_error_false_keeps_ok_true_on_a_500() {
     let addr = respond_once(
         b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
