@@ -1028,15 +1028,18 @@ pub async fn run_orchestration_with_config(
     let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
         .unwrap_or_default();
 
+    // This build's own capability set -- resolved once, here, so
+    // `run_ctx.supported` below carries the exact same value the
+    // refusal walker just checked the top-level document against,
+    // rather than a second, possibly-drifting call to `Supported::
+    // current` at the `RunContext` construction site.
+    let supported = electricity_bytecode::Supported::current(extra_supported_providers());
+
     // Lane A's own refusal walker (issue #408's gate lane), wired in
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(
-        &program,
-        complexity.enabled(),
-        &electricity_bytecode::Supported::current(extra_supported_providers()),
-    ) {
+    if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
         return RunResult {
             ok: false,
             state: None,
@@ -1118,6 +1121,7 @@ pub async fn run_orchestration_with_config(
         declared_prompts: &program.prompts,
         effect_names: &program.effect_names,
         display_depth: 0,
+        supported,
     };
 
     // Step 17/18: execute the root, then the success or failure tail.

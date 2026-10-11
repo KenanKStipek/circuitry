@@ -143,6 +143,17 @@ pub struct RunContext<'a> {
     /// than derived from it -- see electricity/docs/spec/vm-lanes.md's
     /// M1 table, §4 finding 3. Lane K1.
     pub display_depth: u32,
+    /// This run's own capability set -- `electricity` (lib)'s run wiring
+    /// builds it once, from `electricity_bytecode::refusal::Supported::
+    /// current(...)` with the `test-tools` cargo feature's own extras,
+    /// the same value already passed to `first_unsupported` for the
+    /// top-level document. Lane I's own runtime check (M1 table:
+    /// "first_unsupported + allowlist on each loaded child program")
+    /// reads it off here rather than rebuilding it, so a freshly
+    /// compiled `use` child is refused against the exact same
+    /// capability set the parent document was checked against before
+    /// the run started.
+    pub supported: electricity_bytecode::Supported<'a>,
 }
 
 /// Any error [`execute_root`] (or one of its own sub-executors) can
@@ -386,6 +397,7 @@ mod tests {
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
             display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
         };
         execute_root(
             &program,

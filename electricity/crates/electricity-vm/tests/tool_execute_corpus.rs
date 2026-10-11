@@ -291,6 +291,7 @@ async fn golden_corpus_execute_tool() {
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
             display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
         };
         let token = CancellationToken::new();
 
