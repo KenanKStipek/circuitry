@@ -1,0 +1,22 @@
+name: tree-on-error-warnings
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: dynamic
+        name: left
+        on_error: continue
+        effects:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "not json left"}
+      - type: dynamic
+        name: right
+        on_error: continue
+        effects:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "not json right"}

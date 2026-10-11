@@ -181,6 +181,32 @@ fn a_missing_orchestration_file_wins_over_a_malformed_e_value() {
     assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
 }
 
+/// A config-resolution warning (`electricity-config`'s own "Unknown
+/// environment" `log::warn!`, issue #442) fires at `cof run`'s own
+/// point in its resolution order -- config first, before the missing-
+/// orchestration check -- so it must still print even though the
+/// orchestration-not-found error then ends the run before
+/// `run_orchestration` is ever reached (PR #452 review finding 2: the
+/// warning must not be lost just because this invocation never runs
+/// anything).
+#[test]
+fn a_config_warning_still_prints_when_the_orchestration_is_missing() {
+    let (mut cmd, home) = command("missing-orchestration-config-warning");
+    let config = home.config("{\"environment\": \"staging\"}");
+    let output = cmd
+        .args([config.to_str().unwrap(), "no-such-doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr,
+        "WARNING: Unknown environment 'staging'; falling back to 'dev'. Valid: ('dev', 'prod', 'test')\n"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
+}
+
 #[test]
 fn known_run_flag_in_first_position_is_a_run_request() {
     let (mut cmd, home) = command("run-flag-first");
@@ -573,6 +599,41 @@ fn malformed_e_value_is_a_usage_error_with_circuitrys_own_message() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Invalid -e format: 'badtext' (expected KEY=VALUE)"),
+        "{stderr}"
+    );
+}
+
+/// Same ordering as
+/// [`a_config_warning_still_prints_when_the_orchestration_is_missing`],
+/// for the other early-exit path: a malformed `-e` still ends the run
+/// (exit 2) after config resolution's own warning has already printed
+/// (PR #452 review finding 2).
+#[test]
+fn a_config_warning_still_prints_before_a_malformed_e_value_error() {
+    let (mut cmd, home) = command("run-e-malformed-config-warning");
+    let config = home.config("{\"environment\": \"staging\"}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "-e",
+            "badtext",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut lines = stderr.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "WARNING: Unknown environment 'staging'; falling back to 'dev'. Valid: ('dev', 'prod', 'test')"
+        )
+    );
     assert!(
         stderr.contains("Invalid -e format: 'badtext' (expected KEY=VALUE)"),
         "{stderr}"

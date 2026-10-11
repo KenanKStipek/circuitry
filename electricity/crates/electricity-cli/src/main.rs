@@ -454,6 +454,70 @@ fn write_stderr(text: &str) {
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 
+/// `cli/logging_setup.py::configure_cli_logging`'s own stderr handler --
+/// WARNING and above (`cof run`'s default, never-`--verbose` level:
+/// electricity has no `--verbose` flag of its own) formatted as
+/// `{levelname}: {message}`, the same `logging.Formatter` the
+/// reference's own CLI installs -- written straight through
+/// [`write_stderr`], which never buffers across calls, so this is
+/// flushed per line the same way Python's own StreamHandler is. Every
+/// `log::warn!` this binary's own library dependencies call
+/// (electricity-cel's absent-path warning; electricity-vm's
+/// dynamic/conditional on_error degradation warnings;
+/// electricity-config's "Unknown environment" warning; electricity's
+/// own --live-state/--events mid-run write failures) reaches stderr
+/// through this one sink (issue #442) -- a no-op until this is
+/// installed, same as the reference's own NullHandler default for an
+/// embedding caller that never calls configure_cli_logging. Filtered
+/// to this workspace's own crates (`enabled`'s own `target`-prefix
+/// check): `cli/logging_setup.py`'s own handler sits on Circuitry's
+/// own `"circuitry"` logger alone, never the root logger, so a
+/// dependency that happens to log doesn't reach `cof run`'s stderr
+/// either -- `log`'s `target` defaults to the logging call site's own
+/// module path, which for every crate in this workspace starts with
+/// `electricity` (hyphens become underscores in a Rust module path),
+/// so this is the narrowest prefix that admits all of them and
+/// nothing outside this workspace.
+struct StderrWarnLogger;
+
+impl log::Log for StderrWarnLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn && metadata.target().starts_with("electricity")
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        // `Warn` is the only level any of this binary's own
+        // dependencies ever actually emit today (`enabled` above
+        // already excludes Info/Debug/Trace) -- Error is handled for
+        // forward compatibility with a future log::error! site,
+        // matching Python's own logging.WARNING-level threshold
+        // admitting both.
+        let levelname = match record.level() {
+            log::Level::Error => "ERROR",
+            log::Level::Warn => "WARNING",
+            log::Level::Info => "INFO",
+            log::Level::Debug | log::Level::Trace => "DEBUG",
+        };
+        write_stderr(&format!("{levelname}: {}\n", record.args()));
+    }
+
+    fn flush(&self) {}
+}
+
+static WARN_LOGGER: StderrWarnLogger = StderrWarnLogger;
+
+/// Installs [`StderrWarnLogger`] as the `log` crate's global logger, at
+/// WARNING and above -- called once, at the very start of [`main`],
+/// before any config/document loading that could emit one of these
+/// warnings runs.
+fn install_warning_logger() {
+    let _ = log::set_logger(&WARN_LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+}
+
 /// `electricity`'s own non-TTY stdout contract (issue #431's "CLI
 /// output" decision, "Same as `cof` when stdout is not a terminal"):
 /// success with `--out` prints nothing; success without `--out` prints
@@ -502,16 +566,20 @@ fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bo
 /// own `CircuitryGroup.invoke`/CLI-layer checks report them, on stdout
 /// or plain stderr text, never through this JSON-failure path at all.
 ///
-/// Known gap (#442): `result.warnings` only ever holds this run's own
-/// `--events`/`--live-state` write-failure warnings -- it never carries
-/// the `WARNING: ...` lines Circuitry's own Python `logging` module
-/// emits mid-run (`core/dynamic.py`'s/`core/conditional.py`'s own
-/// `on_error: skip`/`continue` degradation, a `finally:` that fails
-/// after the body already did), since there is no VM observer hook yet
-/// for them. State, stdout, and `--events`/`--live-state` are all
-/// unaffected -- the conformance suite never compares stderr -- but a
-/// human watching the terminal sees fewer `Warning:` lines from
-/// electricity than from `cof run` for the same document today.
+/// `result.warnings` only ever holds this run's own `--events`/
+/// `--live-state` write-failure warnings -- the mid-run `WARNING: ...`
+/// lines Circuitry's own Python `logging` module emits
+/// (`core/dynamic.py`'s/`core/conditional.py`'s own `on_error: skip`/
+/// `continue` degradation, a `finally:` that fails after the body
+/// already did, `core/tool.py`'s own invalid-timeout warning, ...) take
+/// a different path to stderr: each site logs through `log::warn!` at
+/// the point it happens (not collected into `RunResult.warnings` at
+/// all), and [`StderrWarnLogger`] -- installed once, in [`main`],
+/// before this function or [`run_orchestration_with_config`] ever runs
+/// -- is what actually writes each one, as `WARNING: <text>`, the
+/// moment it is logged (issue #442's "Warning lines on stderr" item).
+/// `tests/warnings.rs` and `tests/conformance` both compare those
+/// lines against a real `cof run`'s own stderr.
 fn print_stderr_contract(result: &RunResult) {
     for warning in &result.warnings {
         write_stderr(&format!("Warning: {warning}\n"));
@@ -547,12 +615,25 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // whole CLI command, before `run()`'s own JSON-output logic is
     // ever reached, so unlike every other failure this prints no
     // stdout payload at all, `--out` or not (PR #441 review finding 8).
+    // `config_error` resolves *config_path* exactly once for this
+    // whole invocation, at `cof run`'s own point in its resolution
+    // order (`cli/app.py` resolves config at ~:1127, before the
+    // missing-orchestration/bad-`-e` checks below) -- so logging stays
+    // on here: a resolve-time warning (electricity-config's own
+    // "Unknown environment ...", issue #442) must print even when one
+    // of those checks then ends the run early, exactly as it would for
+    // `cof run`. The resolved config is threaded through to
+    // `run_orchestration_with_config` below rather than resolved a
+    // second time, so that warning never fires twice.
     let config_path = PathBuf::from(&run_args.config);
-    if let Some(message) = electricity::config_error(&config_path) {
-        signal_guard.disarm();
-        write_stderr(&format!("Error: {message}\n"));
-        return ExitCode::from(1);
-    }
+    let cfg = match electricity::config_error(&config_path) {
+        Ok(cfg) => cfg,
+        Err(message) => {
+            signal_guard.disarm();
+            write_stderr(&format!("Error: {message}\n"));
+            return ExitCode::from(1);
+        }
+    };
 
     // `cof`'s own "Orchestration not found" check (`_resolve_orchestration`)
     // happens in the CLI layer *before* `-e` is ever parsed
@@ -613,7 +694,9 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             .enable_all()
             .build()
             .expect("could not start the electricity async runtime");
-        runtime.block_on(electricity::run_orchestration(&req, &token))
+        runtime.block_on(electricity::run_orchestration_with_config(
+            cfg, &req, &token,
+        ))
     };
 
     if let Some(path) = &out_path {
@@ -642,6 +725,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    install_warning_logger();
     // `args_os` + lossy conversion instead of `args()`, which panics on a
     // non-UTF-8 argument.
     let args: Vec<String> = std::env::args_os()
@@ -691,6 +775,33 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use log::Log;
+
+    fn warn_metadata(target: &str) -> log::Metadata<'_> {
+        log::Metadata::builder()
+            .level(log::Level::Warn)
+            .target(target)
+            .build()
+    }
+
+    #[test]
+    fn the_warning_logger_admits_this_workspaces_own_crate_targets() {
+        for target in [
+            "electricity_vm::exec::dynamic",
+            "electricity_config::config",
+            "electricity",
+        ] {
+            assert!(
+                StderrWarnLogger.enabled(&warn_metadata(target)),
+                "{target} should be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn the_warning_logger_ignores_a_record_from_outside_this_workspace() {
+        assert!(!StderrWarnLogger.enabled(&warn_metadata("some_other_crate")));
+    }
 
     #[test]
     fn version_flag_wins_over_everything() {

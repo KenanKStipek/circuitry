@@ -28,6 +28,18 @@ def _case_ids() -> list[str]:
     return [d.name for d in CASE_DIRS]
 
 
+def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
+    """`expected.warnings.txt` (issue #442's "Warning lines on stderr"
+    item): compared regardless of `expect` -- a case can log a warning
+    on its way to either a success or a failure."""
+    actual = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
+    expected = [line for line in expected_text.splitlines() if line]
+    assert actual == expected, (
+        f"{case_dir.name}: stderr warning lines mismatch\n  got: {actual}\n  want: {expected}"
+    )
+
+
 @pytest.mark.parametrize("case_dir", CASE_DIRS, ids=_case_ids())
 def test_case(case_dir: Path, tmp_path: Path) -> None:
     metadata = harness.load_case(case_dir)
@@ -47,6 +59,8 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         events_path=events_path,
         live_state_path=live_state_path,
     )
+
+    _assert_warnings_match(case_dir, metadata, result.stderr)
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (

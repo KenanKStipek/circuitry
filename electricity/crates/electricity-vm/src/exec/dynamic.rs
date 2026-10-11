@@ -214,10 +214,20 @@ pub(crate) fn execute_dynamic<'a>(
             let text = error_text(be, token);
             store.set_leaf(&meta_node, key("error"), Value::Str(text.clone()));
             if let Some(fe) = &finally_exc {
+                let finally_text = error_text(fe, token);
                 store.set_leaf(
                     &meta_node,
                     key("finally_error"),
-                    Value::Str(error_text(fe, token)),
+                    Value::Str(finally_text.clone()),
+                );
+                // `core/dynamic.py::DynamicRuntime.execute`'s own
+                // `logger.warning("Dynamic %r: cleanup in 'finally' also
+                // failed (%s) after the original failure (%s)", ...)` --
+                // fires whenever both failed, regardless of this
+                // dynamic's own `on_error` (issue #442).
+                log::warn!(
+                    "Dynamic {}: cleanup in 'finally' also failed ({finally_text}) after the original failure ({text})",
+                    dynamic_name_repr(name)
                 );
             }
             Some(text)
@@ -239,6 +249,15 @@ pub(crate) fn execute_dynamic<'a>(
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(be);
             }
+            // `core/dynamic.py::DynamicRuntime.execute`'s own
+            // `logger.warning("Dynamic %r: %s; on_error=%s, continuing
+            // with the next effect", ...)` (issue #442).
+            log::warn!(
+                "Dynamic {}: {}; on_error={}, continuing with the next effect",
+                dynamic_name_repr(name),
+                error_text(&be, token),
+                on_error_str(op.on_error)
+            );
             return Ok(());
         }
         if let Some(fe) = finally_exc {
@@ -246,6 +265,16 @@ pub(crate) fn execute_dynamic<'a>(
             if is_cancellation || matches!(op.on_error, OnError::Fail) {
                 return Err(fe);
             }
+            // `core/dynamic.py::DynamicRuntime.execute`'s own
+            // `logger.warning("Dynamic %r: finally failed (%s);
+            // on_error=%s, continuing with the next effect", ...)`
+            // (issue #442).
+            log::warn!(
+                "Dynamic {}: finally failed ({}); on_error={}, continuing with the next effect",
+                dynamic_name_repr(name),
+                error_text(&fe, token),
+                on_error_str(op.on_error)
+            );
             return Ok(());
         }
         Ok(())
@@ -259,6 +288,30 @@ fn error_text(err: &VmError, token: &CancellationToken) -> String {
     match err {
         VmError::Cancelled => interrupted_text(token),
         other => other.to_string(),
+    }
+}
+
+/// Python `repr(name)` for a `dynamic`'s own `%r`-formatted warning text
+/// (issue #442) -- `name` is always a plain string (a dynamic is never
+/// unnamed), so this is just [`Value::py_repr`] on it wrapped as a
+/// [`Value::Str`].
+fn dynamic_name_repr(name: &str) -> String {
+    Value::Str(name.to_string()).py_repr()
+}
+
+/// The on-degradation warnings above only ever fire for `skip`/
+/// `continue` (a dynamic's own `on_error` is never `break`, and `fail`
+/// always returns `Err` before reaching them) -- Python's own `%s` on
+/// `self.defn.on_error`, the plain config string.
+fn on_error_str(on_error: OnError) -> &'static str {
+    match on_error {
+        OnError::Skip => "skip",
+        OnError::Continue => "continue",
+        OnError::Fail | OnError::Break => {
+            unreachable!(
+                "a dynamic's own on_error warning path is only ever reached for skip/continue"
+            )
+        }
     }
 }
 

@@ -1547,9 +1547,18 @@ electricity's own non-TTY stdout matches this reference's byte for byte, with on
 deliberate narrowing: a run failure's error goes out only in the stdout JSON
 payload, never duplicated onto stderr. A config error, caught before a run
 ever starts, is the one case that prints on stderr alone (`Error: <text>`)
-and nothing on stdout. electricity does not yet print this reference's own
-Python `logging` warnings mid-run (#442). See electricity/DESIGN.md §6.9,
-"CLI output", for the full statement.
+and nothing on stdout. electricity also reproduces this reference's own
+Python `logging` warnings (its CLI's default `WARNING` level, never
+changed by a `--verbose`/`--quiet` of its own) as the same `WARNING: ...`
+lines, through a `log::Log` `electricity-cli`'s own `main` installs (issue
+#442) -- the `core/dynamic.py`/`core/conditional.py` on_error/`finally:`
+degradation warnings, `core/tool.py`'s invalid-timeout warning,
+`cli/config.py`'s "Unknown environment" warning, and `cli/live_state.py`/
+`cli/events.py`'s mid-run write-failure warnings, all reachable from
+M0-H's own supported subset, in order for a chain and sorted for a tree --
+both `tests/warnings.rs` and the conformance suite now compare these
+lines against a real `cof run`. See electricity/DESIGN.md §6.9, "CLI
+output", for the full statement and its own narrower, still-open gaps.
 
 ### 8.5 `--resume` rules
 

@@ -1030,18 +1030,56 @@ electricity's own stdout matches `cof run`'s byte for byte — success with `--o
 nothing; success without `--out` prints the final state as JSON; a run failure prints
 `{"ok": false, "error": ..., "warnings": [...], "state_out": ...}` and nothing else, regardless of
 `--out`. A run failure's own error therefore never reaches stderr — it is already in that stdout
-payload — so stderr during a run carries only `Warning: ...` lines (from `--events`/`--live-state`
-write failures folded into `result.warnings`; see the known gap below). A **config error** (a bad
+payload — so stderr during a run carries two kinds of line: `Warning: ...` (from `--events`/
+`--live-state` write failures folded into `result.warnings` at the end, plus any "Applied host
+settings" notice from step 6) and `WARNING: ...` (Circuitry's own `logging` module, at its
+reference CLI's default `WARNING` level — there is no `--verbose`/`--quiet` flag of electricity's
+own to change it, so this is always on). The latter are reached through the `log` crate, the same
+facade `electricity-cel`'s own absent-path warning already used before this (its own Cargo.toml
+doc comment foretold it): `electricity-vm`'s `core/dynamic.py`/`core/conditional.py` on_error/
+`finally:` degradation warnings, `core/tool.py`'s own invalid-`runtime.tools.timeout_seconds`
+warning, `electricity-config`'s "Unknown environment" warning (config/check time, before a run even
+starts), and `electricity`'s own `--live-state`/`--events` mid-run write-failure warnings all log
+through it — a no-op unless a binary installs a `log::Log`, same as Circuitry's own `NullHandler`
+default for an embedding caller; `electricity-cli`'s `main` installs one (filtered to its own
+`electricity`-prefixed crate targets, so a future dependency that happens to use `log` for its own
+purposes — unlike Circuitry's `logging`, which only ever installs a handler on its own `circuitry`
+logger — never leaks onto this stderr), writing `{levelname}: {message}\n` straight to stderr,
+flushed per line, matching the reference's own `StreamHandler` (issue #442's "Warning lines on
+stderr" item, fixed by #452). `electricity-cli`'s own config resolution runs exactly once per
+invocation, first (`cof run`'s own point in its resolution order, before the missing-orchestration/
+bad-`-e` checks) — its own warning, if any, is always printed whether or not those later checks then
+end the run early, and the resolved config is threaded straight through to `run_orchestration`
+rather than re-resolved, so that warning is never printed twice. A **config error** (a bad
 `config.json`, caught before `run_orchestration` is ever reached) is the one case that prints
 nothing on stdout at all and a single `Error: <text>` line on stderr instead, matching Circuitry's
 own `CircuitryGroup.invoke`, which catches a `ConfigError` around the whole CLI command before its
-JSON-output logic runs. **Known gap (#442):** `cof run`'s own Python `logging` warnings — the
-`WARNING: ...` lines `core/dynamic.py`/`core/conditional.py` emit mid-run for an `on_error:
-skip`/`continue` degradation or a `finally:` that fails after the body already did — have no VM
-observer hook yet and are not printed by electricity today; state, stdout, and `--events`/
-`--live-state` are unaffected, and the conformance suite never compares stderr, but a human
-watching the terminal sees fewer `Warning:` lines from electricity than from `cof run` for the same
-document.
+JSON-output logic runs. `tests/warnings.rs` (a real `cof run`'s own recorded stderr per case) and the
+conformance suite's own `expected.warnings.txt` per case both compare these lines now, in run order
+for a chain, sorted for a tree. **Known gaps remain (#442):** `--live-state`'s own *first* write is
+synchronous and unconditionally fatal in both engines (run-wiring step 16 above) — reproducing the
+reference's own retry-then-warn-twice behaviour for that specific case (it still attempts, and logs,
+one more write through `close()` in its own `finally:`, even though the run is already failing) would
+need restructuring `run_action`'s early-return paths for a case this preview cannot otherwise
+construct (no filesystem-mutating tool exists to fail a *later* write instead); `core/cel_eval.py`'s
+own `logger.error` for a genuine CEL evaluation exception (not a compile/path error — division by
+zero, say) embeds the underlying Python exception's own `repr`, which has no Rust equivalent to
+reproduce byte for byte, so that one `ERROR:` line is not ported; a tree `dynamic` with two or more
+failed branches and `on_error: skip`/`continue` folds each branch's own continuation line through
+`combine_tree_errors`, which still lacks the reference's own exception class name per branch (#442's
+first item, "the multi-failure tree error text lacks Python's exception class names" — unfixed, so
+the fold's own continuation lines, unlike its first line, are not byte for byte either; the
+conformance suite's own harness only ever compares a case's prefixed `WARNING:`/`Warning:` lines, so
+this divergence is invisible to it today); and a dynamic interrupted mid-body whose `finally:` then
+also fails logs `meta.error`'s own "Interrupted (...)" wording on this warning line
+(`exec/dynamic.rs::error_text`), where the reference logs the interrupting exception's raw `str()`
+instead — `''` for a real signal caught in the main thread (`KeyboardInterrupt`/`SigTermInterrupt`),
+or `"run cancelled"` for a tree branch's own cooperative cancellation check on a worker thread
+(`RunCancelledBySignal`) — two different, thread-dependent texts electricity's own single-threaded
+cooperative-cancellation model (every call is interrupted the same way, by a `tokio::select!`
+noticing the token, regardless of chain or tree) cannot pick between correctly without carrying that
+chain/tree distinction into this warning, which it does not do today. None of these changes state,
+stdout, or `--events`/`--live-state`.
 
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 
