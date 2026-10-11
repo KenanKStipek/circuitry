@@ -245,12 +245,18 @@ fn is_container_path(
 fn any_descendant_failed(
     path: &str,
     flat: &BTreeMap<String, NodeMeta>,
-    event_failed: &BTreeSet<String>,
+    event_failed: &BTreeSet<(String, i64)>,
+    path_failed_without_id: &BTreeSet<String>,
 ) -> bool {
     let prefix = format!("{path}.");
     flat.iter()
         .any(|(other, node)| other.starts_with(&prefix) && node.error.is_some())
-        || event_failed.iter().any(|other| other.starts_with(&prefix))
+        || event_failed
+            .iter()
+            .any(|(other, _)| other.starts_with(&prefix))
+        || path_failed_without_id
+            .iter()
+            .any(|other| other.starts_with(&prefix))
 }
 
 fn on_error_suffix(path: &str, plan: &PlanTree) -> &'static str {
@@ -294,8 +300,9 @@ pub struct Differ {
     /// printing both would duplicate the same transition, once from
     /// each source.
     event_sourced: BTreeSet<String>,
-    /// Paths whose own `end` event reported `ok: false` (M1b, a P2-6
-    /// follow-up): `any_descendant_failed` must see a sibling's
+    /// Every `(path, id)` instance whose own `end` event reported
+    /// `ok: false` (M1b, a P2-6 follow-up; review finding 5 on #458's
+    /// comment 4): `any_descendant_failed` must see a sibling's
     /// failure from earlier in the *same* tick, not just what `diff`'s
     /// state-sourced `self.last` already knew about as of the previous
     /// tick. Events in one tick are handled one at a time, in file
@@ -303,8 +310,23 @@ pub struct Differ {
     /// that tick's own state poll -- so a child's own ✗, two calls
     /// earlier in this same batch, was otherwise invisible to its
     /// container's `end` landing right after it, producing a second,
-    /// duplicate ✗ for the container.
-    event_failed: BTreeSet<String>,
+    /// duplicate ✗ for the container. Keyed per *instance*, not just
+    /// by path: a later `start` reusing the same path -- a retry, or
+    /// the next pass of an unnamed loop (DESIGN.md §2.3) -- never
+    /// erases a *different* id's own already-reported failure. Never
+    /// cleared, which trades away catching the opposite case (a
+    /// stale, long-done descendant failure hiding a later, genuinely
+    /// unrelated container failure) for fixing the more visibly wrong
+    /// one: a reused path's pass that already printed its own ✗ no
+    /// longer causes its own container to print a redundant second
+    /// one once that pass's own slot is reused.
+    event_failed: BTreeSet<(String, i64)>,
+    /// The same idea as `event_failed`, for an `end` with no `id` of
+    /// its own at all (an engine build old enough to omit one): no
+    /// instance key to track separately, so this keeps the previous
+    /// per-path behaviour instead, cleared on that exact path's own
+    /// next `start`.
+    path_failed_without_id: BTreeSet<String>,
     /// The freshest state `note_preview` has been handed, kept
     /// separate from `last` (which only ever advances inside `diff`
     /// itself): container detection for an event whose own `start`
@@ -322,6 +344,7 @@ impl Differ {
             unnamed_pass_counts: BTreeMap::new(),
             event_sourced: BTreeSet::new(),
             event_failed: BTreeSet::new(),
+            path_failed_without_id: BTreeSet::new(),
             preview: BTreeMap::new(),
         }
     }
@@ -363,16 +386,15 @@ impl Differ {
         match event {
             Event::Start { ts, path, .. } => {
                 self.event_sourced.insert(path.clone());
-                // A path reused by a later pass must not keep
-                // answering for a failure from an earlier one (issue
-                // #433's comments): `event_failed` is keyed only by
-                // path, with nothing else to tell passes apart, so a
-                // fresh `start` at this exact path clears both its own
-                // entry and every descendant's (a loop's path is also
-                // every one of its children's own prefix).
+                // `event_failed` itself (the id'd set) is never
+                // cleared here any more (review finding 5 on #458's
+                // comment 4) -- only the id-less fallback is, the same
+                // as before: a fresh `start` at this exact path clears
+                // its own entry and every descendant's (a loop's path
+                // is also every one of its children's own prefix).
                 let restarted_prefix = format!("{path}.");
-                self.event_failed.remove(path);
-                self.event_failed
+                self.path_failed_without_id.remove(path);
+                self.path_failed_without_id
                     .retain(|other| !other.starts_with(&restarted_prefix));
                 // A named container (the document root included) fires
                 // `start`/`end` the same as a leaf (DESIGN.md §1.4's
@@ -399,11 +421,11 @@ impl Differ {
             }
             Event::End {
                 ts,
+                id,
                 path,
                 ok,
                 ms,
                 error,
-                ..
             } => {
                 self.event_sourced.insert(path.clone());
                 if !*ok {
@@ -413,14 +435,28 @@ impl Differ {
                     // already visible here, even though `diff`'s own
                     // state-sourced `self.last` won't catch up until
                     // this tick's later `diff` call.
-                    self.event_failed.insert(path.clone());
+                    match id {
+                        Some(id) => {
+                            self.event_failed.insert((path.clone(), *id));
+                        }
+                        None => {
+                            self.path_failed_without_id.insert(path.clone());
+                        }
+                    }
                 }
                 if is_container_path(path, plan, self.container_lookup(path), model) {
                     // P2-6: the container's own failure, when it has
                     // one, still needs a line if nothing under it
                     // already printed one -- the events path has the
                     // exact same gap state's `diff` does.
-                    if !*ok && !any_descendant_failed(path, &self.last, &self.event_failed) {
+                    if !*ok
+                        && !any_descendant_failed(
+                            path,
+                            &self.last,
+                            &self.event_failed,
+                            &self.path_failed_without_id,
+                        )
+                    {
                         let message = error.as_deref().unwrap_or("");
                         return vec![LogLine {
                             ts: Some(ts.clone()),
@@ -701,7 +737,12 @@ impl Differ {
                         && prev.is_running()
                         && !node.is_running()
                         && node.error.is_some()
-                        && !any_descendant_failed(path, &flat, &self.event_failed)
+                        && !any_descendant_failed(
+                            path,
+                            &flat,
+                            &self.event_failed,
+                            &self.path_failed_without_id,
+                        )
                         && !event_sourced
                     {
                         lines.push(LogLine {
@@ -1528,15 +1569,19 @@ mod tests {
     }
 
     #[test]
-    fn event_failed_is_cleared_on_the_paths_next_start_so_a_later_passs_own_failure_is_not_hidden_by_an_earlier_one()
-     {
-        // Issue #433's comments: `event_failed` used to be keyed only
-        // by path and never cleared, so an unnamed loop's leaf failing
-        // on one pass kept `any_descendant_failed` answering true for
-        // every later pass too -- hiding a container's own cross mark
-        // in a pass where the leaf itself actually succeeded and the
-        // container failed on its own (a CEL error evaluating the
-        // loop's condition, say).
+    fn a_reused_paths_earlier_failure_is_never_forgotten_even_once_a_later_pass_succeeds() {
+        // Review finding 5 on #458's comment 4: `event_failed` used to
+        // clear a path's own entry on its next `start`, so the
+        // container below (`an_unnamed_tree_loops_reused_pass_failure_
+        // does_not_get_a_redundant_cross_mark_once_a_later_pass_
+        // succeeds`) printed a second, redundant ✗ once a later pass's
+        // own success cleared pass 1's own already-reported one. Kept
+        // per instance (by id) instead, this is the deliberate
+        // trade-off: a CEL error on the *same* container, in a *later*
+        // pass where the reused leaf itself succeeds, is now wrongly
+        // read as still being that old, unrelated failure bubbling up
+        // -- accepted, since the redundant-✗ case below is both more
+        // common and more visibly wrong.
         let mut differ = Differ::new();
         let plan = PlanTree::empty();
         let model = RunModel::new();
@@ -1608,10 +1653,99 @@ mod tests {
             &model,
         );
         assert!(
-            container_lines
+            container_lines.is_empty(),
+            "pass 1's own, long-settled failure is still remembered, so the container's own (here, genuinely unrelated) failure is still read as that one bubbling up: {container_lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_tree_loops_reused_pass_failure_does_not_get_a_redundant_cross_mark_once_a_later_pass_succeeds()
+     {
+        // Review finding 5 on #458's comment 4: an unnamed tree loop
+        // whose passes exceed `max_concurrency` reuses the same leaf
+        // path for every pass (DESIGN.md §2.3). Pass 1 at that path
+        // fails and gets its own ✗ immediately. With
+        // `stop_on_error: continue`, later passes keep running at the
+        // very same path -- pass 2 succeeds -- but the loop's own
+        // container still ends with `ok: false` overall, since *some*
+        // pass failed. That end must not print a second, redundant ✗
+        // for the exact same failure pass 1's own line already
+        // reported.
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.nap".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let pass1_lines = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.nap".to_string(),
+                ok: false,
+                ms: Some(1),
+                error: Some("boom".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        differ.diff_event(
+            &Event::Start {
+                ts: "t2".to_string(),
+                id: Some(2),
+                path: "prime.nap".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        differ.diff_event(
+            &Event::End {
+                ts: "t3".to_string(),
+                id: Some(2),
+                path: "prime.nap".to_string(),
+                ok: true,
+                ms: Some(1),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        let container_lines = differ.diff_event(
+            &Event::End {
+                ts: "t3".to_string(),
+                id: Some(0),
+                path: "prime".to_string(),
+                ok: false,
+                ms: Some(5),
+                error: Some("prime.nap: boom".to_string()),
+            },
+            &plan,
+            &model,
+        );
+        assert!(
+            pass1_lines
                 .iter()
-                .any(|l| l.text.starts_with("✗ prime")),
-            "the container's own failure must get its own cross mark, not be hidden by pass 1's stale entry: {container_lines:?}"
+                .any(|l| l.text.starts_with("✗ prime.nap")),
+            "{pass1_lines:?}"
+        );
+        assert!(
+            container_lines.is_empty(),
+            "the container must not print a second, redundant cross mark for a failure pass 1 already reported: {container_lines:?}"
         );
     }
 
