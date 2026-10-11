@@ -505,6 +505,7 @@ dependencies = [
  "digest",
  "electricity-json",
  "electricity-value",
+ "fancy-regex",
  "jiff",
  "libc",
  "md-5",
