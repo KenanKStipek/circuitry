@@ -1,0 +1,48 @@
+name: regex-param-errors
+effects:
+  - type: tool
+    name: missing_pattern
+    provider: regex
+    on_error: continue
+    params: {input: "a"}
+  - type: tool
+    name: empty_pattern
+    provider: regex
+    on_error: continue
+    params: {pattern: "", input: "a"}
+  - type: tool
+    name: non_string_input
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: 5}
+  - type: tool
+    name: unknown_mode
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: "a", mode: bogus}
+  - type: tool
+    name: flags_not_a_list
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: "a", flags: IGNORECASE}
+  - type: tool
+    name: unknown_flag
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: "a", flags: [BOGUS]}
+  - type: tool
+    name: missing_replacement
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: "a", mode: sub}
+  - type: tool
+    name: bad_replacement_escape
+    provider: regex
+    on_error: continue
+    params: {pattern: "a", input: "a", mode: sub, replacement: '\q'}
+  - type: tool
+    name: retried_failure
+    provider: regex
+    on_error: continue
+    retries: {max_attempts: 2, backoff_ms: 0}
+    params: {pattern: "(", input: "a"}

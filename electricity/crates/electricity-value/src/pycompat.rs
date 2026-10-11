@@ -54,6 +54,19 @@ pub enum PyExc {
     /// `fs`/`hash` tools: appended here, never a change to an
     /// existing variant's spelling, per this enum's own doc comment).
     UnicodeEncodeError,
+    /// `IndexError` (lane D2, the `regex` tool's own `sub` template
+    /// parser): CPython's `re.sub` raises this, not `ValueError`, for
+    /// an unknown `\g<name>` group name -- distinct from
+    /// [`PyExc::LookupError`], which is the *class name* `re.error`
+    /// itself subclasses, never the one #442's multi-failure tree text
+    /// needs to print for this specific case.
+    IndexError,
+    /// `re.error` (lane D2, the `regex` tool): CPython 3.11/3.12's own
+    /// name for every pattern-compile and replacement-template parse
+    /// failure (`issue #479`'s own "`re.error`'s class" note; 3.13
+    /// renames it to `PatternError`, tracked only as a documented
+    /// divergence, never matched here).
+    ReError,
     /// `adapters/_retry.py::AdapterCallError` (lane F1, issue #478) --
     /// an adapter call failure carrying its own `RetryInfo`, raised by
     /// the scripted adapter's error replies. `type(e).__name__` for
@@ -87,6 +100,8 @@ impl PyExc {
             PyExc::OverflowError => "OverflowError",
             PyExc::RecursionError => "RecursionError",
             PyExc::UnicodeEncodeError => "UnicodeEncodeError",
+            PyExc::IndexError => "IndexError",
+            PyExc::ReError => "error",
             PyExc::AdapterCallError => "AdapterCallError",
             PyExc::ScriptedRepliesError => "ScriptedRepliesError",
         }

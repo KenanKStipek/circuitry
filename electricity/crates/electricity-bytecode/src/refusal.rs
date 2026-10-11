@@ -278,8 +278,8 @@ impl<'a> Supported<'a> {
             tools_process: true,
             // lane D1 (#460)
             tools_stdlib: true,
-            // lane D2 (#448)
-            tool_regex: false,
+            // lane D2 (#448, #479)
+            tool_regex: true,
             // lane E (#448)
             tool_http: false,
             // lane L2 (#448)
@@ -554,7 +554,10 @@ mod tests {
         assert_eq!(current.preflight, m0.preflight);
         assert!(current.tools_process);
         assert!(current.tools_stdlib);
-        assert_eq!(current.tool_regex, m0.tool_regex);
+        // lane D2 (#448, #479): `tool_regex` is `true` now -- asserted
+        // directly rather than against `m0.tool_regex` (always
+        // `false`), the one field this lane's own PR flips.
+        assert!(current.tool_regex);
         assert_eq!(current.tool_http, m0.tool_http);
         assert_eq!(current.tool_validate_yaml, m0.tool_validate_yaml);
         assert_eq!(current.complexity, m0.complexity);

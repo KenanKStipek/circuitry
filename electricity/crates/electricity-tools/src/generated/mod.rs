@@ -2,6 +2,7 @@
 //! re-run its own `electricity/scripts/generate_*.py` instead.
 
 pub(crate) mod python_codec_names;
+pub(crate) mod regex_unicode;
 mod unicode_alnum_ranges;
 
 /// Whether `c` is alphanumeric per CPython's `str.isalnum()` -- true for
