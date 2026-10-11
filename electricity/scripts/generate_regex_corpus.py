@@ -22,13 +22,12 @@ Writes: crates/electricity-tools/tests/golden/regex_corpus.json
 from __future__ import annotations
 
 import json
+import re
 import struct
 import sys
 import unicodedata
 from pathlib import Path
 from typing import Any
-
-import re
 
 from circuitry.plugins.regex import RegexPlugin
 
