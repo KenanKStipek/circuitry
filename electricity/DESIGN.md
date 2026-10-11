@@ -2118,6 +2118,9 @@ the reference's own `_is_file_or_fifo` check. Parsing matches `python-dotenv`'s 
 interpolation, and the reference's own universal-newline translation of `\r\n`/a lone `\r`), and
 a malformed entry (an invalid key or a NUL byte in a value) is skipped by name rather than ever
 reaching `std::env::set_var`, whose own panic message would otherwise put the value on stderr.
+This is a deliberate divergence for now: the reference currently dies at startup with an uncaught
+`ValueError` on such an entry. #473 proposes the same skip-with-a-warning behaviour for `cof`, with one
+warning text both engines print.
 Only the binary's own startup does this — the `electricity` library crate, like
 `circuitry.api`, never loads it; an embedding program owns its own environment.
 
