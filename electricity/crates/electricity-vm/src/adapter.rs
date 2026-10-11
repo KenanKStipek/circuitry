@@ -139,14 +139,14 @@ impl fmt::Display for AdapterError {
 
 impl std::error::Error for AdapterError {}
 
-/// `adapters/base.py::Adapter` (the `Protocol`), plus the two optional
-/// hooks (`check`/`list_models`) folded directly into the trait --
-/// unlike Python's own structural-typing shim (`call_check`/
-/// `call_list_models`), every Rust [`Adapter`] implementor provides all
-/// three; one that genuinely has nothing useful to report for
-/// `check`/`list_models` returns an always-ready [`CheckResult`]/an
-/// empty list, matching what Python's own shim falls back to for an
-/// adapter missing the hook entirely.
+/// `adapters/base.py::Adapter` (the `Protocol`), plus the three
+/// optional hooks (`check`/`list_models`/`accepts_images`) folded
+/// directly into the trait -- unlike Python's own structural-typing
+/// shim (`call_check`/`call_list_models`), every Rust [`Adapter`]
+/// implementor provides all of them; one that genuinely has nothing
+/// useful to report for `check`/`list_models` returns an always-ready
+/// [`CheckResult`]/an empty list, matching what Python's own shim
+/// falls back to for an adapter missing the hook entirely.
 #[async_trait(?Send)]
 pub trait Adapter {
     fn name(&self) -> &str;
@@ -159,13 +159,29 @@ pub trait Adapter {
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError>;
 
-    fn check(&self) -> CheckResult;
+    /// `preflight.py`'s own per-adapter readiness probe -- `async`
+    /// (review finding 9 on PR #454: `ollama.py`'s own `check()`
+    /// probes the daemon over the network, `adapters/ollama.py:220-`,
+    /// so a synchronous signature here would have forced lane F2 to
+    /// widen this trait's own "final and complete" method once it
+    /// ported that adapter).
+    async fn check(&self) -> CheckResult;
 
     /// `adapters.models.call_list_models`'s own fallback -- `[]` for an
     /// adapter that can't list models (most of them; only a handful of
     /// Python adapters implement this hook at all).
     fn list_models(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Whether this adapter accepts image inputs at all -- lane R's own
+    /// `image_asset_warnings` (`runtime_shim.py:1610-1640`, review
+    /// finding 9 on PR #454) warns once per run when a prompt attaches
+    /// an image to an adapter that can't use it. `false` for every
+    /// adapter that doesn't override this -- the common case; only a
+    /// handful of Python adapters accept images at all.
+    fn accepts_images(&self) -> bool {
+        false
     }
 }
 
@@ -198,7 +214,7 @@ impl Adapter for NoopAdapter {
         })
     }
 
-    fn check(&self) -> CheckResult {
+    async fn check(&self) -> CheckResult {
         CheckResult {
             ok: true,
             ..Default::default()
@@ -322,7 +338,7 @@ mod tests {
             })
         }
 
-        fn check(&self) -> CheckResult {
+        async fn check(&self) -> CheckResult {
             CheckResult {
                 ok: true,
                 ..Default::default()
@@ -390,5 +406,17 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.message, "stub adapter: not implemented");
+    }
+
+    #[tokio::test]
+    async fn check_is_async_and_accepts_images_defaults_to_false() {
+        // Review finding 9 on PR #454: `check` is `async` (an adapter
+        // like `ollama`'s own probes the daemon over the network), and
+        // every adapter that doesn't override `accepts_images` reports
+        // `false`.
+        assert!(NoopAdapter.check().await.ok);
+        assert!(!NoopAdapter.accepts_images());
+        assert!(NotImplementedAdapter.check().await.ok);
+        assert!(!NotImplementedAdapter.accepts_images());
     }
 }
