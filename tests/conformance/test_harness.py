@@ -156,6 +156,75 @@ def test_load_case_rejects_non_bool_electricity_preview_ok(tmp_path: Path) -> No
         harness.load_case(case_dir)
 
 
+def test_load_case_rejects_non_bool_sort_http_requests(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "sort_http_requests": "yes"})
+    with pytest.raises(ValueError, match="'sort_http_requests' must be a bool"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_also_pretty_with_mock_http_fixture(tmp_path: Path) -> None:
+    """PR #455 review finding P2-4: the --pretty re-run gets neither a
+    fresh mock server nor a fresh leftover-replies path, and runs after the
+    server has already stopped."""
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "also_pretty": True,
+            "mock_http_fixture": "mock-http.yaml",
+        },
+    )
+    with pytest.raises(ValueError, match="'also_pretty' cannot combine with"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_known_divergence_with_also_pretty(tmp_path: Path) -> None:
+    """PR #455 review finding P2-4: the --pretty comparison never applies
+    the known_divergence override."""
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "engines": ["python", "electricity"],
+            "also_pretty": True,
+            "known_divergence": {"location": "prime.x.value", "electricity_value": 1},
+        },
+    )
+    with pytest.raises(ValueError, match="'known_divergence' cannot combine with"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_electricity_preview_ok_on_a_failure_case(tmp_path: Path) -> None:
+    """PR #455 review finding P2-4: `electricity_preview_ok` names a case
+    electricity is expected to refuse, which is meaningless on anything but
+    a success case."""
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "failure",
+            "engines": ["python", "electricity"],
+            "electricity_preview_ok": True,
+        },
+    )
+    with pytest.raises(ValueError, match="'electricity_preview_ok' only applies to"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_electricity_preview_ok_without_electricity_in_engines(
+    tmp_path: Path,
+) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "engines": ["python"],
+            "electricity_preview_ok": True,
+        },
+    )
+    with pytest.raises(ValueError, match="'electricity_preview_ok' only applies to"):
+        harness.load_case(case_dir)
+
+
 def test_case_redaction_replacements_only_redacts_host_port_forms(tmp_path: Path) -> None:
     """PR #455 review finding P2-3: a bare port-number replacement could
     also corrupt a run id/UUID or a compact timestamp that happens to

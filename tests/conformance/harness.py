@@ -152,6 +152,22 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'also_pretty' only applies to a 'success' case"
         )
+    if metadata.get("also_pretty") and metadata.get("mock_http_fixture"):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'also_pretty' cannot combine with "
+            "'mock_http_fixture' -- the --pretty re-run gets neither a fresh mock server "
+            "nor a fresh leftover-replies path, and runs after the server has already "
+            "stopped"
+        )
+    if metadata.get("electricity_preview_ok") and (
+        metadata["expect"] != "success" or "electricity" not in metadata["engines"]
+    ):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'electricity_preview_ok' only applies to a "
+            "'success' case that lists 'electricity' in 'engines' -- it names a case "
+            "electricity is expected to refuse, so there is nothing for it to mean "
+            "otherwise"
+        )
     known_divergence = metadata["known_divergence"]
     if known_divergence is not None:
         if (
@@ -166,6 +182,12 @@ def load_case(case_dir: Path) -> dict[str, Any]:
             raise ValueError(
                 f"{case_dir.name}: case.json 'known_divergence.location' must be a "
                 "non-empty string"
+            )
+        if metadata.get("also_pretty"):
+            raise ValueError(
+                f"{case_dir.name}: case.json 'known_divergence' cannot combine with "
+                "'also_pretty' -- the --pretty comparison never applies the override, so "
+                "a documented divergence there would just fail the --pretty assertion"
             )
         if metadata["expect"] != "success":
             raise ValueError(

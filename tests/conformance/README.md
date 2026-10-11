@@ -53,7 +53,15 @@ loudly instead of silently falling back to a default). `config`, if
 omitted, gets the Python engine's own built-in defaults (no `--config`
 passed — `cof run`'s sandboxed-HOME, no-project-config case); the
 electricity runner has a different fallback for the same "omitted" case,
-see "Running it" below.
+see "Running it" below. It also rejects three key combinations that parse
+fine but don't work: `also_pretty` together with `mock_http_fixture` (the
+`--pretty` re-run gets neither a fresh mock server nor a fresh
+leftover-replies path, and runs after the server has already stopped);
+`known_divergence` together with `also_pretty` (the `--pretty` comparison
+never applies the override); and `electricity_preview_ok: true` on
+anything but a *success* case that lists `electricity` in `engines` (it
+names a case electricity is expected to refuse, which is meaningless
+otherwise).
 
 A case document calls no real model or network — a case that needs one
 uses the `scripted` adapter (a replies file) or the harness's own mock
