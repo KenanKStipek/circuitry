@@ -542,3 +542,177 @@ fn the_test_harness_can_spawn_and_signal_a_child_without_hanging() {
     assert!(status.code().is_some() || status.signal().is_some());
     let _ = std::io::stdout().flush();
 }
+
+/// `prime.x`: 2 replies; `prime.y`: 1 -- fixed counts
+/// `electricity-cli/tests/leftover_export.rs`'s own
+/// `LEFTOVER_EXPORT_FIXTURE` also uses, so a reader comparing the two
+/// files sees the identical fixture and expected result. The
+/// `test-tools`-only register hook's own `check()` call leaves these
+/// fully untouched (it never dispatches `generate()`) -- the exact
+/// shape `generate_scripted_corpus.py`'s own
+/// `a_single_preflight_only_instance_reports_every_path_at_its_full_count`
+/// merge case already verifies against Circuitry's own
+/// `ScriptedAdapter.check`/`_merge_leftover_replies`, the functions
+/// `cof run`'s own preflight and `atexit` hook call for a document
+/// whose top-level `adapter: scripted` is never actually dispatched.
+const LEFTOVER_EXPORT_FIXTURE: &str =
+    "prime.x:\n  - text: one\n  - text: two\nprime.y:\n  - text: only\n";
+
+fn expected_leftover_export_counts() -> serde_json::Value {
+    serde_json::json!({"prime.x": 2, "prime.y": 1})
+}
+
+/// [`spawn`], plus the `test-tools`-only register hook
+/// (`ELECTRICITY_TEST_SCRIPTED_REGISTER_REPLIES_FILE`) and the export
+/// target (`CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE`) issue
+/// #478's own exit-path tests below need -- *home*'s own
+/// `replies.yaml` is always [`LEFTOVER_EXPORT_FIXTURE`].
+fn spawn_with_leftover_export_hook(
+    home: &TempHome,
+    config: &Path,
+    doc: &Path,
+    extra_args: &[&str],
+    export: &Path,
+) -> TestChild {
+    let replies = home.write("replies.yaml", LEFTOVER_EXPORT_FIXTURE);
+    let mut cmd = Command::new(bin());
+    cmd.env_clear();
+    cmd.env("HOME", &home.path);
+    cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
+    cmd.env("ELECTRICITY_TEST_SCRIPTED_REGISTER_REPLIES_FILE", &replies);
+    cmd.env("CIRCUITRY_TEST_SCRIPTED_LEFTOVER_REPLIES_FILE", export);
+    cmd.args([config.to_str().unwrap(), doc.to_str().unwrap()]);
+    cmd.args(["--live-state", live_state_path(home).to_str().unwrap()]);
+    cmd.args(extra_args);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.process_group(0);
+    TestChild {
+        child: cmd
+            .spawn()
+            .expect("spawn electricity with the leftover-export register hook"),
+    }
+}
+
+fn assert_export_has_the_fixtures_full_counts(export: &Path) {
+    let text = fs::read_to_string(export)
+        .unwrap_or_else(|e| panic!("export file {} should exist: {e}", export.display()));
+    let got: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(got, expected_leftover_export_counts());
+}
+
+/// Issue #478's own exit-path wiring: `electricity::write_leftover_export`
+/// runs on a *first* SIGINT's own handled exit (130), writing the
+/// register hook's own registered full counts -- exactly as it would
+/// on an ordinary exit 0/1 (`tests/leftover_export.rs`'s own
+/// `test-tools`-gated coverage).
+#[test]
+fn sigint_exit_writes_the_registered_full_counts() {
+    let home = TempHome::new("sigint-export-hook");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let export = home.path.join("leftover-export.json");
+    let mut child = spawn_with_leftover_export_hook(
+        &home,
+        &config,
+        &doc,
+        &["--out", out.to_str().unwrap()],
+        &export,
+    );
+    wait_until_running(&home);
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert!(out.exists());
+    assert_export_has_the_fixtures_full_counts(&export);
+}
+
+/// The same proof as above, for SIGTERM's own handled exit (143).
+#[test]
+fn sigterm_exit_writes_the_registered_full_counts() {
+    let home = TempHome::new("sigterm-export-hook");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let export = home.path.join("leftover-export.json");
+    let mut child = spawn_with_leftover_export_hook(
+        &home,
+        &config,
+        &doc,
+        &["--out", out.to_str().unwrap()],
+        &export,
+    );
+    wait_until_running(&home);
+    child.send(libc::SIGTERM);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGTERM");
+    assert_eq!(status.code(), Some(143));
+    assert!(out.exists());
+    assert_export_has_the_fixtures_full_counts(&export);
+}
+
+/// The same proof as above, for SIGHUP's own handled exit (129).
+#[test]
+fn sighup_exit_writes_the_registered_full_counts() {
+    let home = TempHome::new("sighup-export-hook");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let export = home.path.join("leftover-export.json");
+    let mut child = spawn_with_leftover_export_hook(
+        &home,
+        &config,
+        &doc,
+        &["--out", out.to_str().unwrap()],
+        &export,
+    );
+    wait_until_running(&home);
+    child.send(libc::SIGHUP);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGHUP");
+    assert_eq!(status.code(), Some(129));
+    assert!(out.exists());
+    assert_export_has_the_fixtures_full_counts(&export);
+}
+
+/// A *second* SIGINT's own hard `std::process::exit` skips every
+/// destructor, `write_leftover_export`'s own call site included
+/// (issue #431's Signals section: "no `--out`, no `run_end`" for a
+/// second-signal exit; the same `arm_signals`-armed hard exit never
+/// reaches `main`'s own tail at all) -- the export must stay absent
+/// even though the register hook ran and an instance is sitting in
+/// the registry, same as Python's own `os._exit` skipping `atexit`.
+#[test]
+fn a_second_sigint_still_writes_no_export_even_though_an_instance_is_registered() {
+    let home = TempHome::new("double-sigint-export-hook");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", LONG_SLEEP_DOC);
+    let out = home.path.join("out.json");
+    let export = home.path.join("leftover-export.json");
+    let mut child = spawn_with_leftover_export_hook(
+        &home,
+        &config,
+        &doc,
+        &["--out", out.to_str().unwrap()],
+        &export,
+    );
+    wait_until_running(&home);
+    child.send(libc::SIGINT);
+    std::thread::sleep(Duration::from_millis(2000));
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(2))
+        .expect("electricity exited after a second SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert!(!out.exists());
+    assert!(
+        !export.exists(),
+        "a second signal's own hard exit must never write the export, \
+         even though the register hook already ran"
+    );
+}

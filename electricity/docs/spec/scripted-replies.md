@@ -79,11 +79,16 @@ never matched by substring or prefix; it must match exactly.
 ## 4. One reply
 
 A reply is a mapping, and is exactly one of a text reply or an error reply — never both,
-and never neither. Every key not listed under the shape that applies (4.1 or 4.2) is a
-load-time error, the same as a misspelled one (`token_sent` for `tokens_sent`) silently
-dropping what it meant to set. A boolean is never accepted where an int is expected
-(`status: true`, `tokens_sent: false`) — Python's `bool` is a subtype of `int`, so this is
-checked explicitly, not left to `isinstance(x, int)` alone.
+and never neither. Every key of a *text* reply not listed under 4.1 is a load-time error,
+the same as a misspelled one (`token_sent` for `tokens_sent`) silently dropping what it
+meant to set. An *error* reply's own nested `error:` mapping is checked the same way
+against 4.2's own key set — but the reply's **other**, sibling keys are not checked at all:
+`{error: {kind: timeout}, tokens_sent: 5}` loads silently, the `tokens_sent` simply
+ignored, because the loader only reaches a text reply's own key check on the branch that
+found no `error:` key at all (Circuitry's own code; `circuitry.adapters.scripted`, whose
+behaviour wins over this prose where the two disagree). A boolean is never accepted where
+an int is expected (`status: true`, `tokens_sent: false`) — Python's `bool` is a subtype
+of `int`, so this is checked explicitly, not left to `isinstance(x, int)` alone.
 
 ### 4.1 A text reply
 
@@ -99,7 +104,9 @@ checked explicitly, not left to `isinstance(x, int)` alone.
 token fields, when present, feed the run's own `tokens_sent`/`tokens_received` and
 `*_total` accounting, so a replies file that cares about token totals in its expected
 output sets them explicitly — they default to absent (`null`), same as a real adapter
-reply that reports none.
+reply that reports none. Python's own `int` is unbounded; electricity's token counts are
+`i64`-bounded, a documented divergence — a count beyond that range is a load-time error
+there, with a message Python has no equivalent of, rather than a silent truncation.
 
 ### 4.2 An error reply
 
@@ -132,7 +139,10 @@ name, for every kind except `timeout`/`connection`, which carry no status and ar
 retryable (they model a failure that never got an HTTP response to classify in the first
 place). An explicit `status: null` is only legal for `timeout`/`connection`; every other
 kind needs one (its own default, or an override), checked at load time rather than left
-to fail the call itself with no path named.
+to fail the call itself with no path named. Python's own `int` is unbounded; electricity's
+`status` is `u16`-bounded, a second documented divergence — a status outside that range
+still classifies retryable/not-retryable by its full value, but is stored as absent
+(`None`) on the failure's own retry info, rather than truncated or rejected.
 
 The generated default `message` (when a reply omits one) is the literal string
 `"scripted adapter: <kind> at '<path>'"` — this, like every other error's message, ends
@@ -147,11 +157,13 @@ This file only ever answers a *model* call — `prompt` effects, a `tool`/`use` 
 fakes (a process-backed tool's recorded stdout/exit code, an HTTP-family tool's mock
 server) are a separate mechanism (§12 of `electricity/DESIGN.md`), not part of this file.
 
-The adapter also adds one warning to `meta.warnings` for any prompt effect that sets
-`params`, `messages`, or `images` — `scripted` has no model behind it to honour them, the
-same as any other adapter asked for an option it does not support
-(`ignored_options_warning`). When `runtime.adapters.scripted.replies_file` is unset, it
-defaults to `scripted-replies.yaml`, resolved the same way an explicit relative path is.
+The adapter also adds one warning to `meta.warnings` naming *every* set field of a
+prompt effect's own `GenerateOptions` — `temperature`/`max_tokens`/`stop` included, not
+only `params`/`messages`/`images` — since `scripted` has no model behind it to honour any
+of them, the same as any other adapter asked for an option it does not support
+(`ignored_options_warning`, called with an empty `used` set). When
+`runtime.adapters.scripted.replies_file` is unset, it defaults to `scripted-replies.yaml`,
+resolved the same way an explicit relative path is.
 
 ## 6. Unmatched calls and leftover replies
 
