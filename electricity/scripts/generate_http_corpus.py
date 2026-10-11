@@ -178,10 +178,7 @@ def _http_error_excerpt_cases() -> list[dict[str, Any]]:
         # slice on multi-byte text.
         json.dumps({"errors": [{"msg": "é" * 600}]}),
     ]
-    cases = []
-    for body in bodies:
-        cases.append({"body": body, "expected": http_error_excerpt(body)})
-    return cases
+    return [{"body": body, "expected": http_error_excerpt(body)} for body in bodies]
 
 
 # ---------------------------------------------------------------------
@@ -223,7 +220,7 @@ def _utf8_replace_cases() -> list[dict[str, Any]]:
 def _bytes_ctor(value: Any) -> tuple[str | None, str]:
     try:
         return None, bytes(value).hex()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return type(exc).__name__, str(exc)
 
 
