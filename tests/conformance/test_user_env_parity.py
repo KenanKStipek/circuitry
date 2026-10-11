@@ -323,6 +323,8 @@ def test_a_key_containing_equals_prints_the_exact_same_warning_and_never_the_val
     expected = f"WARNING: {env_path}: skipping 'A=B': not a valid environment variable name or value."
     assert cof_warning == expected, cof_warning
     assert cof_warning == electricity_warning, (cof_warning, electricity_warning)
+    assert cof_result.stderr.count("not a valid environment variable name or value") == 1
+    assert electricity_result.stderr.count("not a valid environment variable name or value") == 1
 
 
 def test_a_nul_byte_in_a_value_prints_the_exact_same_warning_and_never_the_value(
@@ -360,3 +362,5 @@ def test_a_nul_byte_in_a_value_prints_the_exact_same_warning_and_never_the_value
     )
     assert cof_warning == expected, cof_warning
     assert cof_warning == electricity_warning, (cof_warning, electricity_warning)
+    assert cof_result.stderr.count("not a valid environment variable name or value") == 1
+    assert electricity_result.stderr.count("not a valid environment variable name or value") == 1

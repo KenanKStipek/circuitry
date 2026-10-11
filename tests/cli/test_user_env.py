@@ -192,7 +192,8 @@ def test_nul_byte_in_value_is_skipped_with_one_warning(caplog):
     """A raw NUL byte decodes as valid UTF-8 inside a value, but
     `os.environ[key] = value` would raise `ValueError` ("embedded null
     byte") for it (#473)."""
-    path = _write_env("NUL_KEY=ab\x00cd\nOPENAI_API_KEY=" + _CANARY + "\n")
+    secret = "s3cr3t_nul\x00tail_473"
+    path = _write_env("NUL_KEY=" + secret + "\nOPENAI_API_KEY=" + _CANARY + "\n")
 
     with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
         result = load_user_env()
@@ -201,7 +202,8 @@ def test_nul_byte_in_value_is_skipped_with_one_warning(caplog):
     assert result.supplied == ("OPENAI_API_KEY",)
     assert "NUL_KEY" not in os.environ
     assert os.environ["OPENAI_API_KEY"] == _CANARY
-    assert "ab" not in caplog.text or "cd" not in caplog.text
+    assert "s3cr3t_nul" not in caplog.text
+    assert "tail_473" not in caplog.text
     expected = f"{path}: skipping 'NUL_KEY': not a valid environment variable name or value."
     assert expected in caplog.text
 
@@ -233,7 +235,8 @@ def test_doctor_reports_names_only_never_a_value(tmp_path):
 
     from circuitry.cli.app import app
 
-    _write_env(f"OPENAI_API_KEY={_CANARY}\n")
+    invalid_canary = "sk-invalid-canary-should-never-print-2b7e"
+    _write_env(f"OPENAI_API_KEY={_CANARY}\n'A=B'={invalid_canary}\n")
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({"default_adapter": "ollama", "default_model": "llama3:latest"}),
@@ -259,4 +262,41 @@ def test_doctor_reports_names_only_never_a_value(tmp_path):
     assert os.environ["OPENAI_API_KEY"] == _CANARY
     assert "OPENAI_API_KEY" in result.output
     assert "User .env" in result.output
+    assert _CANARY not in result.output
+    assert "A=B" in result.output
+    assert invalid_canary not in result.output
+
+
+def test_doctor_renders_without_error_for_markup_breaking_key(tmp_path):
+    """A key containing Rich markup syntax (e.g. from a single-quoted
+    `'[/x]=1'=...` entry) must not break `cof doctor`'s own rendering —
+    the key name is escaped before being interpolated into a Rich-markup
+    string (#473 P2)."""
+    import json
+
+    import typer.testing
+
+    from circuitry.cli.app import app
+
+    _write_env(f"'[/x]=1'={_CANARY}\nOPENAI_API_KEY={_CANARY}\n")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"default_adapter": "ollama", "default_model": "llama3:latest"}),
+        encoding="utf-8",
+    )
+
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config_path)],
+        env={
+            "CIRCUITRY_ENABLED_ADAPTERS": "",
+            "CIRCUITRY_ENABLED_TOOLS": "",
+            "CIRCUITRY_ENABLED_PLUGINS": "",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "[/x]=1" in result.output
     assert _CANARY not in result.output

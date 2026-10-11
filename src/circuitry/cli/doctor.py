@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 if TYPE_CHECKING:
@@ -186,6 +187,13 @@ def register_doctor(app: typer.Typer) -> None:
             raise typer.Exit(code=1)
 
 
+def _render_names(names: tuple[str, ...]) -> str:
+    """Render key names for Rich markup, safe against any key content."""
+    if not names:
+        return "(none)"
+    return ", ".join(escape(repr(name)) for name in names)
+
+
 def _describe_user_env(result: UserEnvResult | None) -> str:
     """Render :func:`load_user_env`'s result — names only, never a value."""
     if result is None:
@@ -195,11 +203,11 @@ def _describe_user_env(result: UserEnvResult | None) -> str:
             return f"[yellow]WARN[/yellow] {result.warning}"
         return f"— (no file at {result.path})"
     parts = [f"loaded {result.path}"]
-    parts.append(f"supplied: {', '.join(result.supplied) or '(none)'}")
+    parts.append(f"supplied: {_render_names(result.supplied)}")
     if result.skipped:
-        parts.append(f"already set in environment: {', '.join(result.skipped)}")
+        parts.append(f"already set in environment: {_render_names(result.skipped)}")
     if result.invalid:
-        parts.append(f"invalid (skipped): {', '.join(result.invalid)}")
+        parts.append(f"invalid (skipped): {_render_names(result.invalid)}")
     if result.warning:
         parts.append(f"[yellow]WARN[/yellow] {result.warning}")
     return "; ".join(parts)
