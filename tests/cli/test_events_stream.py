@@ -315,6 +315,69 @@ effects:
     for e in ends:
         assert e["ok"] is True
 
+    # #470: an unnamed tree loop's own `dispatch` belongs to the
+    # enclosing container the passes actually run in (here, the run
+    # root itself) — never a literal `"None"` suffix.
+    dispatches = [e for e in events if e["ev"] == "dispatch"]
+    assert len(dispatches) == 1
+    assert dispatches[0]["path"] == "prime"
+
+
+def test_two_unnamed_tree_loops_in_a_row_both_dispatch_at_the_same_enclosing_path(
+    tmp_path: Path,
+) -> None:
+    """Two unnamed `flow: tree` loops, one after the other in the same
+    chain, both have no name of their own to append — their `dispatch`
+    events (#470) both carry the run root's own path, `"prime"`, rather
+    than colliding on some fabricated per-loop identity. Nothing
+    downstream keys a dispatch by path for correctness (`RunManager`
+    only accumulates `concurrency`; oscilloscope's model just records
+    the most recent dispatch per path), so the second dispatch simply
+    replacing the first's record at that path is harmless."""
+    orch = tmp_path / "two_unnamed_tree_loops.yml"
+    orch.write_text(
+        """
+effects:
+  - type: loop
+    flow: tree
+    each: {in: input.items, as: x}
+    body:
+      - type: tool
+        name: t1
+        provider: shell
+        params:
+          command: sleep
+          args: ["0.1"]
+          allowed_commands: ["sleep"]
+  - type: loop
+    flow: tree
+    each: {in: input.items, as: x}
+    body:
+      - type: tool
+        name: t2
+        provider: shell
+        params:
+          command: sleep
+          args: ["0.1"]
+          allowed_commands: ["sleep"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"items": ["a", "b"]}), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path, state_path=state_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    events = _events(events_path)
+    dispatches = [e for e in events if e["ev"] == "dispatch"]
+    assert len(dispatches) == 2
+    assert all(d["path"] == "prime" for d in dispatches)
+    assert all("None" not in d["path"] for d in dispatches)
+
 
 def test_failing_effect_on_error_continue_truncates_error(tmp_path: Path) -> None:
     """A failing effect's `end` carries `ok: false` and an `error` cut to

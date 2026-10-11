@@ -159,6 +159,37 @@ fn is_zero_or_false(value: &Value) -> bool {
     }
 }
 
+/// A Mustache scope stack, nearest scope first, as a parent-linked chain
+/// rather than a `Vec`: pushing a new scope
+/// (`{{#section}}`/`{{^section}}`, [`render_with_pushed_scope`]) borrows
+/// the enclosing chain instead of cloning it, so rendering a section
+/// never copies the outer scopes — including the whole root context —
+/// on every push.
+pub(crate) enum Scope<'a> {
+    Root(&'a Value),
+    Pushed(Value, &'a Scope<'a>),
+}
+
+impl<'a> Scope<'a> {
+    pub(crate) fn root(value: &'a Value) -> Self {
+        Scope::Root(value)
+    }
+
+    fn nearest(&self) -> &Value {
+        match self {
+            Scope::Root(value) => value,
+            Scope::Pushed(value, _) => value,
+        }
+    }
+
+    fn parent(&self) -> Option<&Scope<'a>> {
+        match self {
+            Scope::Root(_) => None,
+            Scope::Pushed(_, parent) => Some(parent),
+        }
+    }
+}
+
 /// `_get_key`: resolve a (possibly dotted) name against the scope stack,
 /// nearest scope first. `"."` always means "the nearest scope, as a
 /// whole" and never falls back further. Any other key tries a full
@@ -170,28 +201,36 @@ fn is_zero_or_false(value: &Value) -> bool {
 /// chevron's own fallback, so this function never needs a separate
 /// not-found signal: every call site already treats `""` as "missing or
 /// falsy", which is exactly what chevron's `_get_key` itself returns.
-pub(crate) fn get_key(key: &str, scopes: &[Value]) -> Result<Value, String> {
+pub(crate) fn get_key(key: &str, scope: &Scope) -> Result<Value, String> {
     if key == "." {
-        return Ok(scopes
-            .first()
-            .cloned()
-            .unwrap_or_else(|| Value::Str(String::new())));
+        return Ok(scope.nearest().clone());
     }
-    for scope in scopes {
-        if let Some(found) = walk_dotted(scope, key)? {
+    let mut current = Some(scope);
+    while let Some(s) = current {
+        if let Some(found) = walk_dotted(s.nearest(), key)? {
             return Ok(found);
         }
+        current = s.parent();
     }
     Ok(Value::Str(String::new()))
 }
 
+/// Walks *key*'s dotted segments against *scope* by reference, cloning
+/// only the final matched value (`step` already clones only the child it
+/// finds at each segment) rather than cloning the whole scope up front.
 fn walk_dotted(scope: &Value, key: &str) -> Result<Option<Value>, String> {
-    let mut current = scope.clone();
-    for part in key.split('.') {
-        match step(&current, part)? {
-            Some(next) => current = next,
+    let mut parts = key.split('.');
+    // `str::split` on a non-empty pattern always yields at least one item.
+    let first = parts.next().expect("split yields at least one segment");
+    let mut current = match step(scope, first)? {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    for part in parts {
+        current = match step(&current, part)? {
+            Some(value) => value,
             None => return Ok(None),
-        }
+        };
     }
     Ok(Some(current))
 }
@@ -315,14 +354,14 @@ fn html_escape(s: &str) -> String {
 /// check).
 fn render_variable_escaped(
     key: &str,
-    scopes: &[Value],
+    scope: &Scope,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
-    let mut value = get_key(key, scopes)?;
+    let mut value = get_key(key, scope)?;
     if key == "." && matches!(value, Value::Bool(true)) {
-        value = scopes
-            .get(1)
-            .cloned()
+        value = scope
+            .parent()
+            .map(|parent| parent.nearest().clone())
             .ok_or_else(|| "list index out of range".to_string())?;
     }
     let text = stringify_for_variable(&value, ctx)?;
@@ -332,8 +371,8 @@ fn render_variable_escaped(
 /// `{{{x}}}`/`{{&x}}`: the resolved value, unescaped, with no special
 /// case for `{{{.}}}`/`{{&.}}` resolving to `True` (see
 /// [`render_variable_escaped`]).
-fn render_variable_raw(key: &str, scopes: &[Value], ctx: &dyn SpliceCtx) -> Result<String, String> {
-    let value = get_key(key, scopes)?;
+fn render_variable_raw(key: &str, scope: &Scope, ctx: &dyn SpliceCtx) -> Result<String, String> {
+    let value = get_key(key, scope)?;
     stringify_for_variable(&value, ctx)
 }
 
@@ -350,17 +389,17 @@ fn render_variable_raw(key: &str, scopes: &[Value], ctx: &dyn SpliceCtx) -> Resu
 /// otherwise.
 pub(crate) fn render_nodes(
     nodes: &[Node],
-    scopes: &[Value],
+    scope: &Scope,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
     let mut out = String::new();
     for node in nodes {
         match node {
             Node::Literal(s) => out.push_str(s),
-            Node::Variable(key) => out.push_str(&render_variable_escaped(key, scopes, ctx)?),
-            Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scopes, ctx)?),
+            Node::Variable(key) => out.push_str(&render_variable_escaped(key, scope, ctx)?),
+            Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scope, ctx)?),
             Node::Section(key, body) => {
-                let mut value = get_key(key, scopes)?;
+                let mut value = get_key(key, scope)?;
                 // `Value::List(items) = value` would move `items` out of
                 // a type that implements `Drop` (electricity-value's
                 // iterative `Drop` impl), which Rust never allows,
@@ -370,20 +409,20 @@ pub(crate) fn render_nodes(
                 if let Value::List(items) = &mut value {
                     for element in std::mem::take(items) {
                         if truthy(&element) {
-                            out.push_str(&render_with_pushed_scope(body, element, scopes, ctx)?);
+                            out.push_str(&render_with_pushed_scope(body, element, scope, ctx)?);
                         }
                     }
                 } else if truthy(&value) {
-                    out.push_str(&render_with_pushed_scope(body, value, scopes, ctx)?);
+                    out.push_str(&render_with_pushed_scope(body, value, scope, ctx)?);
                 }
             }
             Node::Inverted(key, body) => {
-                let value = get_key(key, scopes)?;
+                let value = get_key(key, scope)?;
                 if !truthy(&value) {
                     out.push_str(&render_with_pushed_scope(
                         body,
                         Value::Bool(true),
-                        scopes,
+                        scope,
                         ctx,
                     )?);
                 }
@@ -393,14 +432,12 @@ pub(crate) fn render_nodes(
     Ok(out)
 }
 
-fn render_with_pushed_scope(
+fn render_with_pushed_scope<'a>(
     body: &[Node],
     new_scope: Value,
-    scopes: &[Value],
+    scope: &'a Scope<'a>,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
-    let mut pushed = Vec::with_capacity(scopes.len() + 1);
-    pushed.push(new_scope);
-    pushed.extend_from_slice(scopes);
+    let pushed = Scope::Pushed(new_scope, scope);
     render_nodes(body, &pushed, ctx)
 }

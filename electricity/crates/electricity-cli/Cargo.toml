@@ -13,12 +13,20 @@ path = "src/main.rs"
 
 [features]
 # Never enabled here: a release build of this binary never registers
-# `sleep`/`fail`. The signal-handling test suite enables it explicitly
-# (`cargo test -p electricity-cli --features test-tools --test signals`).
-test-tools = ["electricity/test-tools"]
+# `sleep`/`fail`, and never builds a `scripted` adapter ahead of a real
+# run. The signal-handling test suite enables it explicitly
+# (`cargo test -p electricity-cli --features test-tools --test signals`),
+# and `tests/leftover_export.rs` enables it to drive issue #478's own
+# exit-path wiring end to end (no document can make `scripted` load
+# until lane G flips `prompt`).
+test-tools = ["electricity/test-tools", "dep:electricity-adapters"]
 
 [dependencies]
 electricity = { path = "../electricity" }
+# Only to let `register_test_only_scripted_adapter` (`test-tools`-gated,
+# `main.rs`) build a real `scripted` adapter directly -- never a
+# dependency of the plain binary.
+electricity-adapters = { path = "../electricity-adapters", optional = true }
 electricity-config = { path = "../electricity-config" }
 electricity-value = { path = "../electricity-value" }
 libc = "0.2"

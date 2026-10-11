@@ -1,0 +1,905 @@
+{
+  "host_claude_message": "host_claude cannot be built from config; it requires a request_handler injected at runtime via RunRequest.adapter (see circuitry-mcp). Run `circuitry-mcp` (or `cof mcp`) and drive the orchestration via the MCP tool loop, or supply RunRequest(adapter=HostClaudeAdapter(request_handler=...)) from a programmatic caller.",
+  "merge_cases": [
+    {
+      "case": "the_minimum_across_instances_wins_never_the_sum",
+      "contents": "prime.x:\n  - text: one\n  - text: two\nprime.y:\n  - text: only\nprime.z:\n  - text: untouched\n",
+      "filename": "replies.yaml",
+      "merged": {
+        "prime.x": 1,
+        "prime.z": 1
+      },
+      "per_instance_counts": [
+        {
+          "prime.x": 1,
+          "prime.y": 0,
+          "prime.z": 1
+        },
+        {
+          "prime.x": 2,
+          "prime.y": 1,
+          "prime.z": 1
+        }
+      ]
+    },
+    {
+      "case": "a_path_fully_consumed_by_every_instance_is_omitted_not_zero",
+      "contents": "prime.x:\n  - text: only\n",
+      "filename": "replies.yaml",
+      "merged": {},
+      "per_instance_counts": [
+        {
+          "prime.x": 0
+        }
+      ]
+    },
+    {
+      "case": "a_single_preflight_only_instance_reports_every_path_at_its_full_count",
+      "contents": "prime.x:\n  - text: one\n  - text: two\nprime.y:\n  - text: only\nprime.z:\n  - text: untouched\n",
+      "filename": "replies.yaml",
+      "merged": {
+        "prime.x": 2,
+        "prime.y": 1,
+        "prime.z": 1
+      },
+      "per_instance_counts": [
+        {
+          "prime.x": 2,
+          "prime.y": 1,
+          "prime.z": 1
+        }
+      ]
+    }
+  ],
+  "options_cases": [
+    {
+      "case": "no_fields_set",
+      "input": {
+        "images_count": 0,
+        "max_tokens": null,
+        "messages_count": 0,
+        "params": {},
+        "stop": [],
+        "temperature": null,
+        "used": []
+      },
+      "set_fields": [],
+      "warnings": []
+    },
+    {
+      "case": "temperature_only",
+      "input": {
+        "images_count": 0,
+        "max_tokens": null,
+        "messages_count": 0,
+        "params": {},
+        "stop": [],
+        "temperature": 0.7,
+        "used": []
+      },
+      "set_fields": [
+        "temperature"
+      ],
+      "warnings": [
+        "adapter 'scripted' ignored: temperature"
+      ]
+    },
+    {
+      "case": "every_field_set_scripted_honours_none_of_it",
+      "input": {
+        "images_count": 1,
+        "max_tokens": 10,
+        "messages_count": 1,
+        "params": {
+          "a": 2,
+          "b": 1
+        },
+        "stop": [
+          "END"
+        ],
+        "temperature": 0.1,
+        "used": []
+      },
+      "set_fields": [
+        "temperature",
+        "max_tokens",
+        "stop",
+        "params (a, b)",
+        "messages (roles flattened into one prompt)",
+        "images"
+      ],
+      "warnings": [
+        "adapter 'scripted' ignored: temperature; max_tokens; stop; params (a, b); messages (roles flattened into one prompt); images"
+      ]
+    },
+    {
+      "case": "used_removes_matching_fields_by_first_word",
+      "input": {
+        "images_count": 0,
+        "max_tokens": null,
+        "messages_count": 1,
+        "params": {
+          "seed": 1
+        },
+        "stop": [],
+        "temperature": null,
+        "used": [
+          "params"
+        ]
+      },
+      "set_fields": [
+        "params (seed)",
+        "messages (roles flattened into one prompt)"
+      ],
+      "warnings": [
+        "adapter 'scripted' ignored: messages (roles flattened into one prompt)"
+      ]
+    },
+    {
+      "case": "params_keys_are_sorted_by_code_point",
+      "input": {
+        "images_count": 0,
+        "max_tokens": null,
+        "messages_count": 0,
+        "params": {
+          "Beta": 3,
+          "alpha": 2,
+          "zeta": 1
+        },
+        "stop": [],
+        "temperature": null,
+        "used": []
+      },
+      "set_fields": [
+        "params (Beta, alpha, zeta)"
+      ],
+      "warnings": [
+        "adapter 'scripted' ignored: params (Beta, alpha, zeta)"
+      ]
+    }
+  ],
+  "replies_cases": [
+    {
+      "calls": [
+        {
+          "kind": "generate",
+          "ok": {
+            "finish_reason": "stop",
+            "text": "hello",
+            "tokens_received": 5,
+            "tokens_sent": 3,
+            "warnings": []
+          },
+          "path": "prime.x"
+        }
+      ],
+      "case": "text_reply_with_tokens_and_finish_reason",
+      "contents": "prime.x:\n  - text: hello\n    tokens_sent: 3\n    tokens_received: 5\n    finish_reason: stop\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "generate",
+          "ok": {
+            "finish_reason": null,
+            "text": "from json",
+            "tokens_received": null,
+            "tokens_sent": null,
+            "warnings": []
+          },
+          "path": "prime.x"
+        }
+      ],
+      "case": "dot_json_suffix_parses_as_plain_json",
+      "contents": "{\"prime.x\": [{\"text\": \"from json\"}]}",
+      "filename": "replies.json",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "generate",
+          "ok": {
+            "finish_reason": null,
+            "text": "from yaml flow mapping",
+            "tokens_received": null,
+            "tokens_sent": null,
+            "warnings": []
+          },
+          "path": "prime.x"
+        }
+      ],
+      "case": "a_non_json_suffix_parses_as_yaml_even_with_json_like_content",
+      "contents": "{\"prime.x\": [{\"text\": \"from yaml flow mapping\"}]}",
+      "filename": "replies.txt",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "generate",
+          "ok": {
+            "finish_reason": null,
+            "text": "only",
+            "tokens_received": null,
+            "tokens_sent": null,
+            "warnings": []
+          },
+          "path": "prime.x"
+        },
+        {
+          "error_class": "RuntimeError",
+          "kind": "generate",
+          "message": "scripted adapter: no reply configured for path 'prime.x'",
+          "path": "prime.x"
+        }
+      ],
+      "case": "an_exhausted_queue_then_fails_without_naming_the_replies_file",
+      "contents": "prime.x:\n  - text: only\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "RuntimeError",
+          "kind": "generate",
+          "message": "scripted adapter: no reply configured for path 'prime.unknown'",
+          "path": "prime.unknown"
+        }
+      ],
+      "case": "an_unconfigured_path_fails_without_naming_the_replies_file",
+      "contents": "prime.known:\n  - text: x\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: server_error at 'prime.flaky'",
+          "path": "prime.flaky",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 500
+          }
+        },
+        {
+          "kind": "generate",
+          "ok": {
+            "finish_reason": null,
+            "text": "recovered",
+            "tokens_received": null,
+            "tokens_sent": null,
+            "warnings": []
+          },
+          "path": "prime.flaky"
+        }
+      ],
+      "case": "an_error_reply_is_consumed_even_though_it_fails",
+      "contents": "prime.flaky:\n  - error:\n      kind: server_error\n  - text: recovered\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: rate_limited at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 429
+          }
+        }
+      ],
+      "case": "error_kind_default_status_rate_limited",
+      "contents": "prime.x:\n  - error:\n      kind: rate_limited\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: server_error at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 500
+          }
+        }
+      ],
+      "case": "error_kind_default_status_server_error",
+      "contents": "prime.x:\n  - error:\n      kind: server_error\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: invalid_request at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": false,
+            "status": 400
+          }
+        }
+      ],
+      "case": "error_kind_default_status_invalid_request",
+      "contents": "prime.x:\n  - error:\n      kind: invalid_request\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: unauthorized at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": false,
+            "status": 401
+          }
+        }
+      ],
+      "case": "error_kind_default_status_unauthorized",
+      "contents": "prime.x:\n  - error:\n      kind: unauthorized\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: not_found at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": false,
+            "status": 404
+          }
+        }
+      ],
+      "case": "error_kind_default_status_not_found",
+      "contents": "prime.x:\n  - error:\n      kind: not_found\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: timeout at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": null
+          }
+        }
+      ],
+      "case": "error_kind_default_status_timeout",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: connection at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": null
+          }
+        }
+      ],
+      "case": "error_kind_default_status_connection",
+      "contents": "prime.x:\n  - error:\n      kind: connection\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: http at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 503
+          }
+        }
+      ],
+      "case": "error_kind_default_status_http",
+      "contents": "prime.x:\n  - error:\n      kind: http\n      status: 503\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: timeout at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 503
+          }
+        }
+      ],
+      "case": "timeout_kind_keeps_an_explicit_status_and_stays_retryable",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n      status: 503\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: connection at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 503
+          }
+        }
+      ],
+      "case": "connection_kind_keeps_an_explicit_status_and_stays_retryable",
+      "contents": "prime.x:\n  - error:\n      kind: connection\n      status: 503\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: rate_limited at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 429
+          }
+        }
+      ],
+      "case": "an_empty_message_falls_back_to_the_generated_default",
+      "contents": "prime.x:\n  - error:\n      kind: rate_limited\n      message: ''\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "slow down",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": true,
+            "status": 429
+          }
+        }
+      ],
+      "case": "an_explicit_message_overrides_the_generated_default",
+      "contents": "prime.x:\n  - error:\n      kind: rate_limited\n      message: slow down\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: server_error at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": false,
+            "status": 400
+          }
+        }
+      ],
+      "case": "an_overridden_status_still_classifies_by_status_not_kind_name",
+      "contents": "prime.x:\n  - error:\n      kind: server_error\n      status: 400\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "AdapterCallError",
+          "kind": "generate",
+          "message": "scripted adapter: server_error at 'prime.x'",
+          "path": "prime.x",
+          "retry": {
+            "retry_after": null,
+            "retryable": false,
+            "status": 99999999999999999999999999
+          }
+        }
+      ],
+      "case": "a_status_beyond_u16_still_classifies_by_the_full_value",
+      "contents": "prime.x:\n  - error:\n      kind: server_error\n      status: 99999999999999999999999999\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "TypeError",
+          "kind": "generate",
+          "message": "unhashable type: 'list'",
+          "path": "prime.x"
+        }
+      ],
+      "case": "an_unhashable_kind_raises_pythons_own_type_error",
+      "contents": "prime.x:\n  - error:\n      kind: [1, 2]\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: replies file must be a mapping of path -> list of replies",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_scalar_document_is_not_a_mapping",
+      "contents": "just a string\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: every key must be a non-empty string path",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_empty_key_is_rejected",
+      "contents": "{\"\": [{\"text\": \"x\"}]}",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: replies for path 'prime.x' must be a non-empty list",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_empty_list_is_rejected",
+      "contents": "prime.x: []\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: replies for path 'prime.x' must be a non-empty list",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_list_value_is_rejected",
+      "contents": "prime.x: 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x' must be a mapping",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_mapping_reply_is_rejected",
+      "contents": "prime.x:\n  - 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': exactly one of 'text' or 'error', not both",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "both_text_and_error_is_rejected",
+      "contents": "prime.x:\n  - text: x\n    error:\n      kind: timeout\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of ['finish_reason', 'text', 'tokens_received', 'tokens_sent']",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_unknown_text_reply_key_is_rejected",
+      "contents": "prime.x:\n  - text: x\n    token_sent: 1\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x' needs a string 'text', or an 'error'",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_missing_text_is_rejected",
+      "contents": "prime.x:\n  - finish_reason: stop\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'tokens_sent' must be an int >= 0",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_negative_tokens_sent_is_rejected",
+      "contents": "prime.x:\n  - text: x\n    tokens_sent: -1\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'tokens_sent' must be an int >= 0",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_boolean_tokens_sent_is_rejected",
+      "contents": "prime.x:\n  - text: x\n    tokens_sent: true\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'finish_reason' must be a string",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_string_finish_reason_is_rejected",
+      "contents": "prime.x:\n  - text: x\n    finish_reason: 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'error' must be a mapping with a 'kind'",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "error_without_a_kind_is_rejected",
+      "contents": "prime.x:\n  - error:\n      message: oops\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['bogus']; one of ['kind', 'message', 'status']",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_unknown_error_key_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n      bogus: 1\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown error kind 'bogus'; one of ['connection', 'http', 'invalid_request', 'not_found', 'rate_limited', 'server_error', 'timeout', 'unauthorized']",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "an_unknown_error_kind_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: bogus\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'status' must be an int",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_int_status_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: server_error\n      status: not-a-number\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': error kind 'server_error' needs a 'status'",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_null_status_on_a_kind_that_needs_one_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: server_error\n      status: null\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': 'message' must be a string",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_string_message_is_rejected",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n      message: 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": null,
+          "missing": [],
+          "ok": true
+        }
+      ],
+      "case": "an_error_replys_sibling_keys_are_not_checked",
+      "contents": "prime.x:\n  - error:\n      kind: timeout\n    tokens_sent: 5\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: every key must be a non-empty string path",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "a_non_string_int_key_is_rejected",
+      "contents": "5:\n  - text: x\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of ['finish_reason', 'text', 'tokens_received', 'tokens_sent']",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "two_unknown_text_reply_keys_sort_by_string_value_not_repr",
+      "contents": "prime.x:\n  - text: x\n    b: 1\n    \"it's\": 2\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "error_class": "RuntimeError",
+          "kind": "generate",
+          "message": "scripted adapter: no reply configured for path 'prime.x'",
+          "path": "prime.x"
+        }
+      ],
+      "case": "a_null_document_means_an_empty_mapping",
+      "contents": "null\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.json: invalid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "invalid_json_syntax_reports_cpythons_exact_jsondecodeerror_text",
+      "contents": "{not valid json",
+      "filename": "replies.json",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "replies.yaml: invalid YAML: while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 10:\n    prime.x: [unterminated\n             ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "invalid_yaml_syntax_reports_the_parsers_exact_text",
+      "contents": "prime.x: [unterminated\n",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": null
+    },
+    {
+      "calls": [
+        {
+          "kind": "check",
+          "message": "check() raised UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte",
+          "missing": [],
+          "ok": false
+        }
+      ],
+      "case": "invalid_utf8_raises_pythons_own_unicodedecodeerror_text",
+      "contents": "placeholder",
+      "filename": "replies.yaml",
+      "raw_bytes_hex": "fffe"
+    }
+  ]
+}

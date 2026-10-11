@@ -78,12 +78,12 @@
 //!   instead of reproducing chevron's miscount. Needs a list section
 //!   containing an inverted section that reuses the same key.
 //!
-//! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) clones the
-//! `Value` it resolves rather than walking by reference; correct, and
-//! simple, but it means `render_with_pushed_scope` copies the whole scope
-//! stack — root state included — once per list element. No caller exists
-//! yet to measure against; walking by reference instead is a later
-//! optimization, not a correctness fix, and is deliberately deferred.
+//! Every lookup in `render.rs` (`get_key`/`walk_dotted`/`step`) walks the
+//! scope chain and the resolved `Value` by reference, cloning only the
+//! final matched value; `render_with_pushed_scope` pushes a new scope by
+//! borrowing the enclosing chain (`Scope`, a parent-linked stack) rather
+//! than copying it, so a render never copies the outer scopes — root
+//! state included — on a section push or a tag lookup.
 
 mod render;
 mod tokenizer;
@@ -102,21 +102,18 @@ use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 /// never reaches the tree-building or rendering stage at all.
 ///
 /// Deliberately **not** [`electricity_value::MAX_DEPTH`] (512), and far
-/// smaller: this crate's own rendering walk
-/// (`render::render_with_pushed_scope`) clones the *entire* current scope
-/// stack on every section it descends into, so render time grows with
-/// the *cube* of section depth, not linearly -- measured directly
-/// (`tests/nesting_limit.rs`'s module docs): rendering 300 levels of
-/// nested sections against matching data took 8 seconds on the machine
-/// this was measured on; 400 took 18. 512 would be a full minute or
-/// more for a single template render, a real denial-of-service on its
-/// own regardless of whether it could also overflow the stack (which,
-/// measured separately, it does too, somewhere between 350 and 400
-/// levels on a 2 MiB debug-build stack). 64 keeps a render at the limit
-/// well under a second (measured at ~125ms) and nowhere near either
-/// boundary, with no need for the `[profile.dev.package.*]`
-/// opt-level overrides `electricity-yaml`/`electricity-cel` need for
-/// their own, much larger limits.
+/// smaller. The rendering walk recurses once per section level, and a
+/// lookup inside a section still clones the child subtree it resolves at
+/// each level, so render time grows faster than linearly with section
+/// depth, and the recursion overflows a 2 MiB debug-build stack
+/// somewhere between 350 and 400 levels. (Before #477 the walk also
+/// cloned the whole scope stack on every section push, which made render
+/// time cubic in depth: 300 levels took 8 seconds and 400 took 18, as
+/// measured in `tests/nesting_limit.rs`'s module docs.) 64 keeps a
+/// render at the limit fast and nowhere near the stack boundary, with no
+/// need for the `[profile.dev.package.*]` opt-level overrides
+/// `electricity-yaml`/`electricity-cel` need for their own, much larger
+/// limits.
 pub const MAX_SECTION_DEPTH: usize = 64;
 
 /// Why a template could not be rendered. Mirrors `core/templates.py`'s
@@ -419,8 +416,8 @@ pub fn render_template(
         }
     };
     let tree = render::build_tree(&tokens);
-    let scopes = [root.clone()];
-    render::render_nodes(&tree, &scopes, ctx).map_err(|msg| TemplateError {
+    let scope = render::Scope::root(root);
+    render::render_nodes(&tree, &scope, ctx).map_err(|msg| TemplateError {
         label: label.to_string(),
         kind: TemplateErrorKind::Render(msg),
     })
@@ -574,6 +571,38 @@ mod tests {
             render_template("{{#items}}<{{.}}>{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
             "<1><x>"
         );
+    }
+
+    #[test]
+    fn nested_section_falls_back_to_an_outer_key() {
+        // A name absent from the innermost section's own scope must
+        // still resolve against the enclosing scopes, including the
+        // root -- nearest scope first, the first scope where the full
+        // dotted path resolves wins.
+        let ctx = dict(vec![
+            ("outer", Value::Str("OUTER".to_string())),
+            (
+                "a",
+                dict(vec![("b", dict(vec![("present", Value::Bool(true))]))]),
+            ),
+        ]);
+        let out =
+            render_template("{{#a}}{{#b}}[{{outer}}]{{/b}}{{/a}}", &ctx, &PlainCtx, "t").unwrap();
+        assert_eq!(out, "[OUTER]");
+    }
+
+    #[test]
+    fn a_falsy_but_present_inner_key_shadows_an_outer_truthy_one() {
+        // Chevron never "sees past" a present-but-falsy key to an
+        // outer scope's same name -- the inner, falsy `0` wins over the
+        // outer, truthy `"OUTER"`, even though a plain truthiness check
+        // would prefer the outer value.
+        let ctx = dict(vec![
+            ("x", Value::Str("OUTER".to_string())),
+            ("inner", dict(vec![("x", Value::Int(0.into()))])),
+        ]);
+        let out = render_template("{{#inner}}[{{x}}]{{/inner}}", &ctx, &PlainCtx, "t").unwrap();
+        assert_eq!(out, "[0]");
     }
 
     #[test]

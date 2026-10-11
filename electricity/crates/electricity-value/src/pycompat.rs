@@ -67,6 +67,17 @@ pub enum PyExc {
     /// renames it to `PatternError`, tracked only as a documented
     /// divergence, never matched here).
     ReError,
+    /// `adapters/_retry.py::AdapterCallError` (lane F1, issue #478) --
+    /// an adapter call failure carrying its own `RetryInfo`, raised by
+    /// the scripted adapter's error replies. `type(e).__name__` for
+    /// this class is used verbatim in #442's own multi-failure tree
+    /// text.
+    AdapterCallError,
+    /// `adapters/scripted.py::ScriptedRepliesError` (lane F1, issue
+    /// #478) -- the scripted adapter's own replies-file-is-malformed
+    /// exception, a `RuntimeError` subclass Python code never confuses
+    /// with a plain one (`type(e).__name__` differs).
+    ScriptedRepliesError,
 }
 
 impl PyExc {
@@ -91,6 +102,8 @@ impl PyExc {
             PyExc::UnicodeEncodeError => "UnicodeEncodeError",
             PyExc::IndexError => "IndexError",
             PyExc::ReError => "error",
+            PyExc::AdapterCallError => "AdapterCallError",
+            PyExc::ScriptedRepliesError => "ScriptedRepliesError",
         }
     }
 }
