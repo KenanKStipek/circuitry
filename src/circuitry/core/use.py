@@ -78,6 +78,55 @@ def _namespaced_effect_cb(
     return _forward
 
 
+def _namespaced_dispatch_cb(
+    callback: Callable[[str, int, int], None] | None, node_path: str
+) -> Callable[[str, int, int], None] | None:
+    """Wrap ``concurrent_dispatch`` the same way :func:`_namespaced_effect_cb`
+    wraps ``effect_start``/``effect_complete`` (#483) — a child loop's own
+    dispatch must land at the same absolute path its ``start``/``end``
+    events use, composing with tree-branch prefixing (#475) and nested
+    ``use`` to any depth the same way.
+
+    Unlike ``effect_start``/``effect_complete``, the child's own root path
+    (an unnamed tree loop that is the entire child body) is not dropped: the
+    ``use`` node itself never dispatches, so this is the only dispatch that
+    loop gets. It lands at ``node_path`` — the node the loop's ``start``/
+    ``end`` events already report as.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str, concurrency: int, total: int) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            callback(node_path, concurrency, total)
+            return
+        callback(f"{node_path}.{relative}", concurrency, total)
+
+    return _forward
+
+
+def _namespaced_branch_settled_cb(
+    callback: Callable[[str], None] | None, node_path: str
+) -> Callable[[str], None] | None:
+    """Wrap ``branch_settled`` the same way :func:`_namespaced_dispatch_cb`
+    wraps ``concurrent_dispatch`` (#483) — both must agree on a child loop's
+    dispatch path, since ``RunManager`` pairs one's settle points against
+    the other's announced count.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            callback(node_path)
+            return
+        callback(f"{node_path}.{relative}")
+
+    return _forward
+
+
 def _grafted_snapshot(
     root_state: dict[str, Any],
     node_path: str,
@@ -966,8 +1015,12 @@ class UseRuntime:
                             store.effect_complete, node_path
                         ),
                         effect_start=_namespaced_effect_cb(store.effect_start, node_path),
-                        concurrent_dispatch=store.concurrent_dispatch,
-                        branch_settled=store.branch_settled,
+                        concurrent_dispatch=_namespaced_dispatch_cb(
+                            store.concurrent_dispatch, node_path
+                        ),
+                        branch_settled=_namespaced_branch_settled_cb(
+                            store.branch_settled, node_path
+                        ),
                         _lock=store._lock,
                     )
 
