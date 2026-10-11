@@ -42,6 +42,7 @@ cases/<name>/
 | `error_compare` | failure cases only — `"exact"` (Circuitry's own message, byte-for-byte) or `"location"` (a third-party library's message — CEL, YAML/JSON parse errors, JSON Schema — compared only for failing at the same place with a non-empty message, per §12) |
 | `location_pattern` | failure cases with `error_compare: "location"` — a regex both messages must match, with the same captured text, e.g. `"effects\\[\\d+\\]\\.name"` |
 | `mock_http_fixture` | filename (relative to the case dir) of a mock-HTTP-server fixture; enables the mock server for this case, see "Mock HTTP server" below |
+| `sort_http_requests` | bool, default `false` -- a tree-flow case whose concurrent branches may dispatch their own HTTP calls in a different wall-clock order on either engine; compares the recorded requests re-ordered by their own canonical JSON form instead of arrival order, see "Mock HTTP server" below |
 | `known_divergence` | a deliberate, temporary engine disagreement — `{"location": "<dotted state path>", "electricity_value": <value>}`; see "Known divergence" below |
 | `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`prompt`/`shell`/`http`/...); see "Running it" below |
 
@@ -145,11 +146,42 @@ literal placeholder `__MOCK_HTTP_PORT__` wherever that string appears
 number. Every request the server actually receives (method, path, query,
 headers apart from `User-Agent`, body) is recorded, in arrival order, and
 committed as `expected.http_requests.json` so both engines' own runs can be
-diffed against it (today only the Python engine reaches this far —
-electricity still refuses every case that reaches an HTTP-family tool/
-adapter through the preview marker). See `c-http-mock-server` (the `http`
+diffed against it through `harness.assert_recorded_http_requests`, the one
+place both pytest runners make this comparison (today only the Python
+engine actually reaches it — electricity still refuses every case that
+reaches an HTTP-family tool/adapter through the preview marker; the
+comparison runs unconditionally in both runners regardless, so a future
+lane that lands this support without matching the Python engine's own
+requests fails here immediately). See `c-http-mock-server` (the `http`
 tool) and `c-openai-compatible-mock-server` (the `lmstudio` adapter, no
 credential needed) for complete examples.
+
+Header comparison follows one rule for both engines: a header *name* is
+compared case-insensitively and the whole header *set* order-insensitively
+(`normalize.canonicalize_http_headers` sorts every header to
+`[lowercased name, value]`, so two requests whose headers differ only in
+name case or arrival order still compare equal) — but a header *value* is
+always compared exactly. `User-Agent` is excluded before either engine's
+request even reaches a fixture (`mock_http.MockHttpServer`'s own record
+step), never compared at all. Requests themselves are compared in arrival
+order, since that order is itself part of what a chain-flow case checks —
+unless `case.json` sets `"sort_http_requests": true`, for a tree-flow case
+whose concurrent branches may dispatch their own HTTP calls in a different
+wall-clock order on either engine (cof's real OS threads vs. electricity's
+single-threaded cooperative scheduler); that re-orders the whole list by
+its own canonical JSON representation before comparing, on both sides,
+so neither engine's own dispatch order is asserted.
+
+A client that reaches the mock server has to send the exact headers the
+committed fixture recorded, including ones it adds on its own rather than
+ones the document configured — `expected.http_requests.json` pins
+whatever the *reference* client actually sent, not just the request a
+tool/adapter's own config describes. Python's `urllib` (the Python engine's
+own HTTP client) sends `Accept-Encoding: identity` and `Connection: close`
+on every request, neither of which any case's own fixture or document sets
+explicitly; a client under a future lane (reqwest, or any other library)
+must send the same headers the committed fixture already has, not merely
+the ones the orchestration document itself names.
 
 ## Fake binaries
 

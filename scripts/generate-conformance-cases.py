@@ -50,6 +50,7 @@ from tests.conformance import harness  # noqa: E402
 from tests.conformance.normalize import (  # noqa: E402
     assert_events_equal,
     assert_states_equal,
+    canonicalize_http_requests,
     normalize,
     redact_leaked_paths,
     redact_runtime_strings,
@@ -138,8 +139,11 @@ def _generate_success(
     if server is not None:
         requests_json = [r.to_json() for r in server.requests]
         redacted_requests = redact_runtime_strings(requests_json, replacements)
+        canonical_requests = canonicalize_http_requests(
+            redacted_requests, sort_requests=bool(metadata.get("sort_http_requests"))
+        )
         files["expected.http_requests.json"] = (
-            json.dumps(redacted_requests, indent=2, ensure_ascii=True) + "\n"
+            json.dumps(canonical_requests, indent=2, ensure_ascii=True) + "\n"
         ).encode("utf-8")
     return files
 

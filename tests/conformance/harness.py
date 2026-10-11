@@ -29,7 +29,12 @@ from circuitry.adapters.scripted import (
     total_replies_by_path,
 )
 
-from .mock_http import MockHttpServer
+from .mock_http import MockHttpServer, RecordedRequest
+from .normalize import (
+    assert_states_equal,
+    canonicalize_http_requests,
+    normalize_for_comparison,
+)
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 
@@ -85,6 +90,7 @@ _CASE_JSON_KEYS = frozenset(
         "error_compare",
         "location_pattern",
         "mock_http_fixture",
+        "sort_http_requests",
         "known_divergence",
         "electricity_preview_ok",
         "orchestration",
@@ -114,12 +120,15 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("engines", ["python"])
     metadata.setdefault("config", None)
     metadata.setdefault("mock_http_fixture", None)
+    metadata.setdefault("sort_http_requests", False)
     metadata.setdefault("known_divergence", None)
     metadata.setdefault("electricity_preview_ok", False)
     metadata.setdefault("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
 
     if not isinstance(metadata["electricity_preview_ok"], bool):
         raise ValueError(f"{case_dir.name}: case.json 'electricity_preview_ok' must be a bool")
+    if not isinstance(metadata["sort_http_requests"], bool):
+        raise ValueError(f"{case_dir.name}: case.json 'sort_http_requests' must be a bool")
 
     if "expect" not in metadata:
         raise ValueError(f"{case_dir.name}: case.json is missing the required 'expect' key")
@@ -377,6 +386,42 @@ def mock_http_server(case_dir: Path, metadata: dict[str, Any]) -> Iterator[MockH
         yield server
     finally:
         server.stop()
+
+
+def assert_recorded_http_requests(
+    case_dir: Path,
+    metadata: dict[str, Any],
+    recorded_requests: list[RecordedRequest] | None,
+    *,
+    replacements: list[tuple[str, str]],
+) -> None:
+    """Compare *recorded_requests* (captured from the case's own mock HTTP
+    server, `None` when the case sets no `mock_http_fixture`) against the
+    case's own committed `expected.http_requests.json` -- the one place
+    both the Python and electricity runners make this comparison, so a gap
+    in one (issue #450 item 3: "both engines' records must match") can
+    never go unnoticed the way an inlined copy in only one runner did.
+    Headers are compared case-insensitively on name and order-insensitively
+    as a whole, values exactly (`normalize.canonicalize_http_requests`);
+    requests themselves are compared in arrival order unless `case.json`
+    sets `sort_http_requests: true` (a tree-flow case, whose concurrent
+    branches may dispatch in a different wall-clock order on either
+    engine)."""
+    if recorded_requests is None:
+        return
+    expected_requests = json.loads(
+        (case_dir / "expected.http_requests.json").read_text(encoding="utf-8")
+    )
+    actual_requests = [r.to_json() for r in recorded_requests]
+    sort_requests = bool(metadata.get("sort_http_requests"))
+    assert_states_equal(
+        canonicalize_http_requests(
+            normalize_for_comparison(actual_requests, replacements), sort_requests=sort_requests
+        ),
+        canonicalize_http_requests(
+            normalize_for_comparison(expected_requests, replacements), sort_requests=sort_requests
+        ),
+    )
 
 
 def parse_cli_error(stdout: str) -> str:

@@ -253,6 +253,45 @@ def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]
     return normalize(redact_runtime_strings(value, replacements))
 
 
+def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
+    """A recorded HTTP request's own ``headers`` -- either a mapping (a
+    freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list
+    of ``[name, value]`` pairs (a committed `expected.http_requests.json`,
+    already in this function's own canonical shape) -- as a list of
+    ``[lowercased name, value]`` pairs sorted by that same key. The header
+    rule both the Python and electricity conformance runners compare under
+    (``tests/conformance/README.md``'s "Mock HTTP server" section): header
+    *names* are compared case-insensitively, the whole *set* is compared
+    order-insensitively (two clients are free to send the same headers in a
+    different order), but a *value* is still compared exactly. Sorting by
+    ``(lowercased name, value)`` turns both of those into a single ordered
+    structure plain list/dict equality already checks correctly, without a
+    bespoke set-comparison here. ``User-Agent`` never reaches this function
+    at all -- ``mock_http.MockHttpServer`` excludes it at record time,
+    before either engine's own request even reaches a fixture."""
+    pairs = headers.items() if isinstance(headers, dict) else headers
+    return sorted([str(k).lower(), str(v)] for k, v in pairs)
+
+
+def canonicalize_http_requests(
+    requests: list[dict[str, Any]], *, sort_requests: bool
+) -> list[dict[str, Any]]:
+    """Every recorded HTTP request's own ``headers`` canonicalized
+    (`canonicalize_http_headers`), then, only when *sort_requests* is set
+    (``case.json``'s ``sort_http_requests`` -- a tree-flow case, whose
+    concurrent branches may dispatch their own HTTP calls in a different
+    wall-clock order on either engine), the whole list re-ordered by its own
+    JSON representation into one fixed, engine-independent order. A case
+    with no concurrent dispatch leaves *sort_requests* `False` and keeps
+    arrival order, which is itself part of what's being checked there (a
+    request issued out of the document's own order is a real divergence,
+    not noise to normalize away)."""
+    canonical = [{**r, "headers": canonicalize_http_headers(r["headers"])} for r in requests]
+    if sort_requests:
+        canonical.sort(key=lambda r: json.dumps(r, sort_keys=True))
+    return canonical
+
+
 def assert_states_equal(actual: Any, expected: Any, *, path: str = "$") -> None:
     """Order-sensitive structural equality after `normalize()`. Raises
     `AssertionError` naming the first differing path."""

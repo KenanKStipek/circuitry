@@ -3,12 +3,24 @@
     "method": "POST",
     "path": "/v1/chat/completions",
     "query": [],
-    "headers": {
-      "Host": "127.0.0.1:<MOCK_PORT>",
-      "Accept": "*/*",
-      "Content-Type": "application/json",
-      "Content-Length": "79"
-    },
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "79"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
     "body": "{\"model\": \"test-model\", \"messages\": [{\"role\": \"user\", \"content\": \"say hello\"}]}"
   }
 ]

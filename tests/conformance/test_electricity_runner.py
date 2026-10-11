@@ -173,6 +173,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
             leftover_replies_path=leftover_replies_path,
             mock_http_port=server.port if server else None,
         )
+        recorded_requests = list(server.requests) if server is not None else None
 
     combined_output = result.stdout + result.stderr
     if (
@@ -219,6 +220,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         assert_states_equal(
             normalize_for_comparison(actual_state, replacements),
             normalize_for_comparison(expected_state, replacements),
+        )
+
+        harness.assert_recorded_http_requests(
+            case_dir, metadata, recorded_requests, replacements=replacements
         )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")

@@ -86,15 +86,9 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
             "--live-state's final write is not byte-identical to --out"
         )
 
-        if recorded_requests is not None:
-            expected_requests = json.loads(
-                (case_dir / "expected.http_requests.json").read_text(encoding="utf-8")
-            )
-            actual_requests = [r.to_json() for r in recorded_requests]
-            assert_states_equal(
-                normalize_for_comparison(actual_requests, replacements),
-                normalize_for_comparison(expected_requests, replacements),
-            )
+        harness.assert_recorded_http_requests(
+            case_dir, metadata, recorded_requests, replacements=replacements
+        )
 
         if metadata.get("also_pretty"):
             pretty_home = tmp_path / "home-pretty"
