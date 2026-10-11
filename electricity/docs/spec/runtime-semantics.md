@@ -1616,7 +1616,7 @@ electricity's own `--live-state` also lands in M0-H (issue #431), alongside
 Q2): a live-state mirror needs only the store's own write hook, nothing
 `loop`-specific, so both ship together with the rest of M0-H's run wiring.
 Only loop progress (`meta.progress`, DESIGN.md §10.5's second bullet) still
-waits for `loop` (M1-E).
+waits for `loop` (M1-H).
 
 `cof run --events <file>` (also `run-library`) writes a JSONL stream of
 effect starts and ends: one complete JSON object per line, UTF-8, created

@@ -2375,7 +2375,7 @@ half-run.
 
 | Lane | Deliverable | Depends on |
 |---|---|---|
-| **A** (gate, #449) | Final signatures with stubs: `ToolPlugin` v2 (cancellation token, `runtime.plugins.<name>` config slice, typed `ToolError`); a per-attempt plugin builder with Python's unknown-plugin text; the process API; the `Adapter` trait and registry (new `electricity-adapters` crate); a shared retry module; `RunContext` v2; per-instance event pairing; exec stubs for every effect type; the capability-driven refusal walker; Python-compatibility helpers (`py_int`, `py_strip`, `round6`); the vm-lanes.md M1 table. | — |
+| **A** (gate, #449) | Final signatures with stubs: `ToolPlugin` v2 (cancellation token, `runtime.plugins.<name>` config slice, typed `ToolError`); a per-attempt plugin builder with Python's unknown-plugin text; the process API; the `Adapter` trait and registry (final in `electricity-vm::adapter`, not a new crate -- `electricity-adapters` itself is still unopened, lane F1's own first PR, following DESIGN §2's own dependency direction: the VM defines the trait boundary, the crate implementing concrete adapters depends on it); a shared retry module; `RunContext` v2; per-instance event pairing; exec stubs for every effect type; the capability-driven refusal walker; Python-compatibility helpers (`py_int`, `py_strip`, `round6`); the vm-lanes.md M1 table. | — |
 | **B** (#450) | Conformance infrastructure: scripted replies in cases, a loopback mock HTTP server, fake binaries on `PATH`, normalizer additions, a documented-divergence case kind. | — |
 | **C** | The process runtime (`run_tracked`, process groups, cancellation, text-mode decoding), then `shell`, `awk`, `imagemagick`, `ffmpeg`. | A |
 | **D1** | `fs`, `env_vars`, `hash`, `uuid`, `clock`. | A |

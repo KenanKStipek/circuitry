@@ -197,7 +197,7 @@ fn known_run_flag_in_first_position_is_a_run_request() {
         .output()
         .unwrap();
     // `--profile` refuses with the preview marker before anything else
-    // runs (profiles are M1-I) -- exit 1, every time, regardless of
+    // runs (profiles are M1-J1/J2) -- exit 1, every time, regardless of
     // whether the document itself would otherwise run. An ordinary run
     // failure's own error lives in the stdout JSON payload, not stderr
     // (PR #441 review finding 4, K1).

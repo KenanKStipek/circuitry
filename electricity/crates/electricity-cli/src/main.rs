@@ -18,7 +18,7 @@
 //! error (exit 2): issue #431's gate lane tightens this from the pre-#431
 //! preview CLI, which let a trailing unknown flag fall through to the
 //! (always-refusing) run path instead. `--profile` refuses with the
-//! preview marker (profiles are M1-I) before `run_orchestration` is ever
+//! preview marker (profiles are M1-J1/J2) before `run_orchestration` is ever
 //! called -- no state is written for it, same as any other refusal.
 
 use std::io::Write as _;
@@ -420,7 +420,7 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
 }
 
 /// The preview marker refusal for a flag this preview doesn't support
-/// at all (`--profile`; profiles are M1-I) -- refused before
+/// at all (`--profile`; profiles are M1-J1/J2) -- refused before
 /// `run_orchestration` is ever called, so no state exists to write
 /// (issue #431's "Refused before the run starts" list).
 fn profile_refusal() -> RunResult {
@@ -596,7 +596,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     let out_path = run_args.out.map(PathBuf::from);
 
     // `--profile` refuses with the preview marker before anything else
-    // runs (issue #431's CLI section) -- profiles are M1-I.
+    // runs (issue #431's CLI section) -- profiles are M1-J1/J2.
     let result = if run_args.profile.is_some() {
         profile_refusal()
     } else {
