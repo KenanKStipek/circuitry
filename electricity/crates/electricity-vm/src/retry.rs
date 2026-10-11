@@ -95,14 +95,22 @@ impl RetryInfo {
 /// header value (seconds, or an HTTP-date) as seconds from now. `None`
 /// when *value* is neither.
 ///
-/// Known divergence (review P2-9 on PR #454's second review): Python's
-/// own `float()` accepts a few numeral forms Rust's `str::parse::<f64>`
-/// does not -- `_` digit grouping (`"1_000"`) and non-ASCII decimal
-/// digits Unicode considers numeric (`float("١٢")`, Arabic-Indic
-/// digits). A `Retry-After` header carrying either reads as not-a-
-/// number here where CPython would parse it; left for lane E to widen
-/// if a real provider is ever seen sending one (no normal HTTP server
-/// has reason to, in practice).
+/// Widened by lane E (issue #485) for Python's own `_` digit-grouping
+/// syntax (`"1_000"` -- PEP 515: an underscore is allowed only between
+/// two digits, never leading, trailing, doubled, or next to the `.`/
+/// `e`/sign). [`strip_valid_digit_grouping`] removes exactly those
+/// underscores before the ordinary `f64` parse below; a string with no
+/// underscore, or one placed anywhere else, falls straight through
+/// unchanged (an invalid placement then simply fails to parse as a
+/// plain `f64` too, same as CPython's own `ValueError` here becoming
+/// "not a number").
+///
+/// Still a known, deliberately uncorrected divergence: Python's
+/// `float()` also accepts non-ASCII decimal digits Unicode considers
+/// numeric (`float("١٢")`, Arabic-Indic digits) -- no normal HTTP
+/// server has reason to send one in a `Retry-After` header, so this
+/// stays unwidened (issue #485's own ruling: `_` grouping only, since
+/// it's cheap; this isn't).
 pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -110,6 +118,13 @@ pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
     }
     if let Ok(seconds) = trimmed.parse::<f64>() {
         return Some(seconds.max(0.0));
+    }
+    if trimmed.contains('_') {
+        if let Some(ungrouped) = strip_valid_digit_grouping(trimmed) {
+            if let Ok(seconds) = ungrouped.parse::<f64>() {
+                return Some(seconds.max(0.0));
+            }
+        }
     }
     // RFC 2822 is the HTTP-date form `email.utils.parsedate_to_datetime`
     // (and so `adapters/_retry.py`) actually parses in practice --
@@ -119,6 +134,29 @@ pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
     let now = chrono::Utc::now();
     let seconds = (when.with_timezone(&chrono::Utc) - now).num_milliseconds() as f64 / 1000.0;
     Some(seconds.max(0.0))
+}
+
+/// PEP 515's own underscore-placement rule, narrowed to what
+/// [`parse_retry_after_seconds`] needs: `_` is removed only when both
+/// its immediate neighbors are ASCII digits (never leading, trailing,
+/// doubled, or adjacent to `.`/`e`/`E`/a sign) -- `None` when *any*
+/// underscore in *s* fails that check, so an invalid placement is left
+/// for the ordinary `f64` parse to reject, exactly as CPython's own
+/// `float()` raises `ValueError` for the same malformed literal rather
+/// than silently dropping the stray underscore.
+fn strip_valid_digit_grouping(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c != '_' {
+            continue;
+        }
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+        if !prev_digit || !next_digit {
+            return None;
+        }
+    }
+    Some(chars.into_iter().filter(|&c| c != '_').collect())
 }
 
 /// `adapters/_retry.py::next_backoff_delay_ms` -- exponential backoff
@@ -252,6 +290,38 @@ mod tests {
             let delay = next_backoff_delay_ms(&RetryInfo::retryable(), attempt, 1_000);
             assert!(delay <= RETRY_BACKOFF_CAP_MS);
         }
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_accepts_underscore_digit_grouping() {
+        assert_eq!(parse_retry_after_seconds("1_000"), Some(1000.0));
+        assert_eq!(parse_retry_after_seconds("1_0.0_1"), Some(10.01));
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_rejects_misplaced_underscores() {
+        assert_eq!(parse_retry_after_seconds("_1000"), None);
+        assert_eq!(parse_retry_after_seconds("1000_"), None);
+        assert_eq!(parse_retry_after_seconds("1__000"), None);
+        assert_eq!(parse_retry_after_seconds("1_.0"), None);
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_on_infinity_saturates_rather_than_overflowing() {
+        // Known divergence (issue #485): Python's own `float("inf")`
+        // succeeds, and `int(inf * 1000)` inside the backoff then
+        // raises `OverflowError`, failing the effect outright; this
+        // crate's `f64` -> `u64` cast instead saturates to `u64::MAX`,
+        // which `next_backoff_delay_ms`'s own `.min(RETRY_BACKOFF_CAP_MS)`
+        // then clamps down to the cap -- a real wait, never a crash.
+        let seconds = parse_retry_after_seconds("inf").unwrap();
+        assert!(seconds.is_infinite());
+        let info = RetryInfo {
+            retryable: true,
+            status: Some(429),
+            retry_after: Some("inf".to_string()),
+        };
+        assert_eq!(next_backoff_delay_ms(&info, 0, 0), RETRY_BACKOFF_CAP_MS);
     }
 
     #[test]
