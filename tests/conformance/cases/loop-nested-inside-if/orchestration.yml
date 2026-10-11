@@ -1,0 +1,23 @@
+name: loop-nested-inside-if
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: if
+    name: gate
+    if: {mode: cel, expr: "true"}
+    then:
+      - type: loop
+        name: shots
+        each: {in: "prime.seed.value", as: "item"}
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: {item: "{{item}}"}}
+    else:
+      - type: tool
+        name: skipped
+        provider: json
+        params: {mode: stringify, input: {skipped: true}}

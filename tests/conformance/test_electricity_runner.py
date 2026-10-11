@@ -146,7 +146,10 @@ def _run_electricity(
         cmd,
         cwd=case_dir,
         env=harness._sandboxed_env(
-            case_dir, home_dir, leftover_replies_path=leftover_replies_path
+            case_dir,
+            home_dir,
+            leftover_replies_path=leftover_replies_path,
+            extra_env=metadata.get("env"),
         ),
         capture_output=True,
         text=True,

@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A named while loop's own prime.<loop>.prev: absent on pass 0 (iter_0.step reads the empty Mustache render), then each later pass's own step sees the previous completed pass's own step.value.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

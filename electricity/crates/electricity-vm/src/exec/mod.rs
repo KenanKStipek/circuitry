@@ -178,24 +178,64 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// [`CtxSource::Live`] entry's own [`Store::snapshot`] taken fresh right
 /// here, not at whatever earlier moment that entry joined the chain.
 ///
-/// Known limitation (issue #431 review, PR #440): [`Store::snapshot`]
-/// deep-copies the *entire* subtree under a `Live` entry's own node, so
-/// a call here is O(the live state reachable from that node), not
-/// Python's O(1) live-reference read -- paid again on every `tool`
-/// render and every `if` condition eval, for every enclosing `Live`
-/// entry in the chain. Quadratic in state size over a long chain of
-/// deeply nested containers. Acceptable at M0-H scale; worth revisiting
-/// if a later milestone's documents grow large root state.
+/// Known limitation (issue #431 review, PR #440; #442; tracked onward
+/// as #463): [`Store::snapshot`] deep-copies the *entire* subtree under
+/// a `Live` entry's own node, so a call here is O(the live state
+/// reachable from that node), not Python's O(1) live-reference read --
+/// paid again on every `tool` render and every `if` condition eval, for
+/// every enclosing `Live` entry in the chain. Quadratic in state size
+/// over a long chain of deeply nested containers -- most visibly, a
+/// named loop's own accumulated `iter_<N>` children, re-copied in full
+/// on every single render of every later pass (lane H's own
+/// `loop_perf` test in `tests/loop_perf.rs` measures this directly).
+///
+/// This function fixes only the one constant-factor waste that stays
+/// strictly inside it: the old version called [`Store::snapshot`] and
+/// then `.clone()`d every one of its top-level entries *again* while
+/// folding them into *merged* -- doubling the cost of every entry not
+/// already shared by `Rc`. Taking `resolved`'s own `Value::Dict` by
+/// value and moving its entries into *merged* (`for (k, v) in map`,
+/// `IndexMap`'s own `IntoIterator`) instead of cloning them a second
+/// time removes that double-clone, with no behaviour change: every M0
+/// case and every new loop case in this PR stays byte-identical
+/// (the existing golden corpora, and loop's own conformance cases run
+/// on both engines -- control flow like this is covered by running
+/// real documents, not a golden-corpus replay; see this PR's own
+/// orchestrator-confirmed ruling).
+///
+/// The underlying asymptotic cost is **not** fixed here: `electricity_value::Value`'s
+/// `Dict`/`List` hold plain, non-shared children (`#[derive(Clone)]` is
+/// a full deep clone), so an unchanged sibling subtree still has to be
+/// fully re-cloned into every fresh `Value::Dict` this function builds
+/// -- there is no way to hand back a cached, unchanged subtree by
+/// reference instead. A real fix needs `Value` (or at least its dict/
+/// list entries) to support cheap, Rc-based sharing, which is a change
+/// to `electricity-value`, read by every crate in this workspace --
+/// outside this lane's own footprint (`electricity-vm/src/exec/`).
+/// Filed as #463, with two design directions to choose between:
+/// Rc-shared `Dict`/`List` children in `electricity-value`, or a
+/// render-time projection restricted to the paths a template/CEL
+/// expression actually reads (CEL already projects what it evaluates;
+/// Mustache template rendering would need the same, accounting for its
+/// own outer-scope lookup rules).
 pub(crate) fn live_ctx(chain: &CtxChain, store: &Store) -> Value {
     let mut merged: IndexMap<Value, Value> = IndexMap::new();
     for source in chain {
-        let resolved = match source {
+        let mut resolved = match source {
             CtxSource::Live(node) => store.snapshot(node),
             CtxSource::Frozen(value) => value.clone(),
         };
-        if let Value::Dict(ref map) = resolved {
-            for (k, v) in map {
-                merged.insert(k.clone(), v.clone());
+        // `Value` has a hand-written `Drop` impl (iterative dropping,
+        // regardless of depth), so a plain `if let Value::Dict(map) =
+        // resolved` (a by-value move of just that one field) is
+        // `E0509`: Rust forbids partially moving a field out of a type
+        // that implements `Drop`. `std::mem::take` through `&mut`
+        // sidesteps that -- it swaps the map out for an empty one
+        // (trivially dropped when *resolved* itself goes out of scope)
+        // rather than destructuring *resolved* itself.
+        if let Value::Dict(ref mut map) = resolved {
+            for (k, v) in std::mem::take(map) {
+                merged.insert(k, v);
             }
         }
     }

@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "Named each loop, flow: tree, on_error: continue: one branch's own gate fails, the other two complete -- termination keeps whatever exhaustion/truncation reason the run would otherwise have (collection_exhausted here), completed_passes/failed_passes both populated.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "An unnamed (transparent) each loop, flow: tree: every concurrent pass writes directly into the enclosing node, overwriting the same keys -- no loop node of its own, no iter_<N> children, only the last-merged (highest-index) pass's own value for `x` survives; every pass shares one compiled body path, so --events carries several start/end pairs at that one path (harness: compared as a multiset, paired by id within each stream, see tests/conformance/normalize.py::_check_instance_pairing).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

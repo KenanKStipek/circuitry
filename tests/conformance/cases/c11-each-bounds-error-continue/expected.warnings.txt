@@ -1,0 +1,1 @@
+WARNING: Loop 'shots': each loop 'shots' (prime.seed.value): collection has 3 items but max_iterations is 1 — raise max_iterations, bound the collection, or set each.truncate: true to process the first 1 and record the rest as unvisited; on_error=continue, stopping the loop

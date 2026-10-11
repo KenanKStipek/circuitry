@@ -1,0 +1,12 @@
+{"v":1,"seq":0,"ts":"2026-10-11T09:00:05.454Z","ev":"run_start","run_id":"22249be0-d302-4189-b24e-e1d3b98be52d","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":92236}
+{"v":1,"seq":1,"ts":"2026-10-11T09:00:05.458Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T09:00:05.458Z","ev":"start","id":1,"path":"prime.int_eq_bool"}
+{"v":1,"seq":3,"ts":"2026-10-11T09:00:05.458Z","ev":"end","id":1,"path":"prime.int_eq_bool","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T09:00:05.458Z","ev":"start","id":2,"path":"prime.float_eq_int"}
+{"v":1,"seq":5,"ts":"2026-10-11T09:00:05.459Z","ev":"start","id":3,"path":"prime.float_eq_int.iter_0.step"}
+{"v":1,"seq":6,"ts":"2026-10-11T09:00:05.459Z","ev":"end","id":3,"path":"prime.float_eq_int.iter_0.step","ok":true,"ms":0}
+{"v":1,"seq":7,"ts":"2026-10-11T09:00:05.459Z","ev":"end","id":2,"path":"prime.float_eq_int","ok":true,"ms":1}
+{"v":1,"seq":8,"ts":"2026-10-11T09:00:05.459Z","ev":"start","id":4,"path":"prime.string_eq_int"}
+{"v":1,"seq":9,"ts":"2026-10-11T09:00:05.460Z","ev":"end","id":4,"path":"prime.string_eq_int","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-11T09:00:05.460Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":11,"ts":"2026-10-11T09:00:05.460Z","ev":"run_end","ok":true}

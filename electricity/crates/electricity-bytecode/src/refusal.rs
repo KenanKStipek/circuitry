@@ -259,7 +259,7 @@ impl<'a> Supported<'a> {
             // lane G (#448)
             prompt: false,
             // lane H (#448)
-            loop_: false,
+            loop_: true,
             // lane I (#448)
             use_: false,
             // lane P (#448)
@@ -276,8 +276,8 @@ impl<'a> Supported<'a> {
             preflight: false,
             // lane C (#448)
             tools_process: false,
-            // lane D1 (#448)
-            tools_stdlib: false,
+            // lane D1 (#460)
+            tools_stdlib: true,
             // lane D2 (#448)
             tool_regex: false,
             // lane E (#448)
@@ -531,12 +531,16 @@ mod tests {
         // Review P2-b on PR #454: `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
         // (pinned forever to the exact M0 value by the golden tests
-        // below) -- today, before any M1 lane has landed, the two must
-        // still agree field for field.
+        // below) -- every field still agrees with `Supported::m0` until
+        // its own lane lands. Lane H (#448, #461) is the first to land:
+        // `current.loop_` now asserts `true` directly instead of
+        // comparing against `m0.loop_`, which stays pinned to `false`
+        // forever.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
         assert_eq!(current.prompt, m0.prompt);
-        assert_eq!(current.loop_, m0.loop_);
+        assert!(current.loop_);
+        assert!(!m0.loop_);
         assert_eq!(current.use_, m0.use_);
         assert_eq!(current.yield_, m0.yield_);
         assert_eq!(current.reflector, m0.reflector);
@@ -545,7 +549,9 @@ mod tests {
         assert_eq!(current.declared_prompts, m0.declared_prompts);
         assert_eq!(current.preflight, m0.preflight);
         assert_eq!(current.tools_process, m0.tools_process);
-        assert_eq!(current.tools_stdlib, m0.tools_stdlib);
+        // lane D1 (#460): `tools_stdlib` is the first M1 flag to flip --
+        // `fs`/`env_vars`/`hash`/`uuid`/`clock` are real now.
+        assert!(current.tools_stdlib);
         assert_eq!(current.tool_regex, m0.tool_regex);
         assert_eq!(current.tool_http, m0.tool_http);
         assert_eq!(current.tool_validate_yaml, m0.tool_validate_yaml);

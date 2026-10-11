@@ -43,6 +43,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -127,6 +128,13 @@ def _normalize_leaf(key: str, value: Any, *, field_path: str | None) -> Any:
             )
         return TIMESTAMP_PLACEHOLDER
     if kind == "duration":
+        # `meta.progress.eta_s` (electricity M1-H, #461) is legitimately
+        # `None` before the first pass completes or when `total` itself
+        # is unknown (an uncapped `while` loop) — `core/loop.py::
+        # _loop_progress`'s own contract, not a missing/malformed value
+        # to reject.
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise NormalizationError(f"{key!r}: expected a numeric duration, got {value!r}")
         if value < 0:
@@ -537,7 +545,16 @@ def _group_events_by_path(events: list[dict[str, Any]]) -> dict[str, list[dict[s
     comparing each path's own list *as a list*, not a multiset, catches an
     end-before-start or a dispatch-after-end on the same path, which a
     `collections.Counter` comparison cannot: distinct `ev` values compare
-    equal as a set regardless of which order they came in."""
+    equal as a set regardless of which order they came in.
+
+    A path that carries more than one `start` (several concurrent tree
+    passes of an unnamed loop sharing one compiled body path -- a named
+    loop's own `Frame::with_pass` resolution gives every pass a distinct
+    path instead) is the one case where that ordered-list comparison is
+    too strict: genuinely concurrent passes are free to interleave in a
+    different order on either engine. `assert_events_equal` compares such
+    a path's own events as a sorted multiset instead, via
+    [`_raw_group_events_by_path`]'s own id-pairing check first."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         path = event.get("path")
@@ -545,6 +562,50 @@ def _group_events_by_path(events: list[dict[str, Any]]) -> dict[str, list[dict[s
             continue
         groups.setdefault(path, []).append(_comparable_event(event))
     return groups
+
+
+def _raw_group_events_by_path(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Like [`_group_events_by_path`], but keeps every event exactly as
+    parsed -- `id` included -- for [`_check_instance_pairing`]'s own use.
+    `id` values aren't comparable *across* engines (`_comparable_event`'s
+    own doc comment: assigned from one counter in dispatch order, which a
+    tree dynamic's branches don't commit to matching between engines), but
+    pairing a `start` with its own `end` *within one engine's own stream*
+    is exactly what `id` is for."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        path = event.get("path")
+        if path is None:
+            continue
+        groups.setdefault(path, []).append(event)
+    return groups
+
+
+def _check_instance_pairing(events: list[dict[str, Any]], *, label: str, path: str) -> None:
+    """Within *path*'s own raw event list (one engine's own stream, `id`
+    still attached): every `id` that starts must start before it ends, and
+    every `id` that starts must eventually end. Only meaningful -- and only
+    called -- for a path with more than one `start` (`_group_events_by_
+    path`'s own doc comment); a single-start path already has its full
+    order checked by the plain list comparison."""
+    started_at: dict[Any, int] = {}
+    ended: set[Any] = set()
+    for i, event in enumerate(events):
+        instance = event.get("id")
+        ev = event.get("ev")
+        if ev == "start":
+            if instance in started_at:
+                raise AssertionError(f"{label}: {path!r} id {instance!r} starts more than once")
+            started_at[instance] = i
+        elif ev == "end":
+            if instance not in started_at:
+                raise AssertionError(f"{label}: {path!r} id {instance!r} ends before it starts")
+            ended.add(instance)
+    missing = set(started_at) - ended
+    if missing:
+        raise AssertionError(f"{label}: {path!r} id(s) {sorted(missing)} never end")
 
 
 def _chain_sibling_order(events: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -585,7 +646,14 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
     event is grouped by its own `path` and compared *as an ordered list*
     (`_group_events_by_path`) -- a path's own events have exactly one
     valid order (`start`, optionally `dispatch`, then `end`), so this
-    catches a same-path reordering a multiset comparison would miss; and a
+    catches a same-path reordering a multiset comparison would miss, *except*
+    for a path with more than one `start` (several concurrent tree passes of
+    an unnamed loop sharing one compiled body path): that path's own events
+    are compared as a sorted multiset instead, after first checking, within
+    each stream separately, that every `id` starts before it ends and every
+    started `id` ends (`_check_instance_pairing`) -- genuine concurrent
+    interleaving is allowed to differ between engines, but a same-path
+    ordering bug within *one* engine's own stream still isn't; and a
     chain container's own direct children are compared for the order their
     `start` events occurred in (`_chain_sibling_order`) -- a tree
     dynamic's branches are excluded from that check and may interleave
@@ -615,6 +683,13 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
             f"run_end differs:\n  actual:   {actual_end_c!r}\n  expected: {expected_end_c!r}"
         )
 
+    actual_raw_groups = _raw_group_events_by_path(actual_middle)
+    expected_raw_groups = _raw_group_events_by_path(expected_middle)
+    for label, raw_groups in (("actual", actual_raw_groups), ("expected", expected_raw_groups)):
+        for path, raw_events in raw_groups.items():
+            if sum(1 for e in raw_events if e.get("ev") == "start") > 1:
+                _check_instance_pairing(raw_events, label=label, path=path)
+
     actual_groups = _group_events_by_path(actual_middle)
     expected_groups = _group_events_by_path(expected_middle)
     if set(actual_groups) != set(expected_groups):
@@ -623,7 +698,20 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
             f"  expected: {sorted(expected_groups)}"
         )
     for path in actual_groups:
-        if actual_groups[path] != expected_groups[path]:
+        multi_start = (
+            sum(1 for e in actual_raw_groups[path] if e.get("ev") == "start") > 1
+            or sum(1 for e in expected_raw_groups[path] if e.get("ev") == "start") > 1
+        )
+        if multi_start:
+            actual_counts = Counter(json.dumps(e, sort_keys=True) for e in actual_groups[path])
+            expected_counts = Counter(json.dumps(e, sort_keys=True) for e in expected_groups[path])
+            if actual_counts != expected_counts:
+                raise AssertionError(
+                    f"{path}: concurrent events differ as a multiset:\n"
+                    f"  actual:   {actual_groups[path]!r}\n"
+                    f"  expected: {expected_groups[path]!r}"
+                )
+        elif actual_groups[path] != expected_groups[path]:
             raise AssertionError(
                 f"{path}: events differ:\n  actual:   {actual_groups[path]!r}\n"
                 f"  expected: {expected_groups[path]!r}"

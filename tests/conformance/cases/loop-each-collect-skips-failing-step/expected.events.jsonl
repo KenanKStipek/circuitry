@@ -1,0 +1,20 @@
+{"v":1,"seq":0,"ts":"2026-10-11T09:06:36.866Z","ev":"run_start","run_id":"1ef80c57-465c-46d5-a681-e8533d7c9e8f","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":1713}
+{"v":1,"seq":1,"ts":"2026-10-11T09:06:36.878Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T09:06:36.878Z","ev":"start","id":1,"path":"prime.seed"}
+{"v":1,"seq":3,"ts":"2026-10-11T09:06:36.878Z","ev":"end","id":1,"path":"prime.seed","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T09:06:36.878Z","ev":"start","id":2,"path":"prime.shots"}
+{"v":1,"seq":5,"ts":"2026-10-11T09:06:36.879Z","ev":"start","id":3,"path":"prime.shots.iter_0.step"}
+{"v":1,"seq":6,"ts":"2026-10-11T09:06:36.879Z","ev":"end","id":3,"path":"prime.shots.iter_0.step","ok":true,"ms":0}
+{"v":1,"seq":7,"ts":"2026-10-11T09:06:36.879Z","ev":"start","id":4,"path":"prime.shots.iter_0.gate"}
+{"v":1,"seq":8,"ts":"2026-10-11T09:06:36.881Z","ev":"end","id":4,"path":"prime.shots.iter_0.gate","ok":false,"ms":2,"error":"expect failed: value == 2"}
+{"v":1,"seq":9,"ts":"2026-10-11T09:06:36.881Z","ev":"start","id":5,"path":"prime.shots.iter_1.step"}
+{"v":1,"seq":10,"ts":"2026-10-11T09:06:36.882Z","ev":"end","id":5,"path":"prime.shots.iter_1.step","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-10-11T09:06:36.882Z","ev":"start","id":6,"path":"prime.shots.iter_1.gate"}
+{"v":1,"seq":12,"ts":"2026-10-11T09:06:36.884Z","ev":"end","id":6,"path":"prime.shots.iter_1.gate","ok":true,"ms":2}
+{"v":1,"seq":13,"ts":"2026-10-11T09:06:36.884Z","ev":"start","id":7,"path":"prime.shots.iter_2.step"}
+{"v":1,"seq":14,"ts":"2026-10-11T09:06:36.884Z","ev":"end","id":7,"path":"prime.shots.iter_2.step","ok":true,"ms":0}
+{"v":1,"seq":15,"ts":"2026-10-11T09:06:36.884Z","ev":"start","id":8,"path":"prime.shots.iter_2.gate"}
+{"v":1,"seq":16,"ts":"2026-10-11T09:06:36.886Z","ev":"end","id":8,"path":"prime.shots.iter_2.gate","ok":false,"ms":2,"error":"expect failed: value == 2"}
+{"v":1,"seq":17,"ts":"2026-10-11T09:06:36.886Z","ev":"end","id":2,"path":"prime.shots","ok":true,"ms":8}
+{"v":1,"seq":18,"ts":"2026-10-11T09:06:36.886Z","ev":"end","id":0,"path":"prime","ok":true,"ms":8}
+{"v":1,"seq":19,"ts":"2026-10-11T09:06:36.886Z","ev":"run_end","ok":true}

@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-11T08:43:38.302Z","ev":"run_start","run_id":"7c19baed-bf42-4496-9888-3f46847953a1","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":76144}
+{"v":1,"seq":1,"ts":"2026-10-11T08:43:38.305Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T08:43:38.305Z","ev":"start","id":1,"path":"prime.get_unset_with_default"}
+{"v":1,"seq":3,"ts":"2026-10-11T08:43:38.305Z","ev":"end","id":1,"path":"prime.get_unset_with_default","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T08:43:38.305Z","ev":"start","id":2,"path":"prime.list_prefix_matches_nothing"}
+{"v":1,"seq":5,"ts":"2026-10-11T08:43:38.305Z","ev":"end","id":2,"path":"prime.list_prefix_matches_nothing","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T08:43:38.305Z","ev":"start","id":3,"path":"prime.list_api_key_boundary"}
+{"v":1,"seq":7,"ts":"2026-10-11T08:43:38.305Z","ev":"end","id":3,"path":"prime.list_api_key_boundary","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-11T08:43:38.306Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":9,"ts":"2026-10-11T08:43:38.306Z","ev":"run_end","ok":true}

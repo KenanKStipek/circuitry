@@ -1081,6 +1081,21 @@ noticing the token, regardless of chain or tree) cannot pick between correctly w
 chain/tree distinction into this warning, which it does not do today. None of these changes state,
 stdout, or `--events`/`--live-state`.
 
+**#442's "Interpreter cost" item is only partly closed, tracked onward as #463:** lane H (#461)
+removed the one constant-factor waste that stayed strictly inside `exec::live_ctx` (a double clone
+in its own merge loop), with a regression guard (`electricity-vm/tests/loop_perf.rs`) pinning that a
+future change doesn't make it dramatically worse. The underlying O(state size) cost `live_ctx` pays
+on every single render — most visibly, a named loop's own accumulated `iter_<N>` children,
+re-copied in full on every later pass's render — is **not** fixed: `electricity_value::Value`'s
+`Dict`/`List` hold plain, non-shared children (`#[derive(Clone)]` is a full deep clone), so an
+unchanged sibling subtree still has to be fully re-cloned into every fresh `Value` this function
+builds; there is no way to hand back a cached, unchanged subtree by reference instead. A real fix
+needs a change outside `electricity-vm/src/exec/` — to `electricity-value::Value` itself, read by
+every crate in this workspace — which is #463's own scope, not this lane's: either Rc-shared
+`Dict`/`List` children, or a render-time projection restricted to the paths a template/CEL
+expression actually reads (CEL already projects what it evaluates; Mustache template rendering
+would need the same, accounting for its own outer-scope lookup rules).
+
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 
 Every `--out` — not just a successful one — carries framework-level metadata next to the

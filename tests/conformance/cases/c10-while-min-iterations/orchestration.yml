@@ -1,0 +1,13 @@
+name: c10-while-min-iterations
+effects:
+  - type: loop
+    name: counter
+    min_iterations: 2
+    while:
+      mode: cel
+      expr: "has(state.prime.step) && state.iter.count < 3"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {index: "{{iter.index}}"}}
