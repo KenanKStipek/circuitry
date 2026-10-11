@@ -41,6 +41,21 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     )
 
 
+def _assert_run_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
+    """`expected.run_warnings.txt` -- opt-in via `case.json`'s own
+    `compare_run_warnings` key (issue #495): `cli/app.py::
+    _print_run_warnings`'s own `Warning: ...` lines, e.g. preflight's
+    soft warnings, never compared by `_assert_warnings_match` above."""
+    if not metadata.get("compare_run_warnings"):
+        return
+    actual = harness.run_warning_lines(stderr)
+    expected_text = (case_dir / "expected.run_warnings.txt").read_text(encoding="utf-8")
+    expected = [line for line in expected_text.splitlines() if line]
+    assert actual == expected, (
+        f"{case_dir.name}: stderr run-warning lines mismatch\n  got: {actual}\n  want: {expected}"
+    )
+
+
 @pytest.mark.parametrize("case_dir", CASE_DIRS, ids=_case_ids())
 def test_case(case_dir: Path, tmp_path: Path) -> None:
     metadata = harness.load_case(case_dir)
@@ -75,6 +90,7 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
     )
 
     _assert_warnings_match(case_dir, metadata, result.stderr)
+    _assert_run_warnings_match(case_dir, metadata, result.stderr)
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (

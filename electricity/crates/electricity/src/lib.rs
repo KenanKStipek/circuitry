@@ -295,6 +295,69 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
     }
 }
 
+/// Settled ruling 3, widened for lane G (issue #498, #448): whether the
+/// *root* document itself (never a `use` child's own content, which
+/// isn't expanded inline here -- a `use` leaf never recurses) has an
+/// effect that would call *this run's own default adapter* directly --
+/// a `prompt` (regardless of its own `provider:`, conservatively: a
+/// provider override still falls back to the default on
+/// `provider_fallbacks` exhaustion), a model-mode `if`/`while`
+/// (`core/conditional.py`'s own mode-model branch always calls
+/// `generate()` on the document's default adapter, never a per-
+/// condition override), or a model-mode `expect:` on a `tool`/`use`
+/// effect. A `use` effect's own body never counts on its own (the
+/// placeholder below exists precisely for a default reached *only*
+/// through one) -- only its own `expect:`, when present and model-mode,
+/// does. Every one of these is refused outright before a run reaches
+/// this call under this build's own `Supported` (`prompt`/
+/// `model_condition`/`model_expect` all `false` still) -- this
+/// predicate's own unit tests exercise it directly, against a
+/// hand-built `Op`, rather than through a real run.
+fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
+    use electricity_bytecode::{Condition, ExpectCondition, LeafKind, LoopSpec, NodeKind, Region};
+
+    fn region_calls_default_adapter(region: &Region) -> bool {
+        match region {
+            Region::Block { ops, .. } => ops.iter().any(default_adapter_called_directly),
+            Region::Parallel { branches, .. } => {
+                branches.iter().any(default_adapter_called_directly)
+            }
+            Region::TryFinally { body, finally } => {
+                region_calls_default_adapter(body) || region_calls_default_adapter(finally)
+            }
+            Region::If {
+                cond, then_, else_, ..
+            } => {
+                matches!(cond, Condition::Model { .. })
+                    || region_calls_default_adapter(then_)
+                    || else_.as_deref().is_some_and(region_calls_default_adapter)
+            }
+            Region::Loop { spec, body, .. } => {
+                matches!(spec, LoopSpec::While(Condition::Model { .. }))
+                    || region_calls_default_adapter(body)
+            }
+        }
+    }
+
+    if !op.enabled {
+        return false;
+    }
+    match &op.kind {
+        NodeKind::Leaf(leaf) => match leaf.as_ref() {
+            LeafKind::Prompt(_) => true,
+            LeafKind::Use(use_op) => {
+                matches!(&use_op.expect, Some(ExpectCondition::Model { .. }))
+            }
+            LeafKind::Tool(tool) => {
+                matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
+            }
+            LeafKind::Reflector(reflector) => region_calls_default_adapter(&reflector.inner),
+            LeafKind::Yield(_) => false,
+        },
+        NodeKind::Control(region) => region_calls_default_adapter(region),
+    }
+}
+
 /// The preview-marker refusal for a document/config that configures
 /// persistence or runtime plugins (issue #431's "Out of scope"
 /// section: "refused with the preview marker, after the step-6/9
@@ -1388,14 +1451,31 @@ pub async fn run_orchestration_with_config(
                 let known_but_unbuildable = electricity_vm::adapter_names::ADAPTER_NAMES
                     .contains(&normalized.as_str())
                     && !adapters.supported_names().contains(&normalized);
-                if known_but_unbuildable {
-                    // Settled ruling 3: reachable only when a
-                    // `use` effect alone makes `needs_real_
-                    // adapter` true (a real `prompt`/model-
-                    // condition effect is still refused
-                    // outright, so `generate` is never
-                    // actually called on this placeholder in
-                    // this milestone).
+                if known_but_unbuildable && default_adapter_called_directly(&program.root) {
+                    // Settled ruling 3, widened for lane G (issue
+                    // #498): the root document itself, outside
+                    // any `use` child, has an effect that would
+                    // call this adapter directly (a `prompt`, a
+                    // model-mode `if`/`while`, or a model-mode
+                    // `expect:`) -- refuse the whole run up
+                    // front, statelessly, the same preview text
+                    // as the document-referenced-name refusal
+                    // above, rather than install a placeholder
+                    // that would just defer the identical failure
+                    // to the first `generate` call.
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format_config_refusal(&format!("adapter '{normalized}'"))),
+                        warnings,
+                        signal: None,
+                    };
+                } else if known_but_unbuildable {
+                    // Reachable only when a `use` effect alone
+                    // makes `needs_real_adapter` true -- `generate`
+                    // is never actually called on this placeholder
+                    // in that case (checked just above).
                     Rc::new(preflight::PlaceholderAdapter::new(normalized))
                 } else {
                     fail!(err.message);
@@ -1603,6 +1683,214 @@ pub async fn run_orchestration_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_bytecode::effects::{
+        PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp, UseOp, UseSource,
+    };
+    use electricity_bytecode::region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
+    use electricity_bytecode::template::{Escape, TemplateText};
+    use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError};
+
+    fn leaf(kind: LeafKind) -> electricity_bytecode::Op {
+        electricity_bytecode::Op {
+            path: EffectPath::root().push_name("n"),
+            name: Some("n".to_string()),
+            kind: NodeKind::Leaf(Box::new(kind)),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn block(ops: Vec<electricity_bytecode::Op>) -> electricity_bytecode::Op {
+        electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn tool_op() -> ToolOp {
+        ToolOp {
+            provider: "json".to_string(),
+            params: electricity_bytecode::ParamNode::Map(indexmap::IndexMap::new()),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+        }
+    }
+
+    fn prompt_op() -> PromptOp {
+        PromptOp {
+            content: PromptContent::Template(TemplateText::new(
+                "hi".to_string(),
+                false,
+                Escape::None,
+            )),
+            prompt_type: PromptType::Text,
+            schema: None,
+            model: None,
+            provider: None,
+            provider_fallbacks: Vec::new(),
+            routing_override: None,
+            model_params: None,
+            timeout_ms: None,
+            deterministic: false,
+            inputs: None,
+            assets: Vec::new(),
+            retries: RetryPolicy::default(),
+            description: None,
+            group: None,
+        }
+    }
+
+    fn use_op() -> UseOp {
+        UseOp {
+            source: UseSource::Path("child.yml".to_string()),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn a_prompt_effect_calls_the_default_adapter_directly() {
+        let op = block(vec![leaf(LeafKind::Prompt(prompt_op()))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_plain_use_effect_never_calls_the_default_adapter_on_its_own() {
+        let op = block(vec![leaf(LeafKind::Use(use_op()))]);
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Use(UseOp {
+            expect: Some(ExpectCondition::Model {
+                template: TemplateText::new("ok?".to_string(), false, Escape::None),
+            }),
+            ..use_op()
+        }))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_tools_own_model_mode_expect_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Tool(ToolOp {
+            expect: Some(ExpectCondition::Model {
+                template: TemplateText::new("ok?".to_string(), false, Escape::None),
+            }),
+            ..tool_op()
+        }))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_tools_own_cel_expect_never_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Tool(ToolOp {
+            expect: Some(ExpectCondition::Cel {
+                expr: "true".to_string(),
+            }),
+            ..tool_op()
+        }))]);
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_model_mode_if_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Model {
+                    template: TemplateText::new("ok?".to_string(), false, Escape::None),
+                },
+                then_: Box::new(Region::Block {
+                    ops: vec![],
+                    overlay: false,
+                }),
+                else_: None,
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_cel_mode_if_never_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                },
+                then_: Box::new(Region::Block {
+                    ops: vec![leaf(LeafKind::Use(use_op()))],
+                    overlay: false,
+                }),
+                else_: None,
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_model_mode_while_loop_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Loop {
+                name: None,
+                spec: LoopSpec::While(Condition::Model {
+                    template: TemplateText::new("ok?".to_string(), false, Escape::None),
+                }),
+                body: Box::new(Region::Block {
+                    ops: vec![],
+                    overlay: false,
+                }),
+                flow: LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_disabled_prompt_effect_never_calls_the_default_adapter() {
+        let mut prompt_leaf = leaf(LeafKind::Prompt(prompt_op()));
+        prompt_leaf.enabled = false;
+        assert!(!default_adapter_called_directly(&prompt_leaf));
+    }
 
     #[test]
     fn version_string_has_preview_notice() {

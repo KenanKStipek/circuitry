@@ -71,6 +71,19 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     )
 
 
+def _assert_run_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
+    """`test_python_runner.py`'s own counterpart -- opt-in via `case.json`'s
+    `compare_run_warnings` key (issue #495)."""
+    if not metadata.get("compare_run_warnings"):
+        return
+    actual = harness.run_warning_lines(stderr)
+    expected_text = (case_dir / "expected.run_warnings.txt").read_text(encoding="utf-8")
+    expected = [line for line in expected_text.splitlines() if line]
+    assert actual == expected, (
+        f"{case_dir.name}: stderr run-warning lines mismatch\n  got: {actual}\n  want: {expected}"
+    )
+
+
 @pytest.fixture(scope="session")
 def electricity_binary() -> Path | None:
     """Build the `electricity` binary once per test session. Returns
@@ -141,6 +154,13 @@ def _run_electricity(
         cmd += ["--events", str(events_path)]
     if live_state_path is not None:
         cmd += ["--live-state", str(live_state_path)]
+    profile_rel = metadata.get("profile")
+    if profile_rel:
+        # electricity takes an explicit path, never a discovered name
+        # (DESIGN.md §6.11) -- the absolute path lines up both engines'
+        # own `{path}` in a schema-failure message under the
+        # `<CASE_DIR>/...` redaction (issue #495's own harness addition).
+        cmd += ["--profile", str(case_dir / profile_rel)]
     cmd += harness.materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
     proc = subprocess.run(
         cmd,
@@ -218,6 +238,7 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     )
 
     _assert_warnings_match(case_dir, metadata, result.stderr)
+    _assert_run_warnings_match(case_dir, metadata, result.stderr)
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (

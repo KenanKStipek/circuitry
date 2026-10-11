@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -97,8 +98,15 @@ _CASE_JSON_KEYS = frozenset(
         "timeout_seconds",
         "sort_warnings",
         "env",
+        "profile",
+        "compare_run_warnings",
     }
 )
+
+#: `case.json`'s own `profile` key -- a path relative to the case
+#: directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml`
+#: (`load_case`'s own validation below).
+_PROFILE_PATH_PATTERN = re.compile(r"profiles/([^/.]+)\.(yml|yaml)")
 #: A case's own `case.json` 'env' key may not reintroduce exactly what
 #: `_sandboxed_env`'s own filter above just stripped from the caller's
 #: shell: one of its `CREDENTIAL_ENV_VARS` names, or any `CIRCUITRY_*`
@@ -141,6 +149,8 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     metadata.setdefault("sort_warnings", False)
     metadata.setdefault("env", None)
+    metadata.setdefault("profile", None)
+    metadata.setdefault("compare_run_warnings", False)
 
     env = metadata["env"]
     if env is not None and (
@@ -190,6 +200,36 @@ def load_case(case_dir: Path) -> dict[str, Any]:
             f"{case_dir.name}: case.json 'sort_warnings' must be a bool, "
             f"got {metadata['sort_warnings']!r}"
         )
+    if not isinstance(metadata["compare_run_warnings"], bool):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'compare_run_warnings' must be a bool, "
+            f"got {metadata['compare_run_warnings']!r}"
+        )
+    profile_rel = metadata["profile"]
+    if profile_rel is not None:
+        if not isinstance(profile_rel, str):
+            raise ValueError(f"{case_dir.name}: case.json 'profile' must be a string path")
+        match = _PROFILE_PATH_PATTERN.fullmatch(profile_rel)
+        if match is None:
+            raise ValueError(
+                f"{case_dir.name}: case.json 'profile' must look like 'profiles/<name>.yml' "
+                f"or 'profiles/<name>.yaml', got {profile_rel!r}"
+            )
+        stem, suffix = match.group(1), match.group(2)
+        other_suffix = "yaml" if suffix == "yml" else "yml"
+        named_path = case_dir / profile_rel
+        other_path = case_dir / "profiles" / f"{stem}.{other_suffix}"
+        if not named_path.is_file():
+            raise ValueError(
+                f"{case_dir.name}: case.json 'profile' names {profile_rel}, which doesn't exist"
+            )
+        if other_path.is_file():
+            raise ValueError(
+                f"{case_dir.name}: case.json 'profile' names {profile_rel}, but "
+                f"{other_path.name} also exists -- cof run's own discovery tries .yml "
+                "before .yaml, which would silently pick a different file than "
+                "electricity's own --profile <path> names"
+            )
     if metadata.get("also_pretty") and metadata.get("mock_http_fixture"):
         raise ValueError(
             f"{case_dir.name}: case.json 'also_pretty' cannot combine with "
@@ -437,6 +477,14 @@ def run_case(
             cmd += ["--config", str(config_path)]
         else:
             cmd += ["--config", config_name]
+    profile_rel = metadata.get("profile")
+    if profile_rel:
+        # `cof run --profile <name>` discovers `profiles/<name>.yml`/
+        # `.yaml` under the orchestration's own directory -- the case
+        # directory, since `cwd` is set to it below and `orchestration`
+        # is always a relative path (issue #495's own harness addition).
+        profile_stem = profile_name_from_path(profile_rel)
+        cmd += ["--profile", profile_stem]
     cmd += materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
 
     proc = subprocess.run(
@@ -463,6 +511,28 @@ def run_case(
 #: prefix shape at all (lowercase "arning"/"rror", a different
 #: mechanism entirely -- see electricity/DESIGN.md §6.9's "CLI output").
 _LOG_LEVEL_PREFIXES = ("DEBUG: ", "INFO: ", "WARNING: ", "ERROR: ", "CRITICAL: ")
+
+
+def profile_name_from_path(profile_rel: str) -> str:
+    """The profile's own stem -- `profiles/<name>.yml`/`.yaml` minus the
+    `profiles/` prefix and the one trailing suffix, the name `cof run
+    --profile <name>` itself expects."""
+    return Path(profile_rel).stem
+
+
+def run_warning_lines(stderr: str) -> list[str]:
+    """`cli/app.py::_print_run_warnings`'s own `Warning: ...` lines on
+    stderr (issue #495's own `compare_run_warnings` case key) -- preflight's
+    soft warnings, image-asset warnings, and any other `RunResult.warnings`
+    entry. Distinct from `warning_lines`' own `WARNING:`/`ERROR:` Python
+    `logging`-module lines (issue #442): a run's own warnings print as
+    `Warning: <text>` (capital `W`, no module-level prefix), on both
+    engines -- `cli/app.py`'s own rich console strips its `[yellow]...
+    [/yellow]` markup once stdout/stderr isn't a terminal, and electricity's
+    own `print_stderr_contract` writes the identical `Warning: {text}`
+    line for the same reason.
+    """
+    return [line for line in stderr.splitlines() if line.startswith("Warning: ")]
 
 
 def warning_lines(stderr: str, *, sort: bool = False) -> list[str]:

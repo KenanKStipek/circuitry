@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight)",
+  "description": "A tool-only document naming `adapter: scripted` with no config.json: `replies_file` falls back to the conventional `scripted-replies.yaml`, which doesn't exist, so preflight's own `check()` call fails hard (no named effects reference the adapter at all, so there is no soft/skippable usage to downgrade it) before any effect dispatches.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

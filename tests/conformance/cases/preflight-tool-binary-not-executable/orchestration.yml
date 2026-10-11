@@ -1,0 +1,7 @@
+name: preflight-tool-binary-not-executable
+effects:
+  - type: tool
+    name: result
+    provider: awk
+    params:
+      args: ["--print-env", "FAKE_AWK_VAR"]
