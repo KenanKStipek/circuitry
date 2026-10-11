@@ -173,10 +173,12 @@ pub(crate) async fn execute_loop(
     // (never `BaseException`): a cancellation propagates raw, with no
     // `value`/`meta` write and no `effect_complete` at all -- the same
     // convention `exec::conditional`/`exec::dynamic` already use.
-    if let Err(e) = &outcome {
-        if is_fatal(e) {
-            return outcome;
-        }
+    // `VmError::Refused` (#462, lane I) is fatal for *control* only
+    // (`VmError::is_fatal`'s own doc comment, orchestrator ruling R1 on
+    // PR #462): it still falls through to the ordinary write below,
+    // recorded on this loop's own node exactly like any other failure.
+    if let Err(VmError::Cancelled) = &outcome {
+        return outcome;
     }
 
     let error_text: Option<String> = outcome.as_ref().err().map(VmError::to_string);
@@ -336,19 +338,6 @@ fn py_repr_str(s: &str) -> String {
 /// loop warning/error text below uses.
 fn name_or_unnamed_repr(name: Option<&str>) -> String {
     py_repr_str(name.unwrap_or("<unnamed>"))
-}
-
-/// Classifies *err* as fatal -- bypasses `on_error`/retry entirely,
-/// propagates unwrapped, and (in a tree) stops dispatching new passes
-/// instead of waiting for the rest to settle. Today that's exactly
-/// [`VmError::Cancelled`]; PR #462 (lane I) adds `VmError::Refused`
-/// with the identical contract, behind one predicate
-/// (`VmError::is_fatal`, expected) -- every on_error/stop/retry
-/// decision in this file already goes through this one helper, so
-/// swapping its body for that predicate once #462 merges is a one-line
-/// change, not a re-audit of every call site.
-fn is_fatal(err: &VmError) -> bool {
-    matches!(err, VmError::Cancelled)
 }
 
 /// `%s` on `self.defn.on_error` -- the plain config string a loop's own
@@ -836,7 +825,7 @@ async fn execute_body<'a>(
                     vec![CtxSource::Live(step_overlay(pass_chain, &local))]
                 };
             }
-            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) if e.is_fatal() => return Err(e),
             Err(e) => {
                 return Err(match &child_op.name {
                     Some(name) => wrap_effect_error(name, e),
@@ -950,7 +939,7 @@ async fn run_each_chain<'a>(
                 }
                 observer.write();
             }
-            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) if e.is_fatal() => return Err(e),
             Err(e) => {
                 state.failed_passes.push(idx);
                 if let Some(m) = meta {
@@ -1066,11 +1055,18 @@ async fn run_each_tree<'a>(
     let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
         Default::default();
     let mut errors: std::collections::BTreeMap<u32, VmError> = Default::default();
-    // A fatal result (`is_fatal`) stops dispatching new passes, exactly
-    // like `stop_on_error`, regardless of `on_error` -- and is returned
-    // as-is at the end, never folded into `errors`/the combined
+    // `exec::dynamic::execute_tree`'s own split (orchestrator finding O1
+    // on PR #462): `Cancelled` and a fatal-but-not-`Cancelled` result
+    // (`VmError::Refused`) both stop dispatching new passes, like
+    // `stop_on_error`, regardless of `on_error` -- but only `Cancelled`
+    // skips the merge below entirely (cof's own no-state-write
+    // cancellation contract); a `refused` pass still merges like any
+    // other `stop_on_error` failure (`VmError::is_fatal`'s own doc
+    // comment: fatal for *control*, not for *recording*), then is
+    // returned unfolded, never folded into `errors`/the combined
     // multi-failure text the way an ordinary pass failure is.
-    let mut fatal: Option<VmError> = None;
+    let mut interrupted = false;
+    let mut refused: Option<VmError> = None;
 
     {
         let mut pending: VecDeque<u32> = (0..total).collect();
@@ -1127,8 +1123,11 @@ async fn run_each_tree<'a>(
                 Ok((record, writes)) => {
                     results.insert(idx, (record, writes));
                 }
-                Err(e) if is_fatal(&e) => {
-                    fatal.get_or_insert(e);
+                Err(VmError::Cancelled) => {
+                    interrupted = true;
+                }
+                Err(e) if e.is_fatal() => {
+                    refused.get_or_insert(e);
                 }
                 Err(e) => {
                     errors.insert(idx, e);
@@ -1143,9 +1142,9 @@ async fn run_each_tree<'a>(
                 );
             }
             if token.is_set() {
-                fatal.get_or_insert(VmError::Cancelled);
+                interrupted = true;
             }
-            if fatal.is_some() {
+            if interrupted || refused.is_some() {
                 pending.clear();
             } else if let Some(next_idx) = pending.pop_front() {
                 in_flight.push(launch(next_idx));
@@ -1153,10 +1152,14 @@ async fn run_each_tree<'a>(
         }
     }
 
-    if let Some(e) = fatal {
-        return Err(e);
+    if interrupted {
+        return Err(VmError::Cancelled);
     }
 
+    // A refused branch still merges like any other `stop_on_error`
+    // failure -- every in-flight branch has already drained above, so
+    // there is nothing left to lose by keeping whatever every branch
+    // (refused or not) already wrote.
     store.merge(write_parent, branches).map_err(store_err)?;
     observer.write();
 
@@ -1167,6 +1170,10 @@ async fn run_each_tree<'a>(
             state.last_completed = Some(idx);
             state.completed_indices.push(idx);
         }
+    }
+
+    if let Some(e) = refused {
+        return Err(e);
     }
 
     if total < full_total {
@@ -1279,7 +1286,7 @@ async fn run_while<'a>(
             let ctx = super::live_ctx(&cond_chain, store);
             match evaluate_while_condition(cond, &ctx, &op.path, frame, run_ctx, token).await {
                 Ok(b) => b,
-                Err(e) if is_fatal(&e) => return Err(e),
+                Err(e) if e.is_fatal() => return Err(e),
                 Err(e) => match on_error {
                     OnError::Fail => {
                         state.termination_reason = "error".to_string();
@@ -1361,7 +1368,7 @@ async fn run_while<'a>(
                 }
                 observer.write();
             }
-            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) if e.is_fatal() => return Err(e),
             Err(e) => {
                 state.failed_passes.push(iteration_count);
                 if let Some(m) = meta {

@@ -14,7 +14,7 @@ use electricity_value::Value;
 use electricity_vm::observer::InstanceId;
 use electricity_vm::{CancellationToken, Limiter, RunObserver, Store, VmError};
 use indexmap::IndexMap;
-use support::{json_registry, run_ctx};
+use support::{json_registry, refused_use_leaf, run_ctx};
 
 fn root_path() -> EffectPath {
     EffectPath::root()
@@ -1384,5 +1384,121 @@ async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() 
     assert!(
         err.contains("resolved to date instead of list"),
         "unexpected each_in_error: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// VmError::Refused (#462, lane I prerequisites) -- fatal for control
+// only, recorded on the loop's own node like an ordinary failure
+// ---------------------------------------------------------------------
+
+/// A chain each pass's own refused `use` child (the sentinel
+/// `exec::use_::execute_use` recognizes) is never absorbed by
+/// `on_error: continue`, propagates unwrapped (no `step: ` prefix),
+/// and still leaves the loop's own node recorded exactly like an
+/// ordinary failure -- `value`/`meta.error`/`completed_at` all
+/// written, unlike a real cancellation (`VmError::is_fatal`'s own doc
+/// comment, orchestrator ruling R1 on PR #462).
+#[tokio::test]
+async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_node() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![refused_use_leaf(
+        body_prefix.push_name("child"),
+        "child",
+        OnError::Fail,
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Continue,
+        None,
+        body,
+    );
+
+    let err = run(single(loop_op_), &store)
+        .await
+        .expect_err("a refused use child must never be absorbed by on_error: continue");
+    let VmError::Refused { child_label, .. } = err else {
+        panic!("expected VmError::Refused, got {err:?}");
+    };
+    assert_eq!(child_label, "__test_only_refused__");
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    assert!(
+        get(meta, "completed_at").is_some(),
+        "a refused pass is recorded like an ordinary failure, not bypassed like a cancellation: {meta:?}"
+    );
+    let error_text = match get(meta, "error") {
+        Some(Value::Str(text)) => text.clone(),
+        other => panic!("expected a string meta.error, got {other:?}"),
+    };
+    assert!(
+        error_text.contains("use child __test_only_refused__"),
+        "unexpected meta.error: {error_text}"
+    );
+    assert!(get(shots, "value").is_some());
+}
+
+/// The tree-flow twin: `max_concurrency: 1` makes pass 0's own refusal
+/// deterministic -- it must stop the loop from ever dispatching pass 1
+/// at all (`exec::dynamic::execute_tree`'s own split, mirrored here),
+/// yet still merge pass 0's own isolated store back (a refused branch
+/// is recorded, not bypassed).
+#[tokio::test]
+async fn a_refused_tree_pass_stops_dispatch_but_still_merges() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![refused_use_leaf(
+        body_prefix.push_name("child"),
+        "child",
+        OnError::Fail,
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Tree,
+        Some(1),
+        None,
+        0,
+        OnError::Continue,
+        None,
+        body,
+    );
+
+    let err = run(single(loop_op_), &store)
+        .await
+        .expect_err("a refused use child must never be absorbed by on_error: continue");
+    let VmError::Refused { child_label, .. } = err else {
+        panic!("expected VmError::Refused, got {err:?}");
+    };
+    assert_eq!(child_label, "__test_only_refused__");
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    assert!(
+        get(shots, "iter_1").is_none(),
+        "max_concurrency: 1 means pass 1 must never have been dispatched: {shots:?}"
+    );
+    let meta = as_dict(get(shots, "meta").unwrap());
+    assert!(
+        get(meta, "completed_at").is_some(),
+        "a refused pass is recorded like an ordinary failure, not bypassed like a cancellation: {meta:?}"
     );
 }
