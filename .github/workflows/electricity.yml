@@ -85,6 +85,17 @@ jobs:
         # release than the debug build this suite otherwise covers.
         run: cargo test --release -p electricity-cel
 
+      - name: cargo test --release -p electricity-vm --test loop_perf -- --ignored
+        working-directory: electricity
+        # Lane H (#461), #442's own "Interpreter cost" item, follow-up
+        # #463: `#[ignore]`d (a 1000-pass debug-profile run takes well
+        # over a minute -- too slow for the `cargo test --workspace`
+        # step above) regression guard for `exec::live_ctx`'s per-
+        # render context copy, run explicitly here in release profile
+        # instead -- same convention as this workflow's own `--release`
+        # steps above.
+        run: cargo test --release -p electricity-vm --test loop_perf -- --ignored
+
   msrv:
     name: MSRV check
     runs-on: ubuntu-latest

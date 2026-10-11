@@ -1,12 +1,59 @@
 //! `loop` effect execution (`core/loop.py::LoopRuntime.execute`) --
-//! signature only; lane H fills the body. Issue #449's gate lane, item
-//! 8: routed from [`crate::exec::execute_op`] once
+//! lane H (issue #461). Routed from [`crate::exec::execute_op`] once
 //! [`electricity_bytecode::refusal::Supported::loop_`] is `true`.
+//!
+//! Model-mode `while:` conditions are out of scope here (lane G2):
+//! [`LoopSpec::While`] carrying [`Condition::Model`] is refused before
+//! a real run ever reaches this file (`Supported::model_condition`),
+//! so [`evaluate_while_condition`]'s `Condition::Model` arm has no real
+//! caller yet -- wired so G2's own PR only has to fill
+//! [`super::condition_model::evaluate_model_condition`]'s body, never
+//! this file. `--resume` (C21/C22) and the interactive progress line
+//! are both out of scope too (M2-G; electricity's non-TTY stdout never
+//! prints one) -- every pass here always starts at index 0.
 
-use crate::exec::CtxChain;
-use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
-use electricity_bytecode::{LoopFlow, LoopSpec, Op, Region};
+use super::{CtxChain, CtxSource, execute_op, key, normalize_labels, store_err, wrap_effect_error};
+use crate::exec::dynamic::now_iso;
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use electricity_bytecode::{
+    Condition, LoopFlow, LoopId, LoopSpec, OnError, Op, PathSegment, Region,
+};
+use electricity_tools::{ErrorCause, PyExc};
 use electricity_value::Value;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use indexmap::IndexMap;
+use std::cell::RefCell;
+use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
+use std::time::Instant;
+
+/// Accumulates everything a loop run (either mode, either flow) needs
+/// to write at the end -- the Rust shape of `core/loop.py::
+/// LoopRuntime.execute`'s own local variables (`iteration_count`,
+/// `iterations_effects`, `last_completed`, `failed_passes`,
+/// `completed_indices`, `termination_reason`, `unvisited`,
+/// `termination_detail`).
+#[derive(Default)]
+struct RunState {
+    iteration_count: u32,
+    iterations_effects: Vec<Value>,
+    last_completed: Option<u32>,
+    failed_passes: Vec<u32>,
+    completed_indices: Vec<u32>,
+    termination_reason: String,
+    unvisited: Option<u32>,
+    termination_detail: Option<String>,
+}
+
+impl RunState {
+    fn new() -> Self {
+        RunState {
+            termination_reason: "max_iterations_reached".to_string(),
+            ..Default::default()
+        }
+    }
+}
 
 /// Runs a `loop` effect's own `each:`/`while:` body, chain or tree, as
 /// many passes as *spec*/*max_iterations*/*min_iterations* allow. Each
@@ -18,31 +65,1383 @@ use electricity_value::Value;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_loop(
     op: &Op,
-    _spec: &LoopSpec,
-    _body: &Region,
-    _flow: LoopFlow,
-    _max_concurrency: Option<u32>,
-    _max_iterations: Option<u32>,
-    _min_iterations: u32,
-    _collect: Option<&str>,
-    _store: &Store,
-    _parent: &NodeRef,
-    _ctx_chain: &CtxChain,
-    _frame: &Frame,
-    _run_ctx: &RunContext<'_>,
-    _observer: &dyn RunObserver,
-    _token: &CancellationToken,
+    spec: &LoopSpec,
+    body: &Region,
+    flow: LoopFlow,
+    max_concurrency: Option<u32>,
+    max_iterations: Option<u32>,
+    min_iterations: u32,
+    collect: Option<&str>,
+    store: &Store,
+    parent: &NodeRef,
+    ctx_chain: &CtxChain,
+    frame: &Frame,
+    run_ctx: &RunContext<'_>,
+    observer: &dyn RunObserver,
+    token: &CancellationToken,
 ) -> Result<(), VmError> {
-    Err(VmError::NotImplemented(format!(
-        "{}: `loop` is not supported by this build of electricity yet (M1-H)",
-        op.path
-    )))
+    let loop_name = op.name.as_deref();
+    let is_named = loop_name.is_some();
+
+    let (node, meta): (Option<NodeRef>, Option<NodeRef>) = if let Some(name) = loop_name {
+        let node = store.ensure_dict(parent, key(name)).map_err(store_err)?;
+        store.set_leaf(&node, key("value"), Value::None);
+        let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
+        write_loop_meta_start(
+            store,
+            &meta,
+            max_iterations,
+            min_iterations,
+            op.labels.as_ref(),
+            spec,
+        );
+        (Some(node), Some(meta))
+    } else {
+        (None, None)
+    };
+
+    let write_parent: NodeRef = node.clone().unwrap_or_else(|| parent.clone());
+    let baseline: HashSet<Value> = write_parent.borrow().keys().cloned().collect();
+
+    let body_ops: &[Op] = match body {
+        Region::Block { ops, .. } => ops.as_slice(),
+        _ => unreachable!("a loop body is always compiled as Region::Block"),
+    };
+    let own_names: HashSet<Value> = body_ops
+        .iter()
+        .filter_map(|o| o.name.clone().map(Value::Str))
+        .collect();
+
+    // S8 (M1 gate seam round 2): `Region::Loop` carries no `LoopId` of
+    // its own -- the compiler puts the placeholder on the first body
+    // op's own path, right after this loop's own path segments
+    // (`compile_loop`'s own `loop_path = own_path.push_pass(loop_id)`).
+    let loop_id: Option<LoopId> = if is_named {
+        body_ops.first().and_then(|first| {
+            first.path.0.get(op.path.0.len()).and_then(|seg| match seg {
+                PathSegment::Pass(id) => Some(*id),
+                PathSegment::Name(_) => None,
+            })
+        })
+    } else {
+        None
+    };
+
+    let effect_path = frame.effect_path(&op.path);
+    let instance = if is_named {
+        observer.effect_start(&effect_path)
+    } else {
+        0
+    };
+
+    let t0 = Instant::now();
+    let mut state = RunState::new();
+
+    let outcome: Result<(), VmError> = run_loop_body(
+        op,
+        spec,
+        flow,
+        max_concurrency,
+        max_iterations,
+        min_iterations,
+        is_named,
+        loop_name,
+        loop_id,
+        &write_parent,
+        meta.as_ref(),
+        &baseline,
+        &own_names,
+        body_ops,
+        ctx_chain,
+        frame,
+        store,
+        run_ctx,
+        observer,
+        token,
+        t0,
+        &mut state,
+    )
+    .await;
+
+    // `core/loop.py::LoopRuntime.execute`'s own outer `except Exception`
+    // (never `BaseException`): a cancellation propagates raw, with no
+    // `value`/`meta` write and no `effect_complete` at all -- the same
+    // convention `exec::conditional`/`exec::dynamic` already use.
+    if let Err(e) = &outcome {
+        if is_fatal(e) {
+            return outcome;
+        }
+    }
+
+    let error_text: Option<String> = outcome.as_ref().err().map(VmError::to_string);
+
+    if let (Some(node), Some(meta)) = (&node, &meta) {
+        let termination = build_termination(&state, error_text.as_deref());
+        let mut value_map = IndexMap::new();
+        value_map.insert(key("iterations"), Value::from(state.iteration_count as i64));
+        value_map.insert(key("termination"), termination);
+        value_map.insert(
+            key("effects_by_iteration"),
+            Value::List(state.iterations_effects.clone()),
+        );
+        store.set_leaf(node, key("value"), Value::Dict(value_map));
+
+        if let Some(err_text) = &error_text {
+            store.set_leaf(meta, key("error"), Value::Str(err_text.clone()));
+        }
+        store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
+
+        let mut sorted_completed: Vec<u32> = state.completed_indices.clone();
+        sorted_completed.sort_unstable();
+        sorted_completed.dedup();
+        store.set_leaf(
+            meta,
+            key("completed_passes"),
+            Value::List(
+                sorted_completed
+                    .into_iter()
+                    .map(|i| Value::from(i64::from(i)))
+                    .collect(),
+            ),
+        );
+        if state.failed_passes.is_empty() {
+            meta.borrow_mut().shift_remove(&key("failed_passes"));
+        } else {
+            store.set_leaf(
+                meta,
+                key("failed_passes"),
+                Value::List(
+                    state
+                        .failed_passes
+                        .iter()
+                        .map(|&i| Value::from(i64::from(i)))
+                        .collect(),
+                ),
+            );
+        }
+
+        if let Some(collect_key) = collect {
+            let values = collect_values(store, node, collect_key, &state.completed_indices);
+            let mut collected_map = IndexMap::new();
+            collected_map.insert(key("value"), Value::List(values));
+            store.set_leaf(node, key("collected"), Value::Dict(collected_map));
+        }
+        link_last(store, node, state.last_completed);
+    }
+
+    if is_named {
+        let error_for_complete = meta.as_ref().and_then(|m| node_error(store, m));
+        observer.effect_complete(&effect_path, instance, error_for_complete.as_deref());
+    }
+
+    outcome
+}
+
+/// `meta`'s own current `error` value, if it is a string -- the same
+/// `effect_complete` convention `exec::conditional::node_error` uses.
+fn node_error(store: &Store, meta: &NodeRef) -> Option<String> {
+    match &store.snapshot(meta) {
+        Value::Dict(map) => match map.get(&key("error")) {
+            Some(Value::Str(text)) => Some(text.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Success-path `value.termination` (`state.termination_reason`/
+/// `unvisited`/`termination_detail`) when *error_text* is `None`; the
+/// failure-path `{"reason": "error", "detail": ...}` shape otherwise --
+/// the failure shape never reuses whatever the try body had already
+/// set, exactly matching `core/loop.py::LoopRuntime.execute`'s own
+/// `except` block building a fresh termination dict of its own.
+fn build_termination(state: &RunState, error_text: Option<&str>) -> Value {
+    let mut m = IndexMap::new();
+    match error_text {
+        Some(text) => {
+            m.insert(key("reason"), Value::Str("error".to_string()));
+            m.insert(key("detail"), Value::Str(text.to_string()));
+        }
+        None => {
+            m.insert(key("reason"), Value::Str(state.termination_reason.clone()));
+            if let Some(u) = state.unvisited {
+                m.insert(key("unvisited"), Value::from(i64::from(u)));
+            }
+            if let Some(d) = &state.termination_detail {
+                m.insert(key("detail"), Value::Str(d.clone()));
+            }
+        }
+    }
+    Value::Dict(m)
+}
+
+/// `meta["created_at"]` through `meta["each_as"]`/`meta["mode"]`
+/// (`core/loop.py::LoopRuntime.execute`) -- the keys, in exactly this
+/// order, every named loop node's `meta` starts with. `progress`/
+/// `completed_passes`/`failed_passes` land later, once the run itself
+/// knows what to put in them.
+fn write_loop_meta_start(
+    store: &Store,
+    meta: &NodeRef,
+    max_iterations: Option<u32>,
+    min_iterations: u32,
+    labels: Option<&Value>,
+    spec: &LoopSpec,
+) {
+    store.set_leaf(meta, key("created_at"), Value::Str(now_iso()));
+    store.set_leaf(meta, key("completed_at"), Value::None);
+    store.set_leaf(meta, key("error"), Value::None);
+    if let Some(m) = max_iterations {
+        store.set_leaf(meta, key("max_iterations"), Value::from(i64::from(m)));
+    }
+    store.set_leaf(
+        meta,
+        key("min_iterations"),
+        Value::from(i64::from(min_iterations)),
+    );
+    store.set_leaf(meta, key("labels"), normalize_labels(labels));
+    match spec {
+        LoopSpec::Each {
+            in_path, as_name, ..
+        } => {
+            store.set_leaf(meta, key("mode"), Value::Str("each".to_string()));
+            store.set_leaf(meta, key("each_in_path"), Value::Str(in_path.clone()));
+            store.set_leaf(meta, key("each_as"), Value::Str(as_name.clone()));
+        }
+        LoopSpec::While(cond) => {
+            store.set_leaf(meta, key("mode"), Value::Str(cond.mode().to_string()));
+        }
+    }
+}
+
+/// Python `repr(s)` for a plain string -- every `%r`-formatted warning/
+/// error text below.
+fn py_repr_str(s: &str) -> String {
+    Value::Str(s.to_string()).py_repr()
+}
+
+/// `self.defn.name or '<unnamed>'!r` -- the one name spelling every
+/// loop warning/error text below uses.
+fn name_or_unnamed_repr(name: Option<&str>) -> String {
+    py_repr_str(name.unwrap_or("<unnamed>"))
+}
+
+/// Classifies *err* as fatal -- bypasses `on_error`/retry entirely,
+/// propagates unwrapped, and (in a tree) stops dispatching new passes
+/// instead of waiting for the rest to settle. Today that's exactly
+/// [`VmError::Cancelled`]; PR #462 (lane I) adds `VmError::Refused`
+/// with the identical contract, behind one predicate
+/// (`VmError::is_fatal`, expected) -- every on_error/stop/retry
+/// decision in this file already goes through this one helper, so
+/// swapping its body for that predicate once #462 merges is a one-line
+/// change, not a re-audit of every call site.
+fn is_fatal(err: &VmError) -> bool {
+    matches!(err, VmError::Cancelled)
+}
+
+/// `%s` on `self.defn.on_error` -- the plain config string a loop's own
+/// warning text names. Never called with [`OnError::Skip`] (a loop's
+/// own `on_error:` is always `fail`/`break`/`continue`,
+/// `compile_loop`'s own `normalize_on_error_loop`).
+fn on_error_str(on_error: OnError) -> &'static str {
+    match on_error {
+        OnError::Fail => "fail",
+        OnError::Break => "break",
+        OnError::Continue => "continue",
+        OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+    }
+}
+
+/// `core/loop.py::LoopRuntime._resolve_collection`. Returns the
+/// resolved list, or the exact error text `_resolve_collection` itself
+/// would log (never raises on its own; the caller decides what an
+/// unresolved path means for the loop as a whole).
+fn resolve_collection(in_path: &str, ctx: &Value) -> Result<Vec<Value>, String> {
+    let mut current = ctx;
+    for part in in_path.split('.') {
+        if part.is_empty() {
+            continue;
+        }
+        match current {
+            Value::Dict(map) => match map.get(&key(part)) {
+                Some(v) => current = v,
+                None => {
+                    return Err(format!(
+                        "path {} resolved to None at segment {}",
+                        py_repr_str(in_path),
+                        py_repr_str(part)
+                    ));
+                }
+            },
+            _ => {
+                return Err(format!(
+                    "path {} hit non-dict at segment {}",
+                    py_repr_str(in_path),
+                    py_repr_str(part)
+                ));
+            }
+        }
+        if matches!(current, Value::None) {
+            return Err(format!(
+                "path {} resolved to None at segment {}",
+                py_repr_str(in_path),
+                py_repr_str(part)
+            ));
+        }
+    }
+    match current {
+        Value::List(items) => Ok(items.clone()),
+        other => Err(format!(
+            "path {} resolved to {} instead of list",
+            py_repr_str(in_path),
+            other.type_name()
+        )),
+    }
+}
+
+/// `core/loop.py::LoopBoundsError`'s own exact text, raised (fail) or
+/// just recorded and warned about (break/continue) -- never reachable
+/// once `each.truncate: true` lets the loop run the first
+/// *max_iterations* items instead.
+fn loop_bounds_error_text(
+    loop_name: Option<&str>,
+    in_path: &str,
+    collection_len: usize,
+    max_iterations: u32,
+) -> String {
+    format!(
+        "each loop {} ({in_path}): collection has {collection_len} items but max_iterations is \
+         {max_iterations} \u{2014} raise max_iterations, bound the collection, or set \
+         each.truncate: true to process the first {max_iterations} and record the rest as \
+         unvisited",
+        name_or_unnamed_repr(loop_name)
+    )
+}
+
+fn handle_loop_bounds_error(
+    store: &Store,
+    meta: Option<&NodeRef>,
+    loop_name: Option<&str>,
+    on_error: OnError,
+    state: &mut RunState,
+    bounds_text: String,
+) -> Result<(), VmError> {
+    match on_error {
+        OnError::Fail => Err(VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: bounds_text,
+            cause: ErrorCause::None,
+            cause_class: None,
+        }),
+        OnError::Break | OnError::Continue => {
+            log::warn!(
+                "Loop {}: {bounds_text}; on_error={}, stopping the loop",
+                name_or_unnamed_repr(loop_name),
+                on_error_str(on_error)
+            );
+            state.termination_reason = "error".to_string();
+            state.termination_detail = Some(bounds_text.clone());
+            if let Some(m) = meta {
+                store.set_leaf(m, key("error"), Value::Str(bounds_text));
+            }
+            Ok(())
+        }
+        OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+    }
+}
+
+/// Dispatches to the `each`/`while` mode this loop actually runs --
+/// `core/loop.py::LoopRuntime.execute`'s own `if self.defn.each_def: ...
+/// elif self.defn.while_def: ...` branch, including the collection
+/// resolution/bounds check that gates an `each` loop before any pass
+/// ever starts.
+#[allow(clippy::too_many_arguments)]
+async fn run_loop_body<'a>(
+    op: &'a Op,
+    spec: &'a LoopSpec,
+    flow: LoopFlow,
+    max_concurrency: Option<u32>,
+    max_iterations: Option<u32>,
+    min_iterations: u32,
+    is_named: bool,
+    loop_name: Option<&'a str>,
+    loop_id: Option<LoopId>,
+    write_parent: &'a NodeRef,
+    meta: Option<&'a NodeRef>,
+    baseline: &'a HashSet<Value>,
+    own_names: &'a HashSet<Value>,
+    body_ops: &'a [Op],
+    ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
+    store: &'a Store,
+    run_ctx: &'a RunContext<'a>,
+    observer: &'a dyn RunObserver,
+    token: &'a CancellationToken,
+    t0: Instant,
+    state: &mut RunState,
+) -> Result<(), VmError> {
+    let on_error = op.on_error;
+    match spec {
+        LoopSpec::Each {
+            in_path,
+            as_name,
+            truncate,
+        } => {
+            let ctx = super::live_ctx(ctx_chain, store);
+            match resolve_collection(in_path, &ctx) {
+                Err(error_text) => {
+                    state.termination_reason = "collection_unresolved".to_string();
+                    if let Some(m) = meta {
+                        store.set_leaf(m, key("each_in_error"), Value::Str(error_text.clone()));
+                    }
+                    log::warn!("Loop collection {error_text}; running zero iterations");
+                    Ok(())
+                }
+                Ok(collection) if collection.is_empty() => {
+                    state.termination_reason = "collection_exhausted".to_string();
+                    Ok(())
+                }
+                Ok(collection) => {
+                    if let Some(cap) = max_iterations {
+                        if !truncate && collection.len() > cap as usize {
+                            let bounds_text =
+                                loop_bounds_error_text(loop_name, in_path, collection.len(), cap);
+                            return handle_loop_bounds_error(
+                                store,
+                                meta,
+                                loop_name,
+                                on_error,
+                                state,
+                                bounds_text,
+                            );
+                        }
+                    }
+                    if flow == LoopFlow::Tree {
+                        run_each_tree(
+                            op,
+                            &collection,
+                            as_name,
+                            max_concurrency,
+                            max_iterations,
+                            on_error,
+                            is_named,
+                            loop_name,
+                            loop_id,
+                            write_parent,
+                            meta,
+                            baseline,
+                            own_names,
+                            body_ops,
+                            ctx_chain,
+                            frame,
+                            store,
+                            run_ctx,
+                            observer,
+                            token,
+                            t0,
+                            state,
+                        )
+                        .await
+                    } else {
+                        run_each_chain(
+                            &collection,
+                            as_name,
+                            max_iterations,
+                            on_error,
+                            is_named,
+                            loop_name,
+                            loop_id,
+                            write_parent,
+                            meta,
+                            baseline,
+                            own_names,
+                            body_ops,
+                            ctx_chain,
+                            frame,
+                            store,
+                            run_ctx,
+                            observer,
+                            token,
+                            t0,
+                            state,
+                        )
+                        .await
+                    }
+                }
+            }
+        }
+        LoopSpec::While(cond) => {
+            run_while(
+                op,
+                cond,
+                max_iterations,
+                min_iterations,
+                on_error,
+                is_named,
+                loop_name,
+                loop_id,
+                write_parent,
+                meta,
+                baseline,
+                own_names,
+                body_ops,
+                ctx_chain,
+                frame,
+                store,
+                run_ctx,
+                observer,
+                token,
+                t0,
+                state,
+            )
+            .await
+        }
+    }
+}
+
+/// The per-pass top-level-only overlay (`as_name`/`_loop_index`/
+/// `iter`) -- `{**ctx, as_name: item, "_loop_index": idx, "iter":
+/// {"index": idx}}` (`core/loop.py`'s own dict-literal construction for
+/// `iter_ctx`): no `prime` mirroring at all, unlike a body step's own
+/// post-step overlay ([`step_overlay`]).
+fn index_overlay(as_name: Option<&str>, item: Option<&Value>, idx: u32) -> IndexMap<Value, Slot> {
+    let mut local = IndexMap::new();
+    if let (Some(name), Some(v)) = (as_name, item) {
+        local.insert(key(name), Slot::Value(v.clone()));
+    }
+    local.insert(key("_loop_index"), Slot::Value(Value::from(i64::from(idx))));
+    let mut iter_map = IndexMap::new();
+    iter_map.insert(key("index"), Value::from(i64::from(idx)));
+    local.insert(key("iter"), Slot::Value(Value::Dict(iter_map)));
+    local
+}
+
+/// Every entry of *chain*'s own top-level map, [`Slot`]s rather than
+/// resolved values -- the same flattening `exec::conditional`'s own
+/// `chain_slots` does (duplicated here rather than shared: this lane
+/// never edits `exec/conditional.rs`, a different lane's finalized
+/// file).
+fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
+    let mut merged: IndexMap<Value, Slot> = IndexMap::new();
+    for source in chain {
+        match source {
+            CtxSource::Live(node) => {
+                for (k, v) in node.borrow().iter() {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            CtxSource::Frozen(Value::Dict(map)) => {
+                for (k, v) in map {
+                    merged.insert(k.clone(), Slot::Value(v.clone()));
+                }
+            }
+            CtxSource::Frozen(_) => {}
+        }
+    }
+    merged
+}
+
+/// *slot*'s own top-level map as [`Slot`]s, or an empty one -- the same
+/// `dict_slots` helper `exec::conditional::build_overlay` uses for its
+/// own `ctx.get("prime")` read, duplicated here for the same reason as
+/// [`chain_slots`].
+fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
+    match slot {
+        Some(Slot::Node(node)) => node.borrow().clone(),
+        Some(Slot::Value(Value::Dict(map))) => map
+            .iter()
+            .map(|(k, v)| (k.clone(), Slot::Value(v.clone())))
+            .collect(),
+        _ => IndexMap::new(),
+    }
+}
+
+/// `{**chain, **local}`, no `prime` mirror -- [`index_overlay`]'s own
+/// landing spot. A detached [`NodeRef`], pushed as a [`CtxSource::Live`]
+/// entry.
+fn plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+    let mut top = chain_slots(chain);
+    for (k, v) in local {
+        top.insert(k.clone(), v.clone());
+    }
+    Rc::new(RefCell::new(top))
+}
+
+/// `core/loop.py::LoopRuntime._with_prev` -- overlays
+/// `prime.<loop_name>.prev = prev` onto *chain*, two levels deep,
+/// keeping every other key already in `prime`/`prime.<loop_name>`
+/// untouched. Chain flow only, named loops only, never called before
+/// the first completed pass (see [`execute_loop`]'s callers).
+fn with_prev_overlay(chain: &CtxChain, loop_name: &str, prev: &IndexMap<Value, Slot>) -> NodeRef {
+    let mut top = chain_slots(chain);
+    let prime_key = key("prime");
+    let mut prime = dict_slots(top.get(&prime_key));
+    let loop_key = key(loop_name);
+    let mut own = dict_slots(prime.get(&loop_key));
+    own.insert(key("prev"), Slot::Node(Rc::new(RefCell::new(prev.clone()))));
+    prime.insert(loop_key, Slot::Node(Rc::new(RefCell::new(own))));
+    top.insert(prime_key, Slot::Node(Rc::new(RefCell::new(prime))));
+    Rc::new(RefCell::new(top))
+}
+
+/// A pass's own starting ctx chain: the top-level-only *local* overlay
+/// ([`index_overlay`]), with `prime.<loop_name>.prev` layered on top
+/// when *prev* carries a previous completed pass's writes
+/// ([`with_prev_overlay`]).
+fn build_pass_chain(
+    outer_chain: &CtxChain,
+    local: &IndexMap<Value, Slot>,
+    prev: Option<(&str, &IndexMap<Value, Slot>)>,
+) -> CtxChain {
+    let plain = plain_overlay(outer_chain, local);
+    let base: CtxChain = vec![CtxSource::Live(plain)];
+    match prev {
+        Some((loop_name, prev_writes)) => {
+            vec![CtxSource::Live(with_prev_overlay(
+                &base,
+                loop_name,
+                prev_writes,
+            ))]
+        }
+        None => base,
+    }
+}
+
+/// `core.scope.scope_ctx` -- `{**ctx, **local}`, with *local* also
+/// merged one level inside `ctx["prime"]` -- the within-pass overlay a
+/// body step's own later sibling sees (Quirk Q1), rebuilt fresh from
+/// *pass_chain* (never from the previous step's own overlay) after
+/// every single step. Same shape as `exec::conditional::build_overlay`,
+/// duplicated here for the same reason as [`chain_slots`].
+fn step_overlay(pass_chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+    let base = chain_slots(pass_chain);
+    let prime_key = key("prime");
+    let parent_prime = dict_slots(base.get(&prime_key));
+
+    let mut top = base;
+    for (k, v) in local {
+        top.insert(k.clone(), v.clone());
+    }
+    let mut prime = parent_prime;
+    for (k, v) in local {
+        prime.insert(k.clone(), v.clone());
+    }
+    top.insert(prime_key, Slot::Node(Rc::new(RefCell::new(prime))));
+    Rc::new(RefCell::new(top))
+}
+
+/// `core.scope.local_writes` -- *node*'s own top-level keys since
+/// *baseline*, plus any of *own_names* even if already present in
+/// *baseline*.
+fn local_writes_of(
+    node: &NodeRef,
+    baseline: &HashSet<Value>,
+    own_names: &HashSet<Value>,
+) -> IndexMap<Value, Slot> {
+    node.borrow()
+        .iter()
+        .filter(|(k, _)| !baseline.contains(*k) || own_names.contains(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// `{"type": ..., "name": ...}` -- `core/loop.py::LoopRuntime.
+/// _execute_body`'s own `effect_record` (no `index`, unlike a
+/// conditional branch's own effect record).
+fn body_effect_record(op: &Op) -> Value {
+    let mut m = IndexMap::new();
+    m.insert(key("type"), Value::from(op.python_type_name()));
+    m.insert(
+        key("name"),
+        match &op.name {
+            Some(n) => Value::from(n.as_str()),
+            None => Value::None,
+        },
+    );
+    Value::Dict(m)
+}
+
+/// `core/loop.py::LoopRuntime._execute_body` -- runs *body_ops* once,
+/// in order, against *write_node*, rebuilding the within-pass overlay
+/// after every step. Returns this pass's own `{"executed_effects": [...],
+/// "count": n}` record and its own local writes (for `prev`/the
+/// `while`-condition's own `last_writes`) -- only once every body op has
+/// run; any failure (including a cancellation) returns `Err` instead,
+/// with no record built at all, matching Python's own "only on actual
+/// completion" contract.
+#[allow(clippy::too_many_arguments)]
+async fn execute_body<'a>(
+    body_ops: &'a [Op],
+    store: &'a Store,
+    write_node: &'a NodeRef,
+    pass_chain: &'a CtxChain,
+    baseline: &'a HashSet<Value>,
+    own_names: &'a HashSet<Value>,
+    pass_frame: &'a Frame,
+    run_ctx: &'a RunContext<'a>,
+    observer: &'a dyn RunObserver,
+    token: &'a CancellationToken,
+) -> Result<(Value, IndexMap<Value, Slot>), VmError> {
+    if token.is_set() {
+        return Err(VmError::Cancelled);
+    }
+    let mut executed: Vec<Value> = Vec::with_capacity(body_ops.len());
+    let mut step_chain: CtxChain = pass_chain.clone();
+    for child_op in body_ops {
+        if token.is_set() {
+            return Err(VmError::Cancelled);
+        }
+        match execute_op(
+            child_op,
+            store,
+            write_node,
+            &step_chain,
+            pass_frame,
+            run_ctx,
+            observer,
+            token,
+        )
+        .await
+        {
+            Ok(()) => {
+                executed.push(body_effect_record(child_op));
+                let local = local_writes_of(write_node, baseline, own_names);
+                step_chain = if local.is_empty() {
+                    pass_chain.clone()
+                } else {
+                    vec![CtxSource::Live(step_overlay(pass_chain, &local))]
+                };
+            }
+            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) => {
+                return Err(match &child_op.name {
+                    Some(name) => wrap_effect_error(name, e),
+                    None => e,
+                });
+            }
+        }
+    }
+    let record = {
+        let mut m = IndexMap::new();
+        m.insert(key("executed_effects"), Value::List(executed.clone()));
+        m.insert(key("count"), Value::from(executed.len() as i64));
+        Value::Dict(m)
+    };
+    let writes = local_writes_of(write_node, baseline, own_names);
+    Ok((record, writes))
+}
+
+/// `core/loop.py::LoopRuntime.execute`'s own chain-flow `each` branch.
+#[allow(clippy::too_many_arguments)]
+async fn run_each_chain<'a>(
+    collection: &'a [Value],
+    as_name: &'a str,
+    max_iterations: Option<u32>,
+    on_error: OnError,
+    is_named: bool,
+    loop_name: Option<&'a str>,
+    loop_id: Option<LoopId>,
+    write_parent: &'a NodeRef,
+    meta: Option<&'a NodeRef>,
+    baseline: &'a HashSet<Value>,
+    own_names: &'a HashSet<Value>,
+    body_ops: &'a [Op],
+    outer_chain: &'a CtxChain,
+    frame: &'a Frame,
+    store: &'a Store,
+    run_ctx: &'a RunContext<'a>,
+    observer: &'a dyn RunObserver,
+    token: &'a CancellationToken,
+    t0: Instant,
+    state: &mut RunState,
+) -> Result<(), VmError> {
+    let total = collection.len() as u32;
+    if let Some(m) = meta {
+        store.set_leaf(
+            m,
+            key("progress"),
+            loop_progress(0, Some(total), t0.elapsed().as_secs_f64()),
+        );
+    }
+    let mut prev_writes: Option<IndexMap<Value, Slot>> = None;
+
+    for (idx_usize, item) in collection.iter().enumerate() {
+        let idx = idx_usize as u32;
+        if let Some(cap) = max_iterations {
+            if idx >= cap {
+                state.termination_reason = "max_iterations_reached".to_string();
+                state.unvisited = Some(total - idx);
+                return Ok(());
+            }
+        }
+        if token.is_set() {
+            return Err(VmError::Cancelled);
+        }
+
+        let local = index_overlay(Some(as_name), Some(item), idx);
+        let prev_arg = if is_named {
+            prev_writes.as_ref().map(|p| (loop_name.expect("named"), p))
+        } else {
+            None
+        };
+        let pass_chain = build_pass_chain(outer_chain, &local, prev_arg);
+        let pass_write_node: NodeRef = if is_named {
+            store
+                .ensure_dict(write_parent, key(&format!("iter_{idx}")))
+                .map_err(store_err)?
+        } else {
+            write_parent.clone()
+        };
+        let pass_frame = match loop_id {
+            Some(id) => frame.with_pass(id, idx),
+            None => frame.clone(),
+        };
+
+        match execute_body(
+            body_ops,
+            store,
+            &pass_write_node,
+            &pass_chain,
+            baseline,
+            own_names,
+            &pass_frame,
+            run_ctx,
+            observer,
+            token,
+        )
+        .await
+        {
+            Ok((record, writes)) => {
+                state.iterations_effects.push(record);
+                state.iteration_count += 1;
+                state.last_completed = Some(idx);
+                state.completed_indices.push(idx);
+                prev_writes = Some(writes);
+                if let Some(m) = meta {
+                    store.set_leaf(
+                        m,
+                        key("progress"),
+                        loop_progress(idx + 1, Some(total), t0.elapsed().as_secs_f64()),
+                    );
+                }
+                observer.write();
+            }
+            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) => {
+                state.failed_passes.push(idx);
+                if let Some(m) = meta {
+                    store.set_leaf(
+                        m,
+                        key("progress"),
+                        loop_progress(idx + 1, Some(total), t0.elapsed().as_secs_f64()),
+                    );
+                }
+                observer.write();
+                match on_error {
+                    OnError::Fail => {
+                        state.termination_reason = "error".to_string();
+                        return Err(e);
+                    }
+                    OnError::Break => {
+                        state.termination_reason = "error".to_string();
+                        return Ok(());
+                    }
+                    OnError::Continue => {}
+                    OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+                }
+            }
+        }
+    }
+    state.termination_reason = "collection_exhausted".to_string();
+    Ok(())
+}
+
+/// `core/loop.py::LoopRuntime.execute`'s own tree-flow `each` branch:
+/// one `dispatch` before any branch starts, isolated per-pass stores,
+/// merged back in index order only once nothing was cancelled.
+#[allow(clippy::too_many_arguments)]
+async fn run_each_tree<'a>(
+    op: &'a Op,
+    collection: &'a [Value],
+    as_name: &'a str,
+    max_concurrency: Option<u32>,
+    max_iterations: Option<u32>,
+    on_error: OnError,
+    is_named: bool,
+    loop_name: Option<&'a str>,
+    loop_id: Option<LoopId>,
+    write_parent: &'a NodeRef,
+    meta: Option<&'a NodeRef>,
+    baseline: &'a HashSet<Value>,
+    own_names: &'a HashSet<Value>,
+    body_ops: &'a [Op],
+    outer_chain: &'a CtxChain,
+    frame: &'a Frame,
+    store: &'a Store,
+    run_ctx: &'a RunContext<'a>,
+    observer: &'a dyn RunObserver,
+    token: &'a CancellationToken,
+    t0: Instant,
+    state: &mut RunState,
+) -> Result<(), VmError> {
+    let full_total = collection.len() as u32;
+    let capped: &[Value] = match max_iterations {
+        Some(cap) if (cap as usize) < collection.len() => &collection[..cap as usize],
+        _ => collection,
+    };
+    let total = capped.len() as u32;
+
+    if let Some(m) = meta {
+        store.set_leaf(
+            m,
+            key("progress"),
+            loop_progress(0, Some(full_total), t0.elapsed().as_secs_f64()),
+        );
+    }
+
+    let effective_concurrency: u32 = match max_concurrency {
+        Some(mc) if total > 0 => std::cmp::max(1, std::cmp::min(mc, total)),
+        _ => total,
+    };
+    let effect_path = frame.effect_path(&op.path);
+    observer.dispatch(&effect_path, total as usize, effective_concurrency as usize);
+
+    if total == 0 {
+        if full_total > 0 {
+            state.termination_reason = "max_iterations_reached".to_string();
+            state.unvisited = Some(full_total);
+        } else {
+            state.termination_reason = "collection_exhausted".to_string();
+        }
+        return Ok(());
+    }
+
+    let branches = store
+        .parallel_branches(write_parent, total as usize)
+        .map_err(store_err)?;
+
+    let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
+        Default::default();
+    let mut errors: std::collections::BTreeMap<u32, VmError> = Default::default();
+    // A fatal result (`is_fatal`) stops dispatching new passes, exactly
+    // like `stop_on_error`, regardless of `on_error` -- and is returned
+    // as-is at the end, never folded into `errors`/the combined
+    // multi-failure text the way an ordinary pass failure is.
+    let mut fatal: Option<VmError> = None;
+
+    {
+        let mut pending: VecDeque<u32> = (0..total).collect();
+        let mut in_flight = FuturesUnordered::new();
+
+        let launch = |idx: u32| {
+            let branch_root = &branches[idx as usize];
+            let item = &capped[idx as usize];
+            async move {
+                if token.is_set() {
+                    return (idx, Err(VmError::Cancelled));
+                }
+                let local = index_overlay(Some(as_name), Some(item), idx);
+                let pass_chain = build_pass_chain(outer_chain, &local, None);
+                let pass_write_node: NodeRef = if is_named {
+                    match store.ensure_dict(branch_root, key(&format!("iter_{idx}"))) {
+                        Ok(n) => n,
+                        Err(e) => return (idx, Err(store_err(e))),
+                    }
+                } else {
+                    branch_root.clone()
+                };
+                let pass_frame = match loop_id {
+                    Some(id) => frame.with_pass(id, idx),
+                    None => frame.clone(),
+                };
+                let result = execute_body(
+                    body_ops,
+                    store,
+                    &pass_write_node,
+                    &pass_chain,
+                    baseline,
+                    own_names,
+                    &pass_frame,
+                    run_ctx,
+                    observer,
+                    token,
+                )
+                .await;
+                observer.write();
+                (idx, result)
+            }
+        };
+
+        let launch_count = std::cmp::min(effective_concurrency as usize, pending.len());
+        for _ in 0..launch_count {
+            if let Some(idx) = pending.pop_front() {
+                in_flight.push(launch(idx));
+            }
+        }
+
+        while let Some((idx, result)) = in_flight.next().await {
+            match result {
+                Ok((record, writes)) => {
+                    results.insert(idx, (record, writes));
+                }
+                Err(e) if is_fatal(&e) => {
+                    fatal.get_or_insert(e);
+                }
+                Err(e) => {
+                    errors.insert(idx, e);
+                }
+            }
+            if let Some(m) = meta {
+                let done = (results.len() + errors.len()) as u32;
+                store.set_leaf(
+                    m,
+                    key("progress"),
+                    loop_progress(done, Some(full_total), t0.elapsed().as_secs_f64()),
+                );
+            }
+            if token.is_set() {
+                fatal.get_or_insert(VmError::Cancelled);
+            }
+            if fatal.is_some() {
+                pending.clear();
+            } else if let Some(next_idx) = pending.pop_front() {
+                in_flight.push(launch(next_idx));
+            }
+        }
+    }
+
+    if let Some(e) = fatal {
+        return Err(e);
+    }
+
+    store.merge(write_parent, branches).map_err(store_err)?;
+    observer.write();
+
+    for idx in 0..total {
+        if let Some((record, _writes)) = results.get(&idx) {
+            state.iterations_effects.push(record.clone());
+            state.iteration_count += 1;
+            state.last_completed = Some(idx);
+            state.completed_indices.push(idx);
+        }
+    }
+
+    if total < full_total {
+        state.termination_reason = "max_iterations_reached".to_string();
+        state.unvisited = Some(full_total - total);
+    } else {
+        state.termination_reason = "collection_exhausted".to_string();
+    }
+
+    if !errors.is_empty() {
+        state.failed_passes = errors.keys().copied().collect();
+        match on_error {
+            OnError::Fail => {
+                state.termination_reason = "error".to_string();
+                let lowest_idx = *errors.keys().next().expect("errors is non-empty");
+                let failing = &errors[&lowest_idx];
+                let cause_class = failing.displayed_class();
+                let message = format!(
+                    "loop {} iteration [{lowest_idx}]: {failing}",
+                    name_or_unnamed_repr(loop_name)
+                );
+                return Err(VmError::Raised {
+                    py_class: PyExc::RuntimeError,
+                    message,
+                    cause: ErrorCause::None,
+                    cause_class,
+                });
+            }
+            OnError::Break => {
+                state.termination_reason = "error".to_string();
+            }
+            OnError::Continue => {}
+            OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+        }
+    }
+    Ok(())
+}
+
+/// `core/loop.py::LoopRuntime.execute`'s own `while` branch (CEL
+/// conditions only in this build -- see this file's own module doc
+/// comment).
+#[allow(clippy::too_many_arguments)]
+async fn run_while<'a>(
+    op: &'a Op,
+    cond: &'a Condition,
+    max_iterations: Option<u32>,
+    min_iterations: u32,
+    on_error: OnError,
+    is_named: bool,
+    loop_name: Option<&'a str>,
+    loop_id: Option<LoopId>,
+    write_parent: &'a NodeRef,
+    meta: Option<&'a NodeRef>,
+    baseline: &'a HashSet<Value>,
+    own_names: &'a HashSet<Value>,
+    body_ops: &'a [Op],
+    outer_chain: &'a CtxChain,
+    frame: &'a Frame,
+    store: &'a Store,
+    run_ctx: &'a RunContext<'a>,
+    observer: &'a dyn RunObserver,
+    token: &'a CancellationToken,
+    t0: Instant,
+    state: &mut RunState,
+) -> Result<(), VmError> {
+    let mut iteration_count: u32 = 0;
+    let mut last_writes: IndexMap<Value, Slot> = IndexMap::new();
+    let mut prev_writes: Option<IndexMap<Value, Slot>> = None;
+
+    if let Some(m) = meta {
+        store.set_leaf(
+            m,
+            key("progress"),
+            loop_progress(iteration_count, max_iterations, t0.elapsed().as_secs_f64()),
+        );
+    }
+
+    loop {
+        if let Some(cap) = max_iterations {
+            if iteration_count >= cap {
+                break;
+            }
+        }
+
+        let should_continue = if iteration_count < min_iterations {
+            true
+        } else {
+            if token.is_set() {
+                return Err(VmError::Cancelled);
+            }
+            let mut iter_map = IndexMap::new();
+            iter_map.insert(key("index"), Value::from(i64::from(iteration_count) - 1));
+            iter_map.insert(key("count"), Value::from(i64::from(iteration_count)));
+            let mut cond_local = IndexMap::new();
+            cond_local.insert(key("iter"), Slot::Value(Value::Dict(iter_map)));
+            let cond_base: CtxChain = vec![CtxSource::Live(step_overlay(outer_chain, &cond_local))];
+            let cond_chain: CtxChain = if last_writes.is_empty() {
+                cond_base
+            } else {
+                vec![CtxSource::Live(step_overlay(&cond_base, &last_writes))]
+            };
+            let ctx = super::live_ctx(&cond_chain, store);
+            match evaluate_while_condition(cond, &ctx, &op.path, frame, run_ctx, token).await {
+                Ok(b) => b,
+                Err(e) if is_fatal(&e) => return Err(e),
+                Err(e) => match on_error {
+                    OnError::Fail => {
+                        state.termination_reason = "error".to_string();
+                        return Err(e);
+                    }
+                    OnError::Break | OnError::Continue => {
+                        log::warn!(
+                            "Loop {}: while-condition failed ({e}); on_error={}, stopping the loop",
+                            name_or_unnamed_repr(loop_name),
+                            on_error_str(on_error)
+                        );
+                        state.termination_reason = "condition_error".to_string();
+                        if let Some(m) = meta {
+                            store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                        }
+                        break;
+                    }
+                    OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+                },
+            }
+        };
+
+        if !should_continue && iteration_count >= min_iterations {
+            state.termination_reason = "condition_false".to_string();
+            break;
+        }
+
+        if token.is_set() {
+            return Err(VmError::Cancelled);
+        }
+
+        let local = index_overlay(None, None, iteration_count);
+        let prev_arg = if is_named {
+            prev_writes.as_ref().map(|p| (loop_name.expect("named"), p))
+        } else {
+            None
+        };
+        let pass_chain = build_pass_chain(outer_chain, &local, prev_arg);
+        let pass_write_node: NodeRef = if is_named {
+            store
+                .ensure_dict(write_parent, key(&format!("iter_{iteration_count}")))
+                .map_err(store_err)?
+        } else {
+            write_parent.clone()
+        };
+        let pass_frame = match loop_id {
+            Some(id) => frame.with_pass(id, iteration_count),
+            None => frame.clone(),
+        };
+
+        match execute_body(
+            body_ops,
+            store,
+            &pass_write_node,
+            &pass_chain,
+            baseline,
+            own_names,
+            &pass_frame,
+            run_ctx,
+            observer,
+            token,
+        )
+        .await
+        {
+            Ok((record, writes)) => {
+                state.iterations_effects.push(record);
+                state.last_completed = Some(iteration_count);
+                state.completed_indices.push(iteration_count);
+                iteration_count += 1;
+                prev_writes = Some(writes.clone());
+                last_writes = writes;
+                if let Some(m) = meta {
+                    store.set_leaf(
+                        m,
+                        key("progress"),
+                        loop_progress(iteration_count, max_iterations, t0.elapsed().as_secs_f64()),
+                    );
+                }
+                observer.write();
+            }
+            Err(e) if is_fatal(&e) => return Err(e),
+            Err(e) => {
+                state.failed_passes.push(iteration_count);
+                if let Some(m) = meta {
+                    store.set_leaf(
+                        m,
+                        key("progress"),
+                        loop_progress(
+                            iteration_count + 1,
+                            max_iterations,
+                            t0.elapsed().as_secs_f64(),
+                        ),
+                    );
+                }
+                observer.write();
+                match on_error {
+                    OnError::Fail => {
+                        state.termination_reason = "error".to_string();
+                        return Err(e);
+                    }
+                    OnError::Break => {
+                        state.termination_reason = "error".to_string();
+                        break;
+                    }
+                    OnError::Continue => {
+                        iteration_count += 1;
+                    }
+                    OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+                }
+            }
+        }
+    }
+
+    if state.termination_reason == "max_iterations_reached" {
+        log::warn!(
+            "Loop {}: stopped after {iteration_count} iterations because max_iterations ({}) \
+             was reached, not because the while-condition became false",
+            name_or_unnamed_repr(loop_name),
+            max_iterations.unwrap_or(0)
+        );
+    }
+    state.iteration_count = iteration_count;
+    Ok(())
+}
+
+/// Renders *template*/evaluates *expr* and reports the boolean verdict
+/// -- `Condition::Cel` is the only variant any real run reaches in this
+/// build (see this file's own module doc comment); `Condition::Model`
+/// is wired to lane G2's own stub so its PR only has to fill that stub's
+/// body.
+async fn evaluate_while_condition(
+    cond: &Condition,
+    ctx: &Value,
+    path: &electricity_bytecode::EffectPath,
+    frame: &Frame,
+    run_ctx: &RunContext<'_>,
+    token: &CancellationToken,
+) -> Result<bool, VmError> {
+    match cond {
+        Condition::Cel { expr, strict } => electricity_cel::evaluate_condition(expr, ctx, *strict)
+            .map_err(|e| VmError::Message(e.to_string())),
+        Condition::Model { template } => super::condition_model::evaluate_model_condition(
+            template, ctx, path, frame, run_ctx, token,
+        )
+        .await
+        .map(|outcome| outcome.passed),
+    }
+}
+
+/// `core/loop.py::LoopRuntime._collect_values` -- reads only
+/// *completed_indices* (this call's own record of which passes
+/// finished), never by scanning *node* for stale `iter_<N>` keys left
+/// over from an earlier run on a reused node.
+fn collect_values(
+    store: &Store,
+    node: &NodeRef,
+    collect_key: &str,
+    completed_indices: &[u32],
+) -> Vec<Value> {
+    let mut out = Vec::with_capacity(completed_indices.len());
+    for &i in completed_indices {
+        let Ok(Some(iter_node)) = store.child(node, &key(&format!("iter_{i}"))) else {
+            continue;
+        };
+        let Ok(Some(effect_node)) = store.child(&iter_node, &key(collect_key)) else {
+            continue;
+        };
+        let value = match store.snapshot(&effect_node) {
+            Value::Dict(ref map) => map.get(&key("value")).cloned().unwrap_or(Value::None),
+            _ => Value::None,
+        };
+        out.push(value);
+    }
+    out
+}
+
+/// `core/loop.py::LoopRuntime._link_last` -- `last` aliases the final
+/// *completed* pass's own `iter_<N>` node, with no copy; absent
+/// entirely when no pass ever completed.
+fn link_last(store: &Store, node: &NodeRef, last_completed: Option<u32>) {
+    if let Some(idx) = last_completed {
+        let target = key(&format!("iter_{idx}"));
+        let _ = store.alias(node, key("last"), &target);
+    }
 }
 
 /// `core/loop.py::_loop_progress` -- `meta.progress`'s own
-/// `{done, total, elapsed_s, eta_s}` shape, recomputed after every
-/// pass. Pass-through stub: no caller in this build ever records a
-/// pass yet, so there is nothing real to report.
-pub fn loop_progress(_done: u32, _total: Option<u32>, _elapsed_s: f64) -> Value {
-    Value::None
+/// `{done, total, elapsed_s, eta_s}` shape, recomputed after every pass
+/// (failed ones included).
+pub fn loop_progress(done: u32, total: Option<u32>, elapsed_s: f64) -> Value {
+    let eta = match total {
+        Some(t) if done > 0 => {
+            let remaining = t.saturating_sub(done);
+            Some((elapsed_s / f64::from(done)) * f64::from(remaining))
+        }
+        _ => None,
+    };
+    let mut m = IndexMap::new();
+    m.insert(key("done"), Value::from(i64::from(done)));
+    m.insert(
+        key("total"),
+        match total {
+            Some(t) => Value::from(i64::from(t)),
+            None => Value::None,
+        },
+    );
+    m.insert(key("elapsed_s"), Value::Float(elapsed_s));
+    m.insert(
+        key("eta_s"),
+        match eta {
+            Some(e) => Value::Float(e),
+            None => Value::None,
+        },
+    );
+    Value::Dict(m)
 }

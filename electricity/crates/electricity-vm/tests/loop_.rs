@@ -1,0 +1,877 @@
+//! Lane H (#461): `loop` effect tests -- each/while, chain/tree, named/
+//! unnamed, `collect`/`prev`/`last`, `meta.progress`, `on_error`, and
+//! the `LoopBoundsError`/collection-resolution error texts. See
+//! `tests/support/mod.rs` for the shared `json`-tool-backed builders
+//! this file reuses.
+
+mod support;
+
+use electricity_bytecode::{
+    Condition, EffectPath, Escape, ExpectCondition, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind,
+    OnError, Op, ParamNode, Region, RetryPolicy, TemplateText, ToolOp,
+};
+use electricity_value::Value;
+use electricity_vm::observer::InstanceId;
+use electricity_vm::{CancellationToken, Limiter, RunObserver, Store, VmError};
+use indexmap::IndexMap;
+use support::{json_registry, run_ctx};
+
+fn root_path() -> EffectPath {
+    EffectPath::root()
+}
+
+fn k(s: &str) -> Value {
+    Value::Str(s.to_string())
+}
+
+fn get<'a>(dict: &'a IndexMap<Value, Value>, key: &str) -> Option<&'a Value> {
+    dict.get(&k(key))
+}
+
+fn as_dict(value: &Value) -> &IndexMap<Value, Value> {
+    match value {
+        Value::Dict(d) => d,
+        other => panic!("expected a dict, got {other:?}"),
+    }
+}
+
+fn as_list(value: &Value) -> &Vec<Value> {
+    match value {
+        Value::List(l) => l,
+        other => panic!("expected a list, got {other:?}"),
+    }
+}
+
+fn as_str(value: &Value) -> &str {
+    match value {
+        Value::Str(s) => s,
+        other => panic!("expected a str, got {other:?}"),
+    }
+}
+
+/// A `json` tool leaf, `mode: stringify`, whose own `input:` is a
+/// `{from: path, default: ...}` reference -- lets a test prove what a
+/// body step can actually see in its own rendering context (an earlier
+/// sibling's write, `prime.<loop>.prev`, the loop's own `item`/`iter`
+/// binding) by checking the stringified JSON this tool's own `value`
+/// ends up holding.
+fn stringify_from(path: EffectPath, name: &str, from: &str, default: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        k("mode"),
+        ParamNode::Literal(Value::Str("stringify".to_string())),
+    );
+    params.insert(
+        k("input"),
+        ParamNode::From {
+            path: from.to_string(),
+            default: Some(Value::Str(default.to_string())),
+        },
+    );
+    tool_op(path, name, params, None, RetryPolicy::default())
+}
+
+/// A `json` tool leaf, `mode: parse`, templating `{{item}}` as its own
+/// `input:` and gated by *expect* -- fails deterministically for every
+/// item *expect* rejects.
+fn parse_item_gated(path: EffectPath, name: &str, expect_expr: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        k("mode"),
+        ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        k("input"),
+        ParamNode::Template(TemplateText::new("{{item}}", false, Escape::None)),
+    );
+    tool_op(
+        path,
+        name,
+        params,
+        Some(ExpectCondition::Cel {
+            expr: expect_expr.to_string(),
+        }),
+        RetryPolicy::default(),
+    )
+}
+
+/// A `json` tool leaf, `mode: parse`, with a fixed malformed `input:` --
+/// always fails.
+fn failing_tool(path: EffectPath, name: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        k("mode"),
+        ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        k("input"),
+        ParamNode::Literal(Value::Str("not json".to_string())),
+    );
+    tool_op(path, name, params, None, RetryPolicy::default())
+}
+
+fn tool_op(
+    path: EffectPath,
+    name: &str,
+    params: IndexMap<Value, ParamNode>,
+    expect: Option<ExpectCondition>,
+    retries: RetryPolicy,
+) -> Op {
+    Op {
+        path,
+        name: Some(name.to_string()),
+        kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+            provider: "json".to_string(),
+            params: ParamNode::Map(params),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries,
+            expect,
+            description: None,
+            group: None,
+        }))),
+        on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn loop_op(
+    path: EffectPath,
+    name: Option<&str>,
+    spec: LoopSpec,
+    flow: LoopFlow,
+    max_concurrency: Option<u32>,
+    max_iterations: Option<u32>,
+    min_iterations: u32,
+    on_error: OnError,
+    collect: Option<&str>,
+    body: Vec<Op>,
+) -> Op {
+    Op {
+        path,
+        name: name.map(str::to_string),
+        kind: NodeKind::Control(Region::Loop {
+            name: name.map(str::to_string),
+            spec,
+            body: Box::new(Region::Block {
+                ops: body,
+                overlay: true,
+            }),
+            flow,
+            max_concurrency,
+            max_iterations,
+            min_iterations,
+            collect: collect.map(str::to_string),
+        }),
+        on_error,
+        labels: None,
+        enabled: true,
+    }
+}
+
+fn each_spec(in_path: &str, as_name: &str, truncate: bool) -> LoopSpec {
+    LoopSpec::Each {
+        in_path: in_path.to_string(),
+        as_name: as_name.to_string(),
+        truncate,
+    }
+}
+
+fn cel_while(expr: &str) -> LoopSpec {
+    LoopSpec::While(Condition::Cel {
+        expr: expr.to_string(),
+        strict: false,
+    })
+}
+
+fn seed_items(store: &Store, items: Vec<Value>) {
+    store.set_leaf(&store.root, k("items"), Value::List(items));
+}
+
+#[derive(Default)]
+struct DispatchObserver {
+    dispatches: std::cell::RefCell<Vec<(usize, usize)>>,
+}
+
+impl RunObserver for DispatchObserver {
+    fn dispatch(
+        &self,
+        _path: &electricity_bytecode::EffectPath,
+        branches: usize,
+        concurrency: usize,
+    ) {
+        self.dispatches.borrow_mut().push((branches, concurrency));
+    }
+    fn effect_start(&self, _path: &electricity_bytecode::EffectPath) -> InstanceId {
+        0
+    }
+}
+
+async fn run_with_observer(
+    root: Op,
+    store: &Store,
+    observer: &dyn RunObserver,
+) -> Result<(), VmError> {
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    electricity_vm::execute_root(
+        &support::program(root),
+        store,
+        &Value::None,
+        &ctx,
+        observer,
+        &token,
+    )
+    .await
+}
+
+async fn run(root: Op, store: &Store) -> Result<(), VmError> {
+    run_with_observer(root, store, &electricity_vm::NullObserver).await
+}
+
+fn prime(store: &Store) -> IndexMap<Value, Value> {
+    let snapshot = store.snapshot(&store.root);
+    let root = as_dict(&snapshot);
+    as_dict(get(root, "prime").unwrap()).clone()
+}
+
+fn single(op: Op) -> Op {
+    support::chain_dynamic(root_path(), "prime", OnError::Fail, vec![op])
+}
+
+// ---------------------------------------------------------------------
+// Named chain each
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn named_chain_each_writes_iter_nodes_meta_and_last() {
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![
+            Value::from(10_i64),
+            Value::from(20_i64),
+            Value::from(30_i64),
+        ],
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("describe"),
+        "describe",
+        "item",
+        "MISSING",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    assert_eq!(get(meta, "mode"), Some(&Value::Str("each".to_string())));
+    assert_eq!(
+        get(meta, "each_in_path"),
+        Some(&Value::Str("items".to_string()))
+    );
+    assert_eq!(get(meta, "each_as"), Some(&Value::Str("item".to_string())));
+    assert_eq!(get(meta, "error"), Some(&Value::None));
+    let completed = as_list(get(meta, "completed_passes").unwrap());
+    assert_eq!(
+        completed,
+        &vec![Value::from(0_i64), Value::from(1_i64), Value::from(2_i64)]
+    );
+    assert!(get(meta, "failed_passes").is_none());
+
+    let progress = as_dict(get(meta, "progress").unwrap());
+    assert_eq!(get(progress, "done"), Some(&Value::from(3_i64)));
+    assert_eq!(get(progress, "total"), Some(&Value::from(3_i64)));
+
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(3_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("collection_exhausted".to_string()))
+    );
+    let effects_by_iteration = as_list(get(value, "effects_by_iteration").unwrap());
+    assert_eq!(effects_by_iteration.len(), 3);
+
+    for (idx, expected) in [(0, "10"), (1, "20"), (2, "30")] {
+        let iter_node = as_dict(get(shots, &format!("iter_{idx}")).unwrap());
+        let describe = as_dict(get(iter_node, "describe").unwrap());
+        assert_eq!(
+            get(describe, "value"),
+            Some(&Value::Str(expected.to_string()))
+        );
+    }
+
+    // `last` aliases `iter_2` (the final completed pass).
+    let last = as_dict(get(shots, "last").unwrap());
+    let last_describe = as_dict(get(last, "describe").unwrap());
+    assert_eq!(
+        get(last_describe, "value"),
+        Some(&Value::Str("30".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn named_chain_each_on_error_continue_skips_a_failed_pass_in_collect() {
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![Value::from(1_i64), Value::from(2_i64), Value::from(3_i64)],
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![
+        stringify_from(body_prefix.push_name("step"), "step", "item", "0"),
+        // Only `item == 2` ever satisfies this `expect:` -- passes 0
+        // and 2 fail here, after `step` already wrote its own value.
+        parse_item_gated(body_prefix.push_name("gate"), "gate", "value == 2"),
+    ];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Continue,
+        Some("step"),
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let completed = as_list(get(meta, "completed_passes").unwrap());
+    assert_eq!(completed, &vec![Value::from(1_i64)]);
+    let failed = as_list(get(meta, "failed_passes").unwrap());
+    assert_eq!(failed, &vec![Value::from(0_i64), Value::from(2_i64)]);
+
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(1_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("collection_exhausted".to_string()))
+    );
+
+    let collected = as_dict(get(shots, "collected").unwrap());
+    let values = as_list(get(collected, "value").unwrap());
+    assert_eq!(values, &vec![Value::Str("2".to_string())]);
+}
+
+#[tokio::test]
+async fn named_chain_each_truncate_records_unvisited() {
+    let store = Store::new();
+    seed_items(&store, (1..=5).map(Value::from).collect());
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", true),
+        LoopFlow::Chain,
+        None,
+        Some(2),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("max_iterations_reached".to_string()))
+    );
+    assert_eq!(get(termination, "unvisited"), Some(&Value::from(3_i64)));
+    assert!(get(shots, "iter_2").is_none());
+}
+
+#[tokio::test]
+async fn each_loop_bounds_error_without_truncate_fails_under_on_error_fail() {
+    let store = Store::new();
+    seed_items(&store, (1..=3).map(Value::from).collect());
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        Some(1),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    let err = run(single(loop_op_), &store).await.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("collection has 3 items but max_iterations is 1"),
+        "unexpected error text: {text}"
+    );
+    assert!(
+        text.contains("each.truncate: true"),
+        "unexpected error text: {text}"
+    );
+}
+
+#[tokio::test]
+async fn each_loop_bounds_error_under_on_error_break_records_but_does_not_raise() {
+    let store = Store::new();
+    seed_items(&store, (1..=3).map(Value::from).collect());
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        Some(1),
+        0,
+        OnError::Break,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let error_text = as_str(get(meta, "error").unwrap());
+    assert!(error_text.contains("collection has 3 items but max_iterations is 1"));
+
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(0_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("error".to_string()))
+    );
+    assert!(as_str(get(termination, "detail").unwrap()).contains("max_iterations is 1"));
+    assert!(get(shots, "iter_0").is_none());
+}
+
+#[tokio::test]
+async fn an_unresolved_collection_runs_zero_passes_and_records_each_in_error() {
+    let store = Store::new();
+    // Nothing seeded at `missing` at all.
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("missing", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let each_in_error = as_str(get(meta, "each_in_error").unwrap());
+    assert_eq!(
+        each_in_error,
+        "path 'missing' resolved to None at segment 'missing'"
+    );
+    assert!(
+        get(meta, "progress").is_none(),
+        "no progress is written for an unresolved collection"
+    );
+
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(0_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("collection_unresolved".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn unnamed_chain_each_writes_directly_into_the_enclosing_node_each_pass() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let own_path = root_path();
+    let body = vec![stringify_from(own_path.push_name("x"), "x", "item", "0")];
+    let loop_op_ = loop_op(
+        own_path,
+        None,
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    assert!(get(&pr, "shots").is_none());
+    assert!(get(&pr, "iter_0").is_none());
+    let x = as_dict(get(&pr, "x").unwrap());
+    // Each pass overwrites the same `x` node -- only the last item's
+    // write survives.
+    assert_eq!(get(x, "value"), Some(&Value::Str("2".to_string())));
+}
+
+// ---------------------------------------------------------------------
+// while (CEL only)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn named_while_runs_until_the_condition_is_false() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("counter");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("counter"),
+        cel_while("state.iter.count < 3"),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let counter = as_dict(get(&pr, "counter").unwrap());
+    let meta = as_dict(get(counter, "meta").unwrap());
+    assert_eq!(get(meta, "mode"), Some(&Value::Str("cel".to_string())));
+    let value = as_dict(get(counter, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(3_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("condition_false".to_string()))
+    );
+    let progress = as_dict(get(meta, "progress").unwrap());
+    assert_eq!(get(progress, "total"), Some(&Value::None));
+}
+
+#[tokio::test]
+async fn named_while_hitting_max_iterations_is_distinct_from_condition_false() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("counter");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("counter"),
+        cel_while("true"),
+        LoopFlow::Chain,
+        None,
+        Some(2),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let counter = as_dict(get(&pr, "counter").unwrap());
+    let value = as_dict(get(counter, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("max_iterations_reached".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn named_while_min_iterations_runs_without_consulting_the_condition() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("counter");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    // A condition that is always false -- forced to run twice anyway
+    // by `min_iterations`, then stops the moment it's actually
+    // consulted.
+    let loop_op_ = loop_op(
+        own_path,
+        Some("counter"),
+        cel_while("false"),
+        LoopFlow::Chain,
+        None,
+        None,
+        2,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let counter = as_dict(get(&pr, "counter").unwrap());
+    let value = as_dict(get(counter, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("condition_false".to_string()))
+    );
+}
+
+// ---------------------------------------------------------------------
+// tree each
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn named_tree_each_dispatches_once_and_merges_every_pass_in_order() {
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![
+            Value::from(1_i64),
+            Value::from(2_i64),
+            Value::from(3_i64),
+            Value::from(4_i64),
+        ],
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Tree,
+        Some(2),
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    let observer = DispatchObserver::default();
+    run_with_observer(single(loop_op_), &store, &observer)
+        .await
+        .unwrap();
+
+    assert_eq!(observer.dispatches.borrow().as_slice(), &[(4, 2)]);
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    for (idx, expected) in [(0, "1"), (1, "2"), (2, "3"), (3, "4")] {
+        let iter_node = as_dict(get(shots, &format!("iter_{idx}")).unwrap());
+        let step = as_dict(get(iter_node, "step").unwrap());
+        assert_eq!(get(step, "value"), Some(&Value::Str(expected.to_string())));
+    }
+    // `last_completed` is the highest successful index, not the one
+    // that happened to finish last in completion order.
+    let last = as_dict(get(shots, "last").unwrap());
+    let last_step = as_dict(get(last, "step").unwrap());
+    assert_eq!(get(last_step, "value"), Some(&Value::Str("4".to_string())));
+
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let completed = as_list(get(meta, "completed_passes").unwrap());
+    assert_eq!(
+        completed,
+        &vec![
+            Value::from(0_i64),
+            Value::from(1_i64),
+            Value::from(2_i64),
+            Value::from(3_i64)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn named_tree_each_on_error_fail_reports_the_lowest_failing_index() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![failing_tool(body_prefix.push_name("step"), "step")];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Tree,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    let err = run(single(loop_op_), &store).await.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("loop 'shots' iteration [0]:"),
+        "unexpected error text: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// prev
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn prev_is_absent_before_the_first_completed_pass_and_present_after() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![
+        stringify_from(body_prefix.push_name("echo"), "echo", "item", "0"),
+        stringify_from(
+            body_prefix.push_name("check_prev"),
+            "check_prev",
+            "prime.shots.prev.echo.value",
+            "ABSENT",
+        ),
+    ];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+
+    let iter0 = as_dict(get(shots, "iter_0").unwrap());
+    let check0 = as_dict(get(iter0, "check_prev").unwrap());
+    assert_eq!(
+        get(check0, "value"),
+        Some(&Value::Str("\"ABSENT\"".to_string()))
+    );
+
+    let iter1 = as_dict(get(shots, "iter_1").unwrap());
+    let check1 = as_dict(get(iter1, "check_prev").unwrap());
+    // Pass 1's own `prev` sees pass 0's `echo.value` ("1", stringified
+    // again by `check_prev` itself into `"\"1\""`).
+    assert_eq!(get(check1, "value"), Some(&Value::Str("\"1\"".to_string())));
+}
