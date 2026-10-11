@@ -214,6 +214,22 @@ impl Store {
         Ok(())
     }
 
+    /// *parent*'s own [`Slot`] at *key*, cloned, with no promotion and
+    /// no descent -- unlike [`Store::child`], a plain leaf
+    /// [`Slot::Value`] (even a `Value::Dict` one nobody has ever called
+    /// [`Store::ensure_dict`]/[`Store::child`] on) comes back exactly as
+    /// it is, not coerced into a tracked [`Slot::Node`]. This is the one
+    /// primitive a dotted-path walk against the *live* tree (issue #463:
+    /// a template/CEL render that resolves each segment itself, rather
+    /// than paying for a whole-subtree [`Store::snapshot`] up front)
+    /// needs at each segment: O(1), and a clone of at most one child --
+    /// an `Rc` bump for a [`Slot::Node`], or whatever that one leaf's own
+    /// size is for a [`Slot::Value`], never anything *else* under
+    /// *parent*.
+    pub fn peek(&self, parent: &NodeRef, key: &Value) -> Option<Slot> {
+        parent.borrow().get(key).cloned()
+    }
+
     /// An owned [`Value`] snapshot of *node* -- recursively resolving
     /// every [`Slot::Node`] child in place of the live node it names, so
     /// the result reflects every live write regardless of how deep it
@@ -457,6 +473,37 @@ mod tests {
         let store = Store::new();
         set(&store.root, key("count"), Value::Int(5.into()));
         assert!(store.child(&store.root, &key("count")).unwrap().is_none());
+    }
+
+    #[test]
+    fn peek_reports_none_for_a_missing_key() {
+        let store = Store::new();
+        assert!(store.peek(&store.root, &key("missing")).is_none());
+    }
+
+    #[test]
+    fn peek_reports_a_leaf_without_promoting_it() {
+        let store = Store::new();
+        let mut seed = IndexMap::new();
+        seed.insert(key("a"), Value::Int(1.into()));
+        set(&store.root, key("cfg"), Value::Dict(seed.clone()));
+        match store.peek(&store.root, &key("cfg")) {
+            Some(Slot::Value(Value::Dict(ref d))) => assert_eq!(*d, seed),
+            other => panic!("expected the plain dict leaf, unpromoted, got {other:?}"),
+        }
+        // Still a plain leaf, not promoted into a tracked node -- unlike
+        // `child`, `peek` never mutates what it reads.
+        assert!(!is_node(&store.root, &key("cfg")));
+    }
+
+    #[test]
+    fn peek_reports_a_tracked_node_as_a_slotnode() {
+        let store = Store::new();
+        let shots = store.ensure_dict(&store.root, key("shots")).unwrap();
+        match store.peek(&store.root, &key("shots")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(&n, &shots)),
+            other => panic!("expected the tracked node, got {other:?}"),
+        }
     }
 
     #[test]

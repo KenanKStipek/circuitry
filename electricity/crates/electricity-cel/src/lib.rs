@@ -587,6 +587,50 @@ pub fn state_paths(expr: &str) -> Result<Vec<String>, CelError> {
         .collect())
 }
 
+/// Every `state.`-rooted path *expr* reads (raw, `state.`-prefixed,
+/// [`state_paths`]'s own shape, guarded or not -- [`evaluate_condition`]'s
+/// own `project` call narrows by this same, unfiltered list, not just
+/// the unguarded subset [`paths::first_unresolved`] checks), plus
+/// whether *expr* also reads `state` as a whole value -- everything a
+/// caller needs to narrow a `state` it hasn't built yet down to only
+/// what this expression could ever use, the same decision
+/// [`evaluate_condition`]'s own `project`/`reads_whole_state` branch
+/// makes internally, but available *before* a caller ever materializes
+/// a `state` to narrow (issue #463: a caller that already has to build
+/// `state` from a live, mutable store rather than from an existing
+/// `Value` can use this to build only the narrowed form directly,
+/// never the whole thing). [`state_paths`] returns less (both the
+/// guarded flag and `reads_whole_state` are dropped) and exists for a
+/// different caller (`core/state_ns.py`'s own grammar check).
+///
+/// # Errors
+///
+/// Same as [`state_paths`].
+pub fn condition_paths(expr: &str) -> Result<ConditionPaths, CelError> {
+    check_nesting_depth(expr)?;
+    let env = stdlib_env();
+    let program = compile(&env, expr)?;
+    let collected = paths::collect_state_paths(program.expression());
+    Ok(ConditionPaths {
+        paths: collected.paths.into_iter().map(|p| p.path).collect(),
+        reads_whole_state: collected.reads_whole_state,
+    })
+}
+
+/// [`condition_paths`]'s own result.
+#[derive(Debug, Clone, Default)]
+pub struct ConditionPaths {
+    /// Every `state.`-rooted path *expr* reads, raw and unfiltered (see
+    /// [`condition_paths`]'s own doc comment for why this keeps a
+    /// `has()`-guarded path too).
+    pub paths: Vec<String>,
+    /// Whether *expr* also reads `state` as a whole value
+    /// (`size(state)`, say) -- when `true`, no projection could narrow
+    /// what the expression might read, so a caller must build the
+    /// whole `state` instead of projecting by `paths`.
+    pub reads_whole_state: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -870,6 +914,28 @@ mod tests {
     #[test]
     fn state_paths_errors_on_a_malformed_expression() {
         assert!(state_paths("state.a ==").is_err());
+    }
+
+    #[test]
+    fn condition_paths_collects_has_guarded_and_plain_reads_too() {
+        let collected = condition_paths("has(state.input.n) && state.prime.x.value == 1").unwrap();
+        assert_eq!(
+            collected.paths,
+            vec!["state.input.n", "state.prime.x.value"]
+        );
+        assert!(!collected.reads_whole_state);
+    }
+
+    #[test]
+    fn condition_paths_reports_a_whole_state_read() {
+        let collected = condition_paths("size(state) == 2").unwrap();
+        assert!(collected.paths.is_empty());
+        assert!(collected.reads_whole_state);
+    }
+
+    #[test]
+    fn condition_paths_errors_on_a_malformed_expression() {
+        assert!(condition_paths("state.a ==").is_err());
     }
 
     #[test]

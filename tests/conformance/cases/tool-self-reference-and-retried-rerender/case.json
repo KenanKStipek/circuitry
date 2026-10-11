@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'tool-retries'/'tool-expect'",
+  "description": "Issue #463 (PR #482 review finding 1): a tool's own params render and `expect:` read the *live* store at the moment they run, not a snapshot taken before the attempt started. `{{prime.t.meta.provider}}`/`{{prime.t.value}}` resolve against this same attempt's own just-written `meta`/`value` (matching `core/tool.py`'s own live `ctx` reference), and `expect`'s `state.prime.t.value` sees the value this very attempt just wrote. The first attempt's `expect:` fails (`size(value)` is too small, since `prime.t.value` was still `None` when it rendered its own self-reference), forcing one retry; the second attempt re-renders and its own `input` embeds the *first* attempt's own leftover JSON-encoded value (`meta.params_rendered.input`), proving a retry re-render sees the previous attempt's own write, not a stale pre-run copy. `meta.retries_used: 1` confirms exactly one retry ran.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
