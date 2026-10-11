@@ -85,11 +85,20 @@ def _hexbits(x: float) -> str:
 
 
 def _random_ordinary_floats(rng: random.Random, count: int) -> list[float]:
+    # Built through a decimal string and `float()`, not `mantissa *
+    # (10**exponent)`: a fractional-exponent `10**exponent` calls the
+    # platform's own `pow()`, which isn't required to be correctly
+    # rounded and does disagree in the last bit between libm
+    # implementations (seen: macOS vs. glibc) -- this corpus is
+    # committed and checked on every platform a contributor or CI runs
+    # it from, so it has to be bit-for-bit reproducible everywhere.
+    # `float(str)` is specified to be correctly rounded by the language
+    # itself, not by whatever `libm` the host happens to ship.
     values = []
     for _ in range(count):
-        exponent = rng.uniform(-20, 20)
+        exponent = rng.randint(-20, 20)
         mantissa = rng.uniform(-1.0, 1.0)
-        values.append(mantissa * (10**exponent))
+        values.append(float(f"{mantissa!r}e{exponent}"))
     return values
 
 
