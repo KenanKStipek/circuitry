@@ -26,6 +26,11 @@
 //!   [`allowlist::capability_allow`]: the `enabled_adapters`/
 //!   `enabled_tools`/`enabled_plugins` allowlist seam issue #431's lane
 //!   table left this lane to shape ([`allowlist`] module docs).
+//! - [`dotenv`]: `python-dotenv`'s own `dotenv_values` parsing and
+//!   `${VAR}` interpolation (issue #468) -- the pure parser only;
+//!   `electricity-cli` owns the path resolution, ownership/mode checks
+//!   and precedence that port `cli/config.py::load_user_env` around it
+//!   ([`dotenv`] module docs).
 //!
 //! [mod]: crate::effective_settings
 
@@ -33,6 +38,7 @@ mod allowlist;
 mod capability_gate;
 mod complexity;
 mod config;
+pub mod dotenv;
 mod effective_settings;
 mod merge;
 mod persistence;

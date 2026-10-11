@@ -413,6 +413,7 @@ name = "electricity-cli"
 version = "0.1.0"
 dependencies = [
  "electricity",
+ "electricity-config",
  "libc",
  "log",
  "serde",

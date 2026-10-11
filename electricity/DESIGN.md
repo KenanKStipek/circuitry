@@ -2104,6 +2104,26 @@ Explicit config file only — no discovery, no `cof trust` (Decisions, §1). Bot
 and the orchestration file are operator-chosen and therefore trusted; electricity never
 evaluates any notion of document trust at run time.
 
+**The user's private `.env`** (issue #468). Before resolving the config file, the `electricity`
+binary's own startup ports `cli/config.py::load_user_env`: it loads the private `.env` file
+`cof setup` writes next to the global config (`~/.config/circuitry/.env`) into the process
+environment — the one file every `cof` entry point already loads this way, so a provider API key
+or other variable it holds reaches an `electricity` run exactly as it would a `cof run` of the
+same document. A variable already set in the real environment always wins; a file not owned by
+the current user, or writable by group or others, is refused (one `WARNING:` naming the `chmod
+600` fix); a merely group/world-*readable* file still loads, with a softer warning; an unreadable
+or undecodable file is skipped, with a warning; a directory there parses as empty, the same as
+the reference's own `_is_file_or_fifo` check. Parsing matches `python-dotenv`'s own
+`dotenv_values` exactly (quoting, escapes, `export `, comments, multi-line values, `${VAR}`
+interpolation, and the reference's own universal-newline translation of `\r\n`/a lone `\r`), and
+a malformed entry (an invalid key or a NUL byte in a value) is skipped by name rather than ever
+reaching `std::env::set_var`, whose own panic message would otherwise put the value on stderr.
+This is a deliberate divergence for now: the reference currently dies at startup with an uncaught
+`ValueError` on such an entry. #473 proposes the same skip-with-a-warning behaviour for `cof`, with one
+warning text both engines print.
+Only the binary's own startup does this — the `electricity` library crate, like
+`circuitry.api`, never loads it; an embedding program owns its own environment.
+
 **Keys that change run behavior** (runtime-semantics §5, condensed):
 
 | Key | Effect |
