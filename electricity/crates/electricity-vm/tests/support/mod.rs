@@ -219,6 +219,7 @@ pub enum Event {
 #[derive(Default)]
 pub struct RecordingObserver {
     events: RefCell<Vec<Event>>,
+    next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
 }
 
 impl RecordingObserver {
@@ -232,13 +233,21 @@ impl RecordingObserver {
 }
 
 impl RunObserver for RecordingObserver {
-    fn effect_start(&self, path: &EffectPath) {
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
         self.events
             .borrow_mut()
             .push(Event::Start(path.to_string()));
+        let instance = self.next_instance.get() + 1;
+        self.next_instance.set(instance);
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        _instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
         self.events
             .borrow_mut()
             .push(Event::Complete(path.to_string(), error.map(str::to_string)));
@@ -268,15 +277,21 @@ pub struct CancelOnStart<'a> {
 }
 
 impl RunObserver for CancelOnStart<'_> {
-    fn effect_start(&self, path: &EffectPath) {
-        self.inner.effect_start(path);
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
+        let instance = self.inner.effect_start(path);
         if path.to_string() == self.target {
             self.token.request(2);
         }
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
-        self.inner.effect_complete(path, error);
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
+        self.inner.effect_complete(path, instance, error);
     }
 
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
@@ -291,6 +306,21 @@ pub fn run_ctx<'a>(
     registry: &'a electricity_tools::ToolRegistry,
     limiter: &'a Limiter,
 ) -> RunContext<'a> {
+    // Leaked: no test in this support module's own callers reads any
+    // of these M1-A fields yet, so a `'static` default is simpler than
+    // threading four more lifetimes through every one of this
+    // function's own callers across the test suite.
+    let adapters: &'a electricity_vm::adapter::AdapterRegistry =
+        Box::leak(Box::new(electricity_vm::adapter::AdapterRegistry::new()));
+    let complexity: &'a electricity_config::ComplexitySettings =
+        Box::leak(Box::new(electricity_config::ComplexitySettings::default()));
+    let use_call_stack: &'a std::cell::RefCell<Vec<String>> =
+        Box::leak(Box::new(std::cell::RefCell::new(Vec::new())));
+    let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
+    let declared_prompts: &'a indexmap::IndexMap<String, String> =
+        Box::leak(Box::new(indexmap::IndexMap::new()));
+    let effect_names: &'a std::collections::BTreeSet<String> =
+        Box::leak(Box::new(std::collections::BTreeSet::new()));
     RunContext {
         registry,
         limiter,
@@ -298,6 +328,18 @@ pub fn run_ctx<'a>(
         adapter: "_noop",
         runtime_config: EMPTY_RUNTIME_CONFIG,
         dry_run: false,
+        armed: false,
+        adapters,
+        default_adapter: std::rc::Rc::new(electricity_vm::adapter::NoopAdapter),
+        model_locked: false,
+        adapter_timeout_seconds: 120,
+        complexity,
+        decomposition_depth: 0,
+        use_call_stack,
+        orchestration_dir: dir.as_path(),
+        declared_prompts,
+        effect_names,
+        display_depth: 0,
     }
 }
 

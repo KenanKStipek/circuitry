@@ -8,8 +8,8 @@
 //! differs (`.github/workflows/electricity-generated.yml`), so this test
 //! only needs to trust the committed file.
 
-use electricity_tools::{ToolPlugin, json::JsonTool};
-use electricity_value::{Dict, Value};
+use electricity_tools::{ToolCall, ToolPlugin, json::JsonTool};
+use electricity_value::{CancellationToken, Dict, Value};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -81,10 +81,18 @@ async fn golden_corpus_json_tool() {
     assert!(!corpus.json_tool_cases.is_empty());
 
     let tool = JsonTool;
+    let token = CancellationToken::new();
+    let none_config = Value::None;
+    let call = ToolCall {
+        timeout_seconds: 30,
+        config: &none_config,
+        token: &token,
+        armed: false,
+    };
     let mut failures = Vec::new();
     for (i, case) in corpus.json_tool_cases.into_iter().enumerate() {
         let params = Value::from(case.params);
-        let result = tool.execute(params.clone(), 30).await;
+        let result = tool.execute(params.clone(), &call).await;
         match (result, case.ok, case.raw, case.err) {
             (Ok(got), Some(ok), Some(raw), None) => {
                 let expected_value = Value::from(ok);
@@ -97,10 +105,10 @@ async fn golden_corpus_json_tool() {
                 }
             }
             (Err(err), None, None, Some(expected)) => {
-                if err.0 != expected {
+                if err.message != expected {
                     failures.push(format!(
                         "case {i} ({params:?}): expected err {expected:?}, got {:?}",
-                        err.0
+                        err.message
                     ));
                 }
             }

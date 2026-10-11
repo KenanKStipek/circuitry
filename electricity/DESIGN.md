@@ -2017,7 +2017,8 @@ infrastructure configured still gets spans visible somewhere.
 The first and third bullets below landed in M0-H (issue #431), not in M3-B where an earlier
 draft of §15 put every bullet in this section: a `--live-state` mirror and a run-totals
 accumulator need no `loop` support, only the store's own write hook, so both ship with the rest
-of M0-H's run wiring. Only **loop progress** (the second bullet) still waits for M1-E, since it
+of M0-H's run wiring. Only **loop progress** (the second bullet) still waits for M1's own loop
+lane (M1-H, #448), since it
 has nothing to report before `loop` exists.
 
 - **Live state**: a `Store::on_write`-driven mirror (not a `RuntimePlugin`), writing the full
@@ -2342,48 +2343,70 @@ features layered on top of a document set that already runs, not gates on any on
 | M0-E | `electricity-cel`: the `cel` crate wrapped in the strict/non-strict layer, the two binding entry points (§7.2). | M0-A |
 | M0-F | `electricity-schema`: Draft7 validation against the synced schema copy, offline, plus the sync script and its CI check. | M0-A |
 | M0-G | `electricity-bytecode` + `electricity-compiler`: IR types, the load-and-check pipeline (§4), compiling a document with no effects that need runtime support yet. | M0-B, M0-C, M0-D, M0-E, M0-F (the compile-time checks in §4 step 4 walk every template and every `mode: cel` expression, so the compiler needs the tokenizer and the CEL parser, not just YAML/JSON/schema) |
-| M0-H **(done)** | `electricity-vm`: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree, run wiring, signals, the CLI and its output contract — runs a document made of `tool` (the real `json` provider, not a fake), `dynamic` (chain and tree), `if` (CEL mode) and `finally:` end to end, with `--out`/`--events`/`--live-state` matching `cof run`'s own byte for byte after the conformance normalizer (issue #431). The live-state mirror and its run-totals accumulator (§10.5's first and third bullets) land here, not in M3-B — only loop progress (§10.5's second bullet, which needs `loop`, M1-E) still does. | M0-G |
+| M0-H **(done)** | `electricity-vm`: frames, the state store (`NodeRef`-based, §6.7), `fire_effect_start`/`complete`, the concurrency limiter, cancellation tree, run wiring, signals, the CLI and its output contract — runs a document made of `tool` (the real `json` provider, not a fake), `dynamic` (chain and tree), `if` (CEL mode) and `finally:` end to end, with `--out`/`--events`/`--live-state` matching `cof run`'s own byte for byte after the conformance normalizer (issue #431). The live-state mirror and its run-totals accumulator (§10.5's first and third bullets) land here, not in M3-B — only loop progress (§10.5's second bullet, which needs `loop`, M1-H) still does. | M0-G |
 | M0-I | The conformance harness itself: running `cof run` from the same checkout to generate expected state, diffing with normalization rules (§12). | — (parallel with all of the above) |
 | M0-J **(gate, Python side)** | The `scripted` fixture adapter and the shared fixture-config format (§12) — a change to Circuitry's Python package in the same repository; blocks any conformance case that needs a scripted model reply, which is most of them. | — (parallel with M0-A..I, but gates M0-I actually producing usable fixtures) |
 
 **Acceptance:** conformance cases C2, C3, C6, C23, C27 pass against a hand-written smoke-test
 document set exercising every M0 crate, plus **the `if` half only of C7** (the `while` half
-needs loop support, which doesn't exist until M1-E — see below). **C2 is exercised through
+needs loop support, which doesn't exist until M1-H — see below). **C2 is exercised through
 electricity's own load-and-check pipeline directly, not through a CLI `--validate-only` flag**,
 since v1 has none (§1, Decisions): the case's YAML-value-type and duplicate-key assertions hold
 regardless, but `runtime.last_run.{dry_run,validate_only,verbose}` are compared loosely for this
 one case, not byte-for-byte, since electricity always writes `false` there (§6.10) while the
 reference's own `validate_only` run writes `true`. **C9 (tree loop), C24 (named loop), and the
 `while` half of C7 move to M1's acceptance** — an earlier draft claimed C9 and C24 here, but loop
-support doesn't exist until M1-E; M0-H covers `tool`/`dynamic`/`if`/`finally:` (a *tree* `dynamic`,
+support doesn't exist until M1-H; M0-H covers `tool`/`dynamic`/`if`/`finally:` (a *tree* `dynamic`,
 unlike a tree *loop*, needs no loop support and is in M0-H's own acceptance — lane E1's
 conformance suite exercises it, issue #431).
 
-### M1 — Run the production tool/adapter set (unlocks the first two document sets)
+### M1 — Core tools, model adapters, prompt/loop/use/reflector, profiles, complexity routing and decomposition (unlocks the first two document sets)
+
+Superseded by issue #448's own lane split (its own planning note carries the full detail; this
+section keeps only the summary and the acceptance criteria, so the two don't drift against each
+other in prose). The gate goes first, exactly as M0-H's own lane A did (#432): it fixes every
+cross-lane signature — the `ToolPlugin`/`Adapter` traits, a per-attempt plugin/adapter builder, a
+shared retry module, `RunContext` v2, per-instance `--events` pairing, exec-module stubs for every
+remaining effect type, and a capability-driven refusal walker (`Supported`, one flag per
+capability) — with a stub body for everything a later lane fills in, never a fake success. Each
+lane then flips its own flag in the refusal walker once its own effect type actually runs: a
+merged lane is usable at once, and an unfinished one stays refused with the preview marker, never
+half-run.
 
 | Lane | Deliverable | Depends on |
 |---|---|---|
-| M1-A | `electricity-tools`: `shell`, `fs`, `json`, `env_vars`, `hash`, `uuid`, `clock`, `regex` (the `fancy-regex`-backed plugin, not the CEL path). | M0 |
-| M1-B | `electricity-tools`: `awk`, `imagemagick`, `ffmpeg` (process-backed, shared `GenericSubprocessTool`-equivalent). | M0 |
-| M1-C | `electricity-tools`: `http` (native client, the four-tier error-excerpt extraction, Retry-After capture). | M0 |
-| M1-D | `electricity-adapters`: the OpenAI-compatible family (one parameterized adapter, covering Ollama) + `anthropic`, shared retry classification (§9.6), **and the `host_claude` registration stub (§9.5)** — folded in here since it's a registry entry producing one error message, not real adapter work. | M0 |
-| M1-E | Full effect-type support in `electricity-vm`: `prompt` (retries, fallback chains, decode/schema-retry-through-fallback-first ordering — Quirk Q10), `loop` (each/while, chain/tree, `collect:`, `prev`), `use` (path + inline, the three output-mapping modes), scope overlays (Quirk Q1, and the nested-named-dynamic re-merge, §6.3) end-to-end. | M0 only — built and tested against the `scripted` adapter and fake tools (M0-I/J), **not** gated on M1-A–D; the real tool/adapter lanes can run in parallel with this one, not after it. |
-| M1-F | `electricity-redaction` fully wired into the real tools/adapters from M1-A–D; the literal-only `allowed_commands` rule at both checkpoints (Quirk Q5). | M1-A, M1-D (needs real tools/adapters to wire into, unlike M1-E) |
-| M1-G | Complexity scoring and routing (§9.7): the scorer, the band table, the precedence chain. | M1-E (needs prompt dispatch to attach `meta.complexity`/`model_reason` to) |
-| M1-H | The reflector effect (sugar over `use: inline`, §5.3) and decomposition (§9.7) — **decoupled from the plugin bridge**, since neither needs `python_eval`; decomposition additionally needs the synced copy of the planner orchestration (§9.7). | M1-E, M1-G |
-| M1-I | Profiles (§6.11): `--profile <path>` loading/schema validation, the model/adapter/out precedence layer, per-effect overrides applied onto the compiled IR, and the `effective_settings.profile` record. | M1-E (per-effect overrides need the compiled IR to apply onto), M1-G (a profile's `routing:` pin needs the resolved band table to validate against) |
+| **A** (gate, #449) | Final signatures with stubs: `ToolPlugin` v2 (cancellation token, `runtime.plugins.<name>` config slice, typed `ToolError`); a per-attempt plugin builder with Python's unknown-plugin text; the process API; the `Adapter` trait and registry (new `electricity-adapters` crate); a shared retry module; `RunContext` v2; per-instance event pairing; exec stubs for every effect type; the capability-driven refusal walker; Python-compatibility helpers (`py_int`, `py_strip`, `round6`); the vm-lanes.md M1 table. | — |
+| **B** (#450) | Conformance infrastructure: scripted replies in cases, a loopback mock HTTP server, fake binaries on `PATH`, normalizer additions, a documented-divergence case kind. | — |
+| **C** | The process runtime (`run_tracked`, process groups, cancellation, text-mode decoding), then `shell`, `awk`, `imagemagick`, `ffmpeg`. | A |
+| **D1** | `fs`, `env_vars`, `hash`, `uuid`, `clock`. | A |
+| **D2** | `regex`: a `fancy-regex` translation layer to Python `re` semantics, plus a differential corpus. | A |
+| **E** | The shared HTTP client, the `http` tool, `execute_tool`'s HTTP-family retry branch. | A |
+| **F1** | The adapter core, the Rust `scripted` adapter, the `host_claude` stub, a leftover-replies export. | A |
+| **F2** | Providers: `ollama`, the OpenAI-compatible family, `anthropic`. | E, F1 |
+| **P** | Run-time prompt composition and `yield`: no-escape rendering, `{{> name}}` expansion (the run-time half of #406). | A |
+| **G** | The `prompt` effect: meta key order, retries, fallback chains, decode/schema retries, assets, `json_schema`. | F1, P |
+| **G2** | Model-mode `if`, `while` and `expect`. | G, H |
+| **H** | `loop`: each/while, chain/tree, `collect`, `prev`, `last`, `meta.progress` (moved up from M3-B: it's part of every named loop's own `--out`, not a separate observability lane) — includes the per-render context-copy fix (#442). | A |
+| **I** | `use`: path and inline, interface checks, the three output modes, cycle detection, child observability. | A |
+| **J1** | Profile loading and validation, as a library with a golden corpus. | A |
+| **J2** | Applying profiles: precedence, per-effect IR overrides, disabled effects. | H, I, K2, R |
+| **K1** | The complexity scorer, as a library with a differential corpus. | A |
+| **K2** | Wiring scoring and routing into prompts. | G, K1 |
+| **L1** | `reflector`. | G, I |
+| **L2** | Decomposition, `validate_yaml`, the synced planner document. | G, I, K2 |
+| **R** | Run wiring v2: preflight, adapter resolution, `--profile`, lifting the refusals. | F1, J1 |
+| **M** | The acceptance run, osp's electricity end-to-end suite, docs, closing #406 plus the #442 items the lanes fixed. | all |
 
-**Acceptance:** conformance cases C1, C4, C5, C9, C10–C22, C24, C25, C26 pass, plus the `while`
-half of C7 (C7's `if` half and C27 already passed in M0; neither retested here), plus
-tools-adapters-plugins §7 cases 1–6, 7 (the `http` half
-only — the `mcp` half of case 7 moves to M2's acceptance, since `mcp` itself is M2-A), 9, 12,
-14, 15, 17 pass against real documents using this tool/adapter set. **Case 13 is dropped from
-this milestone's required-pass list**: it asserts the native `ollama` adapter's own three
-hint strings, which electricity's OpenAI-compatible transport (§9.2) has no code path to
-produce — an accepted, named gap (§13's Ollama parity-risk row), not a target to hit. **C8** runs
-in full, including the half that disables a step via a profile override (§6.11) — reproduced by
-running electricity with an equivalent `--profile <path>` fixture in place of the reference's
-`--profile <name>`, not skipped.
+**Acceptance:** conformance cases C1, C4, C5, the `while` half of C7 (C7's `if` half and C27
+already passed in M0), C8 (in full, including a `--profile <path>` fixture for the reference's
+`--profile <name>` half), C9–C20, C24, C25 (re-run with loops and prompts), C26, and C28–C33
+(closing #406) pass, plus tools-adapters-plugins §7 cases 1–6, 7 (the `http` half only — the
+`mcp` half moves to M2), 9, 12, 14, 15, 17 pass against real documents using this tool/adapter set,
+with case 22 (the blanket redaction check) run as a cross-cutting post-check on every one of
+them. Resume (C21, C22) stays in M2-G, with persistence; M1 still records `completed_passes`.
+Case 13 (the native `ollama` adapter's own three hint strings) stays dropped, for the reason M1's
+earlier draft already gave: electricity's OpenAI-compatible transport (§9.2) has no code path to
+produce them (§13's Ollama parity-risk row).
 
 ### M2 — Extended protocol surface (unlocks the third, larger document set)
 
@@ -2394,7 +2417,7 @@ running electricity with an equivalent `--profile <path>` fixture in place of th
 | M2-C | `electricity-adapters`: the `cyberdiner` adapter (§9.4). | M1 |
 | M2-D | `electricity-plugin-bridge`: the Rust NDJSON JSON-RPC client half, per-plugin-name process lifecycle (§8.5), stdout-redirect enforcement, the host-side hard-kill timer. | M1 |
 | M2-E | **Python-side** change: the bridge server module in Circuitry's Python package (§8.5), a hard dependency of M2-D's conformance cases. | — |
-| M2-F | `python_eval` end-to-end through the bridge (M2-D + M2-E only — no longer bundled with the reflector/decomposition/scoring work, which moved to M1-G/H since it has no real dependency on the bridge). | M2-D, M2-E |
+| M2-F | `python_eval` end-to-end through the bridge (M2-D + M2-E only — no longer bundled with the reflector/decomposition/scoring work, which moved to M1 lanes K1/K2 (complexity/routing) and L1/L2 (reflector/decomposition) since none of it has a real dependency on the bridge). | M2-D, M2-E |
 | M2-G | `electricity-runtime-plugins`: state-snapshot persistence backends (`jsonl-file`, sqlite/postgres via `sqlx`; mongodb deferred, §10.1), `--resume` by run id (§6.8). | M1 |
 | M2-H | `electricity-runtime-plugins`: observability plugins — SQL-family (sqlite/postgres), `surrealdb` (distinct from M2-B's tool plugin, §10.2), `jsonl-file` event stream, the `store_raw` cascade. | M1 |
 
@@ -2408,7 +2431,7 @@ state to `cof run`.
 | Lane | Deliverable | Depends on |
 |---|---|---|
 | M3-A | OpenTelemetry runtime plugin (OTLP/http, console-exporter fallback when unconfigured — §10.4), including the thread/task-identity span disambiguation under unnamed `tree` concurrency. | M1 |
-| M3-B | Loop progress (§10.5's second bullet, `meta.progress`) — needs `loop` (M1-E). The live state mirror and the live-event-stream-based run-totals accumulator (§10.5's first and third bullets) already landed in M0-H, not here. | M1 |
+| M3-B | **Removed** (#448's own decision 4): loop progress (§10.5's second bullet, `meta.progress`) lands with `loop` itself in M1-H, since it's part of every named loop's own `--out`, not a separate observability lane. The live state mirror and the live-event-stream-based run-totals accumulator (§10.5's first and third bullets) already landed in M0-H. | — |
 | M3-C | The public embedding API (`electricity` lib crate): a stable `run_orchestration()`-shaped entry point, caller-supplied tool/adapter sets, `initial_state` for resume without a file stash. | M1 (crate boundary already exists from §2; this lane is the API-stability pass) |
 | M3-D | v1 release hardening: the preview release jobs from M0-0 lose their preview label once M1–M3 pass; `mimalloc` on the musl targets; the container image hardened (scratch/distroless, CA roots); crates.io publishing stays out of v1 (Decisions, §1). | M1 (needs a stable, buildable binary; does not need M2) |
 

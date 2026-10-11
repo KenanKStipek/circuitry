@@ -91,6 +91,6 @@ pub use op::{LeafKind, NodeKind, OnError, Op, python_type_name};
 pub use param::ParamNode;
 pub use path::{EffectPath, LoopId, PathSegment};
 pub use program::{DocumentInfo, Program};
-pub use refusal::{Refusal, RefusalReason, first_unsupported};
+pub use refusal::{Refusal, RefusalReason, Supported, first_unsupported};
 pub use region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
 pub use template::{Escape, TemplateText};

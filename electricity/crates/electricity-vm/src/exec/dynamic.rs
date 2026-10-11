@@ -102,7 +102,7 @@ pub(crate) fn execute_dynamic<'a>(
             .map_err(store_err)?;
         write_dynamic_meta_start(store, &meta_node, run_ctx, flow, op.labels.as_ref());
 
-        observer.effect_start(&op.path);
+        let instance = observer.effect_start(&op.path);
 
         // *ctx_chain* for this dynamic's own children always extends the
         // *inherited* chain with one more live entry for *parent* -- the
@@ -232,7 +232,7 @@ pub(crate) fn execute_dynamic<'a>(
         };
         store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
 
-        observer.effect_complete(&op.path, reported_error.as_deref());
+        observer.effect_complete(&op.path, instance, reported_error.as_deref());
 
         if let Some(be) = body_exc {
             let is_cancellation = matches!(be, VmError::Cancelled);

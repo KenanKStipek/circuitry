@@ -46,6 +46,56 @@ reality: a lane that fills in a stub should update the row(s) it touches in the 
 | `electricity` (lib) | `src/run.rs` | `RunRequest`, `RunResult` | A | Final request/result shapes; lane D's own `run_orchestration` (steps 4-19 of #431's run-wiring table) replaces the current preview-refusal `run_orchestration` in `src/lib.rs`. |
 | `electricity-cli` | `src/main.rs` | argument parsing | A | Final: every flag from #431's usage parses in any position; `--out`/`--pretty`/`--live-state`/`--events` route to the preview-refusal stub lane D replaces with the real output contract. |
 
+## M1 lanes (issue #449)
+
+Lane A (the gate, #449) repeated M0-H lane A's own role for M1 (#448): it widened every
+cross-lane signature below -- the `ToolPlugin`/`Adapter` traits, a per-attempt plugin/adapter
+builder, a shared retry module, `RunContext` v2, per-instance `--events` pairing, exec-module
+stubs for every remaining effect type, and the capability-driven refusal walker
+(`electricity_bytecode::refusal::Supported`) -- with a stub body for everything a later lane
+fills in, following the same "Reading this table" conventions below. `Supported::m0` is the exact
+value M0 ran with (every capability flag `false`); each M1 lane flips its own flag once its own
+effect type actually runs, rather than this table's own "final"/"stub" status changing the
+walker's body again.
+
+| Crate | File | Function/type | Lane | Status after lane A |
+|---|---|---|---|---|
+| `electricity-tools` | `src/lib.rs` | `ToolPlugin` (v2), `ToolCall`, `ToolError`, `PyExc`, `ErrorCause`, `ToolResult::validate` | A | Final and complete. |
+| `electricity-tools` | `src/registry.rs` | `build_plugin`, the generated `plugin_names::PLUGIN_NAMES` (from `plugins/factory.py`, `electricity/scripts/generate_plugin_names.py --check`), the unknown-plugin text | A | Final. `run_tool` (electricity-vm) tries the caller's own `ToolRegistry` first (an embedder's own long-lived instance, or a test double -- every M0 test keeps working unchanged), then falls back to this per-attempt builder for a provider not registered there; each native-tool lane adds its own builder entry here in its own PR. |
+| `electricity-tools` | `src/process.rs` | `run_tracked`, `RunOpts`, `Completed`, `ProcError`, `kill_process_group`, `resolve_binary` | A (stub) -> C | Signature final. |
+| `electricity-tools` | `src/{fs,env_vars,hash,uuid,clock}.rs` | the five plugins | D1 | New. |
+| `electricity-tools` | `src/regex/{mod,translate,replace}.rs` | `RegexPlugin`, the Python-`re` translator | D2 | New. |
+| `electricity-tools` | `src/http.rs` + `src/http_client/` | `HttpPlugin`, `http_error_excerpt`, the client builder, redirect policy, proxy resolver | E | New (the client is shared with F2). |
+| `electricity-tools` | `src/validate_yaml.rs` | `ValidateYamlPlugin` | L2 | New. |
+| `electricity-value` | `src/pycompat.rs` | `py_int`, `is_py_whitespace`/`py_strip`, `round6` | A | Final and complete -- golden-tested against CPython's own `round(x, 6)` (`electricity/scripts/generate_round6_corpus.py --check`). |
+| `electricity-value` | `src/pycompat.rs` | `shlex_split`, `shlex_quote` | A (stub) -> C | Signature final. |
+| `electricity-value` | `src/pycompat.rs` | `urlencode` | A (stub) -> E | Signature final. |
+| `electricity-value` | `src/cancel.rs` | `CancellationToken` | A | Moved here from `electricity-vm` (re-exported unchanged as `electricity_vm::CancellationToken`) so `electricity-tools::ToolCall` can carry a reference to the same token type without a crate dependency cycle (DESIGN.md §2's own direction: tools/adapters depend on vm, not the reverse). |
+| `electricity-vm` | `src/adapter.rs` | `Adapter`, `CallContext`, `GenerateOptions`, `GenerateResult`, `ChatMessage`, `ImageInput`, `AdapterError`, `PyExc`, `CheckResult`, `AdapterRegistry`, `NoopAdapter` | A | Final and complete. |
+| `electricity-vm` | `src/retry.rs` | `RetryInfo`, `status_is_retryable`, `next_backoff_delay_ms`, `parse_retry_after_seconds`, `RETRY_BACKOFF_CAP_MS` | A | Final; moved out of `exec/tool.rs`'s own private copy. |
+| `electricity-vm` | `src/lib.rs` | `RunContext` v2 | A | Final shape: `adapters`, `default_adapter`, `model_locked`, `adapter_timeout_seconds`, `complexity`, `decomposition_depth`, `use_call_stack`, `orchestration_dir`, `declared_prompts`, `effect_names`, `display_depth`, `armed` added to the M0-H fields. |
+| `electricity-vm` | `src/observer.rs` | `RunObserver::{warning, effect_start -> InstanceId, effect_complete(instance, ...)}` | A | Final; every M0-H call site (`exec::dynamic`, `exec::conditional`, `exec::tool`, `electricity`'s own `Observer`) updated to thread the instance id through -- `--events` output stays byte-identical. The stderr line that turns a `warning` call into a printed line is #442's own PR, not this lane's. |
+| `electricity-vm` | `src/exec/tool.rs` | `execute_tool` HTTP-family branch (`status_code`, `binary`, Retry-After, typed retry) | E | Still the M0-H "deliberately unwired" part -- fills in once `ErrorCause::Http` has a real producer. |
+| `electricity-vm` | `src/exec/prompt.rs` | `execute_prompt` | A (stub) -> G | |
+| `electricity-vm` | `src/exec/condition_model.rs` | `evaluate_model_condition`, `evaluate_model_expect` | A (stub) -> G2 | Not yet routed from anywhere (`Condition::Model`/`ExpectCondition::Model` are refused before a real run reaches either call site) -- G2 wires both in when it flips `Supported::model_condition`/`model_expect`. |
+| `electricity-vm` | `src/exec/loop_.rs` | `execute_loop`, `loop_progress` | A (stub) -> H | |
+| `electricity-vm` | `src/exec/use_.rs` | `execute_use`, `run_isolated` (shared with L2) | A (stub) -> I | |
+| `electricity-vm` | `src/exec/yield_.rs` + `src/compose.rs` | `execute_yield`, `render_with_composition` | A (stub) -> P | |
+| `electricity-vm` | `src/exec/disabled.rs` | `write_disabled_node`, `skip_disabled` | A (stub) -> J2 | Not yet routed from anywhere (`Op::enabled` exists on the IR since M0-G but the VM never reads it) -- every M0 test with `enabled: false` on an effect still runs it, unchanged. |
+| `electricity-vm` | `src/exec/reflector.rs` | `execute_reflector` | A (stub) -> L1 | |
+| `electricity-vm` | `src/complexity/` | the scorer, `score_and_route` | K1 (library) -> K2 (wiring) | |
+| `electricity-adapters` | `src/{lib,scripted,host_claude}.rs` | the registry builders, `ScriptedAdapter` | A (stub) -> F1 | New crate; not created yet (lane A left the seam in `electricity-vm::adapter` instead -- the trait and registry are final there, so this crate's own first PR is purely additive). |
+| `electricity-adapters` | `src/{openai_compat,openai,anthropic,curl_text}.rs` | the providers, the `curl_failure_message` equivalent | F2 | |
+| `electricity-bytecode` | `src/refusal.rs` | `first_unsupported`, `Supported` | A | Final and complete -- `Supported::m0` is golden-tested to refuse exactly what M0 refused; every later lane flips one field of its own. |
+| `electricity-bytecode` | `src/path_index.rs` | the profile effect-path index (`_collect_effect_paths` port) | A (stub) -> J2 | Not created yet. |
+| `electricity-compiler` | `src/overrides.rs` | `apply_effect_overrides(&mut Program, ...)` | A (stub) -> J2 | Not created yet. |
+| `electricity-config` | `src/profile.rs` | `load_profile`, `ProfileSettings`, the validators | J1 | Not created yet. |
+| `electricity-config` | `src/preflight.rs` | `preflight`, `classify_preflight_results`, the formatters | R | Not created yet. |
+| `electricity-yaml` | `src/lib.rs` | `load_plain` (no duplicate-key check, for profiles) | J1 | Additive. |
+| `electricity-template` | `src/lib.rs` | the no-escape render mode | P | Additive (#406). |
+| `electricity` (lib) | `src/run.rs` | run wiring v2 (preflight, adapter resolution, `--profile`) | R | |
+| `electricity-cli` | `src/main.rs` | `--profile <path>` accepted | R | |
+
 ## Reading this table
 
 - **"A" / final**: lane A's own file and implementation; later lanes should not need to touch it

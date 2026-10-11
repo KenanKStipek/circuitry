@@ -268,6 +268,12 @@ async fn golden_corpus_execute_tool() {
         let limiter = Limiter::new();
         let runtime_config = Value::from(case.runtime_config);
         let ctx = Value::from(case.ctx);
+        let adapters = electricity_vm::adapter::AdapterRegistry::new();
+        let complexity = electricity_config::ComplexitySettings::default();
+        let use_call_stack = std::cell::RefCell::new(Vec::new());
+        let orchestration_dir = std::path::PathBuf::from(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = std::collections::BTreeSet::new();
         let run_ctx = RunContext {
             registry: &registry,
             limiter: &limiter,
@@ -275,6 +281,18 @@ async fn golden_corpus_execute_tool() {
             adapter: "_noop",
             runtime_config: &runtime_config,
             dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: std::rc::Rc::new(electricity_vm::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            use_call_stack: &use_call_stack,
+            orchestration_dir: &orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
         };
         let token = CancellationToken::new();
 

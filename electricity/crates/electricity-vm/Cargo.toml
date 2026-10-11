@@ -10,12 +10,20 @@ description = "The M0-H VM: store, execution, cancellation, limiter (electricity
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-bytecode = { path = "../electricity-bytecode" }
+# `RunContext::complexity` (issue #449's gate lane item 6) -- this crate
+# depends on `electricity-config`, matching DESIGN.md §2's own direction
+# ("config → compiler, vm, tools, adapters, runtime-plugins": everyone
+# reads config, config reads nothing).
+electricity-config = { path = "../electricity-config" }
 electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
 # `exec::conditional`'s own CEL `if` evaluation (`evaluate_condition`).
 electricity-cel = { path = "../electricity-cel" }
+# `adapter::Adapter`'s own object-safety (issue #449's gate lane item 4),
+# the same reason `electricity-tools::ToolPlugin` needs it.
+async-trait = "0.1"
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros", "time"] }
 # `exec::dynamic`'s own tree-flow dispatch: a bounded set of concurrent,
