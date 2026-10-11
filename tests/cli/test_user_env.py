@@ -9,6 +9,7 @@ writing `.env` there never touches the developer's real
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -168,6 +169,65 @@ def test_bare_key_with_no_value_is_not_reported_as_supplied():
         os.environ.pop("BARE_KEY", None)
 
 
+def test_equals_in_single_quoted_key_is_skipped_with_one_warning(caplog):
+    """A single-quoted key can contain `=` (`'A=B'=...`); `os.environ[key]
+    = value` would raise `ValueError` ("illegal environment variable
+    name") for it (#473)."""
+    path = _write_env("'A=B'=" + _CANARY + "\nOPENAI_API_KEY=" + _CANARY + "\n")
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("A=B",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    assert "A=B" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
+    assert _CANARY not in caplog.text
+    expected = f"{path}: skipping 'A=B': not a valid environment variable name or value."
+    assert expected in caplog.text
+    assert caplog.text.count("not a valid environment variable name or value") == 1
+
+
+def test_nul_byte_in_value_is_skipped_with_one_warning(caplog):
+    """A raw NUL byte decodes as valid UTF-8 inside a value, but
+    `os.environ[key] = value` would raise `ValueError` ("embedded null
+    byte") for it (#473)."""
+    secret = "s3cr3t_nul\x00tail_473"
+    path = _write_env("NUL_KEY=" + secret + "\nOPENAI_API_KEY=" + _CANARY + "\n")
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("NUL_KEY",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    assert "NUL_KEY" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
+    assert "s3cr3t_nul" not in caplog.text
+    assert "tail_473" not in caplog.text
+    expected = f"{path}: skipping 'NUL_KEY': not a valid environment variable name or value."
+    assert expected in caplog.text
+
+
+def test_empty_key_is_skipped_with_one_warning(monkeypatch, caplog):
+    """`python-dotenv` never actually hands `load_user_env` an empty key
+    (its own line grammar has no way to produce one), but the check is
+    defensive, matching electricity's port (#473)."""
+    path = _write_env("OPENAI_API_KEY=" + _CANARY + "\n")
+    import dotenv
+
+    monkeypatch.setattr(
+        dotenv, "dotenv_values", lambda _path: {"": "something", "OPENAI_API_KEY": _CANARY}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    expected = f"{path}: skipping '': not a valid environment variable name or value."
+    assert expected in caplog.text
+
+
 def test_doctor_reports_names_only_never_a_value(tmp_path):
     import json
 
@@ -175,7 +235,8 @@ def test_doctor_reports_names_only_never_a_value(tmp_path):
 
     from circuitry.cli.app import app
 
-    _write_env(f"OPENAI_API_KEY={_CANARY}\n")
+    invalid_canary = "sk-invalid-canary-should-never-print-2b7e"
+    _write_env(f"OPENAI_API_KEY={_CANARY}\n'A=B'={invalid_canary}\n")
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({"default_adapter": "ollama", "default_model": "llama3:latest"}),
@@ -201,4 +262,41 @@ def test_doctor_reports_names_only_never_a_value(tmp_path):
     assert os.environ["OPENAI_API_KEY"] == _CANARY
     assert "OPENAI_API_KEY" in result.output
     assert "User .env" in result.output
+    assert _CANARY not in result.output
+    assert "A=B" in result.output
+    assert invalid_canary not in result.output
+
+
+def test_doctor_renders_without_error_for_markup_breaking_key(tmp_path):
+    """A key containing Rich markup syntax (e.g. from a single-quoted
+    `'[/x]=1'=...` entry) must not break `cof doctor`'s own rendering —
+    the key name is escaped before being interpolated into a Rich-markup
+    string (#473 P2)."""
+    import json
+
+    import typer.testing
+
+    from circuitry.cli.app import app
+
+    _write_env(f"'[/x]=1'={_CANARY}\nOPENAI_API_KEY={_CANARY}\n")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"default_adapter": "ollama", "default_model": "llama3:latest"}),
+        encoding="utf-8",
+    )
+
+    runner = typer.testing.CliRunner()
+    result = runner.invoke(
+        app,
+        ["doctor", "--config", str(config_path)],
+        env={
+            "CIRCUITRY_ENABLED_ADAPTERS": "",
+            "CIRCUITRY_ENABLED_TOOLS": "",
+            "CIRCUITRY_ENABLED_PLUGINS": "",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "[/x]=1" in result.output
     assert _CANARY not in result.output
