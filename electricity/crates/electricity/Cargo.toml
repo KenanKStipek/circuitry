@@ -35,6 +35,10 @@ serde_json = "1"
 # runtime of its own; it always runs inside a caller's.
 tokio = { version = "1", features = ["time", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+# `logger.warning` parity for `cli/live_state.py`/`cli/events.py`'s own
+# mid-run write-failure warnings (issue #442) -- a no-op unless a binary
+# later installs a logger, same as electricity-cel's/electricity-vm's.
+log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "test-util"] }

@@ -32,6 +32,10 @@ rand = "0.8"
 # `YYYY-MM-DDTHH:MM:SS` prefix (`_ISO_TS_RE`), so exact microsecond/offset
 # formatting fidelity beyond that isn't required either.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# `logger.warning` parity for `core/dynamic.py`/`core/conditional.py`'s
+# own on_error/finally degradation warnings (issue #442) -- a no-op
+# unless a binary later installs a logger, same as electricity-cel's.
+log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

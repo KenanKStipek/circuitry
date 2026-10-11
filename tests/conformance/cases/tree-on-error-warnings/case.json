@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §6.1/§5.5",
+  "description": "A tree `dynamic`'s own two named branches are each their own nested `dynamic` with `on_error: continue` around a failing tool -- each logs its own stderr WARNING independently (issue #442's \"Warning lines on stderr\" item), and since the two branches run concurrently, their real relative order can vary run to run -- `sort_warnings` compares them as a sorted set instead.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "sort_warnings": true
+}

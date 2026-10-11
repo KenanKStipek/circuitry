@@ -1,0 +1,103 @@
+[
+  {
+    "name": "dynamic_on_error_skip",
+    "orchestration": "effects:\n  - name: guarded\n    type: dynamic\n    on_error: skip\n    effects:\n      - name: bad\n        type: tool\n        provider: json\n        params: {mode: parse, input: 'not json'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Dynamic 'guarded': guarded.bad: json: parse failed: Expecting value: line 1 column 1 (char 0); on_error=skip, continuing with the next effect\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "dynamic_on_error_continue",
+    "orchestration": "effects:\n  - name: guarded\n    type: dynamic\n    on_error: continue\n    effects:\n      - name: bad\n        type: tool\n        provider: json\n        params: {mode: parse, input: 'not json'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Dynamic 'guarded': guarded.bad: json: parse failed: Expecting value: line 1 column 1 (char 0); on_error=continue, continuing with the next effect\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "dynamic_finally_failed_degraded",
+    "orchestration": "effects:\n  - name: cleanup_case\n    type: dynamic\n    on_error: continue\n    effects:\n      - name: body\n        type: tool\n        provider: json\n        params: {mode: parse, input: '{}'}\n    finally:\n      - name: cleanup\n        type: tool\n        provider: json\n        params: {mode: parse, input: 'not json'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Dynamic 'cleanup_case': finally failed (cleanup_case.cleanup: json: parse failed: Expecting value: line 1 column 1 (char 0)); on_error=continue, continuing with the next effect\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "dynamic_cleanup_also_failed",
+    "orchestration": "effects:\n  - name: cleanup_case\n    type: dynamic\n    on_error: continue\n    effects:\n      - name: body\n        type: tool\n        provider: json\n        params: {mode: parse, input: 'not json'}\n    finally:\n      - name: cleanup\n        type: tool\n        provider: json\n        params: {mode: parse, input: 'also not json'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Dynamic 'cleanup_case': cleanup in 'finally' also failed (cleanup_case.cleanup: json: parse failed: Expecting value: line 1 column 1 (char 0)) after the original failure (cleanup_case.body: json: parse failed: Expecting value: line 1 column 1 (char 0))\nWARNING: Dynamic 'cleanup_case': cleanup_case.body: json: parse failed: Expecting value: line 1 column 1 (char 0); on_error=continue, continuing with the next effect\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "conditional_on_error_continue",
+    "orchestration": "effects:\n  - name: gate\n    type: if\n    on_error: continue\n    if:\n      mode: cel\n      expr: \"state.prime.missing.value == 1\"\n      strict: true\n    then:\n      - name: yes_branch\n        type: tool\n        provider: json\n        params: {mode: parse, input: '{}'}\n    else:\n      - name: no_branch\n        type: tool\n        provider: json\n        params: {mode: parse, input: '{}'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Conditional 'gate': condition failed (CEL expression 'state.prime.missing.value == 1' reads unset state path 'state.prime.missing.value' and is marked strict.); on_error=continue, taking the else branch\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "cel_unresolved_path",
+    "orchestration": "effects:\n  - name: gate\n    type: if\n    if:\n      mode: cel\n      expr: \"state.prime.missing.value == 1\"\n    then:\n      - name: yes_branch\n        type: tool\n        provider: json\n        params: {mode: parse, input: '{}'}\n    else:\n      - name: no_branch\n        type: tool\n        provider: json\n        params: {mode: parse, input: '{}'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: CEL expression 'state.prime.missing.value == 1' reads unset state path 'state.prime.missing.value'; condition is false\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "config_unknown_environment",
+    "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    "config": {
+      "environment": "staging"
+    },
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Unknown environment 'staging'; falling back to 'dev'. Valid: ('dev', 'prod', 'test')\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "invalid_tool_timeout_seconds",
+    "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    "config": {
+      "runtime": {
+        "tools": {
+          "timeout_seconds": "abc"
+        }
+      }
+    },
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Invalid runtime.tools.timeout_seconds='abc'; using 300s\n",
+    "os_error_prefix": null
+  },
+  {
+    "name": "events_write_failure",
+    "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    "config": null,
+    "extra_args": [
+      "--events",
+      "blocker/sub/events.jsonl"
+    ],
+    "touch_blocker": "blocker/sub",
+    "expected_stderr": "WARNING: --events open failed, disabling further writes: [Errno 17] File exists: 'blocker/sub'\nWarning: Could not keep --events blocker/sub/events.jsonl in sync with the run; see the log for details.\n",
+    "os_error_prefix": "--events open failed, disabling further writes: "
+  },
+  {
+    "name": "plain_success_has_no_warnings",
+    "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    "config": null,
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "",
+    "os_error_prefix": null
+  }
+]

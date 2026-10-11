@@ -133,10 +133,18 @@ fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
         // any other `int(raw)` result.
         Some(value) => match python_int_floor(value) {
             Some(n) => n.clamp(1, i64::from(u32::MAX)) as u32,
-            // `except (TypeError, ValueError): ... return DEFAULT_TOOL_TIMEOUT_SECONDS`
-            // -- Python also logs a warning here; this crate has no run
-            // logger yet to port that side effect to.
-            None => DEFAULT_TOOL_TIMEOUT_SECONDS,
+            // `except (TypeError, ValueError): logger.warning("Invalid
+            // runtime.tools.timeout_seconds=%r; using %ds", raw,
+            // DEFAULT_TOOL_TIMEOUT_SECONDS); return
+            // DEFAULT_TOOL_TIMEOUT_SECONDS` (issue #442).
+            None => {
+                log::warn!(
+                    "Invalid runtime.tools.timeout_seconds={}; using {}s",
+                    value.py_repr(),
+                    DEFAULT_TOOL_TIMEOUT_SECONDS
+                );
+                DEFAULT_TOOL_TIMEOUT_SECONDS
+            }
         },
     }
 }
@@ -144,19 +152,48 @@ fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
 /// `int(raw)`, as far as [`resolve_timeout_seconds`] needs it: `bool`/
 /// `int`/`float` coerce the way CPython's `int()` does (including
 /// negative values -- the caller's own `max(1, ...)` floors those, just
-/// as Python's does), a numeric `str` parses the same way; anything else
-/// (including a non-numeric `str`) is `None`, this function's caller's
-/// cue to fall back to the default rather than Python's own
-/// `ValueError`/`TypeError` text (never surfaced in state, so there is
-/// nothing here to match byte for byte).
+/// as Python's does), a numeric `str` parses the same way (PEP 515
+/// underscores -- `"1_000"` -- included, via
+/// [`strip_python_int_underscores`]); anything else (including a
+/// non-numeric `str`, a hex literal like `"0x10"`, or a float literal
+/// like `"1.5"` -- `int()` takes a base-10 digit string only) is
+/// `None`, this function's caller's cue to fall back to the default
+/// rather than Python's own `ValueError`/`TypeError` text (never
+/// surfaced in state, so there is nothing here to match byte for
+/// byte).
 fn python_int_floor(value: &Value) -> Option<i64> {
     match value {
         Value::Bool(b) => Some(i64::from(*b)),
         Value::Int(i) => i.to_string().parse().ok(),
         Value::Float(f) if f.is_finite() => Some(f.trunc() as i64),
-        Value::Str(s) => s.trim().parse().ok(),
+        Value::Str(s) => strip_python_int_underscores(s.trim())?.parse().ok(),
         _ => None,
     }
+}
+
+/// Python's PEP 515 digit-separator rule, as far as
+/// [`python_int_floor`] needs it: an `_` is valid only directly between
+/// two ASCII digits -- never leading, trailing, doubled, or next to a
+/// sign. Returns `None` (an invalid literal, same as CPython's `int()`
+/// would raise on it) on any other placement; otherwise every `_` is
+/// stripped and the remaining text returned. A value with no `_` at all
+/// is returned unchanged.
+fn strip_python_int_underscores(s: &str) -> Option<String> {
+    if !s.contains('_') {
+        return Some(s.to_string());
+    }
+    let chars: Vec<char> = s.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c != '_' {
+            continue;
+        }
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
+        if !prev_digit || !next_digit {
+            return None;
+        }
+    }
+    Some(chars.into_iter().filter(|c| *c != '_').collect())
 }
 
 /// `core/allowlist_gate.py::allowed_tools`/`_installed` -- the run's

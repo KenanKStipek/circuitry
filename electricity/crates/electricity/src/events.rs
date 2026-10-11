@@ -75,12 +75,20 @@ impl EventLog {
             .and_then(|()| File::create(path));
         match opened {
             Ok(file) => *log.file.borrow_mut() = Some(file),
-            Err(_) => log.disabled.set(true),
+            Err(err) => log.disable_with("open", &err),
         }
         log
     }
 
-    fn disable(&self) {
+    /// `cli/events.py::EventLog._disable`'s own `if not self._disabled:
+    /// logger.warning("--events %s failed, disabling further writes: %s",
+    /// operation, exc)` -- logged once, for whichever operation first
+    /// failed (issue #442); every later failure still disables (if it
+    /// hasn't already) but never logs a second line.
+    fn disable_with(&self, op: &str, err: &dyn std::fmt::Display) {
+        if !self.disabled.get() {
+            log::warn!("--events {op} failed, disabling further writes: {err}");
+        }
         self.disabled.set(true);
     }
 
@@ -90,24 +98,26 @@ impl EventLog {
         seq
     }
 
-    fn write_line(&self, payload: Value) {
+    fn write_line(&self, op: &str, payload: Value) {
         if self.disabled.get() {
             return;
         }
         let text = match electricity_json::dumps(&payload, electricity_json::WriteMode::EVENTS) {
             Ok(text) => text,
-            Err(_) => {
-                self.disable();
+            Err(err) => {
+                self.disable_with(op, &err);
                 return;
             }
         };
         let mut file_slot = self.file.borrow_mut();
         let Some(file) = file_slot.as_mut() else {
-            self.disable();
+            self.disable_with(op, &"the file is not open");
             return;
         };
-        if writeln!(file, "{text}").is_err() || file.flush().is_err() {
-            self.disable();
+        if let Err(err) = writeln!(file, "{text}") {
+            self.disable_with(op, &err);
+        } else if let Err(err) = file.flush() {
+            self.disable_with(op, &err);
         }
     }
 
@@ -139,7 +149,7 @@ impl EventLog {
             Value::Str("pid".to_string()),
             Value::from(std::process::id() as i64),
         );
-        self.write_line(Value::Dict(payload));
+        self.write_line("run_start", Value::Dict(payload));
     }
 
     pub fn on_dispatch(&self, path: &str, branches: usize, concurrency: usize) {
@@ -166,7 +176,7 @@ impl EventLog {
             Value::Str("concurrency".to_string()),
             Value::from(concurrency as i64),
         );
-        self.write_line(Value::Dict(payload));
+        self.write_line("dispatch", Value::Dict(payload));
     }
 
     pub fn on_start(&self, path: &str) {
@@ -196,7 +206,7 @@ impl EventLog {
             Value::from(instance_id as i64),
         );
         payload.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
-        self.write_line(Value::Dict(payload));
+        self.write_line("start", Value::Dict(payload));
     }
 
     /// `path` finished, with `error` the text that became (or would
@@ -236,7 +246,7 @@ impl EventLog {
                 Value::Str(truncate_error(error)),
             );
         }
-        self.write_line(Value::Dict(payload));
+        self.write_line("end", Value::Dict(payload));
     }
 
     pub fn run_end(&self, ok: bool, error: Option<&str>, signal: Option<&str>) {
@@ -269,7 +279,7 @@ impl EventLog {
                 Value::Str(signal.to_string()),
             );
         }
-        self.write_line(Value::Dict(payload));
+        self.write_line("run_end", Value::Dict(payload));
     }
 
     /// Stops writing; returns whether this instance ever failed to open

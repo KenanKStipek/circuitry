@@ -218,7 +218,18 @@ async fn decide_and_run<'a>(
                     }
                     return Ok(());
                 }
-                OnError::Continue => false,
+                OnError::Continue => {
+                    // `core/conditional.py`'s own `logger.warning("Conditional
+                    // %r: condition failed (%s); on_error=continue, taking
+                    // the else branch", self.defn.name or "<unnamed>", e)`
+                    // (issue #442).
+                    log::warn!(
+                        "Conditional {}: condition failed ({text}); on_error=continue, taking the else branch",
+                        Value::Str(op.name.clone().unwrap_or_else(|| "<unnamed>".to_string()))
+                            .py_repr()
+                    );
+                    false
+                }
                 OnError::Break => unreachable!("a conditional's own on_error is never `break`"),
             }
         }
