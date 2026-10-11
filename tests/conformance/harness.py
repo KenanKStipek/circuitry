@@ -299,14 +299,24 @@ def case_redaction_replacements(
     in the order they must be applied: the case's own `fakes/`
     subdirectory (a longer path than, and a prefix of, the case directory
     itself) before the case directory, then the mock server's own
-    ephemeral port, if one is running for this case."""
+    ephemeral port, if one is running for this case -- only in the
+    `host:port` forms it can actually appear in (`127.0.0.1:<port>`, the
+    loopback address `MockHttpServer` binds, and `localhost:<port>`, since
+    a case's own `base_url`/URL input is free to spell the same loopback
+    address either way), never as the bare port number on its own: a bare
+    digit string would also match anywhere those same digits happen to
+    occur inside a run id/UUID, a compact timestamp, or any other field
+    with no relation to the mock server at all, corrupting it instead of a
+    genuine port reference."""
     replacements: list[tuple[str, str]] = []
     fakes_dir = case_dir / "fakes"
     if fakes_dir.is_dir():
         replacements.append((str(fakes_dir), "<FAKES_DIR>"))
     replacements.append((str(case_dir), "<CASE_DIR>"))
     if mock_http_port is not None:
-        replacements.append((str(mock_http_port), "<MOCK_PORT>"))
+        port = str(mock_http_port)
+        replacements.append((f"127.0.0.1:{port}", "127.0.0.1:<MOCK_PORT>"))
+        replacements.append((f"localhost:{port}", "localhost:<MOCK_PORT>"))
     return replacements
 
 

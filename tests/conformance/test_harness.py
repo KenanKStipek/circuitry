@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from . import harness
+from .normalize import redact_runtime_strings
 
 
 def _write_case(tmp_path: Path, metadata: dict) -> Path:
@@ -153,6 +154,36 @@ def test_load_case_rejects_non_bool_electricity_preview_ok(tmp_path: Path) -> No
     )
     with pytest.raises(ValueError, match="'electricity_preview_ok' must be a bool"):
         harness.load_case(case_dir)
+
+
+def test_case_redaction_replacements_only_redacts_host_port_forms(tmp_path: Path) -> None:
+    """PR #455 review finding P2-3: a bare port-number replacement could
+    also corrupt a run id/UUID or a compact timestamp that happens to
+    contain the same digits as a substring. `case_redaction_replacements`
+    only ever redacts the port inside an actual `host:port` form."""
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    port = 54321
+    replacements = harness.case_redaction_replacements(case_dir, mock_http_port=port)
+
+    uuid_containing_port_digits = f"a1b2c3d4-{port}-4a2b-9c3d-abcdefabcdef"
+    assert (
+        redact_runtime_strings(uuid_containing_port_digits, replacements)
+        == uuid_containing_port_digits
+    )
+    timestamp_containing_port_digits = f"20260101_12{port}"
+    assert (
+        redact_runtime_strings(timestamp_containing_port_digits, replacements)
+        == timestamp_containing_port_digits
+    )
+
+    assert (
+        redact_runtime_strings(f"http://127.0.0.1:{port}/v1", replacements)
+        == "http://127.0.0.1:<MOCK_PORT>/v1"
+    )
+    assert (
+        redact_runtime_strings(f"localhost:{port}", replacements) == "localhost:<MOCK_PORT>"
+    )
 
 
 def test_materialize_cli_args_substitutes_mock_port() -> None:
