@@ -6,5 +6,5 @@ effects:
     retries: {max_attempts: 2, backoff_ms: 1}
     params:
       mode: stringify
-      input: "{{{prime.t.meta.provider}}}:{{{prime.t.value}}}"
+      input: "{{{prime.t.meta.provider}}}|{{{prime.t.value}}}"
     expect: "state.prime.t.value != null && size(value) > 10"
