@@ -164,7 +164,7 @@ use electricity_bytecode::{EffectPath, Refusal, RefusalReason, first_unsupported
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -1072,7 +1072,6 @@ pub async fn run_orchestration_with_config(
     let adapters = electricity_vm::adapter::AdapterRegistry::new();
     let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
         .unwrap_or_default();
-    let use_call_stack: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let orchestration_dir: &Path = program
         .document
         .as_ref()
@@ -1096,7 +1095,6 @@ pub async fn run_orchestration_with_config(
         adapter_timeout_seconds: 120,
         complexity: &complexity,
         decomposition_depth: 0,
-        use_call_stack: &use_call_stack,
         orchestration_dir,
         declared_prompts: &program.prompts,
         effect_names: &program.effect_names,

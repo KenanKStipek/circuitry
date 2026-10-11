@@ -314,8 +314,6 @@ pub fn run_ctx<'a>(
         Box::leak(Box::new(electricity_vm::adapter::AdapterRegistry::new()));
     let complexity: &'a electricity_config::ComplexitySettings =
         Box::leak(Box::new(electricity_config::ComplexitySettings::default()));
-    let use_call_stack: &'a std::cell::RefCell<Vec<String>> =
-        Box::leak(Box::new(std::cell::RefCell::new(Vec::new())));
     let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
     let declared_prompts: &'a indexmap::IndexMap<String, String> =
         Box::leak(Box::new(indexmap::IndexMap::new()));
@@ -335,7 +333,6 @@ pub fn run_ctx<'a>(
         adapter_timeout_seconds: 120,
         complexity,
         decomposition_depth: 0,
-        use_call_stack,
         orchestration_dir: dir.as_path(),
         declared_prompts,
         effect_names,

@@ -270,7 +270,6 @@ async fn golden_corpus_execute_tool() {
         let ctx = Value::from(case.ctx);
         let adapters = electricity_vm::adapter::AdapterRegistry::new();
         let complexity = electricity_config::ComplexitySettings::default();
-        let use_call_stack = std::cell::RefCell::new(Vec::new());
         let orchestration_dir = std::path::PathBuf::from(".");
         let declared_prompts = indexmap::IndexMap::new();
         let effect_names = std::collections::BTreeSet::new();
@@ -288,7 +287,6 @@ async fn golden_corpus_execute_tool() {
             adapter_timeout_seconds: 120,
             complexity: &complexity,
             decomposition_depth: 0,
-            use_call_stack: &use_call_stack,
             orchestration_dir: &orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,

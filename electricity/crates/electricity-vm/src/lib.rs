@@ -43,7 +43,6 @@ use electricity_bytecode::Program;
 use electricity_config::ComplexitySettings;
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
@@ -112,13 +111,22 @@ pub struct RunContext<'a> {
     /// complexity::validate_complexity`) -- lane K1/K2.
     pub complexity: &'a ComplexitySettings,
     /// How many `use`/decomposition levels deep this run already is --
-    /// lane I/L's own recursion-depth ceiling.
+    /// lane I/L's own recursion-depth ceiling. `core/use.py`'s own
+    /// `use_call_stack` cycle-detection stack is deliberately *not* a
+    /// field here: an earlier revision of this struct carried one as a
+    /// `&'a RefCell<Vec<String>>`, shared and mutated in place, which
+    /// is exactly the false-cycle hazard `core/use.py:856-871` warns
+    /// about for concurrent tree/loop branches (M1 gate seam round 2,
+    /// item S6) -- a shared mutable stack can't tell two sibling
+    /// branches apart, so one branch's own push is visible to the
+    /// other as a false ancestor. [`crate::Frame::push_use`]'s own
+    /// per-call, `Rc`-shared-but-never-mutated-in-place stack (built
+    /// fresh per branch, the same way Python derives *parent_stack* as
+    /// a list copy rather than mutating `runtime_config["_use_call_stack"]`
+    /// itself) is the only one; lane I reads it via
+    /// [`crate::Frame::use_call_stack`] off the `Frame` already threaded
+    /// to every container executor, never off this struct.
     pub decomposition_depth: u32,
-    /// `core/use.py`'s own `use_call_stack` -- names of every `use`
-    /// effect currently on the call stack, for cycle detection; shared
-    /// (interior-mutable) across a `use` child's own nested `RunContext`
-    /// borrow, never cloned per level. Lane I.
-    pub use_call_stack: &'a RefCell<Vec<String>>,
     /// The directory a relative `use: {path: ...}`/asset reference
     /// resolves against -- `Program.document`'s own `resolved_directory`.
     /// Lane I.
@@ -324,7 +332,6 @@ mod tests {
         let runtime_config = Value::None;
         let adapters = adapter::AdapterRegistry::new();
         let complexity = ComplexitySettings::default();
-        let use_call_stack = RefCell::new(Vec::new());
         let orchestration_dir = Path::new(".");
         let declared_prompts = indexmap::IndexMap::new();
         let effect_names = BTreeSet::new();
@@ -342,7 +349,6 @@ mod tests {
             adapter_timeout_seconds: 120,
             complexity: &complexity,
             decomposition_depth: 0,
-            use_call_stack: &use_call_stack,
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,

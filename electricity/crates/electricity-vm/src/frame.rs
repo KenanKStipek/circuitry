@@ -58,9 +58,15 @@ pub struct Frame {
     /// [`EffectPath::resolve_passes`] -- extended, never mutated in
     /// place, by [`Frame::with_pass`].
     pass_indices: Rc<HashMap<LoopId, u32>>,
-    /// `core/use.py`'s own `use_call_stack` -- the name of every `use`
-    /// effect on the call stack, extended per level by
-    /// [`Frame::push_use`], for lane I's own cycle detection.
+    /// `core/use.py`'s own `use_call_stack` -- *document identities*
+    /// on the call stack (`core/use.py::_load_child_orch`'s own
+    /// *identity*: a path-`use`'s resolved absolute path, an inline
+    /// `use`'s own inline-document form -- never the `use` effect's own
+    /// *name*, which two unrelated `use` effects can share without
+    /// that being a cycle, and which the same child document reached
+    /// through two different `use` effects would wrongly miss), one
+    /// per level, extended by [`Frame::push_use`], for lane I's own
+    /// cycle detection (M1 gate seam round 2, item S6).
     use_call_stack: Rc<Vec<String>>,
 }
 
@@ -130,13 +136,16 @@ impl Frame {
         }
     }
 
-    /// `core/use.py`'s own `use_call_stack.append(name)` -- a fresh
-    /// `Vec`, never the parent's own mutated in place (this module's own
-    /// doc comment on why that would be wrong for a concurrent sibling
-    /// branch).
-    pub fn push_use(&self, name: String) -> Frame {
+    /// `core/use.py`'s own `parent_stack + [identity]` -- a fresh
+    /// `Vec`, never the parent's own mutated in place (this module's
+    /// own doc comment on why that would be wrong for a concurrent
+    /// sibling branch). *identity* is the child document's own
+    /// identity (this struct's own field doc comment), computed by the
+    /// caller the same way `core/use.py::_load_child_orch` computes
+    /// *identity* -- never the `use` effect's own name.
+    pub fn push_use(&self, identity: String) -> Frame {
         let mut stack = (*self.use_call_stack).clone();
-        stack.push(name);
+        stack.push(identity);
         Frame {
             prefix: Rc::clone(&self.prefix),
             pass_indices: Rc::clone(&self.pass_indices),
@@ -144,8 +153,10 @@ impl Frame {
         }
     }
 
-    /// Every `use` effect name currently on the call stack, outermost
-    /// first -- lane I's own cycle check.
+    /// Every child document identity currently on the call stack,
+    /// outermost first -- lane I's own cycle check: a path-`use`'s
+    /// resolved path or an inline `use`'s own inline form, never a
+    /// `use` effect's name.
     pub fn use_call_stack(&self) -> &[String] {
         &self.use_call_stack
     }
@@ -265,8 +276,43 @@ mod tests {
     #[test]
     fn push_use_extends_a_fresh_stack_not_the_parents_own() {
         let base = Frame::root();
-        let child = base.push_use("fetch".to_string());
+        let child = base.push_use("child.yml".to_string());
         assert_eq!(base.use_call_stack(), &[] as &[String]);
-        assert_eq!(child.use_call_stack(), &["fetch".to_string()]);
+        assert_eq!(child.use_call_stack(), &["child.yml".to_string()]);
+    }
+
+    #[test]
+    fn two_sibling_tree_branches_using_the_same_child_see_no_false_cycle() {
+        // S6 (M1 gate seam round 2): `core/use.py:856-871`'s own
+        // concern -- a *shared*, mutated-in-place call stack would let
+        // one tree-flow branch's own push become visible to a sibling
+        // branch as a false ancestor. `Frame::push_use` instead extends
+        // a fresh `Vec` per call, off the *same* parent frame, so two
+        // sibling branches that each `use` the identical child document
+        // never see each other's own push at all.
+        let parent = Frame::root();
+        let left = parent.push_use("child.yml".to_string());
+        let right = parent.push_use("child.yml".to_string());
+        assert_eq!(left.use_call_stack(), &["child.yml".to_string()]);
+        assert_eq!(right.use_call_stack(), &["child.yml".to_string()]);
+        assert_eq!(parent.use_call_stack(), &[] as &[String]);
+        // Neither sibling's own identity shows up twice -- each one's
+        // own stack has exactly the one push it made itself.
+        assert_eq!(left.use_call_stack().len(), 1);
+        assert_eq!(right.use_call_stack().len(), 1);
+    }
+
+    #[test]
+    fn a_real_cycle_is_detected_by_the_identity_already_being_on_the_stack() {
+        // A real cycle: the same child document reached a second time
+        // on one call path (not two siblings -- one branch nesting into
+        // itself). The identity lane I's own cycle check compares
+        // against is already on `Frame::use_call_stack` by the time the
+        // same child is about to be pushed again.
+        let root = Frame::root();
+        let one_level = root.push_use("a.yml".to_string());
+        let two_levels = one_level.push_use("b.yml".to_string());
+        let identity = "a.yml".to_string();
+        assert!(two_levels.use_call_stack().contains(&identity));
     }
 }
