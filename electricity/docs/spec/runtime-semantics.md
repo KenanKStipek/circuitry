@@ -836,6 +836,15 @@ Backoff is exponential with full jitter from `backoff_ms`
 provider's own `Retry-After` header when the failing adapter can supply one
 (litellm-backed adapters only today).
 
+**`created_at`/`retries_used` (#421)**: `meta.created_at` is the start of
+this pass's *first* attempt — never reset by a later attempt within the same
+pass, so a duration computed from it includes every attempt's backoff.
+`meta.retries_used` is set on **both** a successful and a failed outcome, to
+the index of the attempt that decided the outcome (0-based: the number of
+retries actually spent); it is **absent**, not `0`, when the first attempt
+is also the last. Both rules are identical for `tool` (§5.2) and `use`
+(§5.3).
+
 **`provider_fallbacks`**: `_build_attempts()` (`core/prompt.py:1044`) builds
 an ordered `(adapter, model)` list: this effect's own `provider:` (if set)
 first, then the run-default adapter+model, then every `provider_fallbacks`
@@ -957,7 +966,10 @@ backoff_ms}`, default **1 attempt, no retry** — unlike prompt there is no
 status exactly like an adapter dispatch (429/408/5xx retryable); any other
 tool (`shell`, `ffmpeg`, `comfyui`, ...) retries on **any** failure — there
 is no status to classify, and a process failing once (a transient GPU
-watchdog kill) is exactly the motivating case.
+watchdog kill) is exactly the motivating case. `created_at`/`retries_used`
+follow the same rule as a prompt's (§5.1, #421) — ported to
+`electricity-vm`'s own tool retry loop (`exec/tool.rs`) in the same change
+that fixed it in Circuitry.
 
 **`expect:`**: evaluated **only after** `ok=True` (a plugin-level failure
 never reaches it). Mode `cel` binds `value`/`meta`/`state` (§4.1); mode
@@ -1051,6 +1063,16 @@ trust the parent document already has) plus cycle detection (resolved-path
 identity tracked through `runtime_config["_use_call_stack"]`, built fresh
 per call-path rather than mutated shared state, so concurrent tree-flow
 branches never see siblings as false-positive ancestors).
+
+**Retries** (`core/use.py:819` the attempt loop): `retries: {max_attempts,
+backoff_ms}`, same shape/defaults/backoff curve as `tool` and `prompt`; a
+retry re-runs the **whole child orchestration** from scratch, not just the
+step that failed inside it. `created_at`/`retries_used` follow the same rule
+as a prompt's (§5.1, #421): `created_at` is the start of this pass's first
+attempt, never reset by a later attempt; `retries_used` is set on both a
+successful and a failed outcome, absent (not `0`) when the first attempt is
+also the last. Not yet in `electricity-vm`, which doesn't execute `use` at
+all yet — lane I of #448 ports this effect, the rule included.
 
 **Confirmed live node** (full-namespace mode):
 ```json

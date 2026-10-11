@@ -1,0 +1,9 @@
+name: c-shell-path-fake
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "hello from the fake", "--exit", "0"]

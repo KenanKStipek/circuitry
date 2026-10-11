@@ -18,7 +18,8 @@ from .normalize import (
     assert_out_serialization,
     assert_states_equal,
     assert_values_equal,
-    normalize,
+    normalize_for_comparison,
+    redact_runtime_strings,
 )
 
 CASE_DIRS = harness.list_case_dirs()
@@ -26,6 +27,7 @@ CASE_DIRS = harness.list_case_dirs()
 
 def _case_ids() -> list[str]:
     return [d.name for d in CASE_DIRS]
+
 
 
 @pytest.mark.parametrize("case_dir", CASE_DIRS, ids=_case_ids())
@@ -39,13 +41,26 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
     out_path = tmp_path / "out.json"
     events_path = tmp_path / "events.jsonl"
     live_state_path = tmp_path / "live.json"
-    result = harness.run_case(
-        case_dir,
-        metadata,
-        out_path=out_path,
-        home_dir=home_dir,
-        events_path=events_path,
-        live_state_path=live_state_path,
+    leftover_replies_path = tmp_path / "leftover-replies.json"
+
+    with harness.mock_http_server(case_dir, metadata) as server:
+        replacements = harness.case_redaction_replacements(
+            case_dir, mock_http_port=server.port if server else None
+        )
+        result = harness.run_case(
+            case_dir,
+            metadata,
+            out_path=out_path,
+            home_dir=home_dir,
+            events_path=events_path,
+            live_state_path=live_state_path,
+            leftover_replies_path=leftover_replies_path,
+            mock_http_port=server.port if server else None,
+        )
+        recorded_requests = list(server.requests) if server is not None else None
+
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
 
     if metadata["expect"] == "success":
@@ -57,7 +72,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         assert_out_serialization(actual_text, pretty=False)
         actual_state = json.loads(actual_text)
         expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
-        assert_states_equal(normalize(actual_state), normalize(expected_state))
+        assert_states_equal(
+            normalize_for_comparison(actual_state, replacements),
+            normalize_for_comparison(expected_state, replacements),
+        )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
         assert_events_equal(events_path.read_text(encoding="utf-8"), expected_events_text)
@@ -66,6 +84,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         # (electricity/DESIGN.md §10.5, issue #431's acceptance criterion).
         assert live_state_path.read_bytes() == out_path.read_bytes(), (
             "--live-state's final write is not byte-identical to --out"
+        )
+
+        harness.assert_recorded_http_requests(
+            case_dir, metadata, recorded_requests, replacements=replacements
         )
 
         if metadata.get("also_pretty"):
@@ -86,11 +108,15 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
                 (case_dir / "expected.pretty.json").read_text(encoding="utf-8")
             )
             assert_states_equal(
-                normalize(actual_pretty_state), normalize(expected_pretty_state)
+                normalize_for_comparison(actual_pretty_state, replacements),
+                normalize_for_comparison(expected_pretty_state, replacements),
             )
             # Plain and --pretty of the same document carry the same value,
             # just laid out differently (§3.4.1).
-            assert_values_equal(normalize(actual_state), normalize(actual_pretty_state))
+            assert_values_equal(
+                normalize_for_comparison(actual_state, replacements),
+                normalize_for_comparison(actual_pretty_state, replacements),
+            )
         return
 
     if metadata["expect"] == "failure":
@@ -103,8 +129,8 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         ]
         error_compare = metadata.get("error_compare", "exact")
         assert_errors_equal(
-            actual_error,
-            expected_error,
+            redact_runtime_strings(actual_error, replacements),
+            redact_runtime_strings(expected_error, replacements),
             byte_for_byte=error_compare == "exact",
             location_pattern=metadata.get("location_pattern"),
         )
@@ -115,7 +141,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         expected_out_state = json.loads(
             (case_dir / "expected.out.json").read_text(encoding="utf-8")
         )
-        assert_states_equal(normalize(actual_out_state), normalize(expected_out_state))
+        assert_states_equal(
+            normalize_for_comparison(actual_out_state, replacements),
+            normalize_for_comparison(expected_out_state, replacements),
+        )
         return
 
     raise AssertionError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")

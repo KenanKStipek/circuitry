@@ -1,0 +1,13 @@
+name: c-http-mock-server
+interface:
+  inputs:
+    url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: result
+    provider: http
+    params:
+      url: "{{input.url}}"
+      method: GET

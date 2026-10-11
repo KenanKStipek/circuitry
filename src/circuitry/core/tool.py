@@ -428,7 +428,14 @@ class ToolRuntime:
     Executes a ToolDefinition against a plugin + store.
     Writes:
       <name>.value
-      <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error}
+      <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error, retries_used?}
+
+      ``meta.created_at`` is the start of this pass's first attempt, not
+      reset on a retry, so a reader can time the whole pass (including
+      backoff) from it. ``meta.retries_used`` is set on both a successful
+      and a failed outcome, to the index of the attempt that decided the
+      outcome; it's absent, not 0, when the first attempt is also the last
+      (#421) — same rule as a prompt effect (core.prompt.PromptRuntime).
 
       ``meta.params_rendered`` is redacted (``cli.redaction.redact``) before
       storage; the plugin itself still receives the unredacted values (#238).
@@ -635,7 +642,13 @@ class ToolRuntime:
             t0 = time.monotonic()
             mtag = ""
 
-            meta["created_at"] = _now_iso()
+            # Set once, on this pass's first attempt only — the start of a
+            # retried tool's final attempt is not when it started (#421). A
+            # reused node (an unnamed loop's next pass) still gets a fresh
+            # value because attempt_index is 0 again at the top of that
+            # pass's own loop.
+            if attempt_index == 0:
+                meta["created_at"] = _now_iso()
             meta["completed_at"] = None
             meta["provider"] = self.defn.provider
             meta["error"] = None
@@ -781,6 +794,10 @@ class ToolRuntime:
                         RetryInfo(retryable=True), attempt_index=attempt_index, base_ms=backoff_ms
                     )
                     continue
+                # Set on failure too (#421), same as success below — absent,
+                # not 0, when the first attempt is also the last.
+                if attempt_index > 0:
+                    meta["retries_used"] = attempt_index
                 if self.defn.on_error in ("skip", "continue"):
                     node["value"] = None
                 # Fires before the re-raise so the start/complete pair stays
@@ -871,6 +888,10 @@ class ToolRuntime:
                         base_ms=backoff_ms,
                     )
                     continue
+                # Set on failure too (#421), same as success below — absent,
+                # not 0, when the first attempt is also the last.
+                if attempt_index > 0:
+                    meta["retries_used"] = attempt_index
                 if self.defn.on_error in ("skip", "continue"):
                     node["value"] = None
                 store.fire_effect_complete(self.defn.name, node)

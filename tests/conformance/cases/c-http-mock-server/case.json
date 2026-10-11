@@ -1,0 +1,9 @@
+{
+  "spec_case": "electricity/DESIGN.md §12 (loopback mock HTTP server)",
+  "description": "An `http` tool call against the harness's own loopback mock server (issue #450 item 3): the server's ephemeral port reaches the document only through `-e url=...`, materialized by the harness right before each run, and its own recorded request is committed as `expected.http_requests.json`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "electricity_preview_ok": true,
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "url=http://127.0.0.1:__MOCK_HTTP_PORT__/data"]
+}
