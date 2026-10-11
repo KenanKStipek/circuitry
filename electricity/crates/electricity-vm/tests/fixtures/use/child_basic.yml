@@ -1,0 +1,7 @@
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params:
+      mode: stringify
+      input: hello-from-child

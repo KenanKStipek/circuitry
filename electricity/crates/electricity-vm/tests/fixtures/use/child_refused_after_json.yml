@@ -1,0 +1,10 @@
+effects:
+  - type: tool
+    name: ran
+    provider: json
+    params:
+      mode: stringify
+      input: should-never-run
+  - type: prompt
+    name: unsupported
+    template: hi

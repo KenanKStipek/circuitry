@@ -413,6 +413,7 @@ name = "electricity-cli"
 version = "0.1.0"
 dependencies = [
  "electricity",
+ "electricity-bytecode",
  "electricity-config",
  "electricity-value",
  "libc",
@@ -545,12 +546,14 @@ dependencies = [
  "electricity-template",
  "electricity-tools",
  "electricity-value",
+ "electricity-yaml",
  "futures",
  "indexmap",
  "log",
  "rand",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

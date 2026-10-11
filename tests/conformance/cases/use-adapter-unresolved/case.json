@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md Section 8.6 / Section 5.3",
+  "description": "A use-containing document with both default_adapter and default_model nulled out in config.json: _require_resolved_settings's own exact text (adapter checked first) -- a use document now reaches this check the same way a prompt-containing one always did.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

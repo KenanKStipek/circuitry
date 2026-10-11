@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3",
+  "description": "A use child whose own tool step always fails at run time (a RuntimeError-class failure, retryable): every attempt is retried until retries.max_attempts is exhausted, meta.retries_used records how many ran, and on_error: continue absorbs the final failure.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

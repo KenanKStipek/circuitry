@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-11T11:00:13.870Z","ev":"run_start","run_id":"f2d9b3bf-7f45-46ea-9e27-14f67dd95211","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":78753}
+{"v":1,"seq":1,"ts":"2026-10-11T11:00:13.873Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T11:00:13.873Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-10-11T11:00:13.875Z","ev":"start","id":2,"path":"prime.child.broken"}
+{"v":1,"seq":4,"ts":"2026-10-11T11:00:13.875Z","ev":"end","id":2,"path":"prime.child.broken","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":5,"ts":"2026-10-11T11:00:13.875Z","ev":"end","id":1,"path":"prime.child","ok":true,"ms":2}
+{"v":1,"seq":6,"ts":"2026-10-11T11:00:13.875Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":7,"ts":"2026-10-11T11:00:13.875Z","ev":"run_end","ok":true}

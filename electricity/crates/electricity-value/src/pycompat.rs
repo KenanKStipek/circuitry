@@ -44,6 +44,12 @@ pub enum PyExc {
     /// (review finding 5 on PR #454) -- CPython raises this, not
     /// `ValueError`, for a non-finite float.
     OverflowError,
+    /// `core/use.py`'s own cycle-detection raise (M1 lane I, issue
+    /// #469): a `use` effect whose child identity is already on the
+    /// VM's own use-call-stack (`electricity_vm::Frame::
+    /// use_call_stack`) raises this, not `ValueError` -- still not
+    /// retried, the same as `ValueError`.
+    RecursionError,
     /// `str.encode(encoding)`'s own strict-mode failure (lane D1's
     /// `fs`/`hash` tools: appended here, never a change to an
     /// existing variant's spelling, per this enum's own doc comment).
@@ -68,6 +74,7 @@ impl PyExc {
             PyExc::TimeoutError => "TimeoutError",
             PyExc::UnicodeDecodeError => "UnicodeDecodeError",
             PyExc::OverflowError => "OverflowError",
+            PyExc::RecursionError => "RecursionError",
             PyExc::UnicodeEncodeError => "UnicodeEncodeError",
         }
     }

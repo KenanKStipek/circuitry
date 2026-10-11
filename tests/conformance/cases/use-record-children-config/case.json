@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3",
+  "description": "runtime.state.record_children set through config.json (not the orchestration's own runtime: block) still grafts the child's own effects alongside an explicit output.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

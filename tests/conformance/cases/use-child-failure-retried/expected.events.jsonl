@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-11T12:29:19.427Z","ev":"run_start","run_id":"a6ee508f-4c5f-4109-99b3-3f9c06c782cc","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":50451}
+{"v":1,"seq":1,"ts":"2026-10-11T12:29:19.431Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T12:29:19.431Z","ev":"start","id":1,"path":"prime.always_fails"}
+{"v":1,"seq":3,"ts":"2026-10-11T12:29:19.433Z","ev":"start","id":2,"path":"prime.always_fails.step"}
+{"v":1,"seq":4,"ts":"2026-10-11T12:29:19.433Z","ev":"end","id":2,"path":"prime.always_fails.step","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":5,"ts":"2026-10-11T12:29:19.765Z","ev":"start","id":3,"path":"prime.always_fails.step"}
+{"v":1,"seq":6,"ts":"2026-10-11T12:29:19.765Z","ev":"end","id":3,"path":"prime.always_fails.step","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":7,"ts":"2026-10-11T12:29:19.765Z","ev":"end","id":1,"path":"prime.always_fails","ok":false,"ms":334,"error":"prime.step: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":8,"ts":"2026-10-11T12:29:19.765Z","ev":"end","id":0,"path":"prime","ok":true,"ms":334}
+{"v":1,"seq":9,"ts":"2026-10-11T12:29:19.765Z","ev":"run_end","ok":true}

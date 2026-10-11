@@ -802,10 +802,12 @@ dependencies = [
  "electricity-template",
  "electricity-tools",
  "electricity-value",
+ "electricity-yaml",
  "futures",
  "indexmap",
  "log",
  "rand",
+ "sha2",
  "tokio",
 ]
 

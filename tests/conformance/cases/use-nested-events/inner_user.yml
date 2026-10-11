@@ -1,0 +1,4 @@
+effects:
+  - type: use
+    name: inner
+    path: innermost.yml

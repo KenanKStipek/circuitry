@@ -1,0 +1,20 @@
+name: use-inside-tree-each-loop
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '["Ada", "Grace", "Rose"]'}
+  - type: loop
+    name: shots
+    flow: tree
+    max_concurrency: 2
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: use
+        name: child
+        path: child.yml
+        inputs:
+          name: "{{item}}"
+        outputs:
+          greeting:
+            path: prime.step.value

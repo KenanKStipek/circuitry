@@ -1,0 +1,4 @@
+effects:
+  - type: use
+    name: to_a
+    path: cycle_a.yml
