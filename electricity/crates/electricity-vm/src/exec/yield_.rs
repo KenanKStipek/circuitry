@@ -83,7 +83,10 @@ impl<R: ScopeRoot> ScopeRoot for InputsOverlay<'_, R> {
     /// check -- materializes that whole subtree, a named loop's every
     /// pass included, just to answer a yes/no question).
     fn contains(&self, key: &str) -> bool {
-        let first = key.split('.').next().expect("split yields at least one segment");
+        let first = key
+            .split('.')
+            .next()
+            .expect("split yields at least one segment");
         if self.inputs.contains_key(&Value::Str(first.to_string())) {
             return matches!(self.lookup(key), Ok(Some(_)));
         }
@@ -486,7 +489,9 @@ mod tests {
     async fn a_dry_run_never_renders_and_leaves_value_none() {
         let (_, prime, result) = {
             let store = Store::new();
-            let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+            let prime = store
+                .ensure_dict(&store.root, Value::from("prime"))
+                .unwrap();
             let registry = ToolRegistry::new();
             let limiter = crate::Limiter::new();
             let runtime_config = Value::None;
@@ -562,7 +567,9 @@ mod tests {
     #[test]
     fn inputs_overlay_contains_never_materializes_a_store_backed_loop_node() {
         let store = Store::new();
-        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        let prime = store
+            .ensure_dict(&store.root, Value::from("prime"))
+            .unwrap();
         // A named-loop-shaped node: large enough that a full
         // `Store::snapshot` of it would be a real cost, not just
         // incidentally harmless (review finding 1 on issue #492's PR).
@@ -597,7 +604,9 @@ mod tests {
     #[tokio::test]
     async fn execute_yield_inputs_presence_check_never_materializes_a_named_loop() {
         let store = Store::new();
-        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        let prime = store
+            .ensure_dict(&store.root, Value::from("prime"))
+            .unwrap();
         // `{{> named_loop.x}}`'s own presence check probes exactly
         // `prime.named_loop` -- padded with many passes so a
         // `Store::snapshot` of the whole subtree (the pre-fix bug: the

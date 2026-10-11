@@ -417,7 +417,10 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
     /// onto a `Slot::Node` with no segments left -- materializes that
     /// whole subtree just to answer a presence check).
     fn contains(&self, key: &str) -> bool {
-        let first = key.split('.').next().expect("split yields at least one segment");
+        let first = key
+            .split('.')
+            .next()
+            .expect("split yields at least one segment");
         if self.hidden.contains_key(first) {
             return matches!(self.lookup(key), Ok(Some(_)));
         }
@@ -912,7 +915,9 @@ mod tests {
         use crate::exec::live_scope::LiveRoot;
 
         let store = Store::new();
-        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        let prime = store
+            .ensure_dict(&store.root, Value::from("prime"))
+            .unwrap();
         // A named-loop-shaped node: large enough that a full
         // `Store::snapshot` of it would be a real cost, not just
         // incidentally harmless -- the same shape review finding 1 on
@@ -1170,9 +1175,9 @@ mod tests {
 #[cfg(test)]
 mod golden_corpus_live_root {
     use super::render_with_composition;
-    use crate::{NodeRef, Store};
     use crate::exec::CtxSource;
     use crate::exec::live_scope::LiveRoot;
+    use crate::{NodeRef, Store};
     use electricity_template::{JsonAwareCtx, PlainCtx};
     use electricity_value::Value;
     use indexmap::IndexMap;

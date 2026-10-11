@@ -1734,7 +1734,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
 
         let store = Store::new();
-        let prime = store.ensure_dict(&store.root, Value::from("prime")).unwrap();
+        let prime = store
+            .ensure_dict(&store.root, Value::from("prime"))
+            .unwrap();
         let already_ran = store
             .ensure_dict(&prime, Value::from("already_ran"))
             .unwrap();
