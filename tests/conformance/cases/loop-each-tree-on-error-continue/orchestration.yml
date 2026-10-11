@@ -1,0 +1,21 @@
+name: loop-each-tree-on-error-continue
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: loop
+    name: shots
+    flow: tree
+    on_error: continue
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {item: "{{item}}"}}
+      - type: tool
+        name: gate
+        provider: json
+        params: {mode: parse, input: "{{item}}"}
+        expect: {mode: cel, expr: "value != 2"}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "collect: step with a later body step (gate) that fails for every item but one (expect: value == 2): collected.value reads only the passes that completed before the later failure, in pass order -- a pass where `step` itself already wrote a value, but `gate` then failed, is excluded entirely.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

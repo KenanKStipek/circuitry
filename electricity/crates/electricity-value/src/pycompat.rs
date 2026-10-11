@@ -50,6 +50,10 @@ pub enum PyExc {
     /// use_call_stack`) raises this, not `ValueError` -- still not
     /// retried, the same as `ValueError`.
     RecursionError,
+    /// `str.encode(encoding)`'s own strict-mode failure (lane D1's
+    /// `fs`/`hash` tools: appended here, never a change to an
+    /// existing variant's spelling, per this enum's own doc comment).
+    UnicodeEncodeError,
 }
 
 impl PyExc {
@@ -71,6 +75,7 @@ impl PyExc {
             PyExc::UnicodeDecodeError => "UnicodeDecodeError",
             PyExc::OverflowError => "OverflowError",
             PyExc::RecursionError => "RecursionError",
+            PyExc::UnicodeEncodeError => "UnicodeEncodeError",
         }
     }
 }

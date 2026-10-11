@@ -1,0 +1,22 @@
+{"v":1,"seq":0,"ts":"2026-10-11T08:37:34.679Z","ev":"run_start","run_id":"4d5eeda8-af30-40a9-87f6-8c1a3ee079e6","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":66659}
+{"v":1,"seq":1,"ts":"2026-10-11T08:37:34.683Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T08:37:34.683Z","ev":"start","id":1,"path":"prime.make_dir"}
+{"v":1,"seq":3,"ts":"2026-10-11T08:37:34.683Z","ev":"end","id":1,"path":"prime.make_dir","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T08:37:34.683Z","ev":"start","id":2,"path":"prime.read_1"}
+{"v":1,"seq":5,"ts":"2026-10-11T08:37:34.683Z","ev":"end","id":2,"path":"prime.read_1","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T08:37:34.683Z","ev":"start","id":3,"path":"prime.append_1"}
+{"v":1,"seq":7,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":3,"path":"prime.append_1","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":4,"path":"prime.read_2"}
+{"v":1,"seq":9,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":4,"path":"prime.read_2","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":5,"path":"prime.list_1"}
+{"v":1,"seq":11,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":5,"path":"prime.list_1","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":6,"path":"prime.exists_1"}
+{"v":1,"seq":13,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":6,"path":"prime.exists_1","ok":true,"ms":0}
+{"v":1,"seq":14,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":7,"path":"prime.delete_1"}
+{"v":1,"seq":15,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":7,"path":"prime.delete_1","ok":true,"ms":0}
+{"v":1,"seq":16,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":8,"path":"prime.exists_2"}
+{"v":1,"seq":17,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":8,"path":"prime.exists_2","ok":true,"ms":0}
+{"v":1,"seq":18,"ts":"2026-10-11T08:37:34.684Z","ev":"start","id":9,"path":"prime.delete_recursive"}
+{"v":1,"seq":19,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":9,"path":"prime.delete_recursive","ok":true,"ms":0}
+{"v":1,"seq":20,"ts":"2026-10-11T08:37:34.684Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":21,"ts":"2026-10-11T08:37:34.684Z","ev":"run_end","ok":true}

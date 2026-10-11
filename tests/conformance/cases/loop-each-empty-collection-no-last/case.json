@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A named each loop over an empty (but resolved) collection: zero passes run, termination.reason is collection_exhausted (not collection_unresolved), and the node has no `last` key at all -- a missing key, not an empty/null one.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

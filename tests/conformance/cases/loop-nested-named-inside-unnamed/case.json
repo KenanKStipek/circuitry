@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A named loop (inner) inside an unnamed outer loop: the outer loop runs twice, each time re-executing inner against the exact same node (the unnamed outer loop has no iter_<N> segmentation of its own) -- prime.inner ends up at one single path regardless, reflecting only the last outer pass's own run.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,14 @@
+name: loop-while-prev
+effects:
+  - type: loop
+    name: counter
+    while: {mode: cel, expr: "state.iter.count < 3"}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params:
+          mode: stringify
+          input:
+            index: "{{iter.index}}"
+            prev: "{{prime.counter.prev.step.value}}"

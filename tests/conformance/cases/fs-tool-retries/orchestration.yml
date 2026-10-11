@@ -1,0 +1,8 @@
+name: fs-tool-retries
+effects:
+  - type: tool
+    name: always_missing
+    provider: fs
+    on_error: continue
+    retries: {max_attempts: 2, backoff_ms: 0}
+    params: {mode: read, path: "does-not-exist.txt"}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "C11",
+  "description": "each loop, collection (3 items) longer than max_iterations (1), each.truncate unset (false), on_error: fail (electricity/docs/spec/runtime-semantics.md §5.4): LoopBoundsError raised before any pass ever dispatches -- exact message, em dash included.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "C11",
+  "description": "Same bounds shape as c11-each-bounds-error-fail, this time each.truncate: true (electricity/docs/spec/runtime-semantics.md §5.4): the loop runs the first max_iterations item and records termination.reason: max_iterations_reached with unvisited: 2 -- no LoopBoundsError at all.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

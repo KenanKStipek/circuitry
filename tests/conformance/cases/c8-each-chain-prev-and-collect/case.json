@@ -1,0 +1,6 @@
+{
+  "spec_case": "C8",
+  "description": "Named each loop, flow: chain, 3 items, body reads prime.refine.prev.step.value on pass 2/3 (electricity/docs/spec/runtime-semantics.md \u00a72.3/\u00a72.4): prev absent on pass 0, correct on later passes; collect: step aggregates every pass's own value. The disabled-step-via-profile half of C8 is lane J2's own scope, not this lane's.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

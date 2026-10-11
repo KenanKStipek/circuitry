@@ -1,0 +1,6 @@
+name: clock-unknown-timezone
+effects:
+  - type: tool
+    name: unknown_timezone
+    provider: clock
+    params: {timezone: "Not/AZone"}

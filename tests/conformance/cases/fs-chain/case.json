@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #460 test plan ('fs' chain)",
+  "description": "write -> read -> append -> read -> list -> exists -> delete in a subdirectory the case creates, then exists again on the now-deleted file, then a final recursive delete of the (now-empty) directory. 'stat' mode is not exercised here: its own mtime is real wall-clock data this document's fixed expected.json can't pin.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

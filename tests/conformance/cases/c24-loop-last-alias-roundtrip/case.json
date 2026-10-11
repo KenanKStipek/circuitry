@@ -1,0 +1,6 @@
+{
+  "spec_case": "C24",
+  "description": "Named each loop, 3 items: last aliases iter_2 in memory (electricity/docs/spec/runtime-semantics.md §2.3) -- --out writes \"last\": {\"$ref\": \"iter_2\"} rather than a copy of iter_2's own content.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

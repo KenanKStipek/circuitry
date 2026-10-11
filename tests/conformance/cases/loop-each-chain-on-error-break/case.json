@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "Named each loop, flow: chain, on_error: break: the gate on item 2 fails, stopping the loop (termination reason error, completed_passes [0], failed_passes [1]) without raising -- the orchestration itself still succeeds and runs the step after the loop (companion of loop-each-chain-on-error-continue's sibling tree cases).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

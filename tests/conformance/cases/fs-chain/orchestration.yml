@@ -1,0 +1,38 @@
+name: fs-chain
+effects:
+  - type: tool
+    name: make_dir
+    provider: fs
+    params: {mode: write, path: "scratch/greeting.txt", content: "hello"}
+  - type: tool
+    name: read_1
+    provider: fs
+    params: {mode: read, path: "scratch/greeting.txt"}
+  - type: tool
+    name: append_1
+    provider: fs
+    params: {mode: append, path: "scratch/greeting.txt", content: " world"}
+  - type: tool
+    name: read_2
+    provider: fs
+    params: {mode: read, path: "scratch/greeting.txt"}
+  - type: tool
+    name: list_1
+    provider: fs
+    params: {mode: list, path: "scratch"}
+  - type: tool
+    name: exists_1
+    provider: fs
+    params: {mode: exists, path: "scratch/greeting.txt"}
+  - type: tool
+    name: delete_1
+    provider: fs
+    params: {mode: delete, path: "scratch/greeting.txt"}
+  - type: tool
+    name: exists_2
+    provider: fs
+    params: {mode: exists, path: "scratch/greeting.txt"}
+  - type: tool
+    name: delete_recursive
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

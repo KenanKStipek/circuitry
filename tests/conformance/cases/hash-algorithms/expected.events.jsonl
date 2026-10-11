@@ -1,0 +1,28 @@
+{"v":1,"seq":0,"ts":"2026-10-11T08:39:19.510Z","ev":"run_start","run_id":"294ec9e1-50c1-482d-b723-2a557349f784","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":69176}
+{"v":1,"seq":1,"ts":"2026-10-11T08:39:19.516Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T08:39:19.516Z","ev":"start","id":1,"path":"prime.hex_md5"}
+{"v":1,"seq":3,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":1,"path":"prime.hex_md5","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":2,"path":"prime.hex_sha1"}
+{"v":1,"seq":5,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":2,"path":"prime.hex_sha1","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":3,"path":"prime.hex_sha224"}
+{"v":1,"seq":7,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":3,"path":"prime.hex_sha224","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":4,"path":"prime.hex_sha256"}
+{"v":1,"seq":9,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":4,"path":"prime.hex_sha256","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":5,"path":"prime.hex_sha384"}
+{"v":1,"seq":11,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":5,"path":"prime.hex_sha384","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":6,"path":"prime.hex_sha512"}
+{"v":1,"seq":13,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":6,"path":"prime.hex_sha512","ok":true,"ms":0}
+{"v":1,"seq":14,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":7,"path":"prime.hex_sha3_256"}
+{"v":1,"seq":15,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":7,"path":"prime.hex_sha3_256","ok":true,"ms":0}
+{"v":1,"seq":16,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":8,"path":"prime.hex_sha3_512"}
+{"v":1,"seq":17,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":8,"path":"prime.hex_sha3_512","ok":true,"ms":0}
+{"v":1,"seq":18,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":9,"path":"prime.hex_blake2b"}
+{"v":1,"seq":19,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":9,"path":"prime.hex_blake2b","ok":true,"ms":0}
+{"v":1,"seq":20,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":10,"path":"prime.hex_blake2s"}
+{"v":1,"seq":21,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":10,"path":"prime.hex_blake2s","ok":true,"ms":0}
+{"v":1,"seq":22,"ts":"2026-10-11T08:39:19.517Z","ev":"start","id":11,"path":"prime.base64_sha256"}
+{"v":1,"seq":23,"ts":"2026-10-11T08:39:19.517Z","ev":"end","id":11,"path":"prime.base64_sha256","ok":true,"ms":0}
+{"v":1,"seq":24,"ts":"2026-10-11T08:39:19.518Z","ev":"start","id":12,"path":"prime.unsupported_algorithm"}
+{"v":1,"seq":25,"ts":"2026-10-11T08:39:19.518Z","ev":"end","id":12,"path":"prime.unsupported_algorithm","ok":false,"ms":0,"error":"hash: unsupported algorithm 'bogus'. Supported: ['blake2b', 'blake2s', 'md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha3_256', 'sha3_512', 'sha512']"}
+{"v":1,"seq":26,"ts":"2026-10-11T08:39:19.518Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":27,"ts":"2026-10-11T08:39:19.518Z","ev":"run_end","ok":true}

@@ -1,0 +1,15 @@
+name: c11-each-truncate
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: loop
+    name: shots
+    max_iterations: 1
+    each: {in: "prime.seed.value", as: "item", truncate: true}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {item: "{{item}}"}}
