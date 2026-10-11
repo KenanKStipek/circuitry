@@ -1,0 +1,14 @@
+name: env-vars-get-and-list
+effects:
+  - type: tool
+    name: get_unset_with_default
+    provider: env_vars
+    params: {mode: get, name: "D1_DOES_NOT_EXIST", default: "fallback"}
+  - type: tool
+    name: list_prefix_matches_nothing
+    provider: env_vars
+    params: {mode: list, prefix: "D1_NO_SUCH_PREFIX_"}
+  - type: tool
+    name: list_api_key_boundary
+    provider: env_vars
+    params: {mode: list, prefix: "D1_CASE12_"}

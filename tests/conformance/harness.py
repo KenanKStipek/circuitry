@@ -96,6 +96,7 @@ _CASE_JSON_KEYS = frozenset(
         "orchestration",
         "timeout_seconds",
         "sort_warnings",
+        "env",
     }
 )
 _VALID_EXPECT = frozenset({"success", "failure"})
@@ -126,6 +127,16 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("electricity_preview_ok", False)
     metadata.setdefault("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     metadata.setdefault("sort_warnings", False)
+    metadata.setdefault("env", None)
+
+    env = metadata["env"]
+    if env is not None:
+        if not isinstance(env, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env.items()
+        ):
+            raise ValueError(
+                f"{case_dir.name}: case.json 'env' must be a mapping of str to str"
+            )
 
     if not isinstance(metadata["electricity_preview_ok"], bool):
         raise ValueError(f"{case_dir.name}: case.json 'electricity_preview_ok' must be a bool")
@@ -212,7 +223,11 @@ def load_case(case_dir: Path) -> dict[str, Any]:
 
 
 def _sandboxed_env(
-    case_dir: Path, home_dir: Path, *, leftover_replies_path: Path | None = None
+    case_dir: Path,
+    home_dir: Path,
+    *,
+    leftover_replies_path: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     env = {
         k: v
@@ -223,6 +238,15 @@ def _sandboxed_env(
     fakes_dir = case_dir / "fakes"
     if fakes_dir.is_dir():
         env["PATH"] = f"{fakes_dir}{os.pathsep}{env.get('PATH', '')}"
+    # A case's own `case.json` 'env' key (issue #460's own test plan: "if a
+    # case needs a controlled variable, add an env key to case.json in the
+    # harness") -- applied after every filter above, so a case can set a
+    # name the filter would otherwise have dropped (nothing here can ever
+    # be a credential or a `CIRCUITRY_*` override: `load_case` validates
+    # 'env' is a plain `str -> str` mapping, and a case author controls
+    # its own contents).
+    if extra_env:
+        env.update(extra_env)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
     # variable the harness itself injects for this one subprocess, not
     # inherited from the caller's shell (electricity/docs/spec/
@@ -398,7 +422,12 @@ def run_case(
     proc = subprocess.run(
         cmd,
         cwd=case_dir,
-        env=_sandboxed_env(case_dir, home_dir, leftover_replies_path=leftover_replies_path),
+        env=_sandboxed_env(
+            case_dir,
+            home_dir,
+            leftover_replies_path=leftover_replies_path,
+            extra_env=metadata.get("env"),
+        ),
         capture_output=True,
         text=True,
         timeout=metadata.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS),

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #460 test plan ('hash' algorithms)",
+  "description": "hex and base64 output for every `hash` algorithm `hashlib` supports here, plus the exact unsupported-algorithm text (Python's sorted() list repr).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

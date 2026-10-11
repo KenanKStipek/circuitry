@@ -1,0 +1,51 @@
+name: hash-algorithms
+effects:
+  - type: tool
+    name: hex_md5
+    provider: hash
+    params: {algorithm: md5, input: "hello"}
+  - type: tool
+    name: hex_sha1
+    provider: hash
+    params: {algorithm: sha1, input: "hello"}
+  - type: tool
+    name: hex_sha224
+    provider: hash
+    params: {algorithm: sha224, input: "hello"}
+  - type: tool
+    name: hex_sha256
+    provider: hash
+    params: {algorithm: sha256, input: "hello"}
+  - type: tool
+    name: hex_sha384
+    provider: hash
+    params: {algorithm: sha384, input: "hello"}
+  - type: tool
+    name: hex_sha512
+    provider: hash
+    params: {algorithm: sha512, input: "hello"}
+  - type: tool
+    name: hex_sha3_256
+    provider: hash
+    params: {algorithm: sha3_256, input: "hello"}
+  - type: tool
+    name: hex_sha3_512
+    provider: hash
+    params: {algorithm: sha3_512, input: "hello"}
+  - type: tool
+    name: hex_blake2b
+    provider: hash
+    params: {algorithm: blake2b, input: "hello"}
+  - type: tool
+    name: hex_blake2s
+    provider: hash
+    params: {algorithm: blake2s, input: "hello"}
+  - type: tool
+    name: base64_sha256
+    provider: hash
+    params: {algorithm: sha256, input: "hello", output_format: base64}
+  - type: tool
+    name: unsupported_algorithm
+    provider: hash
+    on_error: continue
+    params: {algorithm: bogus, input: "hello"}

@@ -1,0 +1,20 @@
+name: fs-delete-branches
+effects:
+  - type: tool
+    name: delete_missing
+    provider: fs
+    on_error: continue
+    params: {mode: delete, path: "does-not-exist"}
+  - type: tool
+    name: make_dir
+    provider: fs
+    params: {mode: write, path: "nonempty/file.txt", content: "x"}
+  - type: tool
+    name: delete_without_recursive
+    provider: fs
+    on_error: continue
+    params: {mode: delete, path: "nonempty"}
+  - type: tool
+    name: delete_with_recursive
+    provider: fs
+    params: {mode: delete, path: "nonempty", recursive: true}

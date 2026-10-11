@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §7 case 4",
+  "description": "`fs` delete's three branches, one effect each: a missing path (value: false, no error), a non-empty directory without recursive (raises IsADirectoryError, on_error: continue so the run still finishes), and the same directory with recursive: true (succeeds).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
