@@ -898,3 +898,109 @@ def test_retention_cap_evicts_the_oldest_terminal_run_not_a_live_one(
                     mgr.cancel_run(run_id)
                 except KeyError:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# 16. Unnamed tree loops settle without a None path (#470, #475)
+# ---------------------------------------------------------------------------
+
+
+def test_two_unnamed_tree_loops_in_a_row_complete_through_run_manager(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """An unnamed `flow: tree` `each` loop's `self.defn.name` is `None` —
+    its tree-each branch calls `store.fire_branch_settled(None)` after
+    every pass. `RunManager` is the only caller that ever sets
+    `branch_settled` (`_on_branch_settled` above), so this is the one path
+    that reaches `Store.fire_branch_settled` with a `None` name for real.
+    Before the `own_path` fallback, `effect_path(None)` raised inside the
+    loop's own `finally`, which cancelled the remaining passes and failed
+    the whole run (#475 review finding 1). Two such loops back to back
+    must not confuse `RunManager`'s settle-point accounting either."""
+    p = _write_yml(tmp_path, "two_unnamed_trees.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: loop
+            flow: tree
+            each:
+              in: input.items
+              as: it
+            body:
+              - type: prompt
+                name: ask1
+                template: "Q1: {{it}}"
+          - type: loop
+            flow: tree
+            each:
+              in: input.items
+              as: it
+            body:
+              - type: prompt
+                name: ask2
+                template: "Q2: {{it}}"
+    """)
+    run = mgr.start_run(
+        orchestration_path=p, initial_state={"items": ["a", "b"]},
+    )
+
+    assert _wait_until(lambda: len(run.pending_prompts) == 2, timeout=2.0)
+    first_pids = list(run.pending_prompts)
+    for pid in first_pids:
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r1-{pid[:4]}")
+
+    assert _wait_until(
+        lambda: len(run.pending_prompts) == 2
+        and not run.pending_prompts.keys() & set(first_pids),
+        timeout=2.0,
+    )
+    second_pids = list(run.pending_prompts)
+    for pid in second_pids:
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r2-{pid[:4]}")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status
+
+
+def test_unnamed_tree_loop_nested_inside_a_named_tree_loop_completes(
+    mgr: RunManager, tmp_path: Path
+) -> None:
+    """A nested case the single-loop test above doesn't cover: the inner
+    unnamed loop's `store.fire_concurrent_dispatch(None, ...)`/
+    `fire_branch_settled(None)` now run on an isolated branch store of the
+    *outer* loop (`Store.parallel_branches`, #475 R5's `own_path`/prefix
+    fix), not the root store `test_two_unnamed_tree_loops_in_a_row...`
+    exercises — a different call site reaching the same `None`-name
+    fallback. `RunManager` ignores the path either way, so this only
+    guards against the crash, not the path value itself (covered instead
+    by the `loop-nested-tree-dispatch-paths` conformance case)."""
+    p = _write_yml(tmp_path, "nested_unnamed_tree.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: loop
+            name: outer
+            flow: tree
+            each:
+              in: input.items
+              as: x
+            body:
+              - type: loop
+                flow: tree
+                each:
+                  in: input.sub
+                  as: y
+                body:
+                  - type: prompt
+                    name: ask
+                    template: "Q: {{x}}-{{y}}"
+    """)
+    run = mgr.start_run(
+        orchestration_path=p,
+        initial_state={"items": ["a", "b"], "sub": ["1", "2"]},
+    )
+
+    assert _wait_until(lambda: len(run.pending_prompts) == 4, timeout=2.0)
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r-{pid[:4]}")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status

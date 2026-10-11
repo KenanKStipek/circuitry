@@ -178,19 +178,19 @@ fn render_node(
 /// segment that indexes into a non-container -- never an error, same as
 /// an unset template path.
 fn resolve_reference(ctx: &Value, path: &str) -> Option<Value> {
-    let mut current = ctx.clone();
+    let mut current = ctx;
     for part in path.split('.') {
-        current = match &current {
-            Value::Dict(dict) => dict.get(&Value::Str(part.to_string()))?.clone(),
+        current = match current {
+            Value::Dict(dict) => dict.get(&Value::Str(part.to_string()))?,
             Value::List(items) => {
                 let index: i64 = part.parse().ok()?;
                 let resolved = python_list_index(items.len(), index)?;
-                items[resolved].clone()
+                &items[resolved]
             }
             _ => return None,
         };
     }
-    Some(current)
+    Some(current.clone())
 }
 
 /// Python list indexing (negative indices count from the end) -- `None`
@@ -437,6 +437,36 @@ mod tests {
         assert_eq!(
             rendered.get(&Value::Str("n".to_string())),
             Some(&Value::from(5i64))
+        );
+    }
+
+    #[test]
+    fn a_from_reference_resolves_through_a_list_index() {
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("n".to_string()),
+            ParamNode::From {
+                path: "input.items.1".to_string(),
+                default: None,
+            },
+        );
+        let ctx = ctx_from(vec![(
+            "input",
+            ctx_from(vec![(
+                "items",
+                Value::List(vec![
+                    Value::from(1i64),
+                    Value::from(2i64),
+                    Value::from(3i64),
+                ]),
+            )]),
+        )]);
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap();
+        assert_eq!(
+            rendered.get(&Value::Str("n".to_string())),
+            Some(&Value::from(2i64))
         );
     }
 
