@@ -1,0 +1,13 @@
+name: use-record-children-config
+effects:
+  - type: use
+    name: step
+    inline: |
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: recorded}
+    outputs:
+      result:
+        path: prime.inner.value

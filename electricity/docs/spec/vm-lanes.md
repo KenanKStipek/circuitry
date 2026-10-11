@@ -15,6 +15,7 @@ reality: a lane that fills in a stub should update the row(s) it touches in the 
 | `electricity-compiler` | `src/pipeline.rs` | `post_state_checks` | A | Final: structural checks, compile, groups, cycles, digest (step 14). |
 | `electricity-compiler` | `src/pipeline.rs` | `check_for_run` | A | Final: the three phases' exact composition -- unchanged behaviour. |
 | `electricity-compiler` | `src/pipeline.rs` | `build_input_namespace` | A | Final: returns the coerced/defaulted namespace, not just a verdict. |
+| `electricity-compiler` | `src/pipeline.rs` | `apply_declared_inputs` | A (widened I) | Lane A's own private default-fill/require/coerce mutation (`build_input_namespace`'s own helper), widened to `pub` (issue #469): a `use` effect's own `interface.inputs` check (`exec/use_.rs`'s own row) reuses it directly on a child's already-rendered inputs namespace, rather than duplicating the coercion matrix. Additive and behaviour-preserving for every existing caller. |
 | `electricity-bytecode` | `src/param.rs` | `ParamNode::Map` | A | Final: keyed by `Value`, not `String`. |
 | `electricity-bytecode` | `src/program.rs` | `DocumentInfo::digest` | A | Final: `Option<String>`. |
 | `electricity-bytecode` | `src/path.rs` | `EffectPath::{Display,concretize}` | A | Final and complete -- no further lane needed. |

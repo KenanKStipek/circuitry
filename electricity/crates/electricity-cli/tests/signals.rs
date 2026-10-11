@@ -455,6 +455,61 @@ effects:
     );
 }
 
+/// Lane I (issue #469), orchestrator ruling R3 on PR #472's review:
+/// a SIGINT while a `use` child is running must exit 130 and leave no
+/// trace of the child's own effect having run -- `VmError::Cancelled`
+/// bypasses `execute_use`'s own output-mapping/retry bookkeeping
+/// entirely (the same rule every other container follows), so the use
+/// node itself never gets a `completed_at`, and the child's own
+/// full-passthrough keys (which only ever land on a *successful*
+/// child run) never appear at all -- not even a stale mid-run graft,
+/// since [`run_isolated_inner`] always clears it before returning,
+/// cancelled or not.
+#[test]
+fn sigint_during_a_use_child_exits_130_with_no_leftover_child_effects() {
+    const DOC: &str = "\
+effects:
+  - name: wrapper
+    type: use
+    inline: |
+      effects:
+        - name: slow
+          type: tool
+          provider: sleep
+          params: {seconds: 30}
+finally:
+  - name: cleanup
+    type: tool
+    provider: sleep
+    params: {seconds: 5}
+";
+    let home = TempHome::new("sigint-use-child");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", DOC);
+    let out = home.path.join("out.json");
+    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
+    wait_until_running(&home);
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert!(out.exists());
+    assert_finally_ran(&out);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let wrapper = &state["prime"]["wrapper"];
+    assert!(
+        wrapper["meta"]["completed_at"].is_null(),
+        "a use node cancelled mid-child must never complete: {state}"
+    );
+    assert!(
+        wrapper.get("slow").is_none(),
+        "the child's own effect must never be merged onto the use node \
+         when the run was cancelled before it finished: {state}"
+    );
+}
+
 /// Not `#[ignore]`: proves the test harness itself (process group,
 /// signal delivery, teardown) works today, independent of lanes B/C --
 /// a `--help` child isn't long-running, so SIGINT just has to reach it

@@ -76,7 +76,9 @@ use crate::exec::{CtxChain, live_ctx, store_err};
 use crate::observer::InstanceId;
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
-use electricity_bytecode::{EffectPath, ExpectCondition, OnError, Op, Program, UseOp, UseSource};
+use electricity_bytecode::{
+    EffectPath, ExpectCondition, OnError, Op, PathSegment, Program, UseOp, UseSource,
+};
 use electricity_value::pycompat::PyExc;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -165,7 +167,7 @@ fn validation_failed_text(label: &str, errors: &[String]) -> String {
 }
 
 /// `core/use.py::_clean_yaml_fences`.
-fn clean_yaml_fences(text: &str) -> String {
+pub fn clean_yaml_fences(text: &str) -> String {
     let mut lines: Vec<&str> = Vec::new();
     for line in text.lines() {
         let stripped = line.trim();
@@ -180,7 +182,7 @@ fn clean_yaml_fences(text: &str) -> String {
 /// `core/use.py::_validate_inline_yaml` -- `Ok(())` once *cleaned* (as
 /// a parsed [`Value`]) is confirmed a mapping with an `effects` key and
 /// passes `structural_errors`; `Err` the first violation's own text(s).
-fn validate_inline_yaml(parsed: &Value) -> Result<(), Vec<String>> {
+pub fn validate_inline_yaml(parsed: &Value) -> Result<(), Vec<String>> {
     let Some(dict) = parsed.as_dict() else {
         return Err(vec![
             "Inline orchestration must be a YAML mapping with an 'effects' key.".to_string(),
@@ -202,7 +204,22 @@ fn validate_inline_yaml(parsed: &Value) -> Result<(), Vec<String>> {
 /// `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()` -- the full
 /// lowercase hex digest; [`Frame::push_use`]'s own identity is this
 /// string's first 16 characters, applied by the caller.
-fn sha256_hex(bytes: &[u8]) -> String {
+/// `core/expect.py::expect_failure_summary`'s own model-mode half --
+/// the CEL half is just `defn.expr`, used verbatim everywhere above.
+/// Whitespace-collapsed and capped at 80 characters (Python's own
+/// `collapsed[:80]` is a codepoint slice, matched here with `chars()`
+/// rather than a byte slice).
+fn expect_model_summary(source: &str) -> String {
+    let collapsed = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= 80 {
+        collapsed
+    } else {
+        let truncated: String = collapsed.chars().take(80).collect();
+        format!("{truncated}...")
+    }
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -253,7 +270,7 @@ fn normalize_one_output_runtime(spec: &Value, context: &str, key: &str) -> Resul
 /// `core/outputs.py::normalize_outputs`, against the raw
 /// `interface.outputs` value directly -- `None` for an absent/falsy
 /// value, matching Python's own `if not raw: return None`.
-fn normalize_outputs_runtime(
+pub fn normalize_outputs_runtime(
     raw: Option<&Value>,
     context: &str,
 ) -> Result<Option<IndexMap<String, String>>, String> {
@@ -284,7 +301,7 @@ fn normalize_outputs_runtime(
 /// index, unlike [`resolve_reference`]'s own by-reference-input walk):
 /// `Value::None` the moment any segment is missing or the current
 /// value isn't a dict.
-fn resolve_dot_path(state: &Value, dot_path: &str) -> Value {
+pub fn resolve_dot_path(state: &Value, dot_path: &str) -> Value {
     let mut current = state.clone();
     for part in dot_path.split('.') {
         let Some(next) = current
@@ -304,7 +321,7 @@ fn resolve_dot_path(state: &Value, dot_path: &str) -> Value {
 /// path built up so far; the child root itself reports as
 /// [`CHILD_ROOT`] (`"prime"`), matching Python's own `prefix or
 /// _CHILD_ROOT`.
-fn collect_child_errors(node: &Value, prefix: &str) -> Vec<(String, Value)> {
+pub fn collect_child_errors(node: &Value, prefix: &str) -> Vec<(String, Value)> {
     let mut errors = Vec::new();
     let Some(dict) = node.as_dict() else {
         return errors;
@@ -345,7 +362,7 @@ fn collect_child_errors(node: &Value, prefix: &str) -> Vec<(String, Value)> {
 /// (a [`Slot::Node`] copies as an `Rc` clone of the exact same live
 /// child, not a flattened snapshot -- the same aliasing [`Store::
 /// merge`]'s own doc comment explains matters for a loop's `last`).
-fn graft_child_record(node: &NodeRef, child_prime: &NodeRef) {
+pub fn graft_child_record(node: &NodeRef, child_prime: &NodeRef) {
     let entries: Vec<(Value, Slot)> = child_prime
         .borrow()
         .iter()
@@ -484,32 +501,45 @@ async fn load_child(
                 matches!(text.escape, electricity_bytecode::Escape::Html),
             )?;
             let cleaned = clean_yaml_fences(&rendered);
-            if validate {
-                let parsed_for_validation = electricity_yaml::load_yaml(&cleaned)
-                    .map_err(|e| format!("YAML parse error: {e}"))
-                    .and_then(|parsed| {
-                        validate_inline_yaml(&parsed).map_err(|errors| {
-                            format!(
-                                "Inline orchestration validation failed:\n{}",
-                                errors
-                                    .iter()
-                                    .map(|e| format!("  - {e}"))
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            )
-                        })?;
-                        Ok(parsed)
-                    });
-                let _ = parsed_for_validation?;
-            }
-            let document = electricity_yaml::load_yaml(&cleaned)
-                .map_err(|e| format!("YAML parse error: {e}"))?;
-            if document.as_dict().is_none() {
-                return Err(
-                    "Inline orchestration must be a YAML mapping with an 'effects' key."
-                        .to_string(),
-                );
-            }
+            // `core/use.py::_resolve_orchestration`'s own inline branch
+            // (`use.py:566-577`): with `validate: true`, *every* failure
+            // -- a YAML parse error included -- goes through
+            // `_validate_inline_yaml`'s own `(ok, errors)` and is wrapped
+            // in the "Inline orchestration validation failed:" text; with
+            // `validate: false`, a parse error propagates with no prefix
+            // at all (`str(yaml_error)`), and a non-mapping result gives
+            // the bare "...must be a YAML mapping..." text with no
+            // wrapper, since `_validate_inline_yaml` is never called.
+            let document = if validate {
+                let errors: Vec<String> = match electricity_yaml::load_yaml(&cleaned) {
+                    Err(e) => vec![format!("YAML parse error: {e}")],
+                    Ok(parsed) => match validate_inline_yaml(&parsed) {
+                        Ok(()) => Vec::new(),
+                        Err(errors) => errors,
+                    },
+                };
+                if !errors.is_empty() {
+                    return Err(format!(
+                        "Inline orchestration validation failed:\n{}",
+                        errors
+                            .iter()
+                            .map(|e| format!("  - {e}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+                }
+                electricity_yaml::load_yaml(&cleaned)
+                    .map_err(|e| format!("YAML parse error: {e}"))?
+            } else {
+                let parsed = electricity_yaml::load_yaml(&cleaned).map_err(|e| e.to_string())?;
+                if parsed.as_dict().is_none() {
+                    return Err(
+                        "Inline orchestration must be a YAML mapping with an 'effects' key."
+                            .to_string(),
+                    );
+                }
+                parsed
+            };
             let digest = sha256_hex(cleaned.as_bytes());
             let identity = format!("inline:{}", &digest[..16]);
             // Inline children inherit the current `orchestration_dir`
@@ -589,8 +619,16 @@ enum AttemptProblem {
     NotRetried { message: String, py_class: PyExc },
     /// Anything else (the child's own propagated failure, a failed
     /// `expect:`) -- retried while attempts remain. Always a
-    /// `RuntimeError` class, same as Python's own wrap.
-    Retryable(String),
+    /// `RuntimeError` class, same as Python's own wrap. *child_record*
+    /// is the child's own `prime` [`NodeRef`] (`record_children` only,
+    /// and only for a failure the child's own run raised), carried out
+    /// so [`execute_use`] can graft it once -- never twice, never for a
+    /// retried attempt -- only if this attempt turns out to be the
+    /// last one.
+    Retryable {
+        message: String,
+        child_record: Option<NodeRef>,
+    },
 }
 
 fn not_retried(message: String) -> AttemptProblem {
@@ -818,7 +856,11 @@ async fn attempt_once(
         model_locked: run_ctx.model_locked,
         adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
         complexity: run_ctx.complexity,
-        decomposition_depth: run_ctx.decomposition_depth + 1,
+        // `core/use.py::_run_isolated_child`'s child `RunConfig` copies
+        // `_decomposition_depth` unchanged (`use.py:877-879`) -- only
+        // decomposition's own child increments it (`decompose.py:
+        // 694-698`), so a `use` child must not count as one more level.
+        decomposition_depth: run_ctx.decomposition_depth,
         orchestration_dir: &document_dir,
         declared_prompts: &child_program.prompts,
         effect_names: &child_program.effect_names,
@@ -868,14 +910,32 @@ async fn attempt_once(
             }));
         }
         Err(other) => {
-            if record_children {
-                if let Ok(Some(child_prime_node)) =
-                    child_store.child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
-                {
-                    graft_child_record(effect_node, &child_prime_node);
-                }
-            }
-            return Err(AttemptProblem::Retryable(other.to_string()));
+            // `core/use.py`'s own `record_children` graft for *this*
+            // failure mode -- the child's own run raising mid-way --
+            // only ever happens from the outer `except`, once this
+            // attempt's failure has already been decided final
+            // (`use.py:1121-1127`); a retryable attempt's own `except`
+            // (`use.py:1082-1094`) sets `meta["error"]` and loops again
+            // with no graft at all. Grafting unconditionally here, on
+            // every attempt, would let a key only a now-discarded
+            // attempt's own child ever wrote survive a later successful
+            // retry (review finding 8 on PR #472) -- so the record is
+            // only *collected* here (a live `NodeRef`, not a `Value`
+            // snapshot, to keep `graft_child_record`'s own node-identity
+            // preservation) and [`execute_use`] grafts it, only once it
+            // knows this attempt will not be retried.
+            let child_record = if record_children {
+                child_store
+                    .child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            return Err(AttemptProblem::Retryable {
+                message: other.to_string(),
+                child_record,
+            });
         }
         Ok(()) => {}
     }
@@ -907,6 +967,16 @@ async fn attempt_once(
         }
     }
 
+    // `meta.expect` is written on every attempt that reaches a
+    // successful child run, pass or fail -- `core/use.py::UseRuntime.
+    // execute` sets it unconditionally before deciding whether the
+    // outcome fails the attempt (`use.py:1036-1047`), mirroring `core/
+    // tool.py`'s own `expect_meta` block (`tool.rs`'s own CEL/model
+    // arms). A CEL evaluation error and a model-mode answer-parse
+    // failure are both ordinary attempt failures (retried, never
+    // fatal); only a fatal `VmError` out of the model-mode stub (a
+    // cancellation or a refusal reached while rendering/dispatching)
+    // propagates as fatal.
     if let Some(expect) = &use_op.expect {
         let value_snapshot = store.snapshot(effect_node);
         let value_for_expect = value_snapshot
@@ -917,19 +987,38 @@ async fn attempt_once(
         let meta_snapshot = store.snapshot(meta_node);
         match expect {
             ExpectCondition::Cel { expr } => {
+                let mut expect_meta = IndexMap::new();
+                expect_meta.insert(Value::from("mode"), Value::from("cel"));
+                expect_meta.insert(Value::from("expr"), Value::from(expr.as_str()));
                 match electricity_cel::evaluate_expect(expr, &value_for_expect, &meta_snapshot, ctx)
                 {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return Err(AttemptProblem::Retryable(format!("expect failed: {expr}")));
+                    Ok(passed) => {
+                        expect_meta.insert(Value::from("result"), Value::Bool(passed));
+                        set_leaf(store, meta_node, "expect", Value::Dict(expect_meta));
+                        if !passed {
+                            return Err(AttemptProblem::Retryable {
+                                message: format!("expect failed: {expr}"),
+                                child_record: None,
+                            });
+                        }
                     }
-                    Err(_) => {
-                        return Err(AttemptProblem::Retryable(format!("expect failed: {expr}")));
+                    Err(cel_err) => {
+                        expect_meta.insert(
+                            Value::from("error"),
+                            Value::from(cel_err.to_string().as_str()),
+                        );
+                        expect_meta.insert(Value::from("result"), Value::Bool(false));
+                        set_leaf(store, meta_node, "expect", Value::Dict(expect_meta));
+                        return Err(AttemptProblem::Retryable {
+                            message: format!("expect failed: {expr}"),
+                            child_record: None,
+                        });
                     }
                 }
             }
             ExpectCondition::Model { template } => {
                 let effect_path = frame.effect_path(&op.path);
+                let summary = expect_model_summary(&template.source);
                 match crate::exec::condition_model::evaluate_model_expect(
                     template,
                     &value_for_expect,
@@ -941,14 +1030,46 @@ async fn attempt_once(
                 )
                 .await
                 {
-                    Ok(outcome) if outcome.passed => {}
-                    Ok(_) => {
-                        return Err(AttemptProblem::Retryable(format!(
-                            "expect failed: {}",
-                            template.source
-                        )));
+                    Ok(outcome) => {
+                        let mut expect_meta = IndexMap::new();
+                        expect_meta.insert(Value::from("mode"), Value::from("model"));
+                        expect_meta.insert(Value::from("template"), Value::from(summary.as_str()));
+                        expect_meta.insert(
+                            Value::from("answer"),
+                            Value::from(outcome.generated.text.as_str()),
+                        );
+                        expect_meta.insert(
+                            Value::from("tokens_sent"),
+                            outcome
+                                .generated
+                                .tokens_sent
+                                .map(Value::from)
+                                .unwrap_or(Value::None),
+                        );
+                        expect_meta.insert(
+                            Value::from("tokens_received"),
+                            outcome
+                                .generated
+                                .tokens_received
+                                .map(Value::from)
+                                .unwrap_or(Value::None),
+                        );
+                        expect_meta.insert(Value::from("result"), Value::Bool(outcome.passed));
+                        set_leaf(store, meta_node, "expect", Value::Dict(expect_meta));
+                        if !outcome.passed {
+                            return Err(AttemptProblem::Retryable {
+                                message: format!("expect failed: {summary}"),
+                                child_record: None,
+                            });
+                        }
                     }
-                    Err(e) => return Err(AttemptProblem::Fatal(e)),
+                    Err(e) if e.is_fatal() => return Err(AttemptProblem::Fatal(e)),
+                    Err(e) => {
+                        return Err(AttemptProblem::Retryable {
+                            message: e.to_string(),
+                            child_record: None,
+                        });
+                    }
                 }
             }
         }
@@ -967,6 +1088,34 @@ pub(crate) async fn execute_use(
     store: &Store,
     parent: &NodeRef,
     ctx_chain: &CtxChain,
+    frame: &Frame,
+    run_ctx: &RunContext<'_>,
+    observer: &dyn RunObserver,
+    token: &CancellationToken,
+) -> Result<(), VmError> {
+    let ctx = live_ctx(ctx_chain, store);
+    execute_use_with_ctx(
+        op, use_op, store, parent, &ctx, frame, run_ctx, observer, token,
+    )
+    .await
+}
+
+/// [`execute_use`]'s own real body, taking an already-resolved *ctx*
+/// directly rather than a [`CtxChain`] -- [`CtxChain`]/[`CtxSource`]
+/// are `pub(crate)` (lane B2/H's own `exec/mod.rs`, not this lane's to
+/// widen), so an external integration test (`tests/use_corpus.rs`,
+/// the golden-corpus replay review finding 5 on PR #472 asked for)
+/// cannot name one to call [`execute_use`] itself with. `core/use.py`'s
+/// own `UseRuntime.execute(store, ctx)` takes *ctx* the exact same
+/// way -- this function is the closer match to replay the corpus
+/// against, not a test-only detour.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_use_with_ctx(
+    op: &Op,
+    use_op: &UseOp,
+    store: &Store,
+    parent: &NodeRef,
+    ctx: &Value,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
@@ -1026,7 +1175,6 @@ pub(crate) async fn execute_use(
         return Ok(());
     }
 
-    let ctx = live_ctx(ctx_chain, store);
     let record_children = record_children_enabled(run_ctx.runtime_config);
 
     let max_attempts = use_op.retries.max_attempts.max(1);
@@ -1063,7 +1211,7 @@ pub(crate) async fn execute_use(
             name,
             &effect_node,
             &meta_node,
-            &ctx,
+            ctx,
             frame,
             run_ctx,
             observer,
@@ -1074,7 +1222,7 @@ pub(crate) async fn execute_use(
         )
         .await;
 
-        let (message, py_class) = match attempt_result {
+        let (message, py_class, child_record) = match attempt_result {
             Ok(()) => {
                 if attempt_index > 0 {
                     set_leaf(
@@ -1106,8 +1254,11 @@ pub(crate) async fn execute_use(
                 return Err(refused);
             }
             Err(AttemptProblem::Fatal(other)) => return Err(other),
-            Err(AttemptProblem::NotRetried { message, py_class }) => (message, py_class),
-            Err(AttemptProblem::Retryable(message)) => (message, PyExc::RuntimeError),
+            Err(AttemptProblem::NotRetried { message, py_class }) => (message, py_class, None),
+            Err(AttemptProblem::Retryable {
+                message,
+                child_record,
+            }) => (message, PyExc::RuntimeError, child_record),
         };
 
         set_leaf(store, &meta_node, "error", Value::Str(message.clone()));
@@ -1120,6 +1271,14 @@ pub(crate) async fn execute_use(
                 base_backoff_ms,
             );
             continue;
+        }
+
+        // `record_children`'s own failure-path graft lands here, never
+        // above the `continue` -- `core/use.py`'s own outer `except`
+        // (`use.py:1121-1127`) only ever reaches `_graft_child_record`
+        // once an attempt's failure is final, exactly this point.
+        if let Some(child_record) = &child_record {
+            graft_child_record(&effect_node, child_record);
         }
 
         set_leaf(store, &meta_node, "completed_at", now_iso());
@@ -1174,7 +1333,25 @@ struct ChildObserver<'a> {
     parent: &'a dyn RunObserver,
     root_path: EffectPath,
     child_store: &'a Store,
+    /// Throttles [`RunObserver::write`]'s own snapshot-and-graft pair
+    /// (review finding 7 on PR #472): a long loop inside the child
+    /// calls `write()` once per leaf write, and a full [`Store::saved`]
+    /// snapshot is `O(size of the child tree so far)` -- taking one on
+    /// *every* call would make a child with an `N`-pass loop pay
+    /// `O(N^2)` overall, for live-state content nothing ever reads
+    /// faster than [`CHILD_GRAFT_INTERVAL`] anyway (the real mirror's
+    /// own flush is throttled the same way: `electricity`'s own
+    /// `LiveStateMirror::flush_if_due`). `None` until the first call,
+    /// which always grafts immediately.
+    last_graft: std::cell::Cell<Option<std::time::Instant>>,
 }
+
+/// [`ChildObserver::write`]'s own throttle window -- deliberately not
+/// shared with `electricity` (lib)'s own `LiveStateMirror::
+/// LIVE_STATE_INTERVAL` (that crate isn't a dependency of this one);
+/// a different, shorter value is fine, since both ends only promise
+/// "eventually catches up", never a fixed cadence of their own.
+const CHILD_GRAFT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl RunObserver for ChildObserver<'_> {
     fn effect_start(&self, path: &EffectPath) -> InstanceId {
@@ -1191,11 +1368,34 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.effect_complete(path, instance, error);
     }
 
+    // `core/use.py`'s own child `Store` is handed `concurrent_dispatch`
+    // straight from the parent, un-namespaced (`use.py:969`); the path a
+    // dispatch event carries comes from that child store's own
+    // `effect_path`, always `prime.<name>` relative to the child's own
+    // root, never aware of the `use` node it runs under
+    // (`effect_identity.py::nested_container` only ever sets the
+    // call-path contextvar, not `concurrent_dispatch`'s own path
+    // argument). This crate's own child [`Frame`] composes every path
+    // through [`Frame::effect_path`] instead (so every *other* hook
+    // forwards correctly namespaced) -- *dispatch* alone has to be
+    // rewritten back to what the child's own unnamespaced `prime`-
+    // relative path would have been, matching on whole
+    // [`electricity_bytecode::PathSegment`]s rather than string surgery.
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
-        self.parent.dispatch(path, branches, concurrency);
+        self.parent
+            .dispatch(&self.unnamespace(path), branches, concurrency);
     }
 
     fn write(&self) {
+        let now = std::time::Instant::now();
+        let due = match self.last_graft.get() {
+            None => true,
+            Some(last) => now.duration_since(last) >= CHILD_GRAFT_INTERVAL,
+        };
+        if !due {
+            return;
+        }
+        self.last_graft.set(Some(now));
         let snapshot = self.child_store.saved(&self.child_store.root);
         self.parent.graft_child_write(&self.root_path, &snapshot);
     }
@@ -1210,6 +1410,23 @@ impl RunObserver for ChildObserver<'_> {
 
     fn clear_graft(&self, node_path: &EffectPath) {
         self.parent.clear_graft(node_path);
+    }
+}
+
+impl ChildObserver<'_> {
+    /// *path* with this child's own [`ChildObserver::root_path`] prefix
+    /// replaced by a bare [`EffectPath::root`] -- a no-op for a path
+    /// that doesn't start with it (a dispatch from a *nested* `use`'s
+    /// own, already-unnamespaced child, forwarded through unchanged).
+    fn unnamespace(&self, path: &EffectPath) -> EffectPath {
+        let prefix_len = self.root_path.0.len();
+        if path.0.len() >= prefix_len && path.0[..prefix_len] == self.root_path.0[..] {
+            let mut segments = vec![PathSegment::Name("prime".to_string())];
+            segments.extend_from_slice(&path.0[prefix_len..]);
+            EffectPath(segments)
+        } else {
+            path.clone()
+        }
     }
 }
 
@@ -1236,6 +1453,7 @@ async fn run_isolated_inner(
         parent: observer,
         root_path: root_path.clone(),
         child_store: &child_store,
+        last_graft: std::cell::Cell::new(None),
     };
     let result = crate::exec::dynamic::execute_dynamic(
         &program.root,
@@ -1273,6 +1491,143 @@ pub async fn run_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observer::NullObserver;
+    use electricity_bytecode::{LeafKind, NodeKind};
+    use electricity_config::ComplexitySettings;
+    use std::collections::BTreeSet;
+    use std::rc::Rc;
+
+    /// Review finding 8 on PR #472 (orchestrator ruling R5): a
+    /// retryable child-run failure must *collect* its own
+    /// `record_children` record, never apply it -- only [`execute_use`]
+    /// applies it, and only once it knows this attempt is the last one.
+    /// This white-box test calls [`attempt_once`] directly (its own
+    /// private items aren't reachable from the `tests/` integration
+    /// suite) against an inline child that always fails deterministically
+    /// (`json` tool, `mode: parse` on malformed input, `on_error: fail`
+    /// so the child's own run itself raises) and checks both halves of
+    /// the contract: the failure is retryable and carries the child's
+    /// own record, and *effect_node* -- the use node [`execute_use`]
+    /// would later graft onto -- was not mutated by `attempt_once`
+    /// itself.
+    #[tokio::test]
+    async fn a_retryable_child_failure_collects_its_own_record_children_without_applying_it() {
+        let inline_yaml = "\
+effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: parse, input: \"not json\"}\n";
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 2,
+                backoff_ms: 0,
+            },
+            expect: None,
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+
+        let store = Store::new();
+        let effect_node = store
+            .ensure_dict(&store.root, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+
+        let mut registry = electricity_tools::ToolRegistry::new();
+        registry.register(Box::new(electricity_tools::json::JsonTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let orchestration_dir = std::path::Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        let result = attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            true, // record_children
+        )
+        .await;
+
+        let AttemptProblem::Retryable { child_record, .. } = result.expect_err(
+            "a child whose own run fails must be a retryable AttemptProblem, not applied here",
+        ) else {
+            panic!("expected AttemptProblem::Retryable");
+        };
+        assert!(
+            child_record.is_some(),
+            "record_children was true and the child did run, so a record must be collected"
+        );
+        assert!(
+            effect_node
+                .borrow()
+                .get(&Value::Str("inner".to_string()))
+                .is_none(),
+            "attempt_once must never graft record_children itself -- only execute_use, \
+             once it knows this attempt is final, may"
+        );
+
+        // The collected record is still real, live child data -- grafting
+        // it by hand (exactly what `execute_use` does once an attempt is
+        // final) does carry the child's own content.
+        graft_child_record(&effect_node, &child_record.unwrap());
+        assert!(
+            effect_node
+                .borrow()
+                .contains_key(&Value::Str("inner".to_string())),
+            "the collected record must be the real child node, graftable by the caller"
+        );
+    }
 
     #[test]
     fn clean_yaml_fences_drops_code_fences_and_document_separators() {

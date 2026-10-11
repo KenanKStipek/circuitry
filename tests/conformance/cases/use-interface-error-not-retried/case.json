@@ -1,0 +1,10 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3",
+  "description": "A use child declaring a required interface input that no inputs: entry supplies: the ValueError-class interface check fails the first attempt and is never retried, even though retries.max_attempts: 3 is configured -- meta.retries_used stays absent. on_error: skip absorbs the final failure so the state is inspectable.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "known_divergence": {
+    "location": "prime.meta.adapter",
+    "electricity_value": "_noop"
+  }
+}

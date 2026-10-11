@@ -1,0 +1,12 @@
+effects:
+  - type: use
+    name: validated
+    on_error: skip
+    inline: |
+      - just-a-list
+  - type: use
+    name: unvalidated
+    on_error: skip
+    validate: false
+    inline: |
+      - just-a-list

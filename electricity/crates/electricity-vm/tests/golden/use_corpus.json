@@ -2417,6 +2417,435 @@
         ]
       },
       "raised": false
+    },
+    {
+      "case": "expect_cel_passes",
+      "error": null,
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "greeting"
+                  },
+                  {
+                    "t": "str",
+                    "v": "\"hello-from-child\""
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "str",
+                    "v": "child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<temp>/child_basic.yml"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "dict",
+                    "v": []
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "str",
+                    "v": "0424ddfb33ec2d2d2107a7d7fee5b4a4f9c2da0fef3a4e4f0ad78a3085d32ed6"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "expect"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "mode"
+                        },
+                        {
+                          "t": "str",
+                          "v": "cel"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "expr"
+                        },
+                        {
+                          "t": "str",
+                          "v": "value != null"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "result"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": false
+    },
+    {
+      "case": "inline_validation_failure_wrapped",
+      "error": "use 'inline_validation_failure_wrapped' -> inline: Inline orchestration validation failed:\n  - Inline orchestration must be a YAML mapping with an 'effects' key.",
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": true
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Inline orchestration validation failed:\n  - Inline orchestration must be a YAML mapping with an 'effects' key."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Inline orchestration validation failed:\n  - Inline orchestration must be a YAML mapping with an 'effects' key."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": true
+    },
+    {
+      "case": "inline_validation_failure_unwrapped",
+      "error": "use 'inline_validation_failure_unwrapped' -> inline: Inline orchestration must be a YAML mapping with an 'effects' key.",
+      "node": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "value"
+            },
+            {
+              "t": "none"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "meta"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "created_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "completed_at"
+                  },
+                  {
+                    "t": "str",
+                    "v": "<TIMESTAMP>"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inline"
+                  },
+                  {
+                    "t": "bool",
+                    "v": true
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "resolved_path"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "validation_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "error"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Inline orchestration must be a YAML mapping with an 'effects' key."
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "child_errors"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "inputs"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "orchestration_sha256"
+                  },
+                  {
+                    "t": "none"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "raised": true
     }
   ],
   "graft_child_record_cases": [

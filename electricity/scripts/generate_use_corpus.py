@@ -96,16 +96,6 @@ def _normalize_timestamps(value: object) -> object:
     return value
 
 
-def _normalize_digest(value: object) -> object:
-    """`meta.orchestration_sha256` is a real SHA-256 of a file this
-    generator wrote under a fresh `tempfile.mkdtemp()` each run -- the
-    *content* is fixed by this script, so the digest itself is
-    deterministic across runs; only `meta.resolved_path` (an absolute
-    path under that temp directory) needs blanking, done by the
-    caller's own `_normalize_temp_paths` instead of here."""
-    return value
-
-
 def _normalize_temp_paths(value: object, *replacements: str) -> object:
     """Replaces every occurrence of *replacements* (the generator's own
     fresh temp-directory path, longest first) with `<temp>` -- a
@@ -320,8 +310,15 @@ def run_use_case(
 
 
 def end_to_end_cases() -> list[dict]:
+    # A context manager, not a bare `tempfile.mkdtemp()`: every file this
+    # generator writes under *tmp* is scratch, cleaned up on the way out
+    # regardless of how `run_use_case` below exits.
+    with tempfile.TemporaryDirectory(prefix="use-corpus-") as tmp_name:
+        return _end_to_end_cases(Path(tmp_name))
+
+
+def _end_to_end_cases(tmp: Path) -> list[dict]:
     cases: list[dict] = []
-    tmp = Path(tempfile.mkdtemp(prefix="use-corpus-"))
     # Both the as-given path and its `resolve()`d form: macOS's `/tmp`
     # is itself a symlink to `/private/tmp`, and `UseRuntime`'s own
     # cycle identity canonicalizes through it (`Path(identity).
@@ -466,6 +463,44 @@ def end_to_end_cases() -> list[dict]:
                 "inputs": {"v": "X"},
             },
             ctx={"input": {"v": "Y"}},
+        )
+    )
+    # Review finding 1 on PR #472: `meta.expect` must be written on a
+    # *passing* attempt too, not only a failing one -- the corpus
+    # already had `retried_failing_expect_then_fails` for the failure
+    # half; this is the missing pass half, over the same child.
+    cases.append(
+        run_use_case(
+            name="expect_cel_passes",
+            tmp=tmp,
+            defn_kwargs={
+                "path": "child_basic.yml",
+                "outputs": {"greeting": "prime.step.value"},
+                "expect": ExpectDef(mode="cel", expr="value != null"),
+            },
+        )
+    )
+    # Review finding 2: the inline validation-failure text end to end --
+    # `validate: true` wraps in "Inline orchestration validation
+    # failed:\n  - ..." (and sets `meta.validation_errors`); `validate:
+    # false` gives the bare message, no wrapper, no `validation_errors`.
+    cases.append(
+        run_use_case(
+            name="inline_validation_failure_wrapped",
+            tmp=tmp,
+            defn_kwargs={
+                "inline": "- just-a-list\n",
+            },
+        )
+    )
+    cases.append(
+        run_use_case(
+            name="inline_validation_failure_unwrapped",
+            tmp=tmp,
+            defn_kwargs={
+                "inline": "- just-a-list\n",
+                "validate": False,
+            },
         )
     )
 

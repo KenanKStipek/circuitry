@@ -1,0 +1,10 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3",
+  "description": "An inline use child whose own YAML parses but isn't a mapping, under both validate: true (the 'Inline orchestration validation failed:' wrapper around the same message) and validate: false (the bare message, no wrapper) -- on_error: skip absorbs both so the exact text is inspectable in the final state. A YAML *parse* error's own text is deliberately not used here: PyYAML's and electricity's own YAML parser's error messages differ (compared by source location, not text, per the issue), so a parse-error case would need engine-specific expected text this harness's single-location known_divergence can't express.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "known_divergence": {
+    "location": "prime.meta.adapter",
+    "electricity_value": "_noop"
+  }
+}

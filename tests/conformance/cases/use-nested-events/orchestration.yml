@@ -1,0 +1,5 @@
+name: use-nested-events
+effects:
+  - type: use
+    name: outer
+    path: inner_user.yml

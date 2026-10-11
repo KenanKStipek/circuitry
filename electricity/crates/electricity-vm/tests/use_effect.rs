@@ -223,10 +223,23 @@ async fn a_cycle_between_two_path_children_is_detected_with_the_exact_arrow_text
     let VmError::Raised { message, .. } = err else {
         panic!("expected a VmError::Raised, got {err:?}");
     };
-    assert!(
-        message.contains("cycle detected — ") && message.contains(" → "),
-        "got: {message}"
+    // Review finding 6 on PR #472: this used to only check `contains("
+    // → ")`, but the PR body calls this "exact arrow text" -- so check
+    // the full, real message, both resolved identities included.
+    let identity_a = std::fs::canonicalize("tests/fixtures/use/cycle_a.yml")
+        .expect("cycle_a.yml must exist")
+        .display()
+        .to_string();
+    let identity_b = std::fs::canonicalize("tests/fixtures/use/cycle_b.yml")
+        .expect("cycle_b.yml must exist")
+        .display()
+        .to_string();
+    let expected = format!(
+        "prime.step: use 'step' -> tests/fixtures/use/cycle_a.yml: prime.to_b: use 'to_b' -> \
+         {identity_b}: prime.to_a: use 'to_a' -> {identity_a}: use 'to_a': cycle detected — \
+         {identity_a} → {identity_b} → {identity_a}"
     );
+    assert_eq!(message, expected);
 }
 
 #[tokio::test]
@@ -353,5 +366,176 @@ async fn the_child_roots_own_pair_is_suppressed_and_every_other_hook_forwards_na
             .iter()
             .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step")),
         "got {events:?}"
+    );
+}
+
+/// Review finding 6 on PR #472: every existing refused-child test used
+/// an *inline* child (`support::refused_use_leaf`); this one is a real
+/// `path:` child, with an ordinary `json` step placed *before* the
+/// unsupported `prompt` step in the same chain -- `first_unsupported`
+/// runs on the whole freshly-compiled child program before
+/// `run_isolated_inner` ever starts it, so the refusal must stop the
+/// `json` step from running too, not just the `prompt` step that
+/// triggers it.
+#[tokio::test]
+async fn a_refused_path_child_never_runs_its_own_earlier_json_step() {
+    let use_op = base_use_op(path_source(
+        "tests/fixtures/use/child_refused_after_json.yml",
+    ));
+    let (store, observer, result) = run_use(use_op, OnError::Fail, &Value::None).await;
+    let err = result.expect_err("a child naming an unsupported effect must be refused");
+    assert!(matches!(err, VmError::Refused { .. }), "got {err:?}");
+
+    let events = observer.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Start(p) if p.contains("ran"))),
+        "the child's own earlier json step must never start: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Complete(p, _) if p.contains("ran"))),
+        "the child's own earlier json step must never complete: {events:?}"
+    );
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let use_node = as_dict(get(prime, "step").unwrap());
+    assert!(
+        get(use_node, "ran").is_none(),
+        "a refused child's own json step must never be merged onto the use node: {use_node:?}"
+    );
+    let meta = as_dict(get(use_node, "meta").unwrap());
+    let Some(Value::Str(error_text)) = get(meta, "error") else {
+        panic!("expected meta.error to carry the refusal text, got {meta:?}");
+    };
+    assert!(
+        error_text.contains("is a preview and cannot run orchestrations yet"),
+        "got {error_text:?}"
+    );
+}
+
+/// Orchestrator ruling R3 on PR #472's review (issue #469's own test
+/// plan: "A use inside a tree dynamic ... no false cycle between
+/// sibling passes"). Not a conformance case: a named `dynamic`
+/// container's own `meta.adapter` picks up the same use-triggered
+/// real-adapter heuristic the root document's does, and the
+/// conformance harness's `known_divergence` can only ever name one
+/// location -- a Rust test avoids the cross-engine comparison
+/// entirely while still exercising `Frame::push_use`'s own fresh
+/// `Vec` per branch (this module's own doc comment on why a shared
+/// stack would be wrong here).
+#[tokio::test]
+async fn use_inside_a_tree_dynamic_has_no_false_cycle_between_sibling_branches() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let branch_path = root_path().push_name("fan");
+    let first = support::use_leaf(
+        branch_path.push_name("first"),
+        "first",
+        path_source("tests/fixtures/use/child_basic.yml"),
+        None,
+        None,
+        true,
+        RetryPolicy::default(),
+        None,
+        OnError::Fail,
+    );
+    let second = support::use_leaf(
+        branch_path.push_name("second"),
+        "second",
+        path_source("tests/fixtures/use/child_basic.yml"),
+        None,
+        None,
+        true,
+        RetryPolicy::default(),
+        None,
+        OnError::Fail,
+    );
+    let fan = support::tree_dynamic(
+        branch_path,
+        "fan",
+        OnError::Fail,
+        None,
+        false,
+        vec![first, second],
+    );
+    let root = support::chain_dynamic(root_path(), "prime", OnError::Fail, vec![fan]);
+
+    let result = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    result.expect("two tree-dynamic siblings using the identical child must never false-cycle");
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let fan_node = as_dict(get(prime, "fan").unwrap());
+    for name in ["first", "second"] {
+        let use_node = as_dict(get(fan_node, name).unwrap());
+        let meta = as_dict(get(use_node, "meta").unwrap());
+        assert_eq!(get(meta, "error"), Some(&Value::None), "{name}: {meta:?}");
+    }
+}
+
+/// Review finding 3 on PR #472 / orchestrator ruling R1: a `use`
+/// child's own tree `dynamic` dispatch event is never namespaced
+/// under the use node (`ChildObserver::dispatch`'s own
+/// `unnamespace`), matching `core/use.py`'s own unnamespaced
+/// `Store.concurrent_dispatch`. Also a Rust test, not a conformance
+/// case, for the same `known_divergence` single-location reason as
+/// the sibling test above (the child's own dynamic container also
+/// picks up the use-triggered real-adapter heuristic).
+#[tokio::test]
+async fn use_child_containing_a_tree_dynamic_dispatch_is_not_namespaced_under_the_use_node() {
+    let inline_yaml = "\
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 2
+    effects:
+      - type: tool
+        name: a
+        provider: json
+        params: {mode: stringify, input: 1}
+      - type: tool
+        name: b
+        provider: json
+        params: {mode: stringify, input: 2}
+";
+    let use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    let (_store, observer, result) = run_use(use_op, OnError::Fail, &Value::None).await;
+    result.expect("a child containing a tree dynamic must succeed");
+
+    let events = observer.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.fan")),
+        "the child's own dispatch event must carry its own unnamespaced path, not \
+         prime.step.fan: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Dispatch(p, _, _) if p == "prime.step.fan")),
+        "the child's own dispatch event must never be namespaced under the use node: {events:?}"
     );
 }

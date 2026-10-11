@@ -1,0 +1,10 @@
+{
+  "spec_case": "runtime-semantics.md Section 5.3",
+  "description": "A use effect whose own path: child is itself a use effect of a third document -- every event namespaces correctly to any nesting depth, and neither nested child root's own start/complete pair duplicates the use node that already represents it.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "known_divergence": {
+    "location": "prime.meta.adapter",
+    "electricity_value": "_noop"
+  }
+}
