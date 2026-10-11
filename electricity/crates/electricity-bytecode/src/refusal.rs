@@ -59,6 +59,15 @@ const TOOLS_STDLIB_PROVIDERS: &[&str] = &["fs", "env_vars", "hash", "uuid", "clo
 const TOOL_REGEX_PROVIDERS: &[&str] = &["regex"];
 /// Lane E's own native provider (#448).
 const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
+/// Lane L2's own native provider (#448) -- #448's decision 3: made a
+/// native tool (not refused behind the M2 plugin bridge like every
+/// other plugin) because decomposition's own bundled planner calls it.
+/// Its own flag, not folded into any of the four sets above (review
+/// finding 3 on PR #454): L2's effect type isn't process-, stdlib-,
+/// regex- or HTTP-backed, so it would otherwise force L2 to add a
+/// field to this already-final struct rather than flip one lane A
+/// already named for it.
+const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +171,8 @@ pub struct Supported<'a> {
     pub tool_regex: bool,
     /// Lane E (#448): `http` ([`TOOL_HTTP_PROVIDERS`]).
     pub tool_http: bool,
+    /// Lane L2 (#448): `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]).
+    pub tool_validate_yaml: bool,
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
@@ -196,6 +207,7 @@ impl<'a> Supported<'a> {
             tools_stdlib: false,
             tool_regex: false,
             tool_http: false,
+            tool_validate_yaml: false,
             providers,
         }
     }
@@ -249,6 +261,8 @@ impl<'a> Supported<'a> {
             // lane D2 (#448)
             tool_http: false,
             // lane E (#448)
+            tool_validate_yaml: false,
+            // lane L2 (#448)
             providers,
         }
     }
@@ -265,6 +279,7 @@ impl<'a> Supported<'a> {
             || (self.tools_stdlib && TOOLS_STDLIB_PROVIDERS.contains(&name))
             || (self.tool_regex && TOOL_REGEX_PROVIDERS.contains(&name))
             || (self.tool_http && TOOL_HTTP_PROVIDERS.contains(&name))
+            || (self.tool_validate_yaml && TOOL_VALIDATE_YAML_PROVIDERS.contains(&name))
     }
 }
 
@@ -483,6 +498,7 @@ mod tests {
         assert_eq!(current.tools_stdlib, m0.tools_stdlib);
         assert_eq!(current.tool_regex, m0.tool_regex);
         assert_eq!(current.tool_http, m0.tool_http);
+        assert_eq!(current.tool_validate_yaml, m0.tool_validate_yaml);
     }
 
     fn tool_op(params: ParamNode) -> ToolOp {
@@ -748,6 +764,40 @@ mod tests {
             ..m0()
         };
         assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn validate_yaml_is_accepted_once_tool_validate_yaml_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "validate_yaml",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_validate_yaml: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn validate_yaml_is_refused_until_its_own_flag_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "validate_yaml",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("validate_yaml".to_string())
+        );
     }
 
     #[test]
