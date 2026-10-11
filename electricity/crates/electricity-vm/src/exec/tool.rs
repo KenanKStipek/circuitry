@@ -187,6 +187,21 @@ const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 /// lane D is the one that ever populates `runtime.tools.timeout_seconds`
 /// in it, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
 /// until then.
+/// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- a local copy, not a call
+/// into `crate::retry`'s own private `is_http_family_provider` (issue
+/// #485's own scope note: `retry.rs` is final except for
+/// `parse_retry_after_seconds`'s own widening). *provider* is the
+/// tool's own `provider:` as written, never normalized -- a ` HTTP `
+/// provider still dispatches the `http` plugin (`resolve_plugin`'s own
+/// `.strip().lower()`) but is never classified HTTP family, so
+/// `meta.status_code` is never written for it and every one of its
+/// failures stays unconditionally retryable, exactly as
+/// `crate::retry::is_tool_failure_retryable` already keeps for any
+/// non-HTTP-family provider.
+fn http_family_provider(provider: &str) -> bool {
+    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+}
+
 fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
     // `if self.defn.timeout_ms:` -- falsy, so an explicit `timeout_ms: 0`
     // (the compiler already clamps a negative one to 0) falls through to
@@ -611,6 +626,20 @@ pub async fn execute_tool<R: ParamsCtx>(
         observer.write();
 
         let mut failure: Option<electricity_tools::ToolError> = None;
+        // Lane E (issue #485): `meta.status_code`'s own value, when a
+        // returned result's `raw.status` was an int *and* this
+        // provider is HTTP family (`is_http_family_provider`, below).
+        // Threaded past the big `match` below so the retry
+        // classification after it can pass the real status instead of
+        // M0-H's own hard-coded `None` (`core/tool.py::ToolRuntime.
+        // _is_retryable_failure`'s own *status_code* argument).
+        let mut http_status_for_retry: Option<u16> = None;
+        // The plugin's own *original* `result.raw.headers`'s own
+        // `retry-after`/`Retry-After` value, captured before
+        // `capped_raw` redacts/consumes `result.raw` below. Only ever
+        // set on an `ok: false` returned result -- never a raised
+        // failure or a failed `expect:` (issue #485's own ruling).
+        let mut retry_after_for_backoff: Option<String> = None;
         // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
         // `expect:` check, raised or not, overriding whatever this
         // provider's own HTTP-family status/cause classification would
@@ -807,6 +836,59 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 .map(|code| Value::from(i64::from(code)))
                                                 .unwrap_or(Value::None),
                                         );
+                                        // Lane E (issue #485): `meta.status_code`,
+                                        // HTTP-family providers only (`core/
+                                        // tool.py`'s own `_HTTP_FAMILY_PROVIDERS`
+                                        // gate), the provider's own *as-written*
+                                        // spelling, and only when `raw.status` is
+                                        // an int -- written for a 2xx result too,
+                                        // not just a failing one. `retry_after` is
+                                        // read from the plugin's own *unredacted*
+                                        // `raw.headers` here, before `capped_raw`
+                                        // below redacts/consumes `result.raw`.
+                                        if http_family_provider(&tool.provider) {
+                                            if let Some(Value::Int(
+                                                electricity_value::IntValue::Small(n),
+                                            )) = result.raw.as_dict().and_then(|d| {
+                                                d.get(&Value::Str("status".to_string()))
+                                            }) {
+                                                if let Ok(status_u16) = u16::try_from(*n) {
+                                                    http_status_for_retry = Some(status_u16);
+                                                    set_leaf(
+                                                        store,
+                                                        &meta_node,
+                                                        "status_code",
+                                                        Value::Int(
+                                                            electricity_value::IntValue::Small(*n),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                            if !result.ok {
+                                                retry_after_for_backoff = result
+                                                    .raw
+                                                    .as_dict()
+                                                    .and_then(|d| {
+                                                        d.get(&Value::Str("headers".to_string()))
+                                                    })
+                                                    .and_then(|h| h.as_dict())
+                                                    .and_then(|headers| {
+                                                        headers
+                                                            .get(&Value::Str(
+                                                                "retry-after".to_string(),
+                                                            ))
+                                                            .or_else(|| {
+                                                                headers.get(&Value::Str(
+                                                                    "Retry-After".to_string(),
+                                                                ))
+                                                            })
+                                                    })
+                                                    .and_then(|v| match v {
+                                                        Value::Str(s) => Some(s.clone()),
+                                                        _ => None,
+                                                    });
+                                            }
+                                        }
                                         // Generic across every provider (`core/
                                         // tool.py:822-823`): a `meta.binary` write
                                         // this gate owns, not lane C/E's own HTTP-
@@ -1005,13 +1087,23 @@ pub async fn execute_tool<R: ParamsCtx>(
             // #454's second review, `expect_failed` above).
             let retryable = crate::retry::is_tool_failure_retryable(
                 &tool.provider,
-                None,
+                http_status_for_retry,
                 Some(&failure.cause),
                 expect_failed,
             );
             if !is_last_attempt && retryable {
+                // Lane E (issue #485): a provider's own `Retry-After`
+                // overrides the computed backoff -- only ever present
+                // for an `ok: false` returned result
+                // (`retry_after_for_backoff`'s own doc comment above:
+                // never set for a raised failure or a failed
+                // `expect:`).
                 next_delay_ms = crate::retry::next_backoff_delay_ms(
-                    &crate::retry::RetryInfo::retryable(),
+                    &crate::retry::RetryInfo {
+                        retryable: true,
+                        status: http_status_for_retry,
+                        retry_after: retry_after_for_backoff.clone(),
+                    },
                     attempt_index,
                     base_backoff_ms,
                 );
@@ -3027,5 +3119,243 @@ mod tests {
             );
             assert!(!meta.contains_key(&Value::from("retries_used")));
         }
+    }
+
+    /// A test-only HTTP-family [`electricity_tools::ToolPlugin`]
+    /// double, registered as `http` itself (`http_family_provider`'s
+    /// own exact-spelling check) -- a scripted queue of `(status,
+    /// headers, ok)` results, exercising `meta.status_code` and the
+    /// status-classified retry branch without a real socket (issue
+    /// #485; the real `HttpPlugin`'s own end-to-end behaviour is
+    /// pinned by `electricity-tools`' own `tests/http_plugin.rs`
+    /// instead).
+    type ScriptedHttpResponse = (i64, Vec<(&'static str, &'static str)>, bool);
+
+    struct HttpShapedTool {
+        responses: std::cell::RefCell<std::collections::VecDeque<ScriptedHttpResponse>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for HttpShapedTool {
+        fn name(&self) -> &str {
+            "http"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let (status, headers, ok) = self
+                .responses
+                .borrow_mut()
+                .pop_front()
+                .expect("HttpShapedTool: scripted response queue exhausted");
+            let mut headers_dict = Dict::new();
+            for (k, v) in headers {
+                headers_dict.insert(Value::from(k), Value::from(v));
+            }
+            let mut raw = Dict::new();
+            raw.insert(Value::from("status"), Value::from(status));
+            raw.insert(Value::from("headers"), Value::Dict(headers_dict));
+            let mut result = electricity_tools::ToolResult::new(Value::from("v"), Value::Dict(raw));
+            result.ok = ok;
+            if !ok {
+                result.stderr = Some(format!("HTTP {status}: reason"));
+            }
+            Ok(result)
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    fn http_tool_op(max_attempts: u32) -> ToolOp {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "http".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts,
+            backoff_ms: 0,
+        };
+        tool
+    }
+
+    #[tokio::test]
+    async fn a_429_with_retry_after_zero_then_200_retries_once_and_writes_status_code() {
+        let tool = http_tool_op(3);
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(HttpShapedTool {
+            responses: std::cell::RefCell::new(
+                vec![
+                    (429i64, vec![("retry-after", "0")], false),
+                    (200i64, vec![], true),
+                ]
+                .into(),
+            ),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("status_code")),
+            Some(&Value::from(200i64))
+        );
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+    }
+
+    #[tokio::test]
+    async fn a_401_is_not_retried_even_with_retries_configured() {
+        let tool = http_tool_op(3);
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(HttpShapedTool {
+            responses: std::cell::RefCell::new(vec![(401i64, vec![], false)].into()),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("status_code")),
+            Some(&Value::from(401i64))
+        );
+        assert!(!meta.contains_key(&Value::from("retries_used")));
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from("HTTP 401: reason"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_500_retries_and_a_differently_spelled_http_provider_does_not_classify_by_status() {
+        // Provider spelling (issue #485): " HTTP " still dispatches
+        // this same plugin instance (registered under its own
+        // normalized name by `ToolRegistry::get`'s own lookup key --
+        // this test registers the double under `"http"` and dispatches
+        // it by provider `" HTTP "`, which `resolve_plugin` normalizes
+        // to `"http"` before the registry lookup), but `tool.provider`
+        // itself (unnormalized) is what `http_family_provider` checks,
+        // so this is *not* classified HTTP family: no `status_code` is
+        // ever written, and a 500 retries unconditionally exactly as
+        // any non-HTTP-family provider's failure would.
+        let mut tool = http_tool_op(2);
+        tool.provider = " HTTP ".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(HttpShapedTool {
+            responses: std::cell::RefCell::new(
+                vec![(500i64, vec![], false), (200i64, vec![], true)].into(),
+            ),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert!(!meta.contains_key(&Value::from("status_code")));
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
     }
 }
