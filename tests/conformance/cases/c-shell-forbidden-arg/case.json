@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (shell arg rejection)",
+  "description": "`shell` rejects a null byte or newline anywhere in `params.args`, before the binary ever runs -- `shell` is not a shell interpreter, and a newline could otherwise smuggle a second line past the allowlist's own single-command check.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

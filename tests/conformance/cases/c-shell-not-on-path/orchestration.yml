@@ -1,0 +1,8 @@
+name: c-shell-not-on-path
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: zzzznotarealbinary
+      allowed_commands: [zzzznotarealbinary]

@@ -1,0 +1,10 @@
+name: c-shell-stdin
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--cat"]
+      stdin: "fed through stdin\n"
