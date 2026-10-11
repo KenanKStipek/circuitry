@@ -262,8 +262,10 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 /// `except Exception` (never `BaseException`) never catches, so it
 /// always propagates unwrapped here too.
 pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
+    if err.is_fatal() {
+        return err;
+    }
     match err {
-        VmError::Cancelled => err,
         // A typed tool failure keeps its own `cause` through the wrap --
         // `message` grows the label prefix, and `py_class` becomes
         // `RuntimeError` (review finding 1 on PR #454: #442's own tree
@@ -520,6 +522,27 @@ mod wrap_effect_error_tests {
     fn a_cancellation_passes_through_the_wrap_unchanged() {
         let wrapped = wrap_effect_error("outer.fetch", VmError::Cancelled);
         assert_eq!(wrapped, VmError::Cancelled);
+    }
+
+    #[test]
+    fn a_refusal_passes_through_the_wrap_unchanged() {
+        // M1 lane I prerequisites, issue #448, item U3: `VmError::Refused`
+        // is fatal the same way `VmError::Cancelled` is (`VmError::
+        // is_fatal`) -- never wrapped with an effect-path prefix through a
+        // chain/tree container, even though, unlike a cancellation, it
+        // still gets recorded like an ordinary failure on every
+        // container's own node (orchestrator ruling R1 on PR #462,
+        // `VmError::is_fatal`'s own doc comment) -- this wrap is strictly
+        // a control-path no-op either way.
+        let refused = VmError::Refused {
+            refusal: electricity_bytecode::Refusal {
+                path: electricity_bytecode::EffectPath::root().push_name("step"),
+                reason: electricity_bytecode::RefusalReason::Loop,
+            },
+            child_label: "child.yaml".to_string(),
+        };
+        let wrapped = wrap_effect_error("outer.fetch", refused.clone());
+        assert_eq!(wrapped, refused);
     }
 
     #[test]

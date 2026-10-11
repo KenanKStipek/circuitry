@@ -27,8 +27,10 @@
 //! #431's acceptance criteria).
 
 use crate::out::render_state;
-use electricity_value::Value;
-use std::cell::Cell;
+use electricity_bytecode::EffectPath;
+use electricity_value::{Dict, Value};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -126,6 +128,66 @@ fn write_atomic(path: &Path, payload: &str) -> io::Result<()> {
     result
 }
 
+/// `core/use.py::_grafted_snapshot`'s own seam (M1 lane I
+/// prerequisites, issue #448, item U6): *root* with *node_path*'s own
+/// existing value overlaid by *child_snapshot*'s mirrored effects --
+/// every key of the child's own `prime` root except `value`/`meta`
+/// (the child document's own effects, not its own top-level result).
+/// `None`-shaped input (no `prime` dict in *child_snapshot*, or
+/// nothing left once `value`/`meta` are stripped) returns *root*
+/// unchanged, Python's own two early-return branches. A plain,
+/// stateless `Value` -> `Value` transform -- unlike Python's own
+/// `replace_node` (which walks a live `Store`'s own mutable state
+/// dict), this only ever touches a `Store::saved` snapshot already
+/// taken, so there is no node identity/aliasing of a live store to
+/// preserve or disturb.
+fn grafted_snapshot(root: &Value, node_path: &str, child_snapshot: &Value) -> Value {
+    let Some(child_effects) = child_snapshot
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("prime".to_string())))
+        .and_then(Value::as_dict)
+    else {
+        return root.clone();
+    };
+    let mirrored: Dict = child_effects
+        .iter()
+        .filter(|(k, _)| !matches!(k, Value::Str(s) if s == "value" || s == "meta"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if mirrored.is_empty() {
+        return root.clone();
+    }
+    let segments: Vec<&str> = node_path.split('.').collect();
+    overlay_at_path(root, &segments, &mirrored)
+}
+
+/// Walks *root* down *segments*, returning a full copy with the dict at
+/// that path's own keys from *mirrored* inserted/overwritten -- every
+/// other key already there (a `use` node's own `value`/`meta`
+/// included) survives untouched, Python's own `{**node, **mirrored}`.
+/// A missing/non-dict node along the way is treated as an empty dict,
+/// same as [`crate::out::render_state`]'s own tolerant reads --
+/// `node_path` always names a real, already-created node in practice
+/// (the use effect's own `store.fire_effect_start` already ran before
+/// any child write could happen), so this only ever matters for a test
+/// fixture that skips that step.
+fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
+    let mut dict = root.as_dict().cloned().unwrap_or_default();
+    match segments {
+        [] => {
+            for (k, v) in mirrored {
+                dict.insert(k.clone(), v.clone());
+            }
+        }
+        [first, rest @ ..] => {
+            let key = Value::Str(first.to_string());
+            let existing = dict.get(&key).cloned().unwrap_or(Value::Dict(Dict::new()));
+            dict.insert(key, overlay_at_path(&existing, rest, mirrored));
+        }
+    }
+    Value::Dict(dict)
+}
+
 /// The `--live-state` writer -- see this module's own doc comment.
 pub struct LiveStateMirror {
     path: PathBuf,
@@ -136,6 +198,20 @@ pub struct LiveStateMirror {
     /// this entirely -- its own write is unconditional.
     pending: Cell<bool>,
     had_failure: Cell<bool>,
+    /// Every currently in-flight child write grafted onto the next
+    /// mid-run snapshot ([`Self::graft_child_write`]/[`Self::
+    /// clear_graft`], issue #448 item U6), keyed by the grafted node's
+    /// own absolute dotted path -- a `BTreeMap`, not a `HashMap`, so
+    /// [`Self::apply_grafts`] walks shallower paths before any deeper
+    /// one nested under them (a dotted path that is a strict prefix of
+    /// another always sorts first), composing a nested `use`'s own
+    /// graft correctly on top of its own parent's. A plain map, not a
+    /// stack: a write for a path already present simply replaces that
+    /// path's own entry (the child's latest snapshot, same as Python's
+    /// own closure re-running `_grafted_snapshot` fresh on every call),
+    /// and a tree's own simultaneous sibling `use` branches each keep
+    /// their own independent entry.
+    grafts: RefCell<BTreeMap<String, Value>>,
 }
 
 impl LiveStateMirror {
@@ -150,7 +226,46 @@ impl LiveStateMirror {
             next_due: Cell::new(None),
             pending: Cell::new(false),
             had_failure: Cell::new(false),
+            grafts: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    /// [`electricity_vm::RunObserver::graft_child_write`]'s own
+    /// implementation: records *snapshot* as *node_path*'s own latest
+    /// grafted overlay (replacing whatever was there from an earlier
+    /// write at the same path) and marks a mid-run write pending, the
+    /// same as an ordinary [`Self::mark_pending`] call -- a graft is
+    /// itself a store change a live-state reader should eventually
+    /// see.
+    pub fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+        self.grafts
+            .borrow_mut()
+            .insert(node_path.to_string(), snapshot.clone());
+        self.mark_pending();
+    }
+
+    /// [`electricity_vm::RunObserver::clear_graft`]'s own
+    /// implementation: *node_path* no longer needs an overlay (the
+    /// child it named finished) -- a no-op if nothing was grafted
+    /// there (or it was already cleared).
+    pub fn clear_graft(&self, node_path: &EffectPath) {
+        self.grafts.borrow_mut().remove(&node_path.to_string());
+    }
+
+    /// *snapshot* with every currently active graft applied, shallowest
+    /// path first ([`BTreeMap`]'s own sorted iteration order over a
+    /// dotted path -- this struct's own `grafts` field doc comment).
+    /// Only [`Self::flush_if_due`] ever calls this: [`Self::
+    /// write_initial`] runs before anything could have grafted, and
+    /// [`Self::close`] writes the final, already-really-merged state,
+    /// where no graft should ever still apply.
+    fn apply_grafts(&self, snapshot: Value) -> Value {
+        self.grafts
+            .borrow()
+            .iter()
+            .fold(snapshot, |acc, (path, child)| {
+                grafted_snapshot(&acc, path, child)
+            })
     }
 
     /// The run's very first write: synchronous and fatal on error
@@ -193,7 +308,8 @@ impl LiveStateMirror {
         }
         self.pending.set(false);
         self.next_due.set(Some(now + self.interval));
-        if let Err(err) = write_atomic(&self.path, &render_state(&snapshot(), false)) {
+        let state = self.apply_grafts(snapshot());
+        if let Err(err) = write_atomic(&self.path, &render_state(&state, false)) {
             self.had_failure.set(true);
             // `cli/live_state.py::LiveStateMirror._write`'s own
             // `logger.warning("Could not write --live-state %s: %s",
@@ -236,6 +352,143 @@ mod tests {
             "electricity-live-state-test-{}-{name}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn a_grafted_child_write_mirrors_under_the_parent_use_node() {
+        // M1 lane I prerequisites (issue #448, item U6): a parent
+        // store with a `use` node mid-flight (`value: null`, an
+        // ordinary `meta`) -- the child's own current snapshot, once
+        // grafted, must mirror its own effects under that node without
+        // disturbing the node's own `value`/`meta`.
+        let path = temp_path("grafted");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+
+        let mut use_meta = Dict::new();
+        use_meta.insert(Value::Str("error".to_string()), Value::None);
+        let mut use_node = Dict::new();
+        use_node.insert(Value::Str("value".to_string()), Value::None);
+        use_node.insert(Value::Str("meta".to_string()), Value::Dict(use_meta));
+        let mut prime = Dict::new();
+        prime.insert(
+            Value::Str("fetch".to_string()),
+            Value::Dict(use_node.clone()),
+        );
+        let mut root = Dict::new();
+        root.insert(Value::Str("prime".to_string()), Value::Dict(prime));
+        let root = Value::Dict(root);
+
+        mirror.write_initial(&root).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        // The child's own current snapshot: an `inner` tool effect
+        // already ran inside it; the child's own top-level `value`/
+        // `meta` are never mirrored (the parent's `use` node's own
+        // decide those, once it actually merges for real).
+        let mut inner = Dict::new();
+        inner.insert(Value::Str("value".to_string()), Value::from("hi"));
+        inner.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
+        let mut child_prime = Dict::new();
+        child_prime.insert(Value::Str("value".to_string()), Value::None);
+        child_prime.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
+        child_prime.insert(Value::Str("inner".to_string()), Value::Dict(inner.clone()));
+        let mut child_snapshot = Dict::new();
+        child_snapshot.insert(Value::Str("prime".to_string()), Value::Dict(child_prime));
+        let child_snapshot = Value::Dict(child_snapshot);
+
+        let node_path = EffectPath::root().push_name("fetch");
+        mirror.graft_child_write(&node_path, &child_snapshot);
+        mirror.flush_if_due(|| root.clone());
+
+        // The expected published state: the use node's own `value`/
+        // `meta` untouched, with `inner` mirrored in alongside them.
+        let mut expected_fetch = use_node;
+        expected_fetch.insert(Value::Str("inner".to_string()), Value::Dict(inner));
+        let mut expected_prime = Dict::new();
+        expected_prime.insert(Value::Str("fetch".to_string()), Value::Dict(expected_fetch));
+        let mut expected_root = Dict::new();
+        expected_root.insert(Value::Str("prime".to_string()), Value::Dict(expected_prime));
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            render_state(&Value::Dict(expected_root), false)
+        );
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn clear_graft_removes_a_path_so_a_later_flush_no_longer_overlays_it() {
+        let path = temp_path("clear-grafted");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let mut child_prime = Dict::new();
+        child_prime.insert(Value::Str("value".to_string()), Value::None);
+        child_prime.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
+        child_prime.insert(Value::Str("inner".to_string()), Value::from("leftover"));
+        let mut child_snapshot = Dict::new();
+        child_snapshot.insert(Value::Str("prime".to_string()), Value::Dict(child_prime));
+        let child_snapshot = Value::Dict(child_snapshot);
+        let node_path = EffectPath::root().push_name("fetch");
+        mirror.graft_child_write(&node_path, &child_snapshot);
+        mirror.clear_graft(&node_path);
+
+        mirror.mark_pending();
+        mirror.flush_if_due(|| Value::Dict(Dict::new()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn grafted_snapshot_returns_root_unchanged_for_a_non_dict_or_empty_child() {
+        let root = Value::Dict(Dict::new());
+        assert_eq!(grafted_snapshot(&root, "prime.fetch", &Value::None), root);
+
+        let mut only_value_and_meta = Dict::new();
+        only_value_and_meta.insert(Value::Str("value".to_string()), Value::from("x"));
+        only_value_and_meta.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
+        let mut child = Dict::new();
+        child.insert(
+            Value::Str("prime".to_string()),
+            Value::Dict(only_value_and_meta),
+        );
+        assert_eq!(
+            grafted_snapshot(&root, "prime.fetch", &Value::Dict(child)),
+            root,
+            "value/meta alone leave nothing to mirror"
+        );
+    }
+
+    #[test]
+    fn grafted_snapshot_composes_at_a_nested_path() {
+        // A nested `use` (`prime.outer.inner_use`) grafts correctly
+        // onto its own already-grafted parent -- `apply_grafts`'
+        // shallowest-first application, exercised here directly
+        // against `grafted_snapshot` rather than through the mirror.
+        let root = Value::Dict(Dict::new());
+        let mut grandchild_prime = Dict::new();
+        grandchild_prime.insert(Value::Str("deep".to_string()), Value::from("found"));
+        let mut grandchild = Dict::new();
+        grandchild.insert(
+            Value::Str("prime".to_string()),
+            Value::Dict(grandchild_prime),
+        );
+
+        let grafted = grafted_snapshot(&root, "prime.outer.inner_use", &Value::Dict(grandchild));
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&Value::Str(key.to_string())))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let deep = get(
+            &get(&get(&get(&grafted, "prime"), "outer"), "inner_use"),
+            "deep",
+        );
+        assert_eq!(deep, Value::from("found"));
     }
 
     #[test]
