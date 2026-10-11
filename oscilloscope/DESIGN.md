@@ -530,10 +530,19 @@ its own way. Only `oscilloscope`'s `tui.rs` imports `ratatui` widgets.
 watched run ending) does not, on its own, end this loop: the header, every
 row's final status, and the details pane (`v` included) stay live and
 navigable on whatever the run ended with — ok, failed, cancelled or
-aborted — until the user explicitly leaves. Only three things make this
-loop leave the instant the engine has exited, rather than staying on that
-final state: a confirmed `q`, a Ctrl-C cancel, or any external
-INT/TERM/HUP osp itself received (a SIGHUP in particular never waits for
+aborted — until the user explicitly leaves. The instant this loop first
+observes the ending (the engine's exit, or `osp watch`'s own events-based
+or dead-pid stop condition), it drains once more before ever rebuilding
+this screen: events tailed until a pass turns up nothing new, then the
+same authoritative final read `finish_run`/`finish_watch` themselves take
+— a fast-exiting engine's last events and final write (§1.1: writes land,
+then it exits, with nothing left to ever prompt another poll afterwards)
+are never missed, and this screen can't show a real `ok`/`failed` ending
+as `aborted` just because nothing is still running to eventually correct
+it. Only three things make this loop leave the instant the engine has
+exited, rather than staying on that final state: a confirmed `q`, a
+Ctrl-C cancel, or any external INT/TERM/HUP osp itself received (a SIGHUP
+in particular never waits for
 a key — the terminal is gone by definition). Short of one of those three,
 a run that simply finishes on its own stays up for `q`/Ctrl-C to leave.
 `osp watch`'s own `q` while the watched run is *still going* prints a
