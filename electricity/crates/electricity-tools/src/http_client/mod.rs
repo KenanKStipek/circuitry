@@ -364,7 +364,10 @@ async fn connect(
         .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
     tcp.set_nodelay(true).ok();
 
-    let tcp = if let Some(proxy) = target.proxy.as_ref().filter(|_| target.scheme == Scheme::Https)
+    let tcp = if let Some(proxy) = target
+        .proxy
+        .as_ref()
+        .filter(|_| target.scheme == Scheme::Https)
     {
         connect_tunnel(
             tcp,
@@ -475,9 +478,11 @@ pub async fn send(
     timeout: TimeoutModel,
 ) -> Result<RawResponse, SendError> {
     match timeout {
-        TimeoutModel::Total(d) => tokio::time::timeout(d, send_inner(client, target, request, timeout))
-            .await
-            .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::Total(d) => {
+            tokio::time::timeout(d, send_inner(client, target, request, timeout))
+                .await
+                .unwrap_or(Err(SendError::Timeout))
+        }
         TimeoutModel::PerOperation(_) => send_inner(client, target, request, timeout).await,
     }
 }
@@ -501,9 +506,7 @@ async fn send_inner(
     // an arbitrary `X-Custom-Header` alike); `hyper`'s own default is
     // lower-case. Header *order* on the wire is not required to
     // match (the mock harness compares by name, case-insensitively).
-    let handshake = http1::Builder::new()
-        .title_case_headers(true)
-        .handshake(io);
+    let handshake = http1::Builder::new().title_case_headers(true).handshake(io);
     let (mut sender, conn) = tokio::time::timeout(connect_deadline, handshake)
         .await
         .map_err(|_| SendError::Connect("timed out".to_string()))?
@@ -622,7 +625,11 @@ async fn send_inner(
                 }
             }
             Some(Err(err)) => {
-                body_error = Some(classify_body_phase_error(err, body_bytes.len(), content_length));
+                body_error = Some(classify_body_phase_error(
+                    err,
+                    body_bytes.len(),
+                    content_length,
+                ));
                 break;
             }
         }

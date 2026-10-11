@@ -370,7 +370,8 @@ async fn a_total_timeout_catches_several_under_budget_phases_summing_past_it() {
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
         std::thread::sleep(Duration::from_millis(150));
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+        let _ =
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
         std::thread::sleep(Duration::from_millis(150));
         let _ = stream.write_all(b"ok");
     });
@@ -383,7 +384,10 @@ async fn a_total_timeout_catches_several_under_budget_phases_summing_past_it() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, SendError::Timeout), "expected Timeout, got {err:?}");
+    assert!(
+        matches!(err, SendError::Timeout),
+        "expected Timeout, got {err:?}"
+    );
 }
 
 #[tokio::test]

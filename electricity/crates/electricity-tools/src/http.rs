@@ -645,7 +645,9 @@ fn out_of_range_port(netloc: &str) -> Option<String> {
         hostinfo.rsplit_once(':').map(|(_, p)| p)
     };
     port_str
-        .filter(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_err())
+        .filter(|p| {
+            !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_err()
+        })
         .map(str::to_string)
 }
 
@@ -1097,11 +1099,13 @@ impl ToolPlugin for HttpPlugin {
             Some(scheme) => scheme,
         };
         if !matches!(initial_scheme.as_str(), "http" | "https") {
-            return Err(if matches!(initial_scheme.as_str(), "ftp" | "file" | "data") {
-                unsupported_in_electricity_failure(&original_url, &initial_scheme)
-            } else {
-                unknown_url_type_failure(&original_url, &initial_scheme)
-            });
+            return Err(
+                if matches!(initial_scheme.as_str(), "ftp" | "file" | "data") {
+                    unsupported_in_electricity_failure(&original_url, &initial_scheme)
+                } else {
+                    unknown_url_type_failure(&original_url, &initial_scheme)
+                },
+            );
         }
 
         let client = http_client::build_client().map_err(runtime_error)?;
@@ -1127,11 +1131,13 @@ impl ToolPlugin for HttpPlugin {
             // scheme on the initial URL, and recorded as a divergence
             // (DESIGN.md).
             if !matches!(split.scheme.as_str(), "http" | "https") {
-                return Err(if matches!(split.scheme.as_str(), "ftp" | "file" | "data") {
-                    unsupported_in_electricity_failure(&original_url, &split.scheme)
-                } else {
-                    unknown_url_type_failure(&original_url, &split.scheme)
-                });
+                return Err(
+                    if matches!(split.scheme.as_str(), "ftp" | "file" | "data") {
+                        unsupported_in_electricity_failure(&original_url, &split.scheme)
+                    } else {
+                        unknown_url_type_failure(&original_url, &split.scheme)
+                    },
+                );
             }
             let scheme_enum = if split.scheme == "https" {
                 Scheme::Https
@@ -1211,10 +1217,8 @@ impl ToolPlugin for HttpPlugin {
             // is set).
             if scheme_enum == Scheme::Http {
                 if let Some(creds) = proxy.as_ref().and_then(|p| p.basic_auth.as_deref()) {
-                    send_headers.insert(
-                        "Proxy-authorization".to_string(),
-                        format!("Basic {creds}"),
-                    );
+                    send_headers
+                        .insert("Proxy-authorization".to_string(), format!("Basic {creds}"));
                 }
             }
             // `AbstractHTTPHandler.do_open` always sets

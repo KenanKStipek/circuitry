@@ -558,10 +558,7 @@ async fn end_to_end_cases_match_cpython() {
                     &Value::from(case["raw"]["status"].as_i64().unwrap()),
                     "case: {name}"
                 );
-                let url = raw
-                    .get(&Value::Str("url".to_string()))
-                    .unwrap()
-                    .py_str();
+                let url = raw.get(&Value::Str("url".to_string())).unwrap().py_str();
                 let expected_url = case["raw"]["url"]
                     .as_str()
                     .unwrap()
@@ -573,9 +570,7 @@ async fn end_to_end_cases_match_cpython() {
                     .as_dict()
                     .unwrap();
                 for (k, v) in case["raw"]["headers"].as_object().unwrap() {
-                    let actual = headers_dict
-                        .get(&Value::Str(k.clone()))
-                        .map(|v| v.py_str());
+                    let actual = headers_dict.get(&Value::Str(k.clone())).map(|v| v.py_str());
                     assert_eq!(actual.as_deref(), v.as_str(), "header {k} in case: {name}");
                 }
             }
