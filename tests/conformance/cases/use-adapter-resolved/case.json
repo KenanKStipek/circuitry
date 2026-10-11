@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md Section 8.6 / Section 5.3",
+  "description": "A use-containing document resolves the real configured adapter/model into prime.meta.adapter (and every container's own meta.adapter) -- not the _noop sentinel -- even though M0-H still refuses every prompt-needing capability before ever building a real adapter object. No known_divergence: both engines now report the same configured name.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

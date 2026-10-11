@@ -1,0 +1,10 @@
+interface:
+  inputs:
+    name:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: {from: input.name}}

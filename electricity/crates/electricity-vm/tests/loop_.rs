@@ -1388,8 +1388,9 @@ async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() 
 // only, recorded on the loop's own node like an ordinary failure
 // ---------------------------------------------------------------------
 
-/// A chain each pass's own refused `use` child (the sentinel
-/// `exec::use_::execute_use` recognizes) is never absorbed by
+/// A chain each pass's own refused `use` child (an inline child whose
+/// own content is a `prompt` effect, refused the same way any other
+/// unsupported effect is) is never absorbed by
 /// `on_error: continue`, propagates unwrapped (no `step: ` prefix),
 /// and still leaves the loop's own node recorded exactly like an
 /// ordinary failure -- `value`/`meta.error`/`completed_at` all
@@ -1427,7 +1428,7 @@ async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_nod
     let VmError::Refused { child_label, .. } = err else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "__test_only_refused__");
+    assert_eq!(child_label, "inline");
 
     let pr = prime(&store);
     let shots = as_dict(get(&pr, "shots").unwrap());
@@ -1441,7 +1442,7 @@ async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_nod
         other => panic!("expected a string meta.error, got {other:?}"),
     };
     assert!(
-        error_text.contains("use child __test_only_refused__"),
+        error_text.contains("use child inline: prime.unsupported is a prompt effect"),
         "unexpected meta.error: {error_text}"
     );
     assert!(get(shots, "value").is_some());
@@ -1484,7 +1485,7 @@ async fn a_refused_tree_pass_stops_dispatch_but_still_merges() {
     let VmError::Refused { child_label, .. } = err else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "__test_only_refused__");
+    assert_eq!(child_label, "inline");
 
     let pr = prime(&store);
     let shots = as_dict(get(&pr, "shots").unwrap());

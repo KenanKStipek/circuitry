@@ -1,0 +1,3 @@
+{
+  "error": "No adapter resolved for orchestration orchestration.yml. Set 'adapter' in the orchestration or 'default_adapter' in config.json. (adapter source: default)"
+}

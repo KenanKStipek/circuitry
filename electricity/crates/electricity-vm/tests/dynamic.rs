@@ -955,8 +955,8 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
     else {
         panic!("expected VmError::Refused");
     };
-    assert_eq!(child_label, "__test_only_refused__");
-    assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Loop);
+    assert_eq!(child_label, "inline");
+    assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Prompt);
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
@@ -973,7 +973,7 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
         other => panic!("expected a string meta.error, got {other:?}"),
     };
     assert!(
-        error_text.contains("use child __test_only_refused__"),
+        error_text.contains("use child inline: prime.unsupported is a prompt effect"),
         "meta.error must carry the same preview-marker text VmError::Refused displays as: {error_text}"
     );
 }
@@ -1037,8 +1037,8 @@ async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finall
     else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "__test_only_refused__");
-    assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Loop);
+    assert_eq!(child_label, "inline");
+    assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Prompt);
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);

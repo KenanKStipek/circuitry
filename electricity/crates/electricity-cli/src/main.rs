@@ -36,9 +36,9 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
                     [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
 
-electricity is a preview: it runs tool/dynamic/if/finally documents only
-(prompt/loop/use/reflector/yield, persistence and runtime plugins are
-refused with a preview marker; use `cof run` for those).
+electricity is a preview: it runs tool/dynamic/if/finally/loop/use documents
+only (prompt/reflector/yield, persistence and runtime plugins are refused
+with a preview marker; use `cof run` for those).
 
 Options:
   -V, --version       Print the version and exit
@@ -867,6 +867,68 @@ mod unit_tests {
     fn help_flag_is_recognized() {
         assert!(matches!(classify(&["--help".to_string()]), Action::Help));
         assert!(matches!(classify(&["-h".to_string()]), Action::Help));
+    }
+
+    /// Ties `USAGE`'s own "runs ... documents only" / "refused" lists
+    /// to `Supported::current()`'s own flags, so the next lane that
+    /// flips one (`loop_`/`use_` already did, this PR's own orchestrator
+    /// addition) can't leave this text stale the way it found it --
+    /// each name in the mapping below must appear in exactly one of the
+    /// two lists, matching whichever side its own flag says.
+    #[test]
+    fn usage_text_matches_supported_current_for_every_gated_effect_type() {
+        let supported_list = USAGE
+            .split("it runs ")
+            .nth(1)
+            .expect("USAGE names what it runs")
+            .split(" documents")
+            .next()
+            .expect("USAGE's own \"documents only\" phrase")
+            .split('/')
+            .collect::<Vec<_>>();
+        let refused_list = USAGE
+            .split('(')
+            .nth(1)
+            .expect("USAGE names what it refuses, parenthesized")
+            .split(',')
+            .next()
+            .expect("USAGE's own refused-list prefix, before the first comma")
+            .split('/')
+            .collect::<Vec<_>>();
+
+        let supported = electricity_bytecode::Supported::current(&[]);
+        let gated: [(&str, bool); 5] = [
+            ("prompt", supported.prompt),
+            ("loop", supported.loop_),
+            ("use", supported.use_),
+            ("yield", supported.yield_),
+            ("reflector", supported.reflector),
+        ];
+        for (name, is_supported) in gated {
+            if is_supported {
+                assert!(
+                    supported_list.contains(&name),
+                    "{name} is supported (Supported::current) but missing from USAGE's own \
+                     \"runs ... documents only\" list: {supported_list:?}"
+                );
+                assert!(
+                    !refused_list.contains(&name),
+                    "{name} is supported (Supported::current) but still named in USAGE's own \
+                     refused list: {refused_list:?}"
+                );
+            } else {
+                assert!(
+                    refused_list.contains(&name),
+                    "{name} is refused (Supported::current) but missing from USAGE's own \
+                     refused list: {refused_list:?}"
+                );
+                assert!(
+                    !supported_list.contains(&name),
+                    "{name} is refused (Supported::current) but still named in USAGE's own \
+                     \"runs ... documents only\" list: {supported_list:?}"
+                );
+            }
+        }
     }
 
     #[test]

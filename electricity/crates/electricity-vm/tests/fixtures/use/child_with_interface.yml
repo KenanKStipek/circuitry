@@ -1,0 +1,19 @@
+interface:
+  inputs:
+    name:
+      type: string
+      required: true
+    times:
+      type: integer
+      default: 1
+  outputs:
+    greeting:
+      path: prime.step.value
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params:
+      mode: stringify
+      input:
+        from: input.name

@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-11T12:32:33.625Z","ev":"run_start","run_id":"33adf06d-ce49-4cc2-aff0-77ca480f9051","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":52089}
+{"v":1,"seq":1,"ts":"2026-10-11T12:32:33.628Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T12:32:33.628Z","ev":"start","id":1,"path":"prime.missing_required"}
+{"v":1,"seq":3,"ts":"2026-10-11T12:32:33.630Z","ev":"end","id":1,"path":"prime.missing_required","ok":false,"ms":2,"error":"Use effect 'missing_required': missing required input 'name' declared in orchestration interface."}
+{"v":1,"seq":4,"ts":"2026-10-11T12:32:33.630Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-10-11T12:32:33.630Z","ev":"run_end","ok":true}

@@ -1,0 +1,13 @@
+name: use-adapter-resolved
+effects:
+  - type: use
+    name: step
+    inline: |
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: adapter-resolved}
+    outputs:
+      result:
+        path: prime.inner.value
