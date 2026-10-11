@@ -415,6 +415,7 @@ dependencies = [
  "electricity",
  "electricity-bytecode",
  "electricity-config",
+ "electricity-value",
  "libc",
  "log",
  "serde",

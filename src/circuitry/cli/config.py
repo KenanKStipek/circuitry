@@ -460,14 +460,15 @@ def _applied_env_vars() -> list[str]:
 class UserEnvResult:
     """What :func:`load_user_env` did with the user's private ``.env``.
 
-    ``supplied``/``skipped`` carry variable *names* only — never values, so
-    a caller (``cof doctor``) can report them verbatim.
+    ``supplied``/``skipped``/``invalid`` carry variable *names* only —
+    never values, so a caller (``cof doctor``) can report them verbatim.
     """
 
     path: Path
     loaded: bool
     supplied: tuple[str, ...] = ()
     skipped: tuple[str, ...] = ()
+    invalid: tuple[str, ...] = ()
     warning: str | None = None
 
 
@@ -504,6 +505,13 @@ def load_user_env() -> UserEnvResult:
     group or others, is refused rather than loaded (one warning naming the
     fix). A file merely *readable* by group or others is still loaded, with
     the same warning ``cof doctor`` already prints for that case.
+
+    An entry whose key is empty, or whose key contains ``=`` or a NUL byte,
+    or whose value contains a NUL byte, can never be set with
+    ``os.environ[key] = value`` (it raises ``ValueError``); such an entry is
+    skipped with one warning naming only the key (never the value), and the
+    rest of the file still loads (#473). Electricity's own port of this
+    loader prints the identical line.
 
     ``dotenv`` is imported lazily here, not at module import time, to keep
     the CLI's lazy-import startup budget (#321).
@@ -551,11 +559,19 @@ def load_user_env() -> UserEnvResult:
 
     supplied: list[str] = []
     skipped: list[str] = []
+    invalid: list[str] = []
     for key, value in values.items():
         if key in os.environ:
             skipped.append(key)
             continue
         if value is None:
+            continue
+        if not key or "=" in key or "\x00" in key or "\x00" in value:
+            invalid_warning = (
+                f"{path}: skipping {key!r}: not a valid environment variable name or value."
+            )
+            logger.warning(invalid_warning)
+            invalid.append(key)
             continue
         os.environ[key] = value
         supplied.append(key)
@@ -565,6 +581,7 @@ def load_user_env() -> UserEnvResult:
         loaded=True,
         supplied=tuple(supplied),
         skipped=tuple(skipped),
+        invalid=tuple(invalid),
         warning=warning,
     )
     return _last_user_env_result

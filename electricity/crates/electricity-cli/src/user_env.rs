@@ -15,6 +15,10 @@
 //! - a file merely *readable* by group or others is still loaded,
 //!   with a softer warning;
 //! - an unreadable or undecodable file is skipped, with a warning;
+//! - an entry whose key is empty, or whose key contains `=` or a NUL
+//!   byte, or whose value contains a NUL byte, is skipped with one
+//!   warning naming only the key (never the value), and the rest of
+//!   the file still loads (#473);
 //! - the ownership/mode checks (and so both warnings above) are
 //!   skipped entirely on a non-Unix target, where POSIX mode bits
 //!   don't mean anything.
@@ -43,7 +47,10 @@ use std::path::{Path, PathBuf};
 
 /// What [`load_user_env`] did with the user's private `.env` --
 /// mirrors `cli/config.py::UserEnvResult`. `supplied`/`skipped` carry
-/// variable *names* only, never values.
+/// variable *names* only, never values. An invalid entry (empty key,
+/// `=` or a NUL byte in the key, or a NUL byte in the value) also
+/// lands in `skipped`, alongside an "already set" one -- unlike the
+/// Python reference, there is no separate `invalid` field here.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UserEnvResult {
     pub path: PathBuf,
@@ -72,6 +79,28 @@ pub fn user_env_path() -> Option<PathBuf> {
 /// leading zero-padding.
 fn mode_octal(mode: u32) -> String {
     format!("0o{mode:o}")
+}
+
+/// Python `repr(s)` of a plain string -- the invalid-entry warning's
+/// own `{key!r}` f-string interpolation (#473), quoted with Python's
+/// own rules rather than Rust's `{key:?}` Debug formatting.
+fn py_repr_str(s: &str) -> String {
+    electricity_value::Value::Str(s.to_string()).py_repr()
+}
+
+/// `cli/config.py::load_user_env`'s own f-string, verbatim: `{path}:
+/// skipping {key!r}: not a valid environment variable name or
+/// value.` -- factored out from [`load_user_env_at`]'s loop so a unit
+/// test can check the exact text without needing a real `.env` entry
+/// `dotenv_values` would actually produce (an empty key, for one,
+/// never reaches here from a real file either side's parser can
+/// produce -- this check stays defensive, matching the reference).
+fn invalid_entry_warning(path: &Path, key: &str) -> String {
+    format!(
+        "{}: skipping {}: not a valid environment variable name or value.",
+        path.display(),
+        py_repr_str(key),
+    )
 }
 
 /// POSIX ownership/mode bits are meaningless on a non-Unix target
@@ -265,6 +294,46 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
     let mut supplied = Vec::new();
     let mut skipped = Vec::new();
     for (key, value) in values {
+        // The key/value validity check runs *before* the `var_os`
+        // "already set" lookup below -- never the other way around.
+        // `std::env::var_os` reaches libc `getenv`, whose behaviour on
+        // a key that is empty or contains `=`/NUL is unspecified (a
+        // real libc can scan the `environ` array byte-for-byte and
+        // match a *different*, unrelated variable through a malformed
+        // key like `"A=B"`); checking validity first means such a key
+        // is always rejected with the warning below, never silently
+        // matched against an existing variable through that lookup
+        // (#473 review).
+        //
+        // `std::env::set_var` panics on a key that is empty or
+        // contains `=`/NUL, or a value containing NUL -- `cof`'s own
+        // `os.environ[key] = value` would instead raise a `ValueError`
+        // ("illegal environment variable name" / "embedded null
+        // byte"); `cli/config.py::load_user_env` catches neither case
+        // by the type, it rejects the entry itself before ever
+        // assigning it, with the exact warning built below (#473).
+        // Neither side's warning text ever names the *value* -- but
+        // `set_var`'s panic message does (`failed to set environment
+        // variable {key:?} to {value:?}`), and with no custom panic
+        // hook that would reach stderr verbatim (#471 review finding
+        // 2: a secret leak). A single-quoted key can contain `=`
+        // (`'A=B'=secret`), and a literal NUL byte decodes as valid
+        // UTF-8 inside a quoted or unquoted value -- both reachable
+        // from a real file, not just a hostile one. Skipped, not
+        // propagated as a hard failure: naming only the key keeps
+        // every other line in the same file loading, the same
+        // robustness this function already gives an unreadable or
+        // undecodable file.
+        if key.is_empty()
+            || key.contains('=')
+            || key.contains('\0')
+            || value.as_deref().is_some_and(|v| v.contains('\0'))
+        {
+            let warning = invalid_entry_warning(path, &key);
+            log::warn!("{warning}");
+            skipped.push(key);
+            continue;
+        }
         // `std::env::var_os` -- never `real_env.contains_key`, which
         // can only ever see a name/value that decoded as UTF-8 above --
         // a key already present in the real environment must win
@@ -276,30 +345,6 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
             continue;
         }
         let Some(value) = value else { continue };
-        // `std::env::set_var` panics on a key that is empty or
-        // contains `=`/NUL, or a value containing NUL -- `cof`'s own
-        // `os.environ[key] = value` instead raises a `ValueError`
-        // ("illegal environment variable name" / "embedded null
-        // byte"), which `load_user_env` never catches, so cof fails
-        // the whole command too. Neither side's error text ever names
-        // the *value* -- but `set_var`'s panic message does (`failed
-        // to set environment variable {key:?} to {value:?}`), and with
-        // no custom panic hook that would reach stderr verbatim (#471
-        // review finding 2: a secret leak). A single-quoted key can
-        // contain `=` (`'A=B'=secret`), and a literal NUL byte decodes
-        // as valid UTF-8 inside a quoted or unquoted value -- both
-        // reachable from a real file, not just a hostile one. Skipped,
-        // not propagated as a hard failure: naming only the key keeps
-        // every other line in the same file loading, the same
-        // robustness this function already gives an unreadable or
-        // undecodable file.
-        if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
-            let warning =
-                format!("{key:?} is not a valid environment variable name or value; skipping it.");
-            log::warn!("{warning}");
-            skipped.push(key);
-            continue;
-        }
         // SAFETY: called once, at the very start of `main`, before the
         // signal-handling thread or the Tokio runtime exist -- the one
         // point in this binary's lifetime where mutating the process
@@ -541,6 +586,95 @@ mod tests {
         assert!(std::env::var("A=B").is_err());
     }
 
+    /// Captures `log::warn!` calls from the current test thread only --
+    /// a thread-local sink, not a global one, so this test's own
+    /// `log::set_logger` call (global, process-wide, settable only
+    /// once) never races against another test running on another
+    /// thread at the same time in this same test binary.
+    struct ThreadLocalWarnLogger;
+
+    thread_local! {
+        static CAPTURED_WARNINGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    impl log::Log for ThreadLocalWarnLogger {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                CAPTURED_WARNINGS.with(|c| c.borrow_mut().push(record.args().to_string()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    static THREAD_LOCAL_WARN_LOGGER: ThreadLocalWarnLogger = ThreadLocalWarnLogger;
+
+    fn install_thread_local_warn_logger() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let _ = log::set_logger(&THREAD_LOCAL_WARN_LOGGER);
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+    }
+
+    #[test]
+    fn an_invalid_key_still_warns_even_when_its_truncated_prefix_matches_a_real_variable() {
+        // #473 review: `std::env::var_os` calls libc `getenv`, and
+        // macOS's `getenv` cuts a name at its first `=` before searching
+        // -- so there `var_os("A=B")` matches a real `A` once one is set.
+        // glibc and musl never match such a name. The validity check now
+        // runs *before* that lookup, so the entry is still reported
+        // invalid (one warning, named only by the key) rather than
+        // silently treated as already set; on Linux this test still
+        // checks that the warning fires.
+        let _guard = ENV_MUTATION_LOCK.lock().unwrap();
+        install_thread_local_warn_logger();
+        CAPTURED_WARNINGS.with(|c| c.borrow_mut().clear());
+
+        unsafe { std::env::set_var("A", "unrelated-real-value-473") };
+        #[cfg(target_os = "macos")]
+        assert!(
+            std::env::var_os("A=B").is_some(),
+            "this test's premise -- this platform's own getenv matches an \
+             invalid name's truncated prefix against a real variable -- no \
+             longer holds here"
+        );
+
+        let dir = ScratchDir::new("getenv-prefix-match-473");
+        let path = dir.0.join(".env");
+        std::fs::write(&path, "'A=B'=s3cr3t-should-never-be-read-473\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = load_user_env_at(&path);
+        unsafe { std::env::remove_var("A") };
+
+        assert!(result.supplied.is_empty());
+        assert_eq!(result.skipped, vec!["A=B".to_string()]);
+        let warned = CAPTURED_WARNINGS.with(|c| {
+            c.borrow()
+                .iter()
+                .any(|w| w.contains("not a valid environment variable name or value"))
+        });
+        assert!(
+            warned,
+            "the invalid-entry warning must still fire even though \
+             var_os(\"A=B\") matched the real `A` variable"
+        );
+        CAPTURED_WARNINGS.with(|c| {
+            assert!(
+                !c.borrow()
+                    .iter()
+                    .any(|w| w.contains("s3cr3t-should-never-be-read-473")),
+                "the warning must never name the value"
+            );
+        });
+    }
+
     #[test]
     fn a_nul_byte_in_a_value_is_skipped_not_set() {
         // #471 review finding 2's other probe: a raw NUL decodes as
@@ -558,6 +692,31 @@ mod tests {
         assert!(result.supplied.is_empty());
         assert_eq!(result.skipped, vec!["K_468_NUL".to_string()]);
         assert!(std::env::var("K_468_NUL").is_err());
+    }
+
+    #[test]
+    fn invalid_entry_warning_quotes_the_key_with_python_repr_not_rust_debug() {
+        // #473: the reference's own `{path}: skipping {key!r}: not a
+        // valid environment variable name or value.`, byte for byte --
+        // Rust's `{key:?}` Debug formatting would double-quote instead.
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        assert_eq!(
+            invalid_entry_warning(path, "A=B"),
+            "/home/someone/.config/circuitry/.env: skipping 'A=B': \
+             not a valid environment variable name or value."
+        );
+    }
+
+    #[test]
+    fn invalid_entry_warning_never_contains_a_value() {
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        let warning = invalid_entry_warning(path, "K_468_NUL");
+        assert!(!warning.contains('\0'));
+        assert_eq!(
+            warning,
+            "/home/someone/.config/circuitry/.env: skipping 'K_468_NUL': \
+             not a valid environment variable name or value."
+        );
     }
 
     #[test]

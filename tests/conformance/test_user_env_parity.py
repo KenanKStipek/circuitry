@@ -285,3 +285,82 @@ def test_a_directory_at_the_dotenv_path_parses_as_empty_on_both_engines(
     assert "could not be read" not in electricity_result.stderr
     assert "group/world-readable" in cof_result.stderr
     assert "group/world-readable" in electricity_result.stderr
+
+
+def test_a_key_containing_equals_prints_the_exact_same_warning_and_never_the_value(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """#473: a single-quoted key can contain `=` (`'A=B'=...`); both
+    engines must skip the entry (never crash/panic) with one identical
+    `WARNING:` line naming only the key, and keep loading the rest of
+    the file."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env_path = _write_user_env(
+        home_dir,
+        "'A=B'=s3cr3t-conformance-probe\nCIRCUITRY_ENVIRONMENT=dev\n",
+        mode=0o600,
+    )
+
+    cof_result = _run_cof(tmp_path / "cof_case", home_dir)
+    electricity_result = _run_electricity(electricity_binary, tmp_path / "electricity_case", home_dir)
+
+    assert cof_result.returncode == 0, cof_result.stderr
+    assert electricity_result.returncode == 0, electricity_result.stderr
+    assert "s3cr3t-conformance-probe" not in cof_result.stdout
+    assert "s3cr3t-conformance-probe" not in cof_result.stderr
+    assert "s3cr3t-conformance-probe" not in electricity_result.stdout
+    assert "s3cr3t-conformance-probe" not in electricity_result.stderr
+
+    def invalid_entry_line(stderr: str) -> str:
+        for line in stderr.splitlines():
+            if "not a valid environment variable name or value" in line:
+                return line
+        raise AssertionError(f"no invalid-entry warning in stderr: {stderr!r}")
+
+    cof_warning = invalid_entry_line(cof_result.stderr)
+    electricity_warning = invalid_entry_line(electricity_result.stderr)
+    expected = f"WARNING: {env_path}: skipping 'A=B': not a valid environment variable name or value."
+    assert cof_warning == expected, cof_warning
+    assert cof_warning == electricity_warning, (cof_warning, electricity_warning)
+    assert cof_result.stderr.count("not a valid environment variable name or value") == 1
+    assert electricity_result.stderr.count("not a valid environment variable name or value") == 1
+
+
+def test_a_nul_byte_in_a_value_prints_the_exact_same_warning_and_never_the_value(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """#473: a raw NUL byte decodes as valid UTF-8 inside a value; both
+    engines must skip the entry with one identical `WARNING:` line
+    naming only the key, and keep loading the rest of the file."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    env_text = "NUL_KEY_473=before_s3cr3t_nul\x00after_nul\nCIRCUITRY_ENVIRONMENT=dev\n"
+    env_path = _write_user_env(home_dir, env_text, mode=0o600)
+
+    cof_result = _run_cof(tmp_path / "cof_case", home_dir)
+    electricity_result = _run_electricity(electricity_binary, tmp_path / "electricity_case", home_dir)
+
+    assert cof_result.returncode == 0, cof_result.stderr
+    assert electricity_result.returncode == 0, electricity_result.stderr
+    assert "s3cr3t_nul" not in cof_result.stdout
+    assert "s3cr3t_nul" not in cof_result.stderr
+    assert "s3cr3t_nul" not in electricity_result.stdout
+    assert "s3cr3t_nul" not in electricity_result.stderr
+
+    def invalid_entry_line(stderr: str) -> str:
+        for line in stderr.splitlines():
+            if "not a valid environment variable name or value" in line:
+                return line
+        raise AssertionError(f"no invalid-entry warning in stderr: {stderr!r}")
+
+    cof_warning = invalid_entry_line(cof_result.stderr)
+    electricity_warning = invalid_entry_line(electricity_result.stderr)
+    expected = (
+        f"WARNING: {env_path}: skipping 'NUL_KEY_473': "
+        "not a valid environment variable name or value."
+    )
+    assert cof_warning == expected, cof_warning
+    assert cof_warning == electricity_warning, (cof_warning, electricity_warning)
+    assert cof_result.stderr.count("not a valid environment variable name or value") == 1
+    assert electricity_result.stderr.count("not a valid environment variable name or value") == 1
