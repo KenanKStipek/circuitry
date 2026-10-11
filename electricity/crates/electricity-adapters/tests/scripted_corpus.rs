@@ -99,6 +99,7 @@ struct RepliesCase {
     case: String,
     filename: String,
     contents: String,
+    raw_bytes_hex: Option<String>,
     calls: Vec<CallCase>,
 }
 
@@ -122,9 +123,17 @@ struct OptionsCase {
 }
 
 #[derive(Deserialize)]
+struct MergeCase {
+    case: String,
+    per_instance_counts: Vec<std::collections::HashMap<String, usize>>,
+    merged: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Deserialize)]
 struct Corpus {
     replies_cases: Vec<RepliesCase>,
     options_cases: Vec<OptionsCase>,
+    merge_cases: Vec<MergeCase>,
     host_claude_message: String,
 }
 
@@ -154,7 +163,20 @@ fn path_from_dotted(dotted: &str) -> EffectPath {
 async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
     let dir = TempDir::new();
     let file_path = dir.0.join(&case.filename);
-    std::fs::write(&file_path, &case.contents).unwrap();
+    match &case.raw_bytes_hex {
+        // Only the invalid-UTF-8 case sets this: JSON text can't carry
+        // the raw bytes directly, so the generator hex-encodes them
+        // instead of writing `contents` (itself just a human-readable
+        // placeholder for this one case).
+        Some(hex) => {
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            std::fs::write(&file_path, &bytes).unwrap();
+        }
+        None => std::fs::write(&file_path, &case.contents).unwrap(),
+    }
     let mut cfg = electricity_value::Dict::new();
     cfg.insert(
         Value::Str("replies_file".to_string()),
@@ -170,7 +192,22 @@ async fn run_replies_case(case: RepliesCase, failures: &mut Vec<String>) {
             "check" => {
                 let result = adapter.check().await;
                 let expected_ok = matches!(call.ok, Some(CheckOkOrBool::Bool(true)));
-                if result.ok != expected_ok || result.message != call.message {
+                // Issue #478: a YAML parse-error text is only ever
+                // compared "by location", never byte-for-byte --
+                // `electricity-yaml`'s own error text doesn't reproduce
+                // PyYAML's multi-line `in "<unicode string>", line N,
+                // column N: ...` mark format. Every other message here
+                // (JSON, `OSError`, the structural-validation texts,
+                // the `check() raised ...` fold) is still compared
+                // exactly.
+                let message_matches = match (&result.message, &call.message) {
+                    (Some(got), Some(want)) if want.contains("invalid YAML: ") => {
+                        let prefix = format!("{}: invalid YAML: ", case.filename);
+                        got.starts_with(&prefix) && want.starts_with(&prefix)
+                    }
+                    (got, want) => got == want,
+                };
+                if result.ok != expected_ok || !message_matches {
                     failures.push(format!(
                         "{}: check() = ok:{} message:{:?}, want ok:{expected_ok} message:{:?}",
                         case.case, result.ok, result.message, call.message
@@ -314,6 +351,15 @@ async fn scripted_corpus_matches_circuitrys_own_adapter() {
     }
     for case in data.options_cases {
         check_options_case(case, &mut failures);
+    }
+    for case in data.merge_cases {
+        let got = electricity_adapters::merge_remaining_counts(&case.per_instance_counts);
+        if got != case.merged {
+            failures.push(format!(
+                "{}: merge_remaining_counts mismatch: got {got:?}, want {:?}",
+                case.case, case.merged
+            ));
+        }
     }
 
     let host_claude_err = match electricity_adapters::host_claude::build_host_claude(&Value::None) {

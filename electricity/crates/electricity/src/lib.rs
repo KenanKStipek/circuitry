@@ -1233,12 +1233,11 @@ pub async fn run_orchestration_with_config(
     let model = effective.model.clone().unwrap_or_default();
     let registry = tool_registry();
     // Review P2-3 on PR #454's second review: `electricity_adapters::
-    // build_registry()` (today identical to a fresh
-    // `AdapterRegistry::new()` -- lane F1 hasn't registered a builder
-    // yet) replaces a direct `AdapterRegistry::new()` call here, so
-    // lane F1/F2's own PR only ever adds a builder line inside
-    // `build_registry()`'s own crate, never touches this file to wire
-    // a real registry into the run for the first time.
+    // build_registry()` replaces a direct `AdapterRegistry::new()`
+    // call here, so lane F1/F2's own PR only ever adds a builder line
+    // inside `build_registry()`'s own crate, never touches this file
+    // to wire a real registry into the run. Lane F1 (issue #478) has
+    // since registered `scripted` and `host_claude` there.
     let adapters = electricity_adapters::build_registry();
     let orchestration_dir: &Path = program
         .document

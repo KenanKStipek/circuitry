@@ -53,7 +53,7 @@ jobs:
         working-directory: electricity
         run: cargo test --workspace
 
-      - name: cargo test -p electricity-cli --features test-tools --test signals --test signals_loop --test live_state
+      - name: cargo test -p electricity-cli --features test-tools --test signals --test signals_loop --test live_state --test leftover_export
         working-directory: electricity
         # Never part of the default `cargo test --workspace` run above
         # (`test-tools` is never enabled there) -- real SIGINT/SIGTERM/
@@ -63,7 +63,12 @@ jobs:
         # acceptance criteria; PR #441 review finding 11). `signals_loop`
         # (lane H, #461) is the `loop`-flavoured twin of `signals`'s own
         # cases, in its own file since `signals.rs` is lane B/D's.
-        run: cargo test -p electricity-cli --features test-tools --test signals --test signals_loop --test live_state
+        # `leftover_export` (issue #478, lane F1) adds its own
+        # `test-tools`-gated, content-bearing exit 0/1 cases here; the
+        # three signal-exit cases (130/143/129) and the second-signal
+        # absence case live in `signals.rs` itself, reusing its own
+        # process-group signal-sending infrastructure.
+        run: cargo test -p electricity-cli --features test-tools --test signals --test signals_loop --test live_state --test leftover_export
 
       - name: cargo test --release -p electricity-yaml --test nesting_limit
         working-directory: electricity

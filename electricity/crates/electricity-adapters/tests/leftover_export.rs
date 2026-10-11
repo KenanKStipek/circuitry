@@ -123,7 +123,8 @@ async fn the_leftover_export_behaves_per_scripted_replies_md_7() {
     // `prime.y`'s one; `b` only calls `check()` (a preflight-only
     // instance, full queue, never consumed) -- its vote must never
     // pull `prime.x`/`prime.y`'s reported count back up, and
-    // `prime.z` (never touched by any instance) must not appear.
+    // `prime.z` (never touched by either instance) must appear with
+    // its full, untouched count.
     let replies = write(
         &dir,
         "replies.yaml",

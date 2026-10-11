@@ -104,7 +104,9 @@ of `int`, so this is checked explicitly, not left to `isinstance(x, int)` alone.
 token fields, when present, feed the run's own `tokens_sent`/`tokens_received` and
 `*_total` accounting, so a replies file that cares about token totals in its expected
 output sets them explicitly — they default to absent (`null`), same as a real adapter
-reply that reports none.
+reply that reports none. Python's own `int` is unbounded; electricity's token counts are
+`i64`-bounded, a documented divergence — a count beyond that range is a load-time error
+there, with a message Python has no equivalent of, rather than a silent truncation.
 
 ### 4.2 An error reply
 
@@ -137,7 +139,10 @@ name, for every kind except `timeout`/`connection`, which carry no status and ar
 retryable (they model a failure that never got an HTTP response to classify in the first
 place). An explicit `status: null` is only legal for `timeout`/`connection`; every other
 kind needs one (its own default, or an override), checked at load time rather than left
-to fail the call itself with no path named.
+to fail the call itself with no path named. Python's own `int` is unbounded; electricity's
+`status` is `u16`-bounded, a second documented divergence — a status outside that range
+still classifies retryable/not-retryable by its full value, but is stored as absent
+(`None`) on the failure's own retry info, rather than truncated or rejected.
 
 The generated default `message` (when a reply omits one) is the literal string
 `"scripted adapter: <kind> at '<path>'"` — this, like every other error's message, ends

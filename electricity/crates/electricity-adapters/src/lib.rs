@@ -178,23 +178,47 @@ pub(crate) fn register_for_leftover_export(remaining_counts: Arc<RemainingCounts
     export_registry().lock().unwrap().push(remaining_counts);
 }
 
-/// `adapters/scripted.py::_merge_leftover_replies` -- every registered
-/// instance's own remaining count at each path, merged by taking the
-/// **minimum** remaining count across every instance that holds that
-/// path (`0` counts; never summed), keeping only the paths whose
-/// merged count is nonzero.
-fn merge_leftover_replies() -> HashMap<String, usize> {
+/// `adapters/scripted.py::_merge_leftover_replies`'s own merge
+/// arithmetic, pulled out of [`merge_leftover_replies`] so it can be
+/// tested directly against `generate_scripted_corpus.py`'s own
+/// `merge_cases` -- each one's recorded per-instance remaining-count
+/// snapshots, fed in here with no registry involved at all. The
+/// registry itself (unlike this function) is append-only for the
+/// whole process's lifetime, matching Python's own module-level
+/// `_export_instances` global (by design: one process is one run), so
+/// replaying several independent corpus scenarios against the
+/// registry directly, in one test binary, would let an earlier
+/// scenario's own stale registrations leak into a later one's result
+/// -- this pure form has no such state to leak.
+///
+/// Merges by taking the **minimum** remaining count across every
+/// snapshot that holds a given path (`0` counts; never summed),
+/// keeping only the paths whose merged count is nonzero.
+pub fn merge_remaining_counts(snapshots: &[HashMap<String, usize>]) -> HashMap<String, usize> {
     let mut merged: HashMap<String, usize> = HashMap::new();
-    for remaining_counts in export_registry().lock().unwrap().iter() {
-        for (path, count) in remaining_counts() {
+    for counts in snapshots {
+        for (path, count) in counts {
             merged
-                .entry(path)
-                .and_modify(|current| *current = (*current).min(count))
-                .or_insert(count);
+                .entry(path.clone())
+                .and_modify(|current| *current = (*current).min(*count))
+                .or_insert(*count);
         }
     }
     merged.retain(|_, count| *count > 0);
     merged
+}
+
+/// `adapters/scripted.py::_merge_leftover_replies` -- every registered
+/// instance's own remaining count at each path, merged by
+/// [`merge_remaining_counts`].
+fn merge_leftover_replies() -> HashMap<String, usize> {
+    let snapshots: Vec<HashMap<String, usize>> = export_registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|remaining_counts| remaining_counts())
+        .collect();
+    merge_remaining_counts(&snapshots)
 }
 
 /// A single JSON object, `{"<path>": <count>, ...}`, the same shape
@@ -272,6 +296,44 @@ mod tests {
     fn a_fresh_registry_builds_exactly_scripted_and_host_claude() {
         let registry = build_registry();
         assert_eq!(registry.supported_names(), vec!["host_claude", "scripted"]);
+    }
+
+    #[test]
+    fn build_registry_builds_scripted_through_the_normalized_lookup() {
+        let registry = build_registry();
+        let adapter = registry.build("SCRIPTED ", &Value::None).unwrap();
+        assert_eq!(adapter.name(), "scripted");
+    }
+
+    #[test]
+    fn build_registry_still_gives_the_unknown_adapter_text_for_an_unbuilt_name() {
+        // `ollama` is in Circuitry's own full registry (so it is named
+        // in the message's own "Supported adapters" list), but this
+        // crate has no builder for it yet (lane F2) -- `build_registry`
+        // mustn't register it early.
+        let registry = build_registry();
+        let err = match registry.build("ollama", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an unknown-adapter error"),
+        };
+        assert!(err.message.starts_with("Unknown adapter: 'ollama'."));
+    }
+
+    #[test]
+    fn build_registry_fails_host_claude_with_its_exact_text() {
+        let registry = build_registry();
+        let err = match registry.build("host_claude", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("expected host_claude to fail"),
+        };
+        assert_eq!(
+            err.message,
+            "host_claude cannot be built from config; it requires a request_handler injected \
+             at runtime via RunRequest.adapter (see circuitry-mcp). Run `circuitry-mcp` (or \
+             `cof mcp`) and drive the orchestration via the MCP tool loop, or supply \
+             RunRequest(adapter=HostClaudeAdapter(request_handler=...)) from a programmatic \
+             caller."
+        );
     }
 
     #[test]

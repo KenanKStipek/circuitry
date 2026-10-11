@@ -42,7 +42,11 @@ from circuitry.adapters.base import (
     ignored_options_warning,
 )
 from circuitry.adapters.factory import _build_host_claude
-from circuitry.adapters.scripted import ScriptedAdapter, ScriptedRepliesError
+from circuitry.adapters.scripted import (
+    ScriptedAdapter,
+    ScriptedRepliesError,
+    _merge_leftover_replies,
+)
 from circuitry.core import effect_identity
 
 OUTPUT = (
@@ -76,7 +80,27 @@ def _run_calls(adapter: ScriptedAdapter, calls: list[dict[str, Any]]) -> list[di
     results = []
     for call in calls:
         if call["kind"] == "check":
-            result = adapter.check()
+            # `check()` itself only ever catches `ScriptedRepliesError`
+            # (folding it to `str(e)`) -- any other exception
+            # (`UnicodeDecodeError`, `TypeError`) propagates out of it
+            # uncaught, for `preflight.call_check` to fold to
+            # `check() raised {type(exc).__name__}: {exc}`. Recording
+            # that exact folded text here, rather than a separate
+            # "raised" field, lets the Rust replay compare `message`
+            # directly for every case regardless of which path produced
+            # it.
+            try:
+                result = adapter.check()
+            except Exception as exc:
+                results.append(
+                    {
+                        "kind": "check",
+                        "ok": False,
+                        "missing": [],
+                        "message": f"check() raised {type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
             results.append(
                 {
                     "kind": "check",
@@ -148,18 +172,39 @@ def _run_calls(adapter: ScriptedAdapter, calls: list[dict[str, Any]]) -> list[di
 
 
 def _replies_case(
-    name: str, *, filename: str, contents: str, calls: list[dict[str, Any]]
+    name: str,
+    *,
+    filename: str,
+    contents: str,
+    calls: list[dict[str, Any]],
+    raw_bytes: bytes | None = None,
 ) -> dict[str, Any]:
+    """*raw_bytes*, when given, is written to *filename* instead of
+    *contents* (which still records in the corpus for a reader's own
+    reference) -- the one way to get invalid UTF-8 onto disk, since
+    *contents* is itself a Python `str`."""
     with TemporaryDirectory(prefix="electricity-scripted-corpus-") as tmp:
         previous_cwd = os.getcwd()
         os.chdir(tmp)
         try:
-            (Path(tmp) / filename).write_text(contents, encoding="utf-8")
+            if raw_bytes is not None:
+                (Path(tmp) / filename).write_bytes(raw_bytes)
+            else:
+                (Path(tmp) / filename).write_text(contents, encoding="utf-8")
             adapter = ScriptedAdapter(replies_file=filename)
             results = _run_calls(adapter, calls)
         finally:
             os.chdir(previous_cwd)
-    return {"case": name, "filename": filename, "contents": contents, "calls": results}
+    return {
+        "case": name,
+        "filename": filename,
+        "contents": contents,
+        # Hex-encoded, since JSON text can't carry invalid UTF-8 bytes
+        # directly -- only this one case ever sets it; every other case
+        # is `None` and the Rust replay writes `contents` verbatim.
+        "raw_bytes_hex": raw_bytes.hex() if raw_bytes is not None else None,
+        "calls": results,
+    }
 
 
 def build_replies_cases() -> list[dict[str, Any]]:
@@ -255,6 +300,25 @@ def build_replies_cases() -> list[dict[str, Any]]:
             )
         )
 
+    cases.extend(
+        _replies_case(
+            f"{kind}_kind_keeps_an_explicit_status_and_stays_retryable",
+            filename="replies.yaml",
+            contents=f"prime.x:\n  - error:\n      kind: {kind}\n      status: 503\n",
+            calls=[{"kind": "generate", "path": "prime.x"}],
+        )
+        for kind in ("timeout", "connection")
+    )
+
+    cases.append(
+        _replies_case(
+            "an_empty_message_falls_back_to_the_generated_default",
+            filename="replies.yaml",
+            contents="prime.x:\n  - error:\n      kind: rate_limited\n      message: ''\n",
+            calls=[{"kind": "generate", "path": "prime.x"}],
+        )
+    )
+
     cases.append(
         _replies_case(
             "an_explicit_message_overrides_the_generated_default",
@@ -344,13 +408,140 @@ def build_replies_cases() -> list[dict[str, Any]]:
             "an_error_replys_sibling_keys_are_not_checked",
             "prime.x:\n  - error:\n      kind: timeout\n    tokens_sent: 5\n",
         ),
+        (
+            "a_non_string_int_key_is_rejected",
+            "5:\n  - text: x\n",
+        ),
+        (
+            "two_unknown_text_reply_keys_sort_by_string_value_not_repr",
+            # Python's `sorted({"b", "it's"})` gives `['b', "it's"]` --
+            # sorting by `repr()` instead would put `"it's"` first (a
+            # double quote sorts before `b`).
+            "prime.x:\n  - text: x\n    b: 1\n    \"it's\": 2\n",
+        ),
     ]
     for name, contents in structural_cases:
         cases.append(
             _replies_case(name, filename="replies.yaml", contents=contents, calls=[{"kind": "check"}])
         )
 
+    # A `null` document (an empty file, or a literal `null`) means `{}` --
+    # legal, not a structural failure, so it is a `generate` case (which
+    # fails for the ordinary "no reply configured" reason), not a `check`
+    # case.
+    cases.append(
+        _replies_case(
+            "a_null_document_means_an_empty_mapping",
+            filename="replies.yaml",
+            contents="null\n",
+            calls=[{"kind": "generate", "path": "prime.x"}],
+        )
+    )
+
+    # `_load_raw`'s own three failure texts, each compared exactly since
+    # every path here is the fixed, relative filename this generator
+    # always uses -- never the generating machine's own absolute path.
+    cases.append(
+        _replies_case(
+            "invalid_json_syntax_reports_cpythons_exact_jsondecodeerror_text",
+            filename="replies.json",
+            contents="{not valid json",
+            calls=[{"kind": "check"}],
+        )
+    )
+    cases.append(
+        _replies_case(
+            "invalid_yaml_syntax_reports_the_parsers_exact_text",
+            filename="replies.yaml",
+            contents="prime.x: [unterminated\n",
+            calls=[{"kind": "check"}],
+        )
+    )
+    cases.append(
+        _replies_case(
+            "invalid_utf8_raises_pythons_own_unicodedecodeerror_text",
+            filename="replies.yaml",
+            contents="placeholder",
+            raw_bytes=b"\xff\xfe",
+            calls=[{"kind": "check"}],
+        )
+    )
+
     return cases
+
+
+def _merge_case(
+    name: str, *, filename: str, contents: str, instances_calls: list[list[dict[str, Any]]]
+) -> dict[str, Any]:
+    """`_merge_leftover_replies` (`adapters/scripted.py`) over *len(instances_calls)*
+    independent instances loading one shared file -- each instance runs its own
+    *calls* (discarding their own results; only the merged leftover counts matter
+    here), the same `_run_calls` helper the replies cases use."""
+    with TemporaryDirectory(prefix="electricity-scripted-corpus-") as tmp:
+        previous_cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / filename).write_text(contents, encoding="utf-8")
+            instances = [ScriptedAdapter(replies_file=filename) for _ in instances_calls]
+            for instance, calls in zip(instances, instances_calls, strict=True):
+                _run_calls(instance, calls)
+            # Recorded per-instance so the Rust replay can feed them
+            # straight into its own pure merge-arithmetic helper
+            # (`electricity_adapters::merge_remaining_counts`) without
+            # ever touching its process-wide export registry -- that
+            # registry is append-only for the process's whole
+            # lifetime, so replaying several independent scenarios
+            # against it directly, in one test binary, would let one
+            # scenario's registrations leak into the next's result.
+            per_instance_counts = [instance._remaining_counts() for instance in instances]
+            merged = _merge_leftover_replies(instances)
+        finally:
+            os.chdir(previous_cwd)
+    return {
+        "case": name,
+        "filename": filename,
+        "contents": contents,
+        "per_instance_counts": per_instance_counts,
+        "merged": merged,
+    }
+
+
+def build_merge_cases() -> list[dict[str, Any]]:
+    shared_contents = (
+        "prime.x:\n  - text: one\n  - text: two\nprime.y:\n  - text: only\n"
+        "prime.z:\n  - text: untouched\n"
+    )
+    return [
+        _merge_case(
+            "the_minimum_across_instances_wins_never_the_sum",
+            filename="replies.yaml",
+            contents=shared_contents,
+            instances_calls=[
+                # `a` consumes one of `prime.x`'s two replies and all of
+                # `prime.y`'s one.
+                [
+                    {"kind": "generate", "path": "prime.x"},
+                    {"kind": "generate", "path": "prime.y"},
+                ],
+                # `b` only calls `check()` -- a preflight-only instance,
+                # full queue, never consumed -- its vote must never pull
+                # `prime.x`/`prime.y`'s reported count back up.
+                [{"kind": "check"}],
+            ],
+        ),
+        _merge_case(
+            "a_path_fully_consumed_by_every_instance_is_omitted_not_zero",
+            filename="replies.yaml",
+            contents="prime.x:\n  - text: only\n",
+            instances_calls=[[{"kind": "generate", "path": "prime.x"}]],
+        ),
+        _merge_case(
+            "a_single_preflight_only_instance_reports_every_path_at_its_full_count",
+            filename="replies.yaml",
+            contents=shared_contents,
+            instances_calls=[[{"kind": "check"}]],
+        ),
+    ]
 
 
 def options_case(
@@ -439,6 +630,7 @@ def main() -> int:
     corpus = {
         "replies_cases": build_replies_cases(),
         "options_cases": build_options_cases(),
+        "merge_cases": build_merge_cases(),
         "host_claude_message": _host_claude_message_text(),
     }
     text = render(corpus)

@@ -173,6 +173,30 @@ fn decode_utf8_strict(bytes: &[u8]) -> Result<String, String> {
         .map_err(|_| describe_utf8_error(bytes))
 }
 
+/// `Path.read_text`'s own universal-newline translation: `\r\n` and a
+/// lone `\r` both become `\n`; a lone `\n` is left alone. Applied
+/// after UTF-8 decoding, before the JSON/YAML parse, so a CRLF or
+/// CR-only replies file reports the identical `(char N)`/`line N`
+/// position CPython's own `json.loads`/YAML loader would -- duplicated
+/// from `electricity-compiler::load`'s own `translate_universal_
+/// newlines` (that crate isn't this lane's to edit, and isn't a
+/// dependency of this one).
+fn translate_universal_newlines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------
 // Python truthiness -- duplicated from `electricity-tools::fs`'s own
 // `py_truthy` (same reason as above: not this lane's crate to edit).
@@ -296,7 +320,20 @@ fn reject_unknown_keys(dict: &Dict, allowed: &[&str], prefix: &str) -> Result<()
     if unknown.is_empty() {
         return Ok(());
     }
-    unknown.sort_by_key(|value| value.py_repr());
+    // Python's `sorted(set(entry) - allowed)` compares the keys
+    // themselves -- for the `str` keys every real replies document
+    // has, that's code-point order, not the order their `repr()`
+    // would sort in (which a quote character inside the string can
+    // reorder: `"it's"` reprs with a double quote, sorting before a
+    // bare `'b'`). `Value::Str`'s `Ord` is UTF-8 byte order, which is
+    // code-point order for valid UTF-8, so comparing the strings
+    // directly matches. A non-`str` key (unreachable for a real
+    // document; Python itself would raise `TypeError: '<' not
+    // supported` sorting a mix) falls back to its own `repr()`.
+    unknown.sort_by(|a, b| match (a, b) {
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        _ => a.py_repr().cmp(&b.py_repr()),
+    });
     let unknown_repr = Value::List(unknown).py_repr();
     let mut allowed_sorted: Vec<&str> = allowed.to_vec();
     allowed_sorted.sort();
@@ -544,6 +581,7 @@ fn load_raw(path: &ResolvedPath) -> Result<Value, AdapterError> {
         retry: RetryInfo::not_retryable(),
         py_class: PyExc::UnicodeDecodeError,
     })?;
+    let text = translate_universal_newlines(&text);
     let is_json = path
         .buf
         .extension()
@@ -716,13 +754,15 @@ impl Adapter for ScriptedAdapter {
 
     /// `adapters/scripted.py::ScriptedAdapter.check` -- loads the file
     /// through the same lazy path, registering this instance for the
-    /// export exactly as `generate()` does. Python propagates a
-    /// non-`ScriptedRepliesError` failure (`UnicodeDecodeError`,
-    /// `TypeError`) out of `check()` uncaught, for `preflight.py::
-    /// call_check` to fold; this folds every failure the same way
-    /// (`ok: false`, the exception's own text) since [`CheckResult`]
-    /// has no way to carry a raised exception separately -- said in
-    /// the PR per issue #478's own test-plan note.
+    /// export exactly as `generate()` does. Python's own `check()` only
+    /// catches `ScriptedRepliesError`, folding it to `str(e)`; any other
+    /// exception (`UnicodeDecodeError`, `TypeError`) propagates out of
+    /// `check()` uncaught, for `preflight.py::call_check` to fold to
+    /// `check() raised {type(exc).__name__}: {exc}`. [`CheckResult`] has
+    /// no way to carry a raised exception separately from an ordinary
+    /// `ok: false` result, so this reproduces `call_check`'s own text
+    /// for every non-`ScriptedRepliesError` failure here directly,
+    /// rather than leaving lane R's own fold to guess which kind it is.
     async fn check(&self) -> CheckResult {
         match self.ensure_loaded() {
             Ok(_) => CheckResult {
@@ -730,10 +770,19 @@ impl Adapter for ScriptedAdapter {
                 missing: Vec::new(),
                 message: None,
             },
-            Err(err) => CheckResult {
+            Err(err) if err.py_class == PyExc::ScriptedRepliesError => CheckResult {
                 ok: false,
                 missing: Vec::new(),
                 message: Some(err.message),
+            },
+            Err(err) => CheckResult {
+                ok: false,
+                missing: Vec::new(),
+                message: Some(format!(
+                    "check() raised {}: {}",
+                    err.py_class.name(),
+                    err.message
+                )),
             },
         }
     }
@@ -987,6 +1036,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_folds_a_type_error_the_way_preflights_call_check_does() {
+        // `preflight.py::call_check` only ever sees `check()` raise
+        // uncaught for a non-`ScriptedRepliesError` failure -- a truthy
+        // non-string `replies_file` fails at load time with Python's
+        // own `TypeError`, which Rust's `check()` must fold to the same
+        // `check() raised {type(exc).__name__}: {exc}` text `call_check`
+        // builds, rather than leaving it indistinguishable from an
+        // ordinary `ScriptedRepliesError` result.
+        let adapter = ScriptedAdapter::new(Value::Int(IntValue::Small(5)));
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert!(result.missing.is_empty());
+        assert_eq!(
+            result.message.unwrap(),
+            "check() raised TypeError: expected str, bytes or os.PathLike object, not int"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_folds_a_unicode_decode_error_the_way_preflights_call_check_does() {
+        let (_dir, file) = write_replies("placeholder", ".yaml");
+        std::fs::write(&file, [0xffu8, 0xfe]).unwrap();
+        let adapter = ScriptedAdapter::new(Value::Str(file.to_string_lossy().into_owned()));
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert!(result.missing.is_empty());
+        let message = result.message.unwrap();
+        assert!(message.starts_with("check() raised UnicodeDecodeError: "));
+    }
+
+    #[tokio::test]
     async fn a_missing_replies_file_is_a_scripted_replies_error_naming_the_errno() {
         let adapter =
             ScriptedAdapter::new(Value::Str("/nonexistent/path/to/replies.yaml".to_string()));
@@ -1212,6 +1292,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_text_reply_keys_sort_by_string_value_not_by_repr() {
+        // Python's `sorted({"b", "it's"})` gives `['b', "it's"]` --
+        // sorting by `repr()` instead would put `"it's"` first (a
+        // double quote sorts before `b`).
+        let mut entry = Dict::new();
+        entry.insert(key("text"), Value::Str("x".to_string()));
+        entry.insert(key("b"), Value::Int(IntValue::Small(1)));
+        entry.insert(key("it's"), Value::Int(IntValue::Small(2)));
+        let err = parse_reply(&Value::Dict(entry), "prime.x", 0, "<replies>").unwrap_err();
+        assert_eq!(
+            err.message,
+            "<replies>: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of \
+             ['finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+        );
+    }
+
+    #[test]
     fn unknown_text_reply_keys_are_rejected() {
         let mut entry = Dict::new();
         entry.insert(key("text"), Value::Str("x".to_string()));
@@ -1277,6 +1374,31 @@ mod tests {
         let err = load_raw(&path).unwrap_err();
         assert_eq!(err.py_class, PyExc::UnicodeDecodeError);
         assert!(!err.message.starts_with(&path.display));
+    }
+
+    #[test]
+    fn invalid_json_with_crlf_line_endings_reports_the_same_position_as_lf() {
+        // `Path.read_text`'s own universal-newline translation runs
+        // before the JSON parse -- a CRLF file with a syntax error on
+        // line 2 must report the same `line 2` CPython would, not a
+        // position shifted by the extra `\r` bytes.
+        let (_dir, crlf_file) = write_replies("{\r\n  \"a\": ,\r\n}", ".json");
+        let (_dir2, lf_file) = write_replies("{\n  \"a\": ,\n}", ".json");
+        let crlf_path = expand_user_path(&crlf_file.to_string_lossy());
+        let lf_path = expand_user_path(&lf_file.to_string_lossy());
+        let crlf_err = load_raw(&crlf_path).unwrap_err();
+        let lf_err = load_raw(&lf_path).unwrap_err();
+        let crlf_suffix = crlf_err
+            .message
+            .strip_prefix(&format!("{}: invalid JSON: ", crlf_path.display))
+            .unwrap()
+            .to_string();
+        let lf_suffix = lf_err
+            .message
+            .strip_prefix(&format!("{}: invalid JSON: ", lf_path.display))
+            .unwrap()
+            .to_string();
+        assert_eq!(crlf_suffix, lf_suffix);
     }
 
     #[test]
