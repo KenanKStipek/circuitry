@@ -72,8 +72,10 @@
 //! builds) -- a minimal, additive visibility change to a file no other
 //! M1 lane edits, not a reshape of its behaviour.
 
-use crate::exec::{CtxChain, live_ctx, store_err};
+use crate::exec::live_scope::LiveRoot;
+use crate::exec::{CtxChain, store_err};
 use crate::observer::InstanceId;
+use crate::params::ParamsCtx;
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{
@@ -120,36 +122,17 @@ fn set_leaf(store: &Store, node: &NodeRef, key: &str, value: Value) {
     store.set_leaf(node, Value::Str(key.to_string()), value);
 }
 
-/// `core/use.py::_resolve_reference` -- walks *path* (dot-separated)
-/// through *ctx*: a mapping segment looks the next part up by exact
-/// key; a list segment parses the next part as a Python-style
-/// (negative-wraps) index. `None` on any missing key, out-of-range
-/// index, or a segment that indexes into a non-container.
-///
-/// Not [`crate::params`]'s own `resolve_reference`: that module's doc
-/// comment says a `use` effect's own `inputs:` follow a different
-/// contract (no `default:`, a `{from:}` that resolves to `None` passes
-/// through as `None` rather than raising) and isn't rendered there --
-/// this is `use_.rs`'s own copy of the walk, not a reused one.
-fn resolve_reference(ctx: &Value, path: &str) -> Option<Value> {
-    let mut current = ctx.clone();
-    for part in path.split('.') {
-        current = match &current {
-            Value::Dict(dict) => dict.get(&Value::Str(part.to_string()))?.clone(),
-            Value::List(items) => {
-                let index: i64 = part.parse().ok()?;
-                let len = items.len() as i64;
-                let normalized = if index < 0 { index + len } else { index };
-                if normalized < 0 || normalized >= len {
-                    return None;
-                }
-                items[normalized as usize].clone()
-            }
-            _ => return None,
-        };
-    }
-    Some(current)
-}
+// `core/use.py::_resolve_reference` -- walks a dotted path through
+// *ctx*. `crate::params::ParamsCtx::resolve_from` is the exact same
+// walk (a mapping segment by exact key, a list segment by Python-
+// style, negative-wrapping index, `None` on any missing key/out-of-
+// range index/non-container segment) against any `ParamsCtx` -- a
+// plain already-materialized `Value` or, since issue #463 (PR #482
+// review), a live `LiveRoot` -- so this module calls that shared
+// primitive directly rather than keeping its own second copy of it;
+// only the *caller's* contract around a `None` result (no `default:`,
+// passed through rather than raised -- `crate::params`'s own doc
+// comment) stays `use_.rs`'s own.
 
 /// `"Orchestration {label} validation failed:\n  - ..."` -- the shape
 /// both a file/legacy child's own structural errors and an unknown
@@ -298,7 +281,8 @@ pub fn normalize_outputs_runtime(
 }
 
 /// `core/use.py::_resolve_dot_path` -- a dict-only walk (never a list
-/// index, unlike [`resolve_reference`]'s own by-reference-input walk):
+/// index, unlike [`crate::params::ParamsCtx::resolve_from`]'s own
+/// by-reference-input walk):
 /// `Value::None` the moment any segment is missing or the current
 /// value isn't a dict.
 pub fn resolve_dot_path(state: &Value, dot_path: &str) -> Value {
@@ -482,11 +466,11 @@ struct LoadedChild {
 /// structural check included (Python's own `if self.defn.validate:
 /// errors = structural_errors(...)` sits inside the same function for
 /// both source kinds).
-async fn load_child(
+async fn load_child<R: ParamsCtx>(
     name: &str,
     source: &UseSource,
     validate: bool,
-    ctx: &Value,
+    ctx: &R,
     run_ctx: &RunContext<'_>,
 ) -> Result<LoadedChild, String> {
     match source {
@@ -646,13 +630,13 @@ fn not_retried(message: String) -> AttemptProblem {
 /// (read by [`execute_use`]'s own final `on_error: fail` wrap even when
 /// a *later* step in the same attempt fails).
 #[allow(clippy::too_many_arguments)]
-async fn attempt_once(
+async fn attempt_once<R: ParamsCtx>(
     op: &Op,
     use_op: &UseOp,
     name: &str,
     effect_node: &NodeRef,
     meta_node: &NodeRef,
-    ctx: &Value,
+    ctx: &R,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
@@ -740,7 +724,7 @@ async fn attempt_once(
         for (key, node) in entries {
             let value = match node {
                 electricity_bytecode::ParamNode::From { path, .. } => {
-                    let resolved = resolve_reference(ctx, path).unwrap_or(Value::None);
+                    let resolved = ctx.resolve_from(path).unwrap_or(Value::None);
                     if matches!(resolved, Value::None) {
                         if let Value::Str(key_str) = key {
                             unresolved.insert(key_str.clone(), path.clone());
@@ -985,13 +969,24 @@ async fn attempt_once(
             .cloned()
             .unwrap_or(Value::None);
         let meta_snapshot = store.snapshot(meta_node);
+        // Deliberately *not* narrowed through `exec::live_scope::
+        // build_cel_state` -- same call, same reasoning as `exec::
+        // tool`'s own `expect:` state (that module's own doc comment):
+        // `evaluate_expect` converts its whole `state` with no internal
+        // `project` of its own, so narrowing here would silently change
+        // behaviour issue #463 is not about.
+        let state = ctx.whole();
         match expect {
             ExpectCondition::Cel { expr } => {
                 let mut expect_meta = IndexMap::new();
                 expect_meta.insert(Value::from("mode"), Value::from("cel"));
                 expect_meta.insert(Value::from("expr"), Value::from(expr.as_str()));
-                match electricity_cel::evaluate_expect(expr, &value_for_expect, &meta_snapshot, ctx)
-                {
+                match electricity_cel::evaluate_expect(
+                    expr,
+                    &value_for_expect,
+                    &meta_snapshot,
+                    &state,
+                ) {
                     Ok(passed) => {
                         expect_meta.insert(Value::from("result"), Value::Bool(passed));
                         set_leaf(store, meta_node, "expect", Value::Dict(expect_meta));
@@ -1022,7 +1017,7 @@ async fn attempt_once(
                 match crate::exec::condition_model::evaluate_model_expect(
                     template,
                     &value_for_expect,
-                    ctx,
+                    &state,
                     &effect_path,
                     frame,
                     run_ctx,
@@ -1080,7 +1075,11 @@ async fn attempt_once(
 }
 
 /// `core/use.py::UseRuntime.execute` -- see this module's own doc
-/// comment for the overall design.
+/// comment for the overall design. No longer a `live_ctx` snapshot
+/// taken eagerly here (issue #463, PR #482 review finding 2): a `use`
+/// effect's own input render/`expect:` call sites resolve
+/// `live_scope::LiveRoot` lazily, the same way `exec::tool` already
+/// does, so a `use` effect inside a loop is O(N) total, not O(N^2).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_use(
     op: &Op,
@@ -1093,29 +1092,30 @@ pub(crate) async fn execute_use(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
-    let ctx = live_ctx(ctx_chain, store);
+    let live_root = LiveRoot::new(ctx_chain, store);
     execute_use_with_ctx(
-        op, use_op, store, parent, &ctx, frame, run_ctx, observer, token,
+        op, use_op, store, parent, &live_root, frame, run_ctx, observer, token,
     )
     .await
 }
 
-/// [`execute_use`]'s own real body, taking an already-resolved *ctx*
-/// directly rather than a [`CtxChain`] -- [`CtxChain`]/[`CtxSource`]
-/// are `pub(crate)` (lane B2/H's own `exec/mod.rs`, not this lane's to
-/// widen), so an external integration test (`tests/use_corpus.rs`,
-/// the golden-corpus replay review finding 5 on PR #472 asked for)
-/// cannot name one to call [`execute_use`] itself with. `core/use.py`'s
-/// own `UseRuntime.execute(store, ctx)` takes *ctx* the exact same
-/// way -- this function is the closer match to replay the corpus
-/// against, not a test-only detour.
+/// [`execute_use`]'s own real body, generic over *ctx*'s own
+/// [`ParamsCtx`] rather than requiring an already-resolved [`Value`]
+/// (`R = Value` is still exactly that, so every existing caller --
+/// `tests/use_corpus.rs`'s golden-corpus replay, review finding 5 on
+/// PR #472, which cannot name a [`CtxChain`]/[`CtxSource`] of its own:
+/// both are `pub(crate)` to `exec/mod.rs` -- keeps compiling and
+/// behaving unchanged). `core/use.py`'s own `UseRuntime.execute(store,
+/// ctx)` takes *ctx* the exact same reference way; this function is
+/// the closer match to replay the corpus against, not a test-only
+/// detour.
 #[allow(clippy::too_many_arguments)]
-pub async fn execute_use_with_ctx(
+pub async fn execute_use_with_ctx<R: ParamsCtx>(
     op: &Op,
     use_op: &UseOp,
     store: &Store,
     parent: &NodeRef,
-    ctx: &Value,
+    ctx: &R,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
@@ -1656,8 +1656,8 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         let mut outer = Dict::new();
         outer.insert(Value::Str("x".to_string()), Value::Dict(inner));
         let ctx = Value::Dict(outer);
-        assert_eq!(resolve_reference(&ctx, "x.y"), Some(Value::from(5i64)));
-        assert_eq!(resolve_reference(&ctx, "x.z"), None);
+        assert_eq!(ctx.resolve_from("x.y"), Some(Value::from(5i64)));
+        assert_eq!(ctx.resolve_from("x.z"), None);
     }
 
     #[test]
@@ -1667,8 +1667,8 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             Value::from(2i64),
             Value::from(3i64),
         ]);
-        assert_eq!(resolve_reference(&ctx, "-1"), Some(Value::from(3i64)));
-        assert_eq!(resolve_reference(&ctx, "5"), None);
+        assert_eq!(ctx.resolve_from("-1"), Some(Value::from(3i64)));
+        assert_eq!(ctx.resolve_from("5"), None);
     }
 
     #[test]

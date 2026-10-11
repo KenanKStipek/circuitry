@@ -179,16 +179,15 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// [`CtxSource::Live`] entry's own [`Store::snapshot`] taken fresh right
 /// here, not at whatever earlier moment that entry joined the chain.
 ///
-/// Known limitation (issue #431 review, PR #440; #442; tracked onward
-/// as #463): [`Store::snapshot`] deep-copies the *entire* subtree under
-/// a `Live` entry's own node, so a call here is O(the live state
-/// reachable from that node), not Python's O(1) live-reference read --
-/// paid again on every `tool` render and every `if` condition eval, for
-/// every enclosing `Live` entry in the chain. Quadratic in state size
-/// over a long chain of deeply nested containers -- most visibly, a
-/// named loop's own accumulated `iter_<N>` children, re-copied in full
-/// on every single render of every later pass (lane H's own
-/// `loop_perf` test in `tests/loop_perf.rs` measures this directly).
+/// Known limitation (issue #431 review, PR #440; #442; tracked as
+/// #463): [`Store::snapshot`] deep-copies the *entire* subtree under a
+/// `Live` entry's own node, so a call here is O(the live state
+/// reachable from that node), not Python's O(1) live-reference read.
+/// Quadratic in state size over a long chain of deeply nested
+/// containers -- most visibly, a named loop's own accumulated
+/// `iter_<N>` children, re-copied in full on every single render of
+/// every later pass (lane H's own `loop_perf` test in `tests/
+/// loop_perf.rs` measures this directly).
 ///
 /// This function fixes only the one constant-factor waste that stays
 /// strictly inside it: the old version called [`Store::snapshot`] and
@@ -204,21 +203,28 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// real documents, not a golden-corpus replay; see this PR's own
 /// orchestrator-confirmed ruling).
 ///
-/// The underlying asymptotic cost is **not** fixed here: `electricity_value::Value`'s
-/// `Dict`/`List` hold plain, non-shared children (`#[derive(Clone)]` is
-/// a full deep clone), so an unchanged sibling subtree still has to be
-/// fully re-cloned into every fresh `Value::Dict` this function builds
-/// -- there is no way to hand back a cached, unchanged subtree by
-/// reference instead. A real fix needs `Value` (or at least its dict/
-/// list entries) to support cheap, Rc-based sharing, which is a change
-/// to `electricity-value`, read by every crate in this workspace --
-/// outside this lane's own footprint (`electricity-vm/src/exec/`).
-/// Filed as #463, with two design directions to choose between:
-/// Rc-shared `Dict`/`List` children in `electricity-value`, or a
-/// render-time projection restricted to the paths a template/CEL
-/// expression actually reads (CEL already projects what it evaluates;
-/// Mustache template rendering would need the same, accounting for its
-/// own outer-scope lookup rules).
+/// A `tool` leaf's own render and an `if`/`while` condition no longer
+/// call this function at all (issue #463, PR #482): `exec::live_scope`
+/// resolves both lazily, a dotted segment at a time, off the live
+/// store itself. This function stays the real cost for every caller
+/// that still needs it: a `use` effect's own input render/`expect:`
+/// (`exec::use_`'s own call sites aren't narrowed either -- PR #482
+/// review finding 2, left as a follow-up: a `use` effect's own retry
+/// loop does resolve its `{from:}`/template inputs lazily now through
+/// the same [`crate::exec::live_scope::LiveRoot`], but its `expect:`'s
+/// own `state` argument still collapses through this function, exactly
+/// like `exec::tool`'s does, below), `evaluate_expect`'s own `state`
+/// argument for both leaf kinds (deliberately not narrowed --
+/// `exec::live_scope`'s own module doc comment), a CEL expression this
+/// crate can't collect static paths for (`exec::live_scope::
+/// build_cel_state`'s own fallback), and a tree dispatch's one-time
+/// `Frozen` snapshot (DESIGN.md §5.5, paid once per dispatch, already
+/// cheap). `electricity_value::Value`'s `Dict`/`List` still hold
+/// plain, non-shared children (`#[derive(Clone)]` is a full deep
+/// clone) -- untouched by #463, which solved the loop case by never
+/// reaching this function in the first place for the two call sites
+/// that dominated it, rather than by making this function itself
+/// cheaper to call.
 pub(crate) fn live_ctx(chain: &CtxChain, store: &Store) -> Value {
     let mut merged: IndexMap<Value, Value> = IndexMap::new();
     for source in chain {

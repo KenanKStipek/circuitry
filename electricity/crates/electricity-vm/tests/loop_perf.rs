@@ -16,7 +16,7 @@ mod support;
 
 use electricity_bytecode::{
     Condition, EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
-    ParamNode, Region, RetryPolicy, TemplateText, ToolOp,
+    ParamNode, Region, RetryPolicy, TemplateText, ToolOp, UseSource,
 };
 use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, NullObserver, Store};
@@ -276,6 +276,119 @@ async fn while_loop_of_a_thousand_passes_stays_within_the_issues_own_ceiling() {
     let large = run_while_of(1000).await;
 
     eprintln!("while: 250 passes = {small:?}, 1000 passes = {large:?}");
+
+    if small.as_millis() > 0 {
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        assert!(
+            ratio < 8.0,
+            "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
+             expected under #463's own 8x ceiling for a truly linear cost"
+        );
+    }
+}
+
+/// A `use` effect's own body, inline so no file I/O enters the
+/// measurement: an empty child (`"effects: []"`) with one `{from:}`
+/// input (`iter.index`) -- cheap enough that the *child run* itself
+/// stays near-zero, so this isolates `execute_use`'s own per-pass
+/// cost, the same way [`stringify_item`]'s single `json` tool isolates
+/// [`run_while_of`]'s.
+fn use_loop_item(path: EffectPath, name: &str) -> Op {
+    let mut inputs = IndexMap::new();
+    inputs.insert(
+        Value::Str("idx".to_string()),
+        ParamNode::From {
+            path: "iter.index".to_string(),
+            default: None,
+        },
+    );
+    support::use_leaf(
+        path,
+        name,
+        UseSource::Inline(TemplateText::new("effects: []", false, Escape::None)),
+        Some(ParamNode::Map(inputs)),
+        None,
+        true,
+        RetryPolicy::default(),
+        None,
+        OnError::Fail,
+    )
+}
+
+fn named_while_use_loop(name: &str, max_iterations: u32) -> Op {
+    let loop_id = LoopId(0);
+    let own_path = EffectPath::root().push_name(name);
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![use_loop_item(body_prefix.push_name("child"), "child")];
+    Op {
+        path: own_path.clone(),
+        name: Some(name.to_string()),
+        kind: NodeKind::Control(Region::Loop {
+            name: Some(name.to_string()),
+            spec: LoopSpec::While(Condition::Cel {
+                expr: "state.iter.index < 999999".to_string(),
+                strict: false,
+            }),
+            body: Box::new(Region::Block {
+                ops: body,
+                overlay: true,
+            }),
+            flow: LoopFlow::Chain,
+            max_concurrency: None,
+            max_iterations: Some(max_iterations),
+            min_iterations: 0,
+            collect: None,
+        }),
+        on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    }
+}
+
+async fn run_while_use_of(n: u32) -> std::time::Duration {
+    let store = Store::new();
+    let loop_op = named_while_use_loop("shots", n);
+    let root = support::chain_dynamic(EffectPath::root(), "prime", OnError::Fail, vec![loop_op]);
+
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    // `use_: true` -- the default `run_ctx`'s own `Supported::m0`
+    // refuses a `use` effect outright before this loop ever starts.
+    ctx.supported = electricity_bytecode::Supported::current(&[]);
+
+    let t0 = Instant::now();
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &NullObserver,
+        &token,
+    )
+    .await
+    .unwrap();
+    t0.elapsed()
+}
+
+/// PR #482 review finding 2: `execute_use` still took a full `live_ctx`
+/// snapshot on every pass, unlike the tool leaf this lane's own fix
+/// covers -- so a `use` effect's own input render stayed O(the live
+/// state reachable from the loop) per pass, the same quadratic shape
+/// #463 tracks for a tool leaf. Guards the fix (`exec::use_::
+/// execute_use` now builds a lazy `exec::live_scope::LiveRoot` the
+/// same way `exec::tool` does) the same way
+/// [`while_loop_of_a_thousand_passes_stays_within_the_issues_own_ceiling`]
+/// guards the tool leaf's own fix. `#[ignore]`d for the same reason as
+/// every other guard in this file.
+#[tokio::test]
+#[ignore]
+async fn while_loop_of_a_thousand_passes_with_a_use_effect_stays_within_the_issues_own_ceiling() {
+    let small = run_while_use_of(250).await;
+    let large = run_while_use_of(1000).await;
+
+    eprintln!("while (use effect): 250 passes = {small:?}, 1000 passes = {large:?}");
 
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();

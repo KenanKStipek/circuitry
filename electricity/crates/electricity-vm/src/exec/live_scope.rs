@@ -12,45 +12,48 @@
 //! ScopeRoot`] (so a template renders straight off the live tree,
 //! [`electricity_template::render_template_with_root`]'s own seam for
 //! exactly this) and [`crate::params::ParamsCtx`] (so a tool's
-//! `{from: ...}` params walk the live tree the same way). Both resolve
-//! a key's *first* segment the same way [`super::live_ctx`]'s own merge
-//! rule does -- scanning the chain from its last entry backward,
-//! stopping at the first one whose own top level actually has that
-//! segment ([`chain_first_segment`]) -- then keep descending through
-//! further live [`Slot::Node`] children for as long as the path stays
-//! inside the tree the store actually tracks ([`live_child`]), falling
-//! back to [`electricity_template::step`]'s or a `{from:}` walk's own
+//! `{from: ...}` params walk, and a `use` effect's own `{from:}`
+//! input walk, read the live tree the same way). Both resolve a key's
+//! *first* segment the same way [`super::live_ctx`]'s own merge rule
+//! does -- scanning the chain from its last entry backward, stopping
+//! at the first one whose own top level actually has that segment
+//! ([`chain_first_segment`]) -- then keep descending through further
+//! live [`Slot::Node`] children for as long as the path stays inside
+//! the tree the store actually tracks ([`live_child`]), falling back
+//! to [`electricity_template::step`]'s or a `{from:}` walk's own
 //! per-segment rule only once a plain [`Slot::Value`] leaf is reached.
 //! Nothing this walk doesn't actually touch is ever cloned, let alone
 //! snapshotted.
 //!
 //! [`build_cel_state`] is the parallel fix for `if`/`while` CEL
-//! conditions and a tool/use `expect:`'s own `state` root: collect the
-//! expression's `state.`-rooted paths first
-//! ([`electricity_cel::condition_paths`]), then build only those paths'
-//! subtrees through [`project_live`] -- the same narrowing
-//! [`electricity_cel::evaluate_condition`] already does internally
-//! (`project`), just performed against the live store instead of a
-//! `Value` someone already paid to materialize in full. An expression
-//! that can't be narrowed this way (`size(state)`, or anything that
-//! fails to parse here -- [`evaluate_condition`](electricity_cel::evaluate_condition)'s
-//! own, later compile attempt is what actually reports a syntax error)
+//! conditions' own `state` root: collect the expression's
+//! `state.`-rooted paths first ([`electricity_cel::condition_paths`]),
+//! then build only those paths' subtrees through [`project_live`] --
+//! the same narrowing [`electricity_cel::evaluate_condition`] already
+//! does internally (`project`), just performed against the live store
+//! instead of a `Value` someone already paid to materialize in full.
+//! An expression that can't be narrowed this way (`size(state)`, or
+//! anything that fails to parse here --
+//! [`evaluate_condition`](electricity_cel::evaluate_condition)'s own,
+//! later compile attempt is what actually reports a syntax error)
 //! falls back to [`super::live_ctx`]'s full snapshot; that fallback is
 //! correct, not fast, same as this crate's existing full-state path
-//! today.
+//! today. [`build_cel_state`] is **not** also `evaluate_expect`'s own
+//! `state` builder -- see the next paragraph.
 //!
-//! `evaluate_expect`'s own `state` argument is deliberately **not**
-//! narrowed this way ([`crate::params::ParamsCtx`] has no equivalent of
-//! [`build_cel_state`] for it): unlike `evaluate_condition`,
-//! `evaluate_expect` converts the whole `state` it's handed before its
-//! own CEL evaluation ever runs, with no internal `project` of its own
-//! (this crate's own `evaluate_expect` doc comment, and `core/
-//! cel_eval.py::evaluate_cel_expect` before it) -- a big int *anywhere*
-//! in `state`, read by the expression or not, already makes it raise
-//! today, on both engines. Narrowing it here would quietly drop that
-//! unrelated big int and *fix* a bug this issue is explicitly not
-//! about (`exec::tool`'s own `expect:` call sites keep building `state`
-//! through [`electricity_template::ScopeRoot::whole`] instead, exactly
+//! A tool or `use` effect's own `expect:`'s own `state` argument is
+//! deliberately **not** narrowed this way ([`crate::params::
+//! ParamsCtx`] has no equivalent of [`build_cel_state`] for it):
+//! unlike `evaluate_condition`, `evaluate_expect` converts the whole
+//! `state` it's handed before its own CEL evaluation ever runs, with
+//! no internal `project` of its own (this crate's own `evaluate_expect`
+//! doc comment, and `core/cel_eval.py::evaluate_cel_expect` before it)
+//! -- a big int *anywhere* in `state`, read by the expression or not,
+//! already makes it raise today, on both engines. Narrowing it here
+//! would quietly drop that unrelated big int and *fix* a bug this
+//! issue is explicitly not about (`exec::tool`'s and `exec::use_`'s
+//! own `expect:` call sites both keep building `state` through
+//! [`electricity_template::ScopeRoot::whole`] instead, exactly
 //! [`super::live_ctx`]'s full cost, unchanged).
 
 use super::{CtxChain, CtxSource, live_ctx};
@@ -319,14 +322,14 @@ pub(crate) fn project_live(store: &Store, chain: &CtxChain, paths: &[String]) ->
     Value::Dict(root)
 }
 
-/// The `state` a CEL `if`/`while` condition or a tool/use `expect:`
-/// should evaluate against -- the narrowed subset *expr* actually reads
-/// ([`project_live`]) when that's decidable up front, or
-/// [`super::live_ctx`]'s own full snapshot when it isn't (a parse
-/// failure here, reported properly by the caller's own, subsequent
-/// real evaluation attempt; or a `size(state)`-style whole-state read,
-/// which no path list could narrow). See this module's own doc comment
-/// for why this is **not** also `evaluate_expect`'s own `state` builder.
+/// The `state` a CEL `if`/`while` condition should evaluate against --
+/// the narrowed subset *expr* actually reads ([`project_live`]) when
+/// that's decidable up front, or [`super::live_ctx`]'s own full
+/// snapshot when it isn't (a parse failure here, reported properly by
+/// the caller's own, subsequent real evaluation attempt; or a
+/// `size(state)`-style whole-state read, which no path list could
+/// narrow). **Not** also a tool/`use` `expect:`'s own `state` builder
+/// -- see this module's own doc comment for why.
 pub(crate) fn build_cel_state(chain: &CtxChain, store: &Store, expr: &str) -> Value {
     match electricity_cel::condition_paths(expr) {
         Ok(collected) if !collected.reads_whole_state => {
@@ -380,6 +383,19 @@ mod differential_tests {
 
         let a = store.ensure_dict(&prime, k("a")).unwrap();
         store.set_leaf(&a, k("b"), Value::from(42_i64));
+        // Present but falsy, one level inside the `prime.a` section's
+        // own pushed scope -- `zero` must resolve here and never fall
+        // through to the root's own same-named, truthy `zero` below
+        // (finding 3 on PR #482: Mustache's "first scope where the key
+        // resolves wins, even falsy" rule, exercised across the
+        // section/root boundary that actually reaches `ScopeRoot`).
+        store.set_leaf(&a, k("zero"), Value::from(0_i64));
+
+        // A path that resolves, but to `None` -- distinct from a
+        // missing key for `first_unresolved`'s own "unresolved or
+        // None" rule (finding 3: a strict CEL read of this path must
+        // raise the same way a missing one does).
+        store.set_leaf(&prime, k("nullable"), Value::None);
 
         store.set_leaf(
             &prime,
@@ -407,6 +423,11 @@ mod differential_tests {
         input.insert(k("n"), Value::from(5_i64));
         input.insert(k("s"), Value::from("hi"));
         store.set_leaf(&store.root, k("input"), Value::Dict(input));
+
+        // Truthy, same name as `prime.a`'s own falsy `zero` above --
+        // only reachable here if the Mustache fallback wrongly skipped
+        // the section's own resolving-but-falsy scope.
+        store.set_leaf(&store.root, k("zero"), Value::from(1_i64));
 
         store
     }
@@ -441,6 +462,25 @@ mod differential_tests {
         ]
     }
 
+    /// A chain whose own *second* entry is [`CtxSource::Frozen`] --
+    /// the one-time `dict(ctx)` a tree dispatch snapshots once before
+    /// its branches run (DESIGN.md §5.5), the only source a real run
+    /// ever puts in a chain besides `Live` -- carrying a fresh `iter`
+    /// key, the same way [`overlay_chain`]'s own `Live` detached entry
+    /// does, so the two sources are interchangeable from a caller's
+    /// point of view and [`chain_first_segment`]'s own `Frozen` arm
+    /// (otherwise untested) gets exercised here.
+    fn frozen_chain(store: &Store) -> CtxChain {
+        let mut frozen = IndexMap::new();
+        let mut iter_map = IndexMap::new();
+        iter_map.insert(k("index"), Value::from(9_i64));
+        frozen.insert(k("iter"), Value::Dict(iter_map));
+        vec![
+            CtxSource::Live(Rc::clone(&store.root)),
+            CtxSource::Frozen(Value::Dict(frozen)),
+        ]
+    }
+
     /// Renders *template* both ways and asserts byte-identical output
     /// (`Err` text included).
     fn assert_same_render(chain: &CtxChain, store: &Store, template: &str, case: &str) {
@@ -468,17 +508,25 @@ mod differential_tests {
     }
 
     /// Evaluates a CEL *expr* both ways and asserts an identical
-    /// boolean verdict (`Err` text included).
-    fn assert_same_condition(chain: &CtxChain, store: &Store, expr: &str, case: &str) {
+    /// boolean verdict (`Err` text included) -- *strict* matches
+    /// `evaluate_condition`'s own `strict:` flag (lane notes: must be
+    /// exercised `true` as well as `false`).
+    fn assert_same_condition(
+        chain: &CtxChain,
+        store: &Store,
+        expr: &str,
+        strict: bool,
+        case: &str,
+    ) {
         let old_state = live_ctx(chain, store);
-        let old =
-            electricity_cel::evaluate_condition(expr, &old_state, false).map_err(|e| e.to_string());
+        let old = electricity_cel::evaluate_condition(expr, &old_state, strict)
+            .map_err(|e| e.to_string());
 
         let new_state = build_cel_state(chain, store, expr);
-        let new =
-            electricity_cel::evaluate_condition(expr, &new_state, false).map_err(|e| e.to_string());
+        let new = electricity_cel::evaluate_condition(expr, &new_state, strict)
+            .map_err(|e| e.to_string());
 
-        assert_eq!(old, new, "{case}: CEL {expr:?} diverged");
+        assert_eq!(old, new, "{case}: CEL {expr:?} (strict={strict}) diverged");
     }
 
     const TEMPLATES: &[&str] = &[
@@ -497,6 +545,23 @@ mod differential_tests {
         "{{#prime.a}}{{b}}{{/prime.a}}",
         ".",
         "{{.}}",
+        // A name not in the section's own scope at all (`prime.a` has
+        // no `input` key) -- the fallback has to reach all the way
+        // back to the root scope, which is `ScopeRoot::lookup`'s own
+        // multi-segment path, not `walk_dotted` on an already-pushed
+        // `Value` (finding 3).
+        "{{#prime.a}}{{input.n}}{{/prime.a}}",
+        // A section over a truthy scalar: pushes `42` itself as the new
+        // nearest scope, so `{{.}}` resolves to it, not to `prime.a.b`'s
+        // enclosing dict (finding 3: "a section over a scalar").
+        "{{#prime.a.b}}{{.}}{{/prime.a.b}}",
+        // `prime.a.zero` (0, falsy) must win over the root's own `zero`
+        // (1, truthy) -- the nearest *resolving* scope wins even falsy,
+        // never the nearest *truthy* one (finding 3).
+        "{{#prime.a}}{{zero}}{{/prime.a}}",
+        // `input.n` is `5`, an int: indexing it like a sequence raises,
+        // on both paths alike (finding 3: an error-text case).
+        "{{input.n.0}}",
     ];
 
     const FROM_PATHS: &[&str] = &[
@@ -521,6 +586,23 @@ mod differential_tests {
         "size(state) >= 0",
     ];
 
+    /// Exercised with `strict: true` -- `evaluate_condition`'s `strict`
+    /// flag turns an unresolved `state.`-path read into an `Err` rather
+    /// than a logged, false result (finding 3: must be covered as well
+    /// as the `strict: false` default [`CONDITIONS`] above uses).
+    const CONDITIONS_STRICT: &[&str] = &[
+        // Resolves, so strict has nothing to raise over -- a passing
+        // control case alongside the two that do raise below.
+        "state.prime.a.b == 42",
+        // Present, but `None` -- `first_unresolved`'s own "unresolved or
+        // None" rule treats this exactly like a missing key, so strict
+        // raises here too (finding 3: "a value that resolves to `None`
+        // under a strict condition").
+        "state.prime.nullable == null",
+        // A plain missing key, strict's ordinary case.
+        "state.missing.key == 1",
+    ];
+
     #[test]
     fn templates_match_against_a_plain_chain() {
         let store = test_store();
@@ -528,6 +610,16 @@ mod differential_tests {
         for template in TEMPLATES {
             assert_same_render(&chain, &store, template, "plain chain");
         }
+    }
+
+    #[test]
+    fn templates_match_against_a_frozen_chain() {
+        let store = test_store();
+        let chain = frozen_chain(&store);
+        for template in TEMPLATES {
+            assert_same_render(&chain, &store, template, "frozen chain");
+        }
+        assert_same_render(&chain, &store, "{{iter.index}}", "frozen chain");
     }
 
     #[test]
@@ -582,11 +674,21 @@ mod differential_tests {
     }
 
     #[test]
+    fn from_paths_match_against_a_frozen_chain() {
+        let store = test_store();
+        let chain = frozen_chain(&store);
+        for path in FROM_PATHS {
+            assert_same_resolve(&chain, &store, path, "frozen chain");
+        }
+        assert_same_resolve(&chain, &store, "iter.index", "frozen chain");
+    }
+
+    #[test]
     fn conditions_match_against_a_plain_chain() {
         let store = test_store();
         let chain = plain_chain(&store);
         for expr in CONDITIONS {
-            assert_same_condition(&chain, &store, expr, "plain chain");
+            assert_same_condition(&chain, &store, expr, false, "plain chain");
         }
     }
 
@@ -595,13 +697,39 @@ mod differential_tests {
         let store = test_store();
         let chain = overlay_chain(&store, true);
         for expr in CONDITIONS {
-            assert_same_condition(&chain, &store, expr, "overlay, prime override");
+            assert_same_condition(&chain, &store, expr, false, "overlay, prime override");
         }
         assert_same_condition(
             &chain,
             &store,
             "state.iter.index == 3",
+            false,
             "overlay, prime override",
         );
+    }
+
+    #[test]
+    fn conditions_match_against_a_frozen_chain() {
+        let store = test_store();
+        let chain = frozen_chain(&store);
+        for expr in CONDITIONS {
+            assert_same_condition(&chain, &store, expr, false, "frozen chain");
+        }
+        assert_same_condition(
+            &chain,
+            &store,
+            "state.iter.index == 9",
+            false,
+            "frozen chain",
+        );
+    }
+
+    #[test]
+    fn conditions_match_under_strict_mode() {
+        let store = test_store();
+        let chain = plain_chain(&store);
+        for expr in CONDITIONS_STRICT {
+            assert_same_condition(&chain, &store, expr, true, "plain chain, strict");
+        }
     }
 }

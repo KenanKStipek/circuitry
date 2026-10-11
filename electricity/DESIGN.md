@@ -1091,36 +1091,105 @@ tool render and once per `if`/`while` condition — most visibly, a named loop's
 `iter_<N>` children, re-walked in full on every later pass's render, regardless of whether that
 render ever read any of them.
 
-The fix (this lane, #463): a tool's own render, a `{from: ...}` params walk, and an `if`/`while`
-condition's own `state` no longer go through `live_ctx`/`Store::snapshot` at all. `exec::live_scope`
-adds `Store::peek` (an O(1), single-child read with no promotion and no descent) and a small
-`LiveStep` walk built on it, resolving a dotted path's own first segment the same way `live_ctx`'s
-merge already does (scanning the chain from its last entry backward, stopping at the first one whose
-own top level actually has that segment) and then descending through further live `Slot::Node`
-children for as long as the path stays inside the store's own tracked tree — falling back to
-`electricity_template::step`'s (or a `{from:}` walk's own) per-segment rule only once a plain
-`Slot::Value` leaf is reached. `electricity-template` gained a `ScopeRoot` trait for exactly this:
-`Value`'s own impl is every existing caller and test, byte for byte unchanged; `exec::live_scope::
-LiveRoot` is the live, store-backed one. A CEL `if`/`while` condition collects its own `state.`
-paths first (`electricity_cel::condition_paths`, new) and builds `state` through a store-backed
-projector (`exec::live_scope::project_live`, the same narrowing `evaluate_condition`'s own `project`
-already does internally, just performed before the snapshot rather than after it) — an expression
-that reads `state` as a whole value falls back to `live_ctx`'s full snapshot, correctly, not fast.
-`evaluate_expect`'s own `state` argument is deliberately **not** narrowed this way: unlike
-`evaluate_condition`, it converts the whole `state` it's handed with no internal `project` of its
-own, so an unrelated big int anywhere in `state` already makes it raise today, on both engines
-(`core/cel_eval.py::evaluate_cel_expect` too) — narrowing it would silently fix that divergence,
-which this lane is not about.
+The fix (this lane, #463): a tool's own render, a `use` effect's own input render (`{from: ...}`/
+template), a `{from: ...}` params walk, and an `if`/`while` condition's own `state` no longer go
+through `live_ctx`/`Store::snapshot` at all. `exec::live_scope` adds `Store::peek` (an O(1),
+single-child read with no promotion and no descent) and a small `LiveStep` walk built on it,
+resolving a dotted path's own first segment the same way `live_ctx`'s merge already does (scanning
+the chain from its last entry backward, stopping at the first one whose own top level actually has
+that segment) and then descending through further live `Slot::Node` children for as long as the
+path stays inside the store's own tracked tree — falling back to `electricity_template::step`'s (or
+a `{from:}` walk's own) per-segment rule only once a plain `Slot::Value` leaf is reached.
+`electricity-template` gained a `ScopeRoot` trait for exactly this: `Value`'s own impl is every
+existing caller and test, byte for byte unchanged; `exec::live_scope::LiveRoot` is the live,
+store-backed one. A CEL `if`/`while` condition collects its own `state.` paths first
+(`electricity_cel::condition_paths`, new) and builds `state` through a store-backed projector
+(`exec::live_scope::project_live`, the same narrowing `evaluate_condition`'s own `project` already
+does internally, just performed before the snapshot rather than after it) — an expression that reads
+`state` as a whole value falls back to `live_ctx`'s full snapshot, correctly, not fast. A tool's or a
+`use` effect's own `expect:` `state` argument is deliberately **not** narrowed this way: unlike
+`evaluate_condition`, `evaluate_expect` converts the whole `state` it's handed with no internal
+`project` of its own, so an unrelated big int anywhere in `state` already makes it raise today, on
+both engines (`core/cel_eval.py::evaluate_cel_expect` too) — narrowing it would silently fix that
+divergence, which this lane is not about.
 
-Measured (`electricity-vm/tests/loop_perf.rs`'s own `#[ignore]`d guards, release, one core): a
-`while` loop of one `json` tool per pass went from ≈21x for 4x the passes (the same quadratic shape
-as the issue's own numbers) to ≈4x — the truly-linear bound itself; chain-flow `each` (two tool
-leaves per pass) went from ≈18x to ≈7x. `Store::snapshot`/`live_ctx` stay exactly as they were for
-every caller that genuinely needs a full materialized value: a tree dispatch's own one-time
+**A timing change, not just a speedup (review finding 1 on PR #482).** Before this lane, a `tool`
+leaf's own `ctx` was `live_ctx`'s one-time snapshot taken in `exec/mod.rs`, *before* `execute_tool`
+ever ran — so every render, every retry attempt's own re-render, and `expect:`'s own `state` saw
+the state from before the tool started, never this attempt's own write. After this lane, `exec/
+mod.rs` hands `execute_tool` a lazy `LiveRoot` instead, so a self-referencing template
+(`{{prime.t.meta.provider}}`, `{{prime.t.value}}`) now sees this *same* attempt's own `meta`/`value`
+the moment it's written, a retried attempt's own re-render sees the *previous* attempt's own
+leftover `value` (`exec::tool`'s own `node["value"]` is never reset between attempts, only `meta`
+is), and `expect:`'s `state.prime.<name>.value` sees the value this very attempt just wrote. This is
+a **parity fix, not a regression**: `core/tool.py::ToolRuntime.execute` takes `ctx` as the same live
+dict reference throughout its own retry loop, and never resets `node["value"]` between attempts
+either, so cof's own render/retry/`expect:` already read exactly this way — old electricity diverged
+from cof here, and now matches it. Pinned by a cross-engine conformance case,
+`tests/conformance/cases/tool-self-reference-and-retried-rerender`: a first attempt's own `expect:`
+fails because its self-referencing input is still too short (`prime.t.value` is `None` when it
+first renders), forcing exactly one retry (`meta.retries_used: 1`); the second attempt's own
+`meta.params_rendered.input` embeds the first attempt's own JSON-encoded output, proving the retry
+saw it live. Confirmed divergent against a pre-#482 electricity build (fails outright, exhausting
+retries on an identical, stale render both attempts) and byte-identical against both cof and
+post-#482 electricity.
+
+**`use` checked the same way (review finding 1(d)/2) — a pure perf fix, no observable behaviour
+change.** `core/use.py::UseRuntime.execute` takes `ctx` the same live-reference way tool.py does,
+so its own input render already matched cof's live read for the same reason — but unlike a tool
+leaf, `core/use.py` (and `exec::use_`, before and after this lane) resets *both* `node["value"]`
+and every `meta` field at the start of *every* attempt, so a `use` effect's own self-reference never
+survives a retry on either engine — there's no retry-visible divergence for `use` to pin the way the
+tool case above does. Before this lane, `exec::use_::execute_use` still took one `live_ctx` snapshot
+up front — not because it needed a full materialized value, simply because it hadn't been converted
+yet. A `use` effect inside a loop (the `each`/`while` body can contain one: `Supported::current`'s
+own `use_: true`) paid the same quadratic cost a tool leaf did. Fixed the same way: `execute_use`
+now builds a lazy `LiveRoot` too, and its own input `{from:}` walk goes through the already-shared
+`ParamsCtx::resolve_from` (the exact same walk `exec::use_`'s own private copy of it performed,
+now one primitive instead of two) instead of a second, materialized-`Value`-only copy. Guarded by a
+new `#[ignore]`d perf test, `while_loop_of_a_thousand_passes_with_a_use_effect_stays_within_the_
+issues_own_ceiling` (`tests/loop_perf.rs`), the same shape and ceiling as the tool-leaf guard below.
+
+Measured (`electricity-vm/tests/loop_perf.rs`'s own `#[ignore]`d guards, release, `--test-threads=1`
+to keep this shared machine's own other load from skewing a single-threaded ratio; a calm run's own
+snapshot, not a tight bound -- a noisier run on this same machine measured chain `each` as high as
+≈17x, over the existing 15x ceiling, underscoring the next finding below):
+
+| scenario | 250 passes | 1000 passes | ratio |
+|---|---|---|---|
+| `while`, one `json` tool/pass (the issue's own scenario) | 14ms | 64ms | ≈4.6x |
+| `while`, one `use` effect/pass (new) | 24ms | 71ms | ≈3.0x |
+| chain `each`, two `json` tools/pass | 9ms | 67ms | ≈7.1x |
+| tree `each`, bounded concurrency | 7ms | 48ms | ≈6.4x |
+
+Both `while` shapes land close to the truly-linear ≈4x bound (the issue's own ceiling is 8x, with
+headroom for machine noise — this lane's own `loop_perf.rs` comments have the calmer, single-run
+numbers that motivated the 8x/15x ceilings actually committed). `Store::snapshot`/`live_ctx` stay
+exactly as they were for every remaining caller that genuinely needs a full materialized value: a
+tool's or a `use` effect's own `expect:` `state` (above), a tree dispatch's own one-time
 `ctx_override` snapshot (DESIGN.md §5.5 — paid once per dispatch, not per branch, already cheap), a
 Model-mode condition/`expect:` (unreachable until lane G2), and `--out`/`--live-state`'s own
 `Store::saved`. `electricity_value::Value` itself is untouched — the design-1 alternative this issue's
 body named (Rc-shared `Dict`/`List` children) stays unneeded for this.
+
+**Chain `each` stays above the truly-linear ≈4x bound — confirmed, not fixed, in this lane (review
+finding 5).** `exec::loop_::with_prev_overlay` (a named, chain-flow loop's own `prime.<loop>.prev`
+overlay, rebuilt fresh every pass once there is a previous completed pass to show) calls `dict_slots`
+on the loop's own live node (`prime.<loop>`) to build its own detached replacement — an `IndexMap`
+`.clone()` of *every* top-level entry already written there, every `iter_<K>` for `K < N` included,
+so this one call is O(N) on pass N, the same shape `live_ctx` had before this lane, one level
+deeper. Confirmed
+by reading, not measured indirectly: `dict_slots(prime.get(&loop_key))` is exactly `node.borrow()
+.clone()` on the tracked node holding every earlier pass's own `iter_<K>` entry. A real fix needs the
+detached replacement to defer to the live node for any key it doesn't itself carry, instead of
+copying every key forward — the same per-node overlay/fallback concept `exec::live_scope` gives the
+*top* of a `CtxChain`, one level further in, where nothing in this crate's data model
+(`NodeRef`/`Slot`, `electricity-value`'s own `IndexMap`-backed `Dict`) supports it today. That is a
+shared-type change (`Slot`/`NodeRef` are read by every crate that touches a `Store`), the same scope
+`live_ctx`'s own "design 1" alternative was — outside this lane's own footprint, left as a follow-up
+rather than attempted here. The existing 15x ceiling (headroom over today's own ≈7-12x, machine-noise
+dependent) still catches a regression back toward the old, fully quadratic ≈18-24x shape; it is not
+retightened in this PR.
 
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 
