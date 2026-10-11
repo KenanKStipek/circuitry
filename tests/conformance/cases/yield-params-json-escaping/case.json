@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/runtime-semantics.md §3.4's escape table, issue #487",
+  "description": "A tool's params_json escapes an HTML-special-character input value exactly like an ordinary tool params leaf does (Escape::Html): the rendered JSON text carries the escaped entities literally, and the parsed value keeps them (JSON never re-decodes HTML entities).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=\"<b>&"]
+}

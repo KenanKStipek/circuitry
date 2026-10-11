@@ -68,7 +68,12 @@ electricity-yaml = { path = "../electricity-yaml" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` -- the compose golden corpus's own JSON `ctx`/node
+# objects replay as `electricity_value::Dict`, whose own insertion order
+# is part of what a `{{d}}`/`py_repr` splice renders; `serde_json`'s
+# default `Map` is a `BTreeMap` (alphabetical), which would silently
+# reorder a multi-key object on the way in.
+serde_json = { version = "1", features = ["preserve_order"] }
 async-trait = "0.1"
 # `test-tools`'s own `flaky_build` builder (S1's own test: a fallible
 # per-attempt plugin *builder*, not just a flaky `execute`) -- only ever

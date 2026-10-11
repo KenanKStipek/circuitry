@@ -1,0 +1,8 @@
+name: yield-raw-inputs-shadow
+effects:
+  - type: yield
+    name: greet
+    template: "{{t}} / {{input}}"
+    inputs:
+      t: "{{input.x}}"
+      input: "shadowed"

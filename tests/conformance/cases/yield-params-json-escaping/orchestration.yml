@@ -1,0 +1,10 @@
+name: yield-params-json-escaping
+effects:
+  - type: tool
+    name: escaped
+    provider: json
+    params:
+      mode: stringify
+      input: "{{input.x}}"
+    params_json: |
+      {"extra": "{{input.x}}"}

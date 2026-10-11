@@ -28,6 +28,13 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyExc {
     ValueError,
+    /// `core/templates.py::TemplateError` (a `ValueError` subclass) --
+    /// lane P (#448, #487): a run-time `{{> name}}` expansion/render
+    /// failure under `on_error: fail`. Inserted directly after
+    /// `ValueError`, never at the enum's own tail, so a concurrent
+    /// lane appending its own variant there (lane E, #485) can never
+    /// collide with this one on the same or an adjacent line.
+    TemplateError,
     RuntimeError,
     TypeError,
     KeyError,
@@ -85,6 +92,7 @@ impl PyExc {
     pub fn name(self) -> &'static str {
         match self {
             PyExc::ValueError => "ValueError",
+            PyExc::TemplateError => "TemplateError",
             PyExc::RuntimeError => "RuntimeError",
             PyExc::TypeError => "TypeError",
             PyExc::KeyError => "KeyError",

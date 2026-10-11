@@ -1,0 +1,6 @@
+name: yield-render-failure-continue
+effects:
+  - type: yield
+    name: broken
+    template: "{{input.n.0}}"
+    on_error: continue

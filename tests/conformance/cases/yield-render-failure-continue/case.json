@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/yield_effect.py::YieldRuntime.execute, issue #487",
+  "description": "`{{input.n.0}}` with `n` an int fails to render (indexing a scalar); under on_error: continue the failure is absorbed, with `value: null` and `meta.error` set to the render failure's own text.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "n=5"]
+}

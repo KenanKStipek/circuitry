@@ -206,6 +206,37 @@ impl electricity_template::ScopeRoot for LiveRoot<'_> {
     fn whole(&self) -> Value {
         live_ctx(self.chain, self.store)
     }
+
+    /// Overrides the default (`lookup`-and-check) impl with a
+    /// presence-only walk: `{{> name}}` composition's own
+    /// effect-reference check (`crate::compose`, issue #487) only ever
+    /// probes `prime.<head>` -- a node a named loop can have grown to
+    /// thousands of passes underneath, so resolving all the way to a
+    /// `Value` just to answer a yes/no question (the default impl's
+    /// own `lookup` call, which for a [`LiveStep::Node`] would
+    /// `materialize` -- a full [`Store::snapshot`] -- the whole
+    /// subtree) would pay for exactly the cost this crate's own lazy
+    /// rendering seam exists to avoid. Every step here stays either an
+    /// O(1) [`Store::peek`] (while still inside the live tree) or
+    /// [`electricity_template::step`]'s own per-segment rule (once a
+    /// plain leaf [`Value`] is reached), never a `materialize` call.
+    fn contains(&self, key: &str) -> bool {
+        let mut parts = key.split('.');
+        let first = match parts.next() {
+            Some(first) => first,
+            None => return false,
+        };
+        let Some(mut current) = chain_first_segment(self.chain, self.store, first) else {
+            return false;
+        };
+        for part in parts {
+            current = match live_child(self.store, &current, part) {
+                Ok(Some(next)) => next,
+                Ok(None) | Err(_) => return false,
+            };
+        }
+        true
+    }
 }
 
 impl ParamsCtx for LiveRoot<'_> {
@@ -363,7 +394,7 @@ mod differential_tests {
 
     use super::*;
     use crate::params::ParamsCtx;
-    use electricity_template::{PlainCtx, render_template, render_template_with_root};
+    use electricity_template::{PlainCtx, ScopeRoot, render_template, render_template_with_root};
     use indexmap::IndexMap;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -497,6 +528,19 @@ mod differential_tests {
 
     /// Resolves a `{from: ...}` *path* both ways and asserts identical
     /// results.
+    /// [`ScopeRoot::contains`]'s own default impl (a plain [`Value`]'s
+    /// `lookup`-and-check) against [`LiveRoot`]'s own presence-only
+    /// override.
+    fn assert_same_contains(chain: &CtxChain, store: &Store, path: &str, case: &str) {
+        let old_ctx = live_ctx(chain, store);
+        let old = old_ctx.contains(path);
+
+        let live_root = LiveRoot::new(chain, store);
+        let new = live_root.contains(path);
+
+        assert_eq!(old, new, "{case}: contains({path:?}) diverged");
+    }
+
     fn assert_same_resolve(chain: &CtxChain, store: &Store, path: &str, case: &str) {
         let old_ctx = live_ctx(chain, store);
         let old = old_ctx.resolve_from(path);
@@ -574,6 +618,22 @@ mod differential_tests {
         "prime.raw.nested.x",
         "missing.key",
         "prime",
+    ];
+
+    /// [`ScopeRoot::contains`]'s own override on [`LiveRoot`] (issue
+    /// #487's `{{> name}}` composition presence check) -- a mix of
+    /// hits (including a present-but-`None` leaf, which must still
+    /// count as present) and misses, at both a top-level segment and a
+    /// deeper dotted one.
+    const CONTAINS_PATHS: &[&str] = &[
+        "prime",
+        "prime.a",
+        "prime.a.b",
+        "prime.nullable",
+        "prime.iter_0.value",
+        "missing",
+        "prime.missing",
+        "prime.a.missing",
     ];
 
     const CONDITIONS: &[&str] = &[
@@ -681,6 +741,36 @@ mod differential_tests {
             assert_same_resolve(&chain, &store, path, "frozen chain");
         }
         assert_same_resolve(&chain, &store, "iter.index", "frozen chain");
+    }
+
+    #[test]
+    fn contains_matches_against_a_plain_chain() {
+        let store = test_store();
+        let chain = plain_chain(&store);
+        for path in CONTAINS_PATHS {
+            assert_same_contains(&chain, &store, path, "plain chain");
+        }
+    }
+
+    #[test]
+    fn contains_matches_against_an_overlay_chain() {
+        let store = test_store();
+        let chain = overlay_chain(&store, true);
+        for path in CONTAINS_PATHS {
+            assert_same_contains(&chain, &store, path, "overlay, prime override");
+        }
+        assert_same_contains(&chain, &store, "prime.only_here", "overlay, prime override");
+        assert_same_contains(&chain, &store, "iter.index", "overlay, prime override");
+    }
+
+    #[test]
+    fn contains_matches_against_a_frozen_chain() {
+        let store = test_store();
+        let chain = frozen_chain(&store);
+        for path in CONTAINS_PATHS {
+            assert_same_contains(&chain, &store, path, "frozen chain");
+        }
+        assert_same_contains(&chain, &store, "iter.index", "frozen chain");
     }
 
     #[test]
