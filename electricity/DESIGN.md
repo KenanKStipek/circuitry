@@ -1530,11 +1530,50 @@ silently different:
   itself fixed-width; the translator's own `Width` analysis tracks each group's width and would
   accept this too, but `fancy-regex`'s own compiler always reports a backreference as
   non-constant-width regardless of the referenced group (confirmed in its `analyze.rs`:
-  `Expr::Backref` never sets `const_size`), so it rejects the pattern downstream either way.
-- **The backtrack limit.** `fancy-regex` stops at its own backtrack limit with its own error
-  (`regex: backtrack limit exceeded`, a retryable `RuntimeError`, like any other tool failure);
-  CPython's `re` has no such limit and would run until the effect itself is killed — the `regex`
-  plugin ignores `timeout_seconds` in both engines (#448's "Settled questions").
+  `Expr::Backref` never sets `const_size`), so it rejects the pattern downstream either way. The
+  resulting error is this translator's own wording (`a backreference inside a look-behind is not
+  supported`) under the usual invalid-pattern prefix, never `fancy-regex`'s own raw compile-error
+  text (review R9: it used to leak `Error compiling regex: Look-behind assertion without
+  constant size` verbatim) -- `regex::compile_error_text` maps every `fancy_regex::Error` that
+  reaches this point the same way, rather than forwarding its `Display` text.
+- **The backtrack limit, sized per call.** `fancy-regex` stops at its own backtrack limit with
+  its own error (`regex: backtrack limit exceeded`, a retryable `RuntimeError`, like any other
+  tool failure); CPython's `re` has no such limit and would run until the effect itself is
+  killed — the `regex` plugin ignores `timeout_seconds` in both engines (#448's "Settled
+  questions", revised by PR #480's review, finding R8).
+
+  `fancy-regex`'s own backtrack limit (default 1,000,000) counts backtrack attempts across
+  *every* start position of one search, not just the eventual match, so a pattern this
+  translator turns into a lookaround (non-MULTILINE `$`, `\b`/`\B`, any lookbehind) could exceed
+  the crate's own default on an ordinary multi-hundred-KB input even though the real
+  per-character cost is tiny (R8's own measurements: `\bzebra\b` findall with no match on 300 KB
+  of plain text, `\d+$` findall on 20,000 lines, `\s+$` search on 1.2 MB -- `cof` succeeds on
+  each instantly; electricity's old, fixed 1,000,000 default did not). `RegexPlugin::execute`
+  now compiles with `RegexBuilder::backtrack_limit`, sized per call as
+  `max(FLOOR, PER_CHAR * (input_len + 1))` (`regex::backtrack_limit_for`; *input_len* is the
+  input's own byte length, never smaller than its char count). Measured directly in a release
+  build (`cargo build --release`; debug assertions change the constant meaningfully), never
+  guessed:
+  - **`PER_CHAR` = 100.** Every lookaround form this translator emits (`\bzebra\b`, `\d+$`,
+    `\s+$`, a fixed-width lookbehind) was run as a no-match search over inputs from 10 KB to 2
+    MB; the worst observed cost was ~7 backtracks per input byte (`\bzebra\b` against plain
+    words). 100 clears that with more than 10x headroom.
+  - **`FLOOR` = 10,000,000.** The review's own catastrophic-but-bounded baseline,
+    `(a+)+(?=b)` against 18-20 `a`s (CPython itself returns `[]` in low-single-digit
+    milliseconds), needs 1,048,576-4,194,304 backtracks to fail in `fancy-regex`; 10,000,000
+    clears that with more than 2x headroom (measured: 18 `a`s completes in ~22ms at this exact
+    limit). At the same time, a genuinely catastrophic pattern on a small input -- `(a+)+`
+    against 30 `a`s with no match -- still fails in ~223ms at this exact FLOOR, nowhere near a
+    ~2s budget.
+
+  This is a change in the limit's own value, not a new mechanism; `fancy-regex`'s *other*
+  backtracking ceiling, a fixed 1,000,000-entry stack (`vm.rs`'s own `MAX_STACK`, not exposed by
+  `RegexBuilder` and so not configurable here at all), is a separate, smaller ceiling that a
+  pattern needing deep single-quantifier backtracking (e.g. `\s+$` against one unbroken run of
+  more than ~1,000,000 whitespace characters) can still hit regardless of `backtrack_limit` --
+  reported as `regex: stack overflow`, not `regex: backtrack limit exceeded`. Ordinary text
+  (words separated by single spaces, lines separated by newlines, ...) never approaches this,
+  since each individual whitespace *run* stays short even when the whole input is large.
 - **A shortcut class nested inside a user's own class.** `\w`/`\W`/`\s`/`\S`/`\d`/`\D` used on
   its own, outside a class, is guarded against `fancy-regex`'s own IGNORECASE folding with a
   local `(?-i:...)` (confirmed directly: without it, `\w` under IGNORECASE alone starts

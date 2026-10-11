@@ -186,8 +186,12 @@ pub fn parse_template(
                 if !is_octal {
                     let index: usize = digits.parse().unwrap_or(usize::MAX);
                     if index > group_count {
+                        // CPython reports the *digit*'s own position,
+                        // not the backslash's (confirmed directly:
+                        // `\10`/`\3` are both "at position 1", not 0).
                         return Err(format!(
-                            "invalid group reference {index} at position {backslash_pos}"
+                            "invalid group reference {index} at position {}",
+                            backslash_pos + 1
                         ));
                     }
                     flush(&mut literal, &mut parts);
@@ -287,7 +291,7 @@ pub fn substitute_n(
     let mut out = String::new();
     let mut last_copy = 0usize;
     let mut n = 0usize;
-    let mut scanner = Scanner::new(re);
+    let mut scanner = Scanner::new(re, crate::regex::backtrack_limit_for(text.len()));
     while n < max {
         let Some(caps) = scanner.next(text)? else {
             break;
@@ -313,7 +317,7 @@ pub fn find_iter<'t>(
     text: &'t str,
 ) -> Result<Vec<fancy_regex::Captures<'t>>, fancy_regex::Error> {
     let mut out = Vec::new();
-    let mut scanner = Scanner::new(re);
+    let mut scanner = Scanner::new(re, crate::regex::backtrack_limit_for(text.len()));
     while let Some(caps) = scanner.next(text)? {
         out.push(caps);
     }
@@ -353,15 +357,21 @@ struct Scanner<'r> {
     forced: Option<fancy_regex::Regex>,
     pos: usize,
     forbidden: Option<usize>,
+    /// The same backtrack limit the caller compiled *re* with
+    /// (`crate::regex::backtrack_limit_for`) -- the lazily-built
+    /// `forced` regex runs over the same *text*, so it needs the same
+    /// headroom, not `fancy-regex`'s own 1,000,000 default.
+    limit: usize,
 }
 
 impl<'r> Scanner<'r> {
-    fn new(re: &'r fancy_regex::Regex) -> Self {
+    fn new(re: &'r fancy_regex::Regex, limit: usize) -> Self {
         Scanner {
             re,
             forced: None,
             pos: 0,
             forbidden: None,
+            limit,
         }
     }
 
@@ -376,10 +386,14 @@ impl<'r> Scanner<'r> {
             }
             if self.forbidden == Some(self.pos) {
                 if self.forced.is_none() {
-                    self.forced = Some(fancy_regex::Regex::new(&format!(
-                        "(?:{})(?<!\\G)",
-                        self.re.as_str()
-                    ))?);
+                    self.forced = Some(
+                        fancy_regex::RegexBuilder::new(&format!(
+                            "(?:{})(?<!\\G)",
+                            self.re.as_str()
+                        ))
+                        .backtrack_limit(self.limit)
+                        .build()?,
+                    );
                 }
                 let forced = self.forced.as_ref().unwrap();
                 let candidate = forced.captures_from_pos(text, self.pos)?;
@@ -530,7 +544,23 @@ mod tests {
     fn invalid_group_reference_in_template() {
         let (_re, gc, names) = compile("(a)");
         let err = parse_template(r"\5", gc, &names).unwrap_err();
-        assert!(err.contains("invalid group reference 5"));
+        // CPython: "invalid group reference 5 at position 1" -- the
+        // digit's own position, not the backslash's (R9).
+        assert_eq!(err, "invalid group reference 5 at position 1");
+    }
+
+    #[test]
+    fn invalid_group_reference_in_template_double_digit() {
+        let (_re, gc, names) = compile("(a)");
+        let err = parse_template(r"\10", gc, &names).unwrap_err();
+        assert_eq!(err, "invalid group reference 10 at position 1");
+    }
+
+    #[test]
+    fn invalid_group_reference_in_template_single_digit_three() {
+        let (_re, gc, names) = compile("(a)");
+        let err = parse_template(r"\3", gc, &names).unwrap_err();
+        assert_eq!(err, "invalid group reference 3 at position 1");
     }
 
     #[test]

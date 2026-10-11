@@ -18,7 +18,17 @@
 //!   `RuntimeError` (`regex: backtrack limit exceeded`), retryable like
 //!   any other tool failure, where CPython's `re` (which ignores this
 //!   plugin's `timeout_seconds`, like every other mode here) would run
-//!   until the effect is killed (#448 decision, "Settled questions");
+//!   until the effect is killed (#448 decision, "Settled questions").
+//!   The limit itself is sized per call, `max(FLOOR, PER_CHAR *
+//!   (input_len + 1))` ([`backtrack_limit_for`]; `PER_CHAR = 100`,
+//!   `FLOOR = 10_000_000`, each measured directly in a release build
+//!   -- DESIGN.md §7.3 has the full measurements), since the crate's
+//!   own fixed 1,000,000 default counts backtracks across every start
+//!   position of a search, not just the eventual match, and so used
+//!   to fail ordinary multi-hundred-KB inputs through the lookarounds
+//!   this translator emits for `\b`/`\B`/non-MULTILINE `$`/lookbehind
+//!   (PR #480 review, finding R8) even though the real per-character
+//!   cost is tiny;
 //! - IGNORECASE: `fancy-regex`'s own Unicode case folding is used
 //!   directly for everything this translator doesn't expand itself
 //!   (`translate::literal_outside_class`/`expand_case_in_class` now
@@ -53,6 +63,26 @@ fn invalid_pattern(message: impl std::fmt::Display) -> ToolError {
     value_error(format!("regex: invalid pattern: {message}"))
 }
 
+/// Our own wording for a `fancy_regex::Error` reached *after* this
+/// translator's own `translate()` already succeeded -- never
+/// `fancy-regex`'s own `Display` text verbatim (PR #480 review R9:
+/// leaking its "Error compiling regex: Look-behind assertion without
+/// constant size" broke the "Circuitry's own messages, never a
+/// third-party one" rule). The one construct known to reach this
+/// point is a backreference inside a look-behind (this module's own
+/// doc comment, "Known divergences"): this translator's own `Width`
+/// analysis accepts it when the referenced group is fixed-width, but
+/// `fancy-regex`'s compiler rejects every backreference there
+/// regardless.
+fn compile_error_text(e: &fancy_regex::Error) -> String {
+    match e {
+        fancy_regex::Error::CompileError(fancy_regex::CompileError::LookBehindNotConst) => {
+            "a backreference inside a look-behind is not supported".to_string()
+        }
+        _ => "an unsupported pattern construct".to_string(),
+    }
+}
+
 /// An error from *running* an already-compiled pattern (`captures`/
 /// `find_iter`/`substitute_n`) -- distinct from a compile-time one
 /// ([`invalid_pattern`]) because `fancy-regex` hitting its own
@@ -78,7 +108,7 @@ fn exec_error(e: fancy_regex::Error) -> ToolError {
             message: "regex: stack overflow".to_string(),
             cause: ErrorCause::None,
         },
-        other => invalid_pattern(other),
+        other => invalid_pattern(compile_error_text(&other)),
     }
 }
 
@@ -100,6 +130,47 @@ fn template_error(message: String) -> ToolError {
         message,
         cause: ErrorCause::None,
     }
+}
+
+/// `fancy-regex`'s own default backtrack limit (1,000,000) counts
+/// backtrack attempts across *every* start position of one search,
+/// not just the eventual match -- so an otherwise-linear pattern this
+/// translator turns into a lookaround (non-MULTILINE `$`, `\b`/`\B`,
+/// any lookbehind) can exhaust the crate's own default on an ordinary
+/// multi-hundred-KB input even though the real per-character cost is
+/// tiny (PR #480 review R8: `\bzebra\b` findall with no match, 20,000
+/// lines of `item N value M`, `\s+$` on 1.2 MB -- all fail against
+/// `fancy-regex`'s default even though `cof` succeeds instantly).
+///
+/// Measured directly in a release build (`cargo build --release`;
+/// debug assertions change the constant meaningfully) rather than
+/// guessed:
+/// - **`PER_CHAR` = 100.** Every lookaround form this translator
+///   emits (`\bzebra\b`, `\d+$`, `\s+$`, a fixed-width lookbehind) was
+///   run as a no-match search over inputs from 10 KB to 2 MB; the
+///   worst observed cost was ~7 backtracks per input byte (`\bzebra\b`
+///   against plain words). 100 is comfortably past 10x that.
+///   `(PER_CHAR * (input_len + 1))` is this limit's own scaling term.
+/// - **`FLOOR` = 10,000,000.** CPython's own baseline for a
+///   catastrophic pattern on a *small* input --
+///   `(a+)+(?=b)` against 18-20 `a`s, which the review's own R8 names
+///   -- needs 1,048,576-4,194,304 backtracks to fail in `fancy-regex`;
+///   10,000,000 clears that with more than 2x headroom (measured: 18
+///   `a`s at the exact limit this constant would compute, ~22ms;
+///   CPython itself returns `[]` in low-single-digit milliseconds, so
+///   this is still "like CPython", not just "eventually"). At the same
+///   time, a genuinely catastrophic pattern on a small input --
+///   `(a+)+` against 30 `a`s with no match -- still fails in ~223ms at
+///   this exact FLOOR, nowhere near the ~2s budget R8 sets.
+///
+/// *input_len* is the input text's own byte length, never smaller
+/// than its char count, so this never under-provisions for multi-byte
+/// text.
+const REGEX_BACKTRACK_PER_CHAR: usize = 100;
+const REGEX_BACKTRACK_FLOOR: usize = 10_000_000;
+
+pub(crate) fn backtrack_limit_for(input_len: usize) -> usize {
+    REGEX_BACKTRACK_FLOOR.max(REGEX_BACKTRACK_PER_CHAR.saturating_mul(input_len.saturating_add(1)))
 }
 
 /// `_resolve_flags`: falsy -> no flags; a non-list -> `ValueError`; each
@@ -229,7 +300,11 @@ impl ToolPlugin for RegexPlugin {
         } else {
             translated.pattern.clone()
         };
-        let compiled = fancy_regex::Regex::new(&pattern_text).map_err(invalid_pattern)?;
+        let backtrack_limit = backtrack_limit_for(input.len());
+        let compiled = fancy_regex::RegexBuilder::new(&pattern_text)
+            .backtrack_limit(backtrack_limit)
+            .build()
+            .map_err(|e| invalid_pattern(compile_error_text(&e)))?;
 
         let value = match mode.as_str() {
             "match" | "search" => match compiled.captures(&input).map_err(exec_error)? {
@@ -484,6 +559,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backreference_inside_lookbehind_never_leaks_fancy_regexs_own_text() {
+        // PR #480 review R9: a group with fixed width ("a") makes
+        // this translator's own analysis accept `\1` inside the
+        // look-behind (CPython accepts it too), but `fancy-regex`'s
+        // own compiler rejects every backreference there regardless
+        // (DESIGN.md §7.3's own divergence note). The resulting error
+        // must be electricity's own wording under the usual prefix,
+        // never fancy-regex's raw "Error compiling regex: ..." text.
+        let err = run(dict(vec![
+            ("pattern", Value::from(r"(a)(?<=\1)b")),
+            ("input", Value::from("ab")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "regex: invalid pattern: a backreference inside a look-behind is not supported"
+        );
+    }
+
+    #[tokio::test]
     async fn match_anchors_a_leading_inline_flag_over_the_whole_pattern() {
         // issue #479: "Check that a leading global inline flag
         // (`(?i)...`) still applies to the whole pattern."
@@ -515,6 +611,81 @@ mod tests {
             err.py_class,
             electricity_value::pycompat::PyExc::RuntimeError
         );
+    }
+
+    #[tokio::test]
+    async fn word_boundary_no_match_findall_succeeds_on_a_two_megabyte_input() {
+        // PR #480 review R8: `\b` forces the backtracking VM (it's
+        // translated into a lookaround), and `fancy-regex`'s own
+        // 1,000,000 default backtrack limit counts across every start
+        // position of the search, not just the eventual match -- so
+        // this used to fail past roughly 150 KB even though `cof`
+        // succeeds on it instantly.
+        let text = "the quick brown fox jumps ".repeat(2_000_000 / 26 + 1);
+        let result = run(dict(vec![
+            ("pattern", Value::from(r"\bzebra\b")),
+            ("input", Value::from(text)),
+            ("mode", Value::from("findall")),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(result.value, Value::List(vec![]));
+    }
+
+    #[tokio::test]
+    async fn trailing_dollar_search_succeeds_on_a_1_2_megabyte_input() {
+        // Ordinary text (single-space-separated words, never one
+        // giant run of whitespace -- that would overflow
+        // `fancy-regex`'s own fixed 1,000,000-entry backtrack *stack*,
+        // a separate, unconfigurable limit from `backtrack_limit`)
+        // ending in a non-whitespace character: `\s+$` cannot ever
+        // succeed, so an unanchored search tries this from every start
+        // position -- the review's own `\s+$` case.
+        let text = "word ".repeat(1_200_000 / 5) + "x";
+        let result = run(dict(vec![
+            ("pattern", Value::from(r"\s+$")),
+            ("input", Value::from(text)),
+            ("mode", Value::from("search")),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(result.value, Value::None);
+    }
+
+    #[tokio::test]
+    async fn trailing_digits_findall_succeeds_on_fifty_thousand_lines() {
+        let mut text = String::new();
+        for i in 0..50_000 {
+            text.push_str(&format!("item {i} value {i}\n"));
+        }
+        let result = run(dict(vec![
+            ("pattern", Value::from(r"\d+$")),
+            ("input", Value::from(text)),
+            ("mode", Value::from("findall")),
+        ]))
+        .await
+        .unwrap();
+        // Non-MULTILINE `$` only matches once, right before the
+        // string's own trailing newline -- the *last* line's own
+        // final number, same as `cof`.
+        assert_eq!(result.value, Value::List(vec![Value::from("49999")]));
+    }
+
+    #[tokio::test]
+    async fn catastrophic_but_bounded_pattern_still_returns_no_match_like_cpython() {
+        // The review's own R8 baseline: CPython returns `[]` for this
+        // in milliseconds; it used to need just past 1,000,000
+        // backtracks in fancy-regex (fancy-regex's old default),
+        // which this translator's new per-input limit must still
+        // clear for an 18-20 character input.
+        let result = run(dict(vec![
+            ("pattern", Value::from(r"(a+)+(?=b)")),
+            ("input", Value::from("a".repeat(18) + "c")),
+            ("mode", Value::from("findall")),
+        ]))
+        .await
+        .unwrap();
+        assert_eq!(result.value, Value::List(vec![]));
     }
 
     #[tokio::test]

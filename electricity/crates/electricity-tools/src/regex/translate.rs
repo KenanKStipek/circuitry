@@ -477,7 +477,6 @@ impl Translator {
     /// never here), folding each into *flags*.
     fn consume_leading_global_flags(&mut self, mut flags: ResolvedFlags) -> PResult<ResolvedFlags> {
         loop {
-            let start = self.pos;
             if self.peek() != Some('(') || self.peek_at(1) != Some('?') {
                 return Ok(flags);
             }
@@ -494,8 +493,13 @@ impl Translator {
             if letters.is_empty() || self.chars.get(i) != Some(&')') {
                 return Ok(flags);
             }
+            // `i` is the closing `)`'s own position -- CPython
+            // reports that, not the opening `(`'s (confirmed
+            // directly: `(?L)a` is "at position 3", `(?aL)a` is "at
+            // position 4").
+            let close_pos = i;
             self.pos = i + 1;
-            apply_global_letters(&letters, &mut flags, start)?;
+            apply_global_letters(&letters, &mut flags, close_pos)?;
         }
     }
 
@@ -1095,9 +1099,11 @@ impl Translator {
         let inner = self.parse_alternation()?;
         self.expect_close(open_pos)?;
         if !inner.width.is_fixed() {
-            return Err(format!(
-                "look-behind requires fixed-width pattern at position {open_pos}"
-            ));
+            // CPython's own `sre_compile` raises this with no
+            // position suffix at all (confirmed directly:
+            // `(?<=a+)b` is exactly "look-behind requires fixed-width
+            // pattern", unlike every other `sre_parse`-raised error).
+            return Err("look-behind requires fixed-width pattern".to_string());
         }
         let marker = if negate { "!" } else { "=" };
         Ok(atom(format!("(?<{marker}{})", inner.text), Width::fixed(0)))
@@ -1179,12 +1185,16 @@ impl Translator {
                 ))
             }
             Some(':') => {
-                i += 1;
+                // CPython reports the `:` itself, not what follows it
+                // (confirmed directly: `a(?L:b)` is "at position 4",
+                // the `:`'s own index) -- captured before `i` advances
+                // past it below.
                 if add.contains('L') {
                     return Err(format!(
                         "bad inline flags: cannot use 'L' flag with a str pattern at position {i}"
                     ));
                 }
+                i += 1;
                 let mut scope = self.scope();
                 if add.contains('x') {
                     scope.verbose = true;
@@ -1353,8 +1363,12 @@ impl Translator {
                 .unwrap_or_else(Width::unknown);
             return Ok(atom(format!("\\{group}"), width));
         }
+        // CPython reports the *digit*'s own position, not the
+        // backslash's (confirmed directly: `\1(a)` is "invalid group
+        // reference 1 at position 1", not position 0).
         Err(format!(
-            "invalid group reference {group} at position {backslash_pos}"
+            "invalid group reference {group} at position {}",
+            backslash_pos + 1
         ))
     }
 
@@ -1597,7 +1611,39 @@ mod tests {
     #[test]
     fn forward_backreference_is_rejected() {
         let err = translate(r"\1(a)", flags()).unwrap_err();
-        assert!(err.contains("invalid group reference 1"));
+        // CPython: "invalid group reference 1 at position 1" -- the
+        // digit's own position, not the backslash's (R9).
+        assert_eq!(err, "invalid group reference 1 at position 1");
+    }
+
+    #[test]
+    fn l_flag_error_names_the_closing_paren_position() {
+        // CPython: "bad inline flags: cannot use 'L' flag with a str
+        // pattern at position 3" for a bare leading `(?L)`.
+        let err = translate("(?L)a", flags()).unwrap_err();
+        assert_eq!(
+            err,
+            "bad inline flags: cannot use 'L' flag with a str pattern at position 3"
+        );
+    }
+
+    #[test]
+    fn l_flag_error_in_a_scoped_group_names_the_colon_position() {
+        // CPython: "... at position 4" for `a(?L:b)` -- the `:`'s own
+        // index, not whatever follows it.
+        let err = translate("a(?L:b)", flags()).unwrap_err();
+        assert_eq!(
+            err,
+            "bad inline flags: cannot use 'L' flag with a str pattern at position 4"
+        );
+    }
+
+    #[test]
+    fn look_behind_fixed_width_error_has_no_position_suffix() {
+        // CPython's own `sre_compile` raises this with no position at
+        // all, unlike every other `sre_parse` error (R9).
+        let err = translate("(?<=a+)b", flags()).unwrap_err();
+        assert_eq!(err, "look-behind requires fixed-width pattern");
     }
 
     #[test]
