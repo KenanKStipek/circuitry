@@ -38,6 +38,7 @@
 //! per run, same as every other check-failure surface in this
 //! workspace).
 
+use crate::effects::UseSource;
 use crate::op::{LeafKind, NodeKind, Op};
 use crate::param::ParamNode;
 use crate::path::EffectPath;
@@ -355,6 +356,18 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             // the walker entirely.
             if use_op.inputs.as_ref().is_some_and(param_node_has_partial) {
                 return refusal(path, RefusalReason::PartialReference);
+            }
+            // Review finding 2 on PR #454: `UseSource::Inline`'s own
+            // template text is rendered with composition at run time
+            // too (`core/use.py:557`), and a `{{> step}}` fragment in
+            // it can name an effect's own output with no `prompts:`
+            // block involved at all -- the same check as `inputs`
+            // above, unconditional until M1-P's own landing removes
+            // this walker check entirely.
+            if let UseSource::Inline(text) = &use_op.source {
+                if has_partial(text) {
+                    return refusal(path, RefusalReason::PartialReference);
+                }
             }
             None
         }
@@ -1383,6 +1396,34 @@ mod tests {
             LeafKind::Use(crate::effects::UseOp {
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: Some(ParamNode::Map(inputs)),
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy::default(),
+                expect: None,
+                description: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![use_op]));
+        let supported = Supported { use_: true, ..m0() };
+        let refusal = first_unsupported(&program, &supported).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::PartialReference);
+        assert_eq!(refusal.path, use_path);
+    }
+
+    #[test]
+    fn an_unexpanded_partial_in_inline_use_source_is_refused_even_once_use_is_supported() {
+        // Review finding 2 on PR #454: `UseSource::Inline`'s own
+        // template text is spliced through composition at run time
+        // too (`core/use.py:557`), with no `prompts:` block needed for
+        // a `{{> step}}` fragment inside it to name an effect's own
+        // output -- the walker's own `{{>` check used to look only at
+        // `UseOp::inputs`, never the inline source text itself.
+        let use_path = EffectPath::root().push_name("sub");
+        let use_op = leaf_op(
+            use_path.clone(),
+            LeafKind::Use(crate::effects::UseOp {
+                source: UseSource::Inline(TemplateText::new("{{> step}}", true, Escape::Html)),
+                inputs: None,
                 outputs: None,
                 validate: true,
                 retries: RetryPolicy::default(),
