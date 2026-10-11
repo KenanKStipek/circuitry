@@ -329,9 +329,10 @@ unrendered text.
 `electricity_template::MAX_SECTION_DEPTH` (64) deep, rejected at tokenize time with its own
 `TemplateError` kind (#394) — smaller than §3.1's shared `MAX_DEPTH` (512), and for a different
 reason: rendering a deeply nested section isn't only a stack-depth concern (the tree-walking
-renderer recurses once per level) but a CPU-time one, since the renderer clones its whole current
-scope stack on every section it descends into, making render time grow with the *cube* of
-nesting depth. 64 keeps a render at the limit itself fast, not merely safe. Dotted-name
+renderer recurses once per level) but a CPU-time one, since a lookup inside a section clones the
+child subtree it resolves at each level. (Until #477 the renderer also cloned its whole scope stack
+on every section push, which made render time cubic in depth.) 64 keeps a render at the limit
+itself fast, not merely safe. Dotted-name
 resolution (`a.b.c`) is an ordinary loop over a `.`-split name, never recursion, so it needs no
 limit of its own regardless of how long a dotted name is.
 

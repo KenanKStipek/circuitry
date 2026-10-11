@@ -6,18 +6,15 @@
 //! point this module exists to pin is the *measurement* behind why this
 //! crate needs its own, much smaller limit than
 //! [`electricity_value::MAX_DEPTH`] (512): rendering 512 levels of
-//! nested sections isn't just a stack-overflow risk (confirmed
-//! separately, somewhere between 350 and 400 levels on a 2 MiB
-//! debug-build stack) but a denial-of-service in its own right --
-//! `render::render_with_pushed_scope` clones the entire current scope
-//! stack on every section it descends into, so render time grows with
-//! the *cube* of section depth: measured directly on the machine this
-//! was written on, rendering 100 matching levels took ~0.3 seconds, 200
-//! took ~2.3, 300 took ~8.3 -- a trajectory that puts 512 at roughly a
-//! minute, for a single template render, with no recursion depth
-//! involved at all yet. `MAX_SECTION_DEPTH` (64) keeps a render at the
-//! limit itself cheap (measured at ~125ms) rather than merely
-//! stack-safe.
+//! nested sections overflows a 2 MiB debug-build stack (somewhere
+//! between 350 and 400 levels), and its render time grows faster than
+//! linearly with depth, since a lookup inside a section clones the child
+//! subtree it resolves at each level. Before #477 the renderer also
+//! cloned its whole scope stack on every section push, which made
+//! render time cubic in depth: 100 matching levels took ~0.3 seconds,
+//! 200 took ~2.3 and 300 took ~8.3 on the machine those were measured
+//! on. `MAX_SECTION_DEPTH` (64) keeps a render at the limit cheap
+//! rather than merely stack-safe.
 
 use electricity_template::{
     MAX_SECTION_DEPTH, PlainCtx, Value, render_template, template_syntax_error,
@@ -100,7 +97,7 @@ fn template_syntax_error_does_not_reject_a_too_deep_template() {
 }
 
 /// A too-deep template is rejected during tokenizing, before
-/// `render_template` would ever reach the cubic-cost rendering walk --
+/// `render_template` would ever reach the costly deep rendering walk --
 /// this asserts the specific, fast failure mode (a `Result::Err`
 /// returned promptly), not just "didn't hang", since a hang wouldn't
 /// show up as a test failure at all.
