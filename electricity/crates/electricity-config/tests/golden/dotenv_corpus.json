@@ -1,0 +1,387 @@
+[
+  {
+    "name": "simple_key_value",
+    "text": "FOO=bar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "bare_key_has_no_value",
+    "text": "FOO\n",
+    "real_env": {},
+    "expect": {
+      "FOO": null
+    }
+  },
+  {
+    "name": "empty_value",
+    "text": "FOO=\n",
+    "real_env": {},
+    "expect": {
+      "FOO": ""
+    }
+  },
+  {
+    "name": "whitespace_around_key_and_value_is_trimmed",
+    "text": "  FOO  =  bar  \n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "blank_lines_and_full_line_comments_are_skipped",
+    "text": "\n# a comment\n\nFOO=bar\n# another\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "export_prefix_is_stripped",
+    "text": "export FOO=bar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "inline_comment_after_unquoted_value",
+    "text": "FOO=bar # trailing comment\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "hash_with_no_leading_space_is_part_of_the_value",
+    "text": "FOO=bar#not_a_comment\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar#not_a_comment"
+    }
+  },
+  {
+    "name": "value_is_empty_when_hash_follows_whitespace_after_equals",
+    "text": "FOO= # just a comment\n",
+    "real_env": {},
+    "expect": {
+      "FOO": ""
+    }
+  },
+  {
+    "name": "single_quoted_value",
+    "text": "FOO='bar baz'\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar baz"
+    }
+  },
+  {
+    "name": "double_quoted_value",
+    "text": "FOO=\"bar baz\"\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar baz"
+    }
+  },
+  {
+    "name": "single_quoted_value_keeps_a_hash_literal",
+    "text": "FOO='bar # not a comment'\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar # not a comment"
+    }
+  },
+  {
+    "name": "double_quoted_value_keeps_a_hash_literal",
+    "text": "FOO=\"bar # not a comment\"\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar # not a comment"
+    }
+  },
+  {
+    "name": "double_quoted_escapes_decode",
+    "text": "FOO=\"line1\\nline2\\tend\"\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "line1\nline2\tend"
+    }
+  },
+  {
+    "name": "single_quoted_escapes_only_backslash_and_quote",
+    "text": "FOO='a\\nb\\'c\\\\d'\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "a\\nb'c\\d"
+    }
+  },
+  {
+    "name": "multiline_double_quoted_value",
+    "text": "FOO=\"line one\nline two\nline three\"\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "line one\nline two\nline three"
+    }
+  },
+  {
+    "name": "multiline_single_quoted_value",
+    "text": "FOO='line one\nline two'\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "line one\nline two"
+    }
+  },
+  {
+    "name": "single_quoted_value_is_also_interpolated",
+    "text": "A=hello\nB='${A} world'\n",
+    "real_env": {},
+    "expect": {
+      "A": "hello",
+      "B": "hello world"
+    }
+  },
+  {
+    "name": "double_quoted_value_is_interpolated",
+    "text": "A=hello\nB=\"${A} world\"\n",
+    "real_env": {},
+    "expect": {
+      "A": "hello",
+      "B": "hello world"
+    }
+  },
+  {
+    "name": "unquoted_value_is_interpolated",
+    "text": "A=hello\nB=${A}_suffix\n",
+    "real_env": {},
+    "expect": {
+      "A": "hello",
+      "B": "hello_suffix"
+    }
+  },
+  {
+    "name": "interpolation_falls_back_to_the_real_environment",
+    "text": "B=${REAL_ONLY}\n",
+    "real_env": {
+      "REAL_ONLY": "from_env"
+    },
+    "expect": {
+      "B": "from_env"
+    }
+  },
+  {
+    "name": "interpolation_default_when_unset_anywhere",
+    "text": "B=${TOTALLY_UNSET:-fallback}\n",
+    "real_env": {},
+    "expect": {
+      "B": "fallback"
+    }
+  },
+  {
+    "name": "interpolation_default_is_empty_string",
+    "text": "B=${TOTALLY_UNSET:-}\n",
+    "real_env": {},
+    "expect": {
+      "B": ""
+    }
+  },
+  {
+    "name": "bare_key_resolves_to_empty_not_the_default",
+    "text": "A\nB=${A:-fallback}\n",
+    "real_env": {},
+    "expect": {
+      "A": null,
+      "B": ""
+    }
+  },
+  {
+    "name": "a_file_value_outranks_the_real_environment_for_interpolation",
+    "text": "A=file_value\nB=${A}\n",
+    "real_env": {
+      "A": "env_value"
+    },
+    "expect": {
+      "A": "file_value",
+      "B": "file_value"
+    }
+  },
+  {
+    "name": "repeated_key_keeps_first_position_takes_last_value",
+    "text": "A=1\nB=2\nA=3\n",
+    "real_env": {},
+    "expect": {
+      "A": "3",
+      "B": "2"
+    }
+  },
+  {
+    "name": "crlf_line_endings",
+    "text": "FOO=bar\r\nBAZ=qux\r\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar",
+      "BAZ": "qux"
+    }
+  },
+  {
+    "name": "single_quoted_key",
+    "text": "'FOO BAR'=baz\n",
+    "real_env": {},
+    "expect": {
+      "FOO BAR": "baz"
+    }
+  },
+  {
+    "name": "unterminated_single_quote_line_is_dropped",
+    "text": "FOO='unterminated\nBAR=baz\n",
+    "real_env": {},
+    "expect": {
+      "BAR": "baz"
+    }
+  },
+  {
+    "name": "unterminated_double_quote_line_is_dropped",
+    "text": "FOO=\"unterminated\nBAR=baz\n",
+    "real_env": {},
+    "expect": {
+      "BAR": "baz"
+    }
+  },
+  {
+    "name": "stray_text_after_quoted_value_drops_the_line",
+    "text": "FOO=\"bar\"stray\nBAZ=qux\n",
+    "real_env": {},
+    "expect": {
+      "BAZ": "qux"
+    }
+  },
+  {
+    "name": "empty_file",
+    "text": "",
+    "real_env": {},
+    "expect": {}
+  },
+  {
+    "name": "only_whitespace",
+    "text": "   \n\n\t\n",
+    "real_env": {},
+    "expect": {}
+  },
+  {
+    "name": "no_trailing_newline_on_last_line",
+    "text": "FOO=bar",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "no_trailing_newline_quoted_value",
+    "text": "FOO=\"bar\"",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "nested_interpolation_through_two_names",
+    "text": "A=1\nB=${A}\nC=${B}2\n",
+    "real_env": {},
+    "expect": {
+      "A": "1",
+      "B": "1",
+      "C": "12"
+    }
+  },
+  {
+    "name": "unicode_value",
+    "text": "FOO=héllo wörld 🎉\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "héllo wörld 🎉"
+    }
+  },
+  {
+    "name": "key_with_underscores_and_digits",
+    "text": "FOO_BAR_2=baz\n",
+    "real_env": {},
+    "expect": {
+      "FOO_BAR_2": "baz"
+    }
+  },
+  {
+    "name": "value_containing_equals_sign",
+    "text": "FOO=bar=baz=qux\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar=baz=qux"
+    }
+  },
+  {
+    "name": "multiple_variables_in_one_value",
+    "text": "A=1\nB=2\nC=${A}-${B}\n",
+    "real_env": {},
+    "expect": {
+      "A": "1",
+      "B": "2",
+      "C": "1-2"
+    }
+  },
+  {
+    "name": "unset_variable_in_middle_of_text",
+    "text": "A=${B}x${C:-y}\n",
+    "real_env": {},
+    "expect": {
+      "A": "xy"
+    }
+  },
+  {
+    "name": "crlf_inside_a_multiline_quoted_value",
+    "text": "K=\"a\r\nb\"\r\n",
+    "real_env": {},
+    "expect": {
+      "K": "a\nb"
+    }
+  },
+  {
+    "name": "lone_cr_inside_a_single_quoted_value",
+    "text": "K='x\ry'\n",
+    "real_env": {},
+    "expect": {
+      "K": "x\ny"
+    }
+  },
+  {
+    "name": "backslash_immediately_before_crlf_in_a_quoted_value",
+    "text": "K=\"a\\\r\nb\"\r\n",
+    "real_env": {},
+    "expect": {
+      "K": "a\\\nb"
+    }
+  },
+  {
+    "name": "c0_separator_in_an_unquoted_key_is_whitespace",
+    "text": "A\u001fB=1\n",
+    "real_env": {},
+    "expect": {}
+  },
+  {
+    "name": "c0_separator_before_the_equals_sign",
+    "text": "FOO\u001f=bar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  },
+  {
+    "name": "c0_separator_after_the_equals_sign",
+    "text": "FOO=\u001fbar\n",
+    "real_env": {},
+    "expect": {
+      "FOO": "bar"
+    }
+  }
+]

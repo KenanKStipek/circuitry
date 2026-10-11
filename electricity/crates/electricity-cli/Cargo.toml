@@ -19,6 +19,7 @@ test-tools = ["electricity/test-tools"]
 
 [dependencies]
 electricity = { path = "../electricity" }
+electricity-config = { path = "../electricity-config" }
 libc = "0.2"
 log = "0.4"
 tokio = { version = "1", features = ["rt", "macros", "signal", "sync", "time"] }
