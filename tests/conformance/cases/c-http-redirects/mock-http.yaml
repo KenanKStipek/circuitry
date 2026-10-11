@@ -1,0 +1,25 @@
+- request:
+    method: POST
+    path: /start-303
+  response:
+    status: 303
+    reason: See Other
+    headers:
+      Location: "/next-303"
+    body: ""
+- request:
+    method: GET
+    path: /next-303
+  response:
+    status: 200
+    reason: OK
+    body: "redirected ok"
+- request:
+    method: POST
+    path: /start-307
+  response:
+    status: 307
+    reason: Temporary Redirect
+    headers:
+      Location: "/next-307"
+    body: "not followed"

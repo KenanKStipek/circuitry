@@ -1,0 +1,21 @@
+name: c-http-redirects
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: post_303_becomes_get
+    provider: http
+    params:
+      url: "{{input.base_url}}/start-303"
+      method: POST
+      body: "payload"
+  - type: tool
+    name: post_307_keeps_method_and_succeeds_with_stderr
+    provider: http
+    params:
+      url: "{{input.base_url}}/start-307"
+      method: POST
+      body: "payload"

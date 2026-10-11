@@ -1,0 +1,13 @@
+- request:
+    method: GET
+    path: /slow
+  response:
+    status: 200
+    body: "late"
+    delay_ms: 1500
+- request:
+    method: GET
+    path: /slow
+  response:
+    status: 200
+    body: "on time"

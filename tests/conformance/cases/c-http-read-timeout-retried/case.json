@@ -1,0 +1,8 @@
+{
+  "spec_case": "electricity/DESIGN.md §12 (a read timeout waiting for the status line is an unwrapped, always-retryable TimeoutError)",
+  "description": "timeout_ms: 300 against a first response delayed 600ms: the first attempt times out ('timed out', unwrapped, ErrorCause::NoReply, always retryable regardless of provider status), the second attempt answers immediately and succeeds.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}
