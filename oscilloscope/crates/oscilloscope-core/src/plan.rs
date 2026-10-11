@@ -25,14 +25,14 @@ pub use electricity::parse_inputs;
 /// one place that options a real `electricity` run uses are built, so
 /// osp's own plan can't drift from what the engine itself checks a
 /// document against (its `config_runtime` merge included, e.g. a
-/// config-defined `concurrency_groups`). **osp does not reproduce
-/// `cof`'s own config discovery** (the global or project
+/// config-defined `concurrency_groups`). With none, this never
+/// reproduces `cof`'s own config discovery (the global or project
 /// `circuitry.config.json` layers `cof run` resolves with no
-/// `--config`): a `group:` defined only in one of those layers, not in
-/// `osp`'s own `--config`/positional config argument, still falls back
-/// to no plan here, on `cof` as much as on electricity, even though
-/// `cof run` itself would see it. Without a config, there is nothing
-/// for `check_options` to read a `runtime:` block from, so this builds
+/// `--config`) — [`compile_with_discovery`] is the entry point that
+/// does, by discovering that same config first and handing this
+/// function `Some(path)` to a temp file holding it. Without a config,
+/// there is nothing for `check_options` to read a `runtime:` block
+/// from, so this builds
 /// `CheckOptions` the same way directly — `Default` plus field
 /// assignment, not a struct literal: its field list is still growing
 /// as electricity's compiler lanes land, and a literal would need an
@@ -55,6 +55,41 @@ pub fn compile(
         }
     };
     check_for_run(path, &options)
+}
+
+/// [`compile`], after first discovering the config a bare `cof run
+/// <doc>` (no `--config`) would layer on its own from `home`/`cwd`
+/// (issue #433; `config_discovery::discover_merged_config`) when
+/// `config` is `None` -- the global config plus a *trusted* project
+/// config found in `cwd`. With an explicit `config`, this is exactly
+/// `compile`: discovery only ever stands in for the no-`--config`
+/// case, the same as `cof run` itself. Falls back to `compile`'s own
+/// existing no-config behaviour whenever discovery finds nothing, or
+/// a temp file for its own output can't be made or written -- this
+/// must never be the reason a plan compile fails that otherwise
+/// wouldn't have.
+pub fn compile_with_discovery(
+    path: &Path,
+    config: Option<&Path>,
+    inputs: &indexmap::IndexMap<String, String>,
+    home: &Path,
+    cwd: &Path,
+    trust_env: Option<&str>,
+) -> Result<Program, RunCheckError> {
+    if config.is_some() {
+        return compile(path, config, inputs);
+    }
+    let Some(discovered) = crate::config_discovery::discover_merged_config(home, cwd, trust_env)
+    else {
+        return compile(path, None, inputs);
+    };
+    let Ok(mut tmp) = tempfile::NamedTempFile::new() else {
+        return compile(path, None, inputs);
+    };
+    if std::io::Write::write_all(&mut tmp, discovered.to_string().as_bytes()).is_err() {
+        return compile(path, None, inputs);
+    }
+    compile(path, Some(tmp.path()), inputs)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -952,6 +987,101 @@ mod tests {
 
         let program = compile(&doc, Some(&config), &indexmap::IndexMap::new())
             .expect("a config with a runtime block should still compile");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
+    }
+
+    #[test]
+    fn compile_with_discovery_picks_up_a_global_configs_runtime_block_with_no_dash_dash_config() {
+        // Issue #433: a bare `cof run <doc>` with no `--config` still
+        // resolves the global config on its own -- `compile` alone
+        // never does, since it has no `home`/`cwd` of its own to
+        // discover anything from; `compile_with_discovery` is the one
+        // that does.
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/circuitry")).unwrap();
+        std::fs::write(
+            home.path().join(".config/circuitry/config.json"),
+            r#"{"runtime": {"max_concurrency": 3}}"#,
+        )
+        .unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+
+        let program = compile_with_discovery(
+            &doc,
+            None,
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+        )
+        .expect("the discovered global config's own runtime block should still compile");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
+    }
+
+    #[test]
+    fn compile_with_discovery_falls_back_to_the_plain_no_config_path_when_nothing_is_discovered() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+
+        let program = compile_with_discovery(
+            &doc,
+            None,
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+        )
+        .expect("should compile exactly as compile(..., None, ...) already does");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
+    }
+
+    #[test]
+    fn compile_with_discovery_leaves_an_explicit_config_untouched_by_discovery() {
+        // A positional/--config argument already wins over discovery
+        // in cof's own precedence (`find_config_path`'s order) --
+        // this must behave exactly like `compile` with that same
+        // config, even with a global config sitting right there too.
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/circuitry")).unwrap();
+        std::fs::write(
+            home.path().join(".config/circuitry/config.json"),
+            r#"{"runtime": {"max_concurrency": 99}}"#,
+        )
+        .unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+        let explicit_config = cwd.path().join("config.json");
+        std::fs::write(&explicit_config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
+
+        let program = compile_with_discovery(
+            &doc,
+            Some(&explicit_config),
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+        )
+        .expect("an explicit config should still compile, discovery or not");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
     }

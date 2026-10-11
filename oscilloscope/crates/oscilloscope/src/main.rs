@@ -254,6 +254,40 @@ fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
     }
 }
 
+/// `oscilloscope_core::plan::compile`, mirroring `cof`'s own config
+/// discovery (issue #433) when `config` is `None`: `$HOME` and osp's
+/// own current directory are read here, at this one real call site,
+/// and handed down as plain parameters from here on — discovery
+/// itself never touches the process environment directly (see
+/// `config_discovery`'s own module doc), so a test exercising it
+/// supplies both explicitly instead. Either one being unavailable
+/// (`$HOME` unset, the cwd gone) just skips discovery, the same as
+/// nothing being found by it. No named return type (and so no direct
+/// `electricity`/`electricity-bytecode` dependency of this binary
+/// crate) — both branches already return exactly the same type
+/// `oscilloscope_core::plan`'s own two functions do, inferred from
+/// this macro's own expansion at each call site.
+macro_rules! compile_plan {
+    ($orchestration:expr, $config:expr, $inputs:expr) => {
+        match (std::env::var_os("HOME"), std::env::current_dir()) {
+            (Some(home), Ok(cwd)) => {
+                let trust_env =
+                    std::env::var(oscilloscope_core::config_discovery::TRUST_PROJECT_CONFIG_ENV)
+                        .ok();
+                oscilloscope_core::plan::compile_with_discovery(
+                    $orchestration,
+                    $config,
+                    $inputs,
+                    Path::new(&home),
+                    &cwd,
+                    trust_env.as_deref(),
+                )
+            }
+            _ => oscilloscope_core::plan::compile($orchestration, $config, $inputs),
+        }
+    };
+}
+
 /// `do_run`'s own plain supervise loop, shared with `run_tui`'s own
 /// TUI-unavailable fallback (review finding 14): forwards every
 /// signal osp receives to the engine's process group, escalates to
@@ -380,29 +414,24 @@ fn do_run(args: RunArgs) -> ExitCode {
     // K4: the exact options a real `electricity <config> <doc> -e
     // k=v...` run would check this document against (DESIGN.md §5
     // via `electricity::check_options`), so the plan can't drift from
-    // what the engine itself would check. osp does not reproduce
-    // `cof`'s own config discovery (the global/project
-    // `circuitry.config.json` layers a bare `cof run` resolves with
-    // no `--config`), so a `group:` defined only in one of those
-    // layers still falls back to no plan here, on either engine. A
-    // malformed `-e` is never osp's own error (the engine reports
-    // that itself once it actually runs) — just the same no-plan
-    // fallback as a compile failure.
+    // what the engine itself would check. With no config argument,
+    // `compile_plan` also mirrors `cof`'s own config discovery (the
+    // global/project `circuitry.config.json` layers a bare `cof run`
+    // resolves with no `--config`, issue #433), so a `group:` defined
+    // only in one of those layers is no longer lost here either, on
+    // either engine. A malformed `-e` is never osp's own error (the
+    // engine reports that itself once it actually runs) — just the
+    // same no-plan fallback as a compile failure.
     let plan = match oscilloscope_core::plan::parse_inputs(&args.set) {
-        Ok(inputs) => {
-            match oscilloscope_core::plan::compile(&orchestration, spec.config.as_deref(), &inputs)
-            {
-                Ok(program) => {
-                    PlanTree::from_program_with_options(&program, spec.config.as_deref(), &inputs)
-                }
-                Err(err) => {
-                    eprintln!(
-                        "osp: couldn't compile a plan ({err}); running from observations only"
-                    );
-                    PlanTree::empty()
-                }
+        Ok(inputs) => match compile_plan!(&orchestration, spec.config.as_deref(), &inputs) {
+            Ok(program) => {
+                PlanTree::from_program_with_options(&program, spec.config.as_deref(), &inputs)
             }
-        }
+            Err(err) => {
+                eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
+                PlanTree::empty()
+            }
+        },
         Err(err) => {
             eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
             PlanTree::empty()
@@ -1310,21 +1339,17 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // the same plan a live `osp run` of that document would.
     let plan = match &args.plan {
         Some(doc) => match oscilloscope_core::plan::parse_inputs(&args.set) {
-            Ok(inputs) => {
-                match oscilloscope_core::plan::compile(doc, args.config.as_deref(), &inputs) {
-                    Ok(program) => PlanTree::from_program_with_options(
-                        &program,
-                        args.config.as_deref(),
-                        &inputs,
-                    ),
-                    Err(err) => {
-                        eprintln!(
-                            "osp: couldn't compile a plan ({err}); running from observations only"
-                        );
-                        PlanTree::empty()
-                    }
+            Ok(inputs) => match compile_plan!(doc, args.config.as_deref(), &inputs) {
+                Ok(program) => {
+                    PlanTree::from_program_with_options(&program, args.config.as_deref(), &inputs)
                 }
-            }
+                Err(err) => {
+                    eprintln!(
+                        "osp: couldn't compile a plan ({err}); running from observations only"
+                    );
+                    PlanTree::empty()
+                }
+            },
             Err(err) => {
                 eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
                 PlanTree::empty()
