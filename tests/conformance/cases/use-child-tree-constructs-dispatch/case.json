@@ -2,9 +2,5 @@
   "spec_case": "runtime-semantics.md Section 5.3 / Section 5.5",
   "description": "A use child containing a tree loop -- dispatch events from inside the child are never namespaced under the use node, matching the child's own unnamespaced Store.concurrent_dispatch (review finding 3 on PR #472). The tree-dynamic half of this probe is a Rust test instead (electricity-vm/tests/use_effect.rs): a dynamic container's own meta.adapter also picks up the use-triggered real-adapter heuristic, which this harness's single-location known_divergence can't express alongside the root's own.",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "known_divergence": {
-    "location": "prime.meta.adapter",
-    "electricity_value": "_noop"
-  }
+  "expect": "success"
 }

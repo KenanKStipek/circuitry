@@ -350,10 +350,25 @@ pub enum Event {
     ClearGraft(String),
 }
 
-#[derive(Default)]
 pub struct RecordingObserver {
     events: RefCell<Vec<Event>>,
     next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
+    /// `true` by default -- every existing test here that asserts a
+    /// `Event::Graft`/`Event::ClearGraft` pair happened needs
+    /// `exec::use_::ChildObserver::write` to actually take one (R4 on
+    /// PR #472's review gates it on this). [`Self::with_child_snapshots`]
+    /// turns it off for a test that specifically checks the *opposite*.
+    wants_child_snapshots: std::cell::Cell<bool>,
+}
+
+impl Default for RecordingObserver {
+    fn default() -> Self {
+        RecordingObserver {
+            events: RefCell::new(Vec::new()),
+            next_instance: std::cell::Cell::new(0),
+            wants_child_snapshots: std::cell::Cell::new(true),
+        }
+    }
 }
 
 impl RecordingObserver {
@@ -363,6 +378,11 @@ impl RecordingObserver {
 
     pub fn events(&self) -> Vec<Event> {
         self.events.borrow().clone()
+    }
+
+    pub fn with_child_snapshots(self, wants: bool) -> Self {
+        self.wants_child_snapshots.set(wants);
+        self
     }
 }
 
@@ -407,6 +427,10 @@ impl RunObserver for RecordingObserver {
         self.events
             .borrow_mut()
             .push(Event::ClearGraft(node_path.to_string()));
+    }
+
+    fn wants_child_snapshots(&self) -> bool {
+        self.wants_child_snapshots.get()
     }
 }
 

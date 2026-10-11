@@ -2,9 +2,5 @@
   "spec_case": "C16",
   "description": "A use effect's own inline: text is Mustache-rendered against the PARENT's ctx before it is even parsed as YAML -- a {{input.v}} written inside the inline text resolves to the parent's own input.v, never the child's own rendered inputs.v, no matter what the inputs: mapping sets (runtime-semantics.md Quirk Q3).",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "known_divergence": {
-    "location": "prime.meta.adapter",
-    "electricity_value": "_noop"
-  }
+  "expect": "success"
 }

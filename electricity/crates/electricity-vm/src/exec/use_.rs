@@ -1387,6 +1387,14 @@ impl RunObserver for ChildObserver<'_> {
     }
 
     fn write(&self) {
+        // Orchestrator R4 on PR #472's review: without a `--live-state`
+        // mirror (or any other caller that actually reads a graft),
+        // `graft_child_write` is a no-op, so the `Store::saved` snapshot
+        // below -- an `O(size of the child tree so far)` recursive
+        // clone -- is never worth taking at all, not even throttled.
+        if !self.parent.wants_child_snapshots() {
+            return;
+        }
         let now = std::time::Instant::now();
         let due = match self.last_graft.get() {
             None => true,

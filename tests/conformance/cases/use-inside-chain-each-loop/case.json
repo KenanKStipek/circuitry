@@ -2,9 +2,5 @@
   "spec_case": "runtime-semantics.md Section 5.3 / Section 5.4",
   "description": "A literal path: use effect inside a chain each loop's body, with per-pass inputs rendered from the loop's own item binding.",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "known_divergence": {
-    "location": "prime.meta.adapter",
-    "electricity_value": "_noop"
-  }
+  "expect": "success"
 }

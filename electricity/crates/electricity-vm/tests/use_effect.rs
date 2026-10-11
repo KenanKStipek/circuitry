@@ -539,3 +539,79 @@ effects:
         "the child's own dispatch event must never be namespaced under the use node: {events:?}"
     );
 }
+
+/// Orchestrator R4 on PR #472's review: without a `--live-state`
+/// mirror (`RunObserver::wants_child_snapshots` default `false`), a
+/// `use` child's own writes must never trigger a snapshot-and-graft
+/// pair at all -- not even once. A multi-step child (several leaf
+/// writes) proves this isn't merely "throttled down to one"; zero
+/// `Event::Graft` calls land regardless of how many times the child
+/// itself writes.
+#[tokio::test]
+async fn without_a_live_state_mirror_a_use_child_never_snapshots_for_a_graft() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new().with_child_snapshots(false);
+
+    let inline_yaml = "\
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params: {mode: stringify, input: 1}
+  - type: tool
+    name: b
+    provider: json
+    params: {mode: stringify, input: 2}
+  - type: tool
+    name: c
+    provider: json
+    params: {mode: stringify, input: 3}
+";
+    let use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    let op = support::use_leaf(
+        root_path().push_name("step"),
+        "step",
+        use_op.source,
+        use_op.inputs,
+        use_op.outputs,
+        use_op.validate,
+        use_op.retries,
+        use_op.expect,
+        OnError::Fail,
+    );
+    let root = support::chain_dynamic(root_path(), "prime", OnError::Fail, vec![op]);
+    let result = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    result.expect("a child with several ordinary steps must succeed");
+
+    let events = observer.events();
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Graft(_, _))),
+        "no Event::Graft may ever appear when the parent observer doesn't want child \
+         snapshots, however many times the child itself wrote: {events:?}"
+    );
+    // `clear_graft` is still fine to call unconditionally (a no-op for
+    // a path that was never grafted) -- this isn't gated on the same
+    // capability, only the snapshot-taking `write()` hook is.
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step")),
+        "got {events:?}"
+    );
+}

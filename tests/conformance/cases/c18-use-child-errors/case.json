@@ -2,9 +2,5 @@
   "spec_case": "C18",
   "description": "A use child whose own nested effect fails under on_error: skip: the parent use node still succeeds (meta.error: null), but meta.child_errors lists the swallowed failure (runtime-semantics.md Section 5.3, Section 6.2).",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "known_divergence": {
-    "location": "prime.meta.adapter",
-    "electricity_value": "_noop"
-  }
+  "expect": "success"
 }

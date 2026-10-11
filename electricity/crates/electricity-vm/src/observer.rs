@@ -89,6 +89,21 @@ pub trait RunObserver {
     /// directly. A no-op for a path that was never grafted (or already
     /// cleared), same as every other hook's own tolerant default here.
     fn clear_graft(&self, _node_path: &EffectPath) {}
+
+    /// Whether this observer's own [`RunObserver::graft_child_write`]
+    /// is ever actually consumed -- `false` by default, so a caller
+    /// that would otherwise take a [`crate::Store::saved`] snapshot
+    /// (an `O(size of the tree so far)` recursive clone) purely to hand
+    /// it to a `graft_child_write` nobody reads never has to pay for
+    /// that snapshot at all (`exec::use_`'s own `ChildObserver::write`,
+    /// lane I's review finding on PR #472: a long loop inside a `use`
+    /// child used to pay one such snapshot per child write regardless
+    /// of `--live-state`). `electricity` (lib)'s own `Observer` is the
+    /// only implementation that ever returns `true`, and only when a
+    /// `--live-state` mirror is actually running.
+    fn wants_child_snapshots(&self) -> bool {
+        false
+    }
 }
 
 /// A [`RunObserver`] that does nothing -- every lane A test (and any
