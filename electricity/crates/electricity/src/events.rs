@@ -4,11 +4,19 @@
 //! once; a write failure disables every further write and is folded
 //! into one run-level warning rather than ever failing the run.
 //!
-//! Single-threaded (electricity has no worker-thread tree-flow
-//! branches of its own the way Circuitry's `DynamicRuntime` does --
-//! DESIGN.md §6.1-6.2), so the per-thread `start`/`end` pairing stack
-//! `cli/events.py` needs is just one stack per path here, not one per
-//! `threading.local()`.
+//! Single-threaded (electricity runs concurrent tree/loop branches as
+//! tasks on one OS thread, never a worker thread of their own --
+//! DESIGN.md §6.1-6.2), so `cli/events.py`'s own per-thread `start`/
+//! `end` pairing stack narrows to one stack per path here rather than
+//! one per `threading.local()` -- but, unlike Python's thread-affined
+//! stack, two *concurrent* calls at the same path (an unnamed tree
+//! branch, or a `flow: tree` loop's own concurrent passes, both
+//! sharing one path until `electricity_vm::Frame` disambiguates them)
+//! can both be open on this single stack at once, so `on_complete`
+//! removes *its own* [`EventLog::on_start`] id from wherever it sits
+//! on the path's own stack (review finding 3 on PR #454), never just
+//! the top -- a bare LIFO `pop` paired the wrong end with the wrong
+//! start whenever two such calls overlapped (`id`s came out reversed).
 
 use electricity_value::{Dict, Value};
 use std::cell::{Cell, RefCell};
@@ -49,7 +57,10 @@ pub struct EventLog {
     next_instance_id: Cell<u64>,
     /// One stack per effect path, the ids (and start `Instant`) still
     /// open on it -- `cli/events.py`'s own per-thread stack, narrowed to
-    /// one thread (this module's own doc comment).
+    /// one thread (this module's own doc comment); [`EventLog::on_complete`]
+    /// removes its own matching id from anywhere in the `Vec`, not just
+    /// the end, so a path with more than one call open at once still
+    /// pairs each `end` with its *own* `start`.
     stacks: RefCell<HashMap<String, Vec<(u64, Instant)>>>,
     disabled: Cell<bool>,
 }
@@ -179,9 +190,16 @@ impl EventLog {
         self.write_line("dispatch", Value::Dict(payload));
     }
 
-    pub fn on_start(&self, path: &str) {
+    /// Returns the id this call was assigned -- the one
+    /// [`EventLog::on_complete`] must be given back, so the matching
+    /// `end` line still reports it even when another call at the same
+    /// path starts (or finishes) in between (review finding 3 on PR
+    /// #454). `0` when this log is already disabled: a caller still
+    /// holding a token from a now-disabled log hits [`EventLog::on_complete`]'s
+    /// own early return before that token is ever looked up again.
+    pub fn on_start(&self, path: &str) -> u64 {
         if self.disabled.get() {
-            return;
+            return 0;
         }
         let instance_id = self.next_instance_id.get();
         self.next_instance_id.set(instance_id + 1);
@@ -207,18 +225,31 @@ impl EventLog {
         );
         payload.insert(Value::Str("path".to_string()), Value::Str(path.to_string()));
         self.write_line("start", Value::Dict(payload));
+        instance_id
     }
 
     /// `path` finished, with `error` the text that became (or would
-    /// have become) its `meta.error`, `None` on success. A completion
-    /// with no matching start on this path's own stack (a double-fire,
-    /// or a call this instance never saw the start of) is not an error:
-    /// `id: null` and no `ms`, same as `cli/events.py::EventLog.on_complete`.
-    pub fn on_complete(&self, path: &str, error: Option<&str>) {
+    /// have become) its `meta.error`, `None` on success. *id* is the
+    /// value the matching [`EventLog::on_start`] call returned --
+    /// removed from *path*'s own stack by that exact id, not by popping
+    /// whatever happens to be on top (review finding 3 on PR #454: a
+    /// bare `Vec::pop` pairs the wrong start with the wrong end once
+    /// two calls at the same path overlap, e.g. an unnamed `flow: tree`
+    /// loop's own concurrent passes). A completion with no matching
+    /// start on this path's own stack (a double-fire, or a call this
+    /// instance never saw the start of) is not an error: `id: null` and
+    /// no `ms`, same as `cli/events.py::EventLog.on_complete`.
+    pub fn on_complete(&self, path: &str, id: u64, error: Option<&str>) {
         if self.disabled.get() {
             return;
         }
-        let popped = self.stacks.borrow_mut().get_mut(path).and_then(Vec::pop);
+        let popped = {
+            let mut stacks = self.stacks.borrow_mut();
+            stacks.get_mut(path).and_then(|stack| {
+                let position = stack.iter().position(|&(entry_id, _)| entry_id == id)?;
+                Some(stack.remove(position))
+            })
+        };
         let (id_value, ms_value) = match popped {
             Some((instance_id, started_at)) => {
                 let ms = started_at.elapsed().as_millis().min(i64::MAX as u128) as i64;
@@ -342,8 +373,8 @@ mod tests {
     fn start_and_complete_pair_by_path_with_an_ms_field() {
         let path = temp_path("pairing");
         let log = EventLog::open(&path);
-        log.on_start("prime");
-        log.on_complete("prime", None);
+        let id = log.on_start("prime");
+        log.on_complete("prime", id, None);
         log.close();
         let lines = read_lines(&path);
         let end = lines[1].as_dict().unwrap();
@@ -356,10 +387,41 @@ mod tests {
     }
 
     #[test]
+    fn two_overlapping_calls_on_the_same_path_each_end_pairs_with_its_own_start() {
+        // Review finding 3 on PR #454's own probe: start A, start B
+        // (both on the same path -- an unnamed `flow: tree` loop's own
+        // concurrent passes, once lane H lands, share exactly this
+        // shape), then end A, then end B. A bare `Vec::pop` would hand
+        // B's own id back for A's own end (and vice versa); removing by
+        // the exact id `on_start` returned keeps them straight
+        // regardless of finish order.
+        let path = temp_path("overlapping");
+        let log = EventLog::open(&path);
+        let id_a = log.on_start("prime.lp.step");
+        let id_b = log.on_start("prime.lp.step");
+        assert_eq!((id_a, id_b), (0, 1));
+        log.on_complete("prime.lp.step", id_a, None);
+        log.on_complete("prime.lp.step", id_b, None);
+        log.close();
+        let lines = read_lines(&path);
+        let end_a = lines[2].as_dict().unwrap();
+        let end_b = lines[3].as_dict().unwrap();
+        assert_eq!(
+            end_a.get(&Value::Str("id".to_string())),
+            Some(&Value::from(0i64))
+        );
+        assert_eq!(
+            end_b.get(&Value::Str("id".to_string())),
+            Some(&Value::from(1i64))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn a_complete_with_no_matching_start_gets_a_null_id_and_no_ms() {
         let path = temp_path("unmatched");
         let log = EventLog::open(&path);
-        log.on_complete("prime", Some("boom"));
+        log.on_complete("prime", 0, Some("boom"));
         log.close();
         let lines = read_lines(&path);
         let end = lines[0].as_dict().unwrap();
@@ -410,7 +472,7 @@ mod tests {
         let path = temp_path("truncate");
         let log = EventLog::open(&path);
         let long_error = "x".repeat(600);
-        log.on_complete("prime", Some(&long_error));
+        log.on_complete("prime", 0, Some(&long_error));
         log.close();
         let lines = read_lines(&path);
         let error = lines[0]

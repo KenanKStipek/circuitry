@@ -26,7 +26,7 @@
 //! `std::process::exit` call), entirely independent of what any VM
 //! token -- `finally:`'s own included -- is doing at that moment.
 
-use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_value::{Dict, Value};
 
@@ -55,7 +55,7 @@ impl ToolPlugin for SleepTool {
         "sleep"
     }
 
-    async fn execute(&self, params: Value, _timeout_seconds: u32) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
         let seconds = seconds_param(&params);
         tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
         Ok(ToolResult::new(
@@ -84,9 +84,75 @@ impl ToolPlugin for FailTool {
         "fail"
     }
 
-    async fn execute(&self, params: Value, _timeout_seconds: u32) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
         let _ = params;
-        Err(ToolError("FailTool: deliberate failure".to_string()))
+        Err(ToolError::message("FailTool: deliberate failure"))
+    }
+
+    fn check(&self) -> CheckResult {
+        CheckResult {
+            ok: true,
+            missing: Vec::new(),
+            message: None,
+        }
+    }
+}
+
+/// `test-tools` feature only: a per-attempt *builder* (not the tool's
+/// own `execute`) that fails the first `fail_times` builds for a given
+/// `id`, then succeeds -- the gate's S1 seam (`registry::Builder` is now
+/// fallible) needs a builder that can actually fail, which `sleep`/
+/// `fail` never do. Distinct from `electricity_vm::exec::tool`'s own
+/// `FlakyTool`, which fails inside `execute` (an already-built plugin
+/// returning `ok: false`), not during the build itself.
+/// `id`/`fail_times` come from `runtime.plugins.flaky_build`, read the
+/// same way `shell`'s own config-validating builder reads
+/// `allowed_commands`: one build call per retry attempt, each getting a
+/// fresh config lookup, so a counter keyed by `id` is the only way two
+/// calls for the same logical tool can tell their attempt number apart.
+fn flaky_build_counters() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    static COUNTERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+        std::sync::OnceLock::new();
+    COUNTERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn build_flaky(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
+    let dict = cfg.as_dict();
+    let id = dict
+        .and_then(|d| d.get(&Value::Str("id".to_string())))
+        .and_then(|v| match v {
+            Value::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let fail_times = dict
+        .and_then(|d| d.get(&Value::Str("fail_times".to_string())))
+        .and_then(|v| match v {
+            Value::Int(i) => Some(i.to_f64() as u32),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let mut counters = flaky_build_counters().lock().unwrap();
+    let count = counters.entry(id).or_insert(0);
+    if *count < fail_times {
+        *count += 1;
+        return Err(ToolError::message(
+            "FlakyBuildTool: deliberate build failure",
+        ));
+    }
+    Ok(Box::new(FlakyBuildTool))
+}
+
+struct FlakyBuildTool;
+
+#[async_trait(?Send)]
+impl ToolPlugin for FlakyBuildTool {
+    fn name(&self) -> &str {
+        "flaky_build"
+    }
+
+    async fn execute(&self, _params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult::new(Value::from("ok"), Value::Dict(Dict::new())))
     }
 
     fn check(&self) -> CheckResult {
@@ -101,6 +167,18 @@ impl ToolPlugin for FailTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_value::CancellationToken;
+
+    static NONE: Value = Value::None;
+
+    fn call(token: &CancellationToken) -> ToolCall<'_> {
+        ToolCall {
+            timeout_seconds: 30,
+            config: &NONE,
+            token,
+            armed: false,
+        }
+    }
 
     #[test]
     fn both_test_tools_report_their_own_names() {
@@ -113,14 +191,19 @@ mod tests {
         let mut params = Dict::new();
         params.insert(Value::Str("seconds".to_string()), Value::from(5i64));
         let started = tokio::time::Instant::now();
-        SleepTool.execute(Value::Dict(params), 30).await.unwrap();
+        let token = CancellationToken::new();
+        SleepTool
+            .execute(Value::Dict(params), &call(&token))
+            .await
+            .unwrap();
         assert_eq!(started.elapsed(), std::time::Duration::from_secs(5));
     }
 
     #[tokio::test]
     async fn sleep_tool_defaults_to_zero_with_no_seconds_param() {
+        let token = CancellationToken::new();
         let result = SleepTool
-            .execute(Value::Dict(Dict::new()), 30)
+            .execute(Value::Dict(Dict::new()), &call(&token))
             .await
             .unwrap();
         assert!(result.ok);
@@ -128,10 +211,11 @@ mod tests {
 
     #[tokio::test]
     async fn fail_tool_always_fails_with_a_fixed_message() {
+        let token = CancellationToken::new();
         let err = FailTool
-            .execute(Value::Dict(Dict::new()), 30)
+            .execute(Value::Dict(Dict::new()), &call(&token))
             .await
             .unwrap_err();
-        assert_eq!(err.0, "FailTool: deliberate failure");
+        assert_eq!(err.message, "FailTool: deliberate failure");
     }
 }

@@ -28,6 +28,17 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # crate already exposed. `derive` stays enabled: the golden-corpus tests
 # derive `Deserialize` on their own fixture types.
 serde = { version = "1", features = ["derive"] }
+# `cancel::CancellationToken`'s own wait/notify primitive (moved here from
+# electricity-vm, issue #449's gate lane: a `ToolCall` (electricity-tools)
+# and the VM (electricity-vm) both need the *same* token type, and the
+# workspace's own dependency direction (DESIGN.md §2 -- tools/adapters
+# depend on vm, not the reverse) rules out defining it in either one;
+# electricity-value is the one crate both already depend on with no
+# knowledge of the language itself, so it moved down here instead) --
+# `sync` only, no runtime/IO features, since this crate never spawns a
+# task of its own.
+tokio = { version = "1", features = ["sync", "macros"] }
 
 [dev-dependencies]
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }

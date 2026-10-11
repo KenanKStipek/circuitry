@@ -286,6 +286,7 @@ async fn run_case(name: &str, orchestration: &str, config: &str) -> Json {
         pretty: false,
         live_state_path: None,
         events_path: None,
+        armed: true,
     };
     let token = CancellationToken::new();
     let result = electricity::run_orchestration(&req, &token).await;

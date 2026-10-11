@@ -1463,6 +1463,7 @@ mod tests {
                         path: loop_path,
                         name: Some("each_chain".to_string()),
                         kind: NodeKind::Control(Region::Loop {
+                            name: Some("each_chain".to_string()),
                             spec: LoopSpec::Each {
                                 in_path: "prime.items".to_string(),
                                 as_name: "item".to_string(),

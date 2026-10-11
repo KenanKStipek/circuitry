@@ -207,6 +207,36 @@ pub fn cel_if(
     }
 }
 
+/// A `mode: model` `if` -- review P2-4 on PR #454's second review:
+/// `execute_conditional`'s own `decide_and_run` routes this through
+/// `condition_model::evaluate_model_condition` now, so this always
+/// fails with that function's own `VmError::NotImplemented` (M1-G2
+/// hasn't filled in a real body yet), never panics.
+pub fn model_if(path: EffectPath, name: Option<&str>, template: &str, on_error: OnError) -> Op {
+    Op {
+        path,
+        name: name.map(str::to_string),
+        kind: NodeKind::Control(Region::If {
+            cond: Condition::Model {
+                template: electricity_bytecode::TemplateText::new(
+                    template,
+                    false,
+                    electricity_bytecode::Escape::None,
+                ),
+            },
+            then_: Box::new(Region::Block {
+                ops: vec![],
+                overlay: true,
+            }),
+            else_: None,
+            threshold: 0.5,
+        }),
+        on_error,
+        labels: None,
+        enabled: true,
+    }
+}
+
 /// Every hook [`RecordingObserver`] saw, in call order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -219,6 +249,7 @@ pub enum Event {
 #[derive(Default)]
 pub struct RecordingObserver {
     events: RefCell<Vec<Event>>,
+    next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
 }
 
 impl RecordingObserver {
@@ -232,13 +263,21 @@ impl RecordingObserver {
 }
 
 impl RunObserver for RecordingObserver {
-    fn effect_start(&self, path: &EffectPath) {
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
         self.events
             .borrow_mut()
             .push(Event::Start(path.to_string()));
+        let instance = self.next_instance.get() + 1;
+        self.next_instance.set(instance);
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        _instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
         self.events
             .borrow_mut()
             .push(Event::Complete(path.to_string(), error.map(str::to_string)));
@@ -268,15 +307,21 @@ pub struct CancelOnStart<'a> {
 }
 
 impl RunObserver for CancelOnStart<'_> {
-    fn effect_start(&self, path: &EffectPath) {
-        self.inner.effect_start(path);
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
+        let instance = self.inner.effect_start(path);
         if path.to_string() == self.target {
             self.token.request(2);
         }
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
-        self.inner.effect_complete(path, error);
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
+        self.inner.effect_complete(path, instance, error);
     }
 
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
@@ -291,6 +336,19 @@ pub fn run_ctx<'a>(
     registry: &'a electricity_tools::ToolRegistry,
     limiter: &'a Limiter,
 ) -> RunContext<'a> {
+    // Leaked: no test in this support module's own callers reads any
+    // of these M1-A fields yet, so a `'static` default is simpler than
+    // threading four more lifetimes through every one of this
+    // function's own callers across the test suite.
+    let adapters: &'a electricity_vm::adapter::AdapterRegistry =
+        Box::leak(Box::new(electricity_vm::adapter::AdapterRegistry::new()));
+    let complexity: &'a electricity_config::ComplexitySettings =
+        Box::leak(Box::new(electricity_config::ComplexitySettings::default()));
+    let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
+    let declared_prompts: &'a indexmap::IndexMap<String, String> =
+        Box::leak(Box::new(indexmap::IndexMap::new()));
+    let effect_names: &'a std::collections::BTreeSet<String> =
+        Box::leak(Box::new(std::collections::BTreeSet::new()));
     RunContext {
         registry,
         limiter,
@@ -298,6 +356,17 @@ pub fn run_ctx<'a>(
         adapter: "_noop",
         runtime_config: EMPTY_RUNTIME_CONFIG,
         dry_run: false,
+        armed: false,
+        adapters,
+        default_adapter: std::rc::Rc::new(electricity_vm::adapter::NoopAdapter),
+        model_locked: false,
+        adapter_timeout_seconds: 120,
+        complexity,
+        decomposition_depth: 0,
+        orchestration_dir: dir.as_path(),
+        declared_prompts,
+        effect_names,
+        display_depth: 0,
     }
 }
 

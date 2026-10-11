@@ -3,13 +3,12 @@
 //! runs it. The dispatch seam itself is final (lane B/C never edit this
 //! file to wire a new provider in; they only build the registry they
 //! pass to it); *provider* normalization already matches `plugins/
-//! factory.py::build_plugin`'s own `.strip().lower()` (below), but the
-//! exact "unknown provider" wording still diverges -- this crate's own
-//! [`crate::VmError::ToolNotFound`] text isn't `build_plugin`'s own
-//! `"Unknown plugin: 'x'. Supported plugins: ..."` -- so lane C may
-//! still widen that text with the supported-provider list once it has
-//! the full `electricity_tools::ToolRegistry` populated to word that
-//! list from.
+//! factory.py::build_plugin`'s own `.strip().lower()` (below), and the
+//! "unknown provider" text is already exact -- [`electricity_tools::
+//! build_plugin`]'s own `"Unknown plugin: 'x'. Supported plugins:
+//! ..."`, naming Circuitry's full registry (`electricity_tools::
+//! plugin_names::PLUGIN_NAMES`), not just this crate's own
+//! [`electricity_tools::ToolRegistry`].
 //!
 //! [`execute_tool`] is the lane C's own owning entry point for a `tool`
 //! effect -- a close port of `core/tool.py::ToolRuntime.execute`. It
@@ -42,10 +41,12 @@
 //!   [`electricity_tools::ToolRegistry`], so every failure is simply
 //!   retryable, exactly like any non-HTTP-family Python plugin already
 //!   is;
-//! - `meta.binary`/`meta.status_code` -- `json`'s own `ToolResult.raw`
-//!   never carries either key, so the write is a no-op every time it
-//!   would run; left unwired rather than wired against keys nothing
-//!   produces yet;
+//! - `meta.status_code` -- `_HTTP_FAMILY_PROVIDERS`-gated in Python, so
+//!   it stays lane E's own write once an HTTP-shaped provider exists;
+//!   `meta.binary` (`core/tool.py:822-823`) is generic across every
+//!   provider instead, so this gate wires it here (M1 gate seam S2):
+//!   `json`'s own `ToolResult.raw` never carries a `binary` key, so the
+//!   write is still a no-op for every M0 case;
 //! - `expect: {mode: model, ...}` -- refused before a run starts
 //!   ([`electricity_bytecode::refusal::first_unsupported`]), so
 //!   [`ToolOp::expect`] is never anything but
@@ -64,47 +65,118 @@ use crate::params::{
 };
 #[cfg(test)]
 use crate::store::Slot;
-use crate::{CancellationToken, RunContext, RunObserver, VmError};
+use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
-use electricity_tools::ToolRegistry;
+use electricity_tools::{ToolCall, ToolRegistry};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
-use rand::Rng;
 
-/// Runs *provider* (a tool effect's own `provider:`) against *registry*,
-/// with *params* already rendered (lane B/C's own `params.rs` -- `{from:
-/// ...}` resolved, templates rendered, `params_json` deep-merged; out of
-/// scope for this function) and *timeout_seconds* already resolved by
-/// the caller (`core/tool.py::ToolRuntime._resolve_timeout_seconds`'s
-/// own `timeout_ms`-vs-`runtime.tools.timeout_seconds`-vs-default
-/// policy needs the merged runtime config this function doesn't take --
-/// [`crate::RunContext::runtime_config`] is where lane B's own caller
-/// reads it from before calling this).
+/// Either half of the plugin a `tool` effect ends up dispatching
+/// through -- [`resolve_plugin`]'s own result. An embedder's own
+/// long-lived [`electricity_tools::ToolPlugin`] instance borrows
+/// straight through; one [`electricity_tools::build_plugin`] just
+/// built owns its own box (review finding 6 on PR #454: resolving
+/// *before* the limiter slot is acquired, as `core/tool.py::
+/// ToolRuntime.execute` does, needs a value this enum's own caller can
+/// hold across that wait -- a bare `&dyn ToolPlugin` can't borrow from
+/// a `Box` [`resolve_plugin`] itself only just created and is about to
+/// drop).
+pub enum ResolvedPlugin<'a> {
+    Registered(&'a dyn electricity_tools::ToolPlugin),
+    Built(Box<dyn electricity_tools::ToolPlugin>),
+}
+
+impl ResolvedPlugin<'_> {
+    fn as_dyn(&self) -> &dyn electricity_tools::ToolPlugin {
+        match self {
+            ResolvedPlugin::Registered(plugin) => *plugin,
+            ResolvedPlugin::Built(plugin) => plugin.as_ref(),
+        }
+    }
+}
+
+/// Looks *provider* (a tool effect's own `provider:`) up in *registry*,
+/// falling through to [`electricity_tools::build_plugin`] -- `core/
+/// tool.py::ToolRuntime.execute`'s own `build_plugin(...)` call,
+/// `tool.py:702`, which runs *before* that same attempt's limiter wait
+/// (`tool.py:724`) -- [`execute_tool`] calls this first, outside its
+/// own acquire `select!`, so a per-plugin config error fails the
+/// attempt immediately, never waiting for a concurrency slot it will
+/// only turn around and release unused (review finding 6 on PR #454).
 ///
-/// `Err` is [`VmError::ToolNotFound`] for an unregistered *provider*, or
-/// the plugin's own [`electricity_tools::ToolError`] wrapped the same
-/// way.
+/// *registry* (still [`crate::RunContext::registry`]) is tried first --
+/// an embedder's own long-lived [`electricity_tools::ToolPlugin`]
+/// instance (or a test double, as this module's own unit tests below
+/// still register) always wins when one is registered under
+/// *provider*'s own normalized name. Only a *provider* with no such
+/// entry falls through to [`electricity_tools::build_plugin`] (issue
+/// #449's gate lane item 2) -- called fresh on *this* call, i.e. once
+/// per attempt, exactly where `core/tool.py::ToolRuntime.execute` calls
+/// Python's own `build_plugin` every attempt -- so a per-plugin config
+/// error on that path fails just the one attempt. `json` is never
+/// registered as a singleton on the production path
+/// (`electricity::tool_registry`) for exactly this reason: every
+/// attempt builds its own fresh [`electricity_tools::json::JsonTool`]
+/// through this same fallback, the way any other `build_plugin`-only
+/// provider would.
+///
+/// `Err` is a typed [`electricity_tools::ToolError`] (review finding 1
+/// on PR #454 -- a previous revision wrapped it into a bare
+/// `VmError::Tool(String)` right here, throwing its own *py_class*/
+/// *cause* away before [`execute_tool`] could ever classify a failure
+/// for retry or report its real exception class) -- `build_plugin`'s
+/// own exact unknown-plugin text (naming Circuitry's **full**
+/// registry, [`electricity_tools::PyExc::ValueError`]) for a *provider*
+/// neither *registry* nor `build_plugin` knows.
+pub fn resolve_plugin<'a>(
+    registry: &'a ToolRegistry,
+    provider: &str,
+    runtime_config: &Value,
+) -> Result<ResolvedPlugin<'a>, electricity_tools::ToolError> {
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    if let Some(plugin) = registry.get(&normalized) {
+        return Ok(ResolvedPlugin::Registered(plugin));
+    }
+    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)?;
+    Ok(ResolvedPlugin::Built(plugin))
+}
+
+/// Dispatches *params* (already rendered -- lane B/C's own `params.rs`:
+/// `{from: ...}` resolved, templates rendered, `params_json`
+/// deep-merged; out of scope for this function) through *plugin*
+/// ([`resolve_plugin`]'s own result, resolved by the caller *before*
+/// this call). *runtime_config* is the merged `runtime:` block
+/// [`crate::RunContext::runtime_config`] carries, read again here only
+/// for the [`electricity_tools::ToolCall::config`] slice *plugin*'s own
+/// `execute` receives (`resolve_plugin`'s own build already read it
+/// once, for the build itself; a plugin's own `execute`, e.g. `shell`'s
+/// host pin, can still need the same slice again at dispatch time).
+///
+/// `Err` is the resolved plugin's own raised
+/// [`electricity_tools::ToolError`], unchanged. [`execute_tool`] is the
+/// one place this crate ever turns it into a [`VmError::Raised`].
 pub async fn run_tool(
-    registry: &ToolRegistry,
+    plugin: &ResolvedPlugin<'_>,
     provider: &str,
     params: Value,
+    runtime_config: &Value,
     timeout_seconds: u32,
-) -> Result<electricity_tools::ToolResult, VmError> {
-    let normalized = provider.trim().to_lowercase();
-    let plugin = registry
-        .get(&normalized)
-        .ok_or_else(|| VmError::ToolNotFound(provider.to_string()))?;
-    plugin
-        .execute(params, timeout_seconds)
-        .await
-        .map_err(|err| VmError::Tool(err.to_string()))
+    token: &CancellationToken,
+    armed: bool,
+) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
+    let call = ToolCall {
+        timeout_seconds,
+        config: &config,
+        token,
+        armed,
+    };
+    plugin.as_dyn().execute(params, &call).await
 }
 
 /// `core/tool.py::DEFAULT_TOOL_TIMEOUT_SECONDS`.
 const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
-
-/// `adapters/_retry.py::RETRY_BACKOFF_CAP_MS`.
-const RETRY_BACKOFF_CAP_MS: u32 = 60_000;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
@@ -220,7 +292,7 @@ fn allowed_tools(runtime_config: &Value) -> Option<Vec<String>> {
 /// exact `AllowlistError` text once *provider* (canonicalised the way
 /// `build_plugin` canonicalises it) isn't in the run's `enabled_tools`.
 fn require_tool(provider: &str, runtime_config: &Value) -> Result<(), String> {
-    let normalized = provider.trim().to_lowercase();
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let Some(allowed) = allowed_tools(runtime_config) else {
         return Ok(());
     };
@@ -366,27 +438,6 @@ fn now_iso() -> Value {
     Value::Str(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false))
 }
 
-/// `adapters/_retry.py::next_backoff_delay_ms`, minus the `Retry-After`
-/// override: no HTTP-family tool exists in this crate's own
-/// [`electricity_tools::ToolRegistry`] yet, so *retry_info.retry_after*
-/// is always `None` for every provider `run_tool` can actually dispatch
-/// to, same as every other non-HTTP-family Python plugin already is.
-fn full_jitter_backoff_ms(attempt_index: u32, base_ms: u32) -> u32 {
-    // `base_ms * 2**attempt_index`: any shift at or beyond 20 already
-    // sends the product past `RETRY_BACKOFF_CAP_MS` for every `base_ms`
-    // at least 1, so capping the shift there (rather than at the full
-    // 63 bits a `u64` could hold) keeps the multiplication itself clear
-    // of overflow without changing the clamped result for any ceiling
-    // this function could ever actually return.
-    let shift = attempt_index.min(20);
-    let scaled = u64::from(base_ms).saturating_mul(1u64 << shift);
-    let ceiling = scaled.min(u64::from(RETRY_BACKOFF_CAP_MS)) as u32;
-    if ceiling == 0 {
-        return 0;
-    }
-    rand::thread_rng().gen_range(0..=ceiling)
-}
-
 /// Test-only now: `execute_tool`'s own `setdefault`-shaped check reads
 /// the node's own `IndexMap` directly (`contains_key`), since this
 /// function's `None`-on-either collapsing can't tell a `Slot::Node`
@@ -413,16 +464,24 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
 /// block, up to and including `rendered = {**top_level, **params}`) can
 /// fail with, already flattened to its own `Display` text -- the only
 /// thing a caller here ever needs it for.
-fn render_tool_call(name: &str, tool: &ToolOp, ctx: &Value) -> Result<Dict, String> {
+fn render_tool_call(
+    name: &str,
+    tool: &ToolOp,
+    ctx: &Value,
+    declared_prompts: &indexmap::IndexMap<String, String>,
+    effect_names: &std::collections::BTreeSet<String>,
+) -> Result<Dict, String> {
     let mut rendered: Dict = Dict::new();
     if let Some(prompt) = &tool.prompt {
-        let text = electricity_template::render_template(
+        let text = crate::compose::render_with_composition(
             &prompt.source,
             ctx,
-            &electricity_template::PlainCtx,
+            declared_prompts,
+            effect_names,
             "prompt",
-        )
-        .map_err(|err| err.to_string())?;
+            &electricity_template::PlainCtx,
+            matches!(prompt.escape, electricity_bytecode::Escape::Html),
+        )?;
         rendered.insert(Value::Str("prompt".to_string()), Value::Str(text));
     }
     if let Some(model) = &tool.model {
@@ -430,10 +489,16 @@ fn render_tool_call(name: &str, tool: &ToolOp, ctx: &Value) -> Result<Dict, Stri
     }
 
     reject_security_sensitive_literal(tool_params_map(&tool.params))?;
-    let mut params = render_params(name, tool_params_map(&tool.params), ctx)
-        .map_err(|err: RenderParamsError| err.to_string())?;
+    let mut params = render_params(
+        name,
+        tool_params_map(&tool.params),
+        ctx,
+        declared_prompts,
+        effect_names,
+    )
+    .map_err(|err: RenderParamsError| err.to_string())?;
     if let Some(params_json) = &tool.params_json {
-        let overlay = render_params_json(&params_json.source, ctx)
+        let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
         params = deep_merge_params(params, overlay);
@@ -455,6 +520,7 @@ pub async fn execute_tool(
     store: &crate::Store,
     parent: &crate::NodeRef,
     ctx: &Value,
+    frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
@@ -467,7 +533,7 @@ pub async fn execute_tool(
 
     let effect_node = store
         .ensure_dict(parent, name_key)
-        .map_err(|err| VmError::Tool(err.to_string()))?;
+        .map_err(|err| VmError::tool(err.to_string()))?;
     // `node.setdefault("value", None)` -- a plain presence check, unlike
     // `get_leaf`'s own `None`-on-promoted-dict behaviour, so a `Slot::Node`
     // already there (e.g. a nested-dict value written by an earlier
@@ -480,7 +546,7 @@ pub async fn execute_tool(
     }
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
-        .map_err(|err| VmError::Tool(err.to_string()))?;
+        .map_err(|err| VmError::tool(err.to_string()))?;
 
     let timeout_seconds = resolve_timeout_seconds(tool, run_ctx.runtime_config);
 
@@ -489,13 +555,14 @@ pub async fn execute_tool(
     // start/complete pair unbalanced, exactly as Python's own
     // `AllowlistError` (never caught, so `fire_effect_complete` is never
     // reached either) does.
-    observer.effect_start(&op.path);
+    let effect_path = frame.effect_path(&op.path);
+    let instance = observer.effect_start(&effect_path);
 
     let max_attempts = tool.retries.max_attempts.max(1);
     let base_backoff_ms = tool.retries.backoff_ms;
 
     if let Err(denial) = require_tool(&tool.provider, run_ctx.runtime_config) {
-        return Err(VmError::Tool(denial));
+        return Err(VmError::tool(denial));
     }
 
     let mut next_delay_ms = base_backoff_ms;
@@ -542,11 +609,27 @@ pub async fn execute_tool(
         // diffing the store itself.
         observer.write();
 
-        let mut failure: Option<String> = None;
+        let mut failure: Option<electricity_tools::ToolError> = None;
+        // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
+        // `expect:` check, raised or not, overriding whatever this
+        // provider's own HTTP-family status/cause classification would
+        // otherwise say -- unlike an HTTP status, a failed `expect:`
+        // carries no classification of its own, and the motivating case
+        // (a flaky image-generation result) is exactly "try again"
+        // (review P2-8 on PR #454's second review). Set only in the two
+        // `expect` branches below, never the dispatch-failure branch
+        // above them.
+        let mut expect_failed = false;
 
-        match render_tool_call(name, tool, ctx) {
+        match render_tool_call(
+            name,
+            tool,
+            ctx,
+            run_ctx.declared_prompts,
+            run_ctx.effect_names,
+        ) {
             Err(message) => {
-                failure = Some(message);
+                failure = Some(electricity_tools::ToolError::message(message));
             }
             Ok(rendered) => {
                 let rendered_value = Value::Dict(rendered);
@@ -557,172 +640,291 @@ pub async fn execute_tool(
                     electricity_redaction::redact(rendered_value.clone()),
                 );
 
-                let group = tool.group.as_deref();
-                let acquire_future =
-                    run_ctx
-                        .limiter
-                        .acquire_reporting(group, |event| match event {
-                            crate::limiter::SlotEvent::Waiting(label) => {
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "waiting_for",
-                                    Value::Str(label.to_string()),
-                                );
-                                observer.write();
-                            }
-                            crate::limiter::SlotEvent::Acquired => {
-                                set_leaf(store, &meta_node, "waiting_for", Value::None);
-                                observer.write();
-                            }
-                        });
-                // Biased: a free slot must be taken even if the token
-                // is already cancelled, never raced against it -- Python's
-                // own `_acquire_one` (`core/concurrency.py`) takes a free
-                // slot with a non-blocking `sem.acquire(blocking=False)`
-                // and returns before ever looking at the cancellation
-                // token, which is only checked once this call actually
-                // has to block. Listing the work branch first only
-                // matters because of `biased;`: tokio polls branches in
-                // source order and takes the first *ready* one, instead
-                // of picking at random among every branch that happens to
-                // be ready on the same poll.
-                let acquired = tokio::select! {
-                    biased;
-                    result = acquire_future => Some(result),
-                    () = token.cancelled() => None,
-                };
-
-                match acquired {
-                    None => return Err(VmError::Cancelled),
-                    Some(Err(limiter_err)) => {
-                        failure = Some(limiter_err.to_string());
+                // `core/tool.py::ToolRuntime.execute`'s own
+                // `build_plugin(...)` call (`tool.py:702`) runs *before*
+                // that same attempt's limiter wait (`tool.py:724`) --
+                // resolved here, outside the acquire `select!` below, so
+                // a per-plugin config error fails this attempt at once,
+                // never waiting for (and then releasing unused) a
+                // concurrency slot (review finding 6 on PR #454).
+                match resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config) {
+                    Err(err) => {
+                        failure = Some(err);
                     }
-                    Some(Ok(guard)) => {
-                        // `run_tool`'s own future is not itself
-                        // cancellation-aware (it has no token to check),
-                        // so this `select!` is the only thing standing
-                        // between a cancelled run and a tool dispatch
-                        // that blocks indefinitely -- a hit here, like
-                        // every other cancellation point in this
-                        // function, is `VmError::Cancelled` and bypasses
-                        // `on_error` entirely, never folded into an
-                        // ordinary `VmError::Tool` failure.
-                        // Biased, for the same reason as the acquire
-                        // `select!` above: a `run_tool` future that is
-                        // already finished at the first poll (an
-                        // instantly-completed json tool, say) must keep
-                        // its result, never race a concurrent
-                        // cancellation to a coin flip -- Python's own
-                        // `ToolRuntime.execute` (`core/tool.py`) has no
-                        // cancellation check once a dispatched call has
-                        // actually returned, only before the next attempt.
-                        let dispatch = tokio::select! {
+                    Ok(resolved) => {
+                        let group = tool.group.as_deref();
+                        let acquire_future =
+                            run_ctx
+                                .limiter
+                                .acquire_reporting(group, |event| match event {
+                                    crate::limiter::SlotEvent::Waiting(label) => {
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "waiting_for",
+                                            Value::Str(label.to_string()),
+                                        );
+                                        observer.write();
+                                    }
+                                    crate::limiter::SlotEvent::Acquired => {
+                                        set_leaf(store, &meta_node, "waiting_for", Value::None);
+                                        observer.write();
+                                    }
+                                });
+                        // Biased: a free slot must be taken even if the token
+                        // is already cancelled, never raced against it -- Python's
+                        // own `_acquire_one` (`core/concurrency.py`) takes a free
+                        // slot with a non-blocking `sem.acquire(blocking=False)`
+                        // and returns before ever looking at the cancellation
+                        // token, which is only checked once this call actually
+                        // has to block. Listing the work branch first only
+                        // matters because of `biased;`: tokio polls branches in
+                        // source order and takes the first *ready* one, instead
+                        // of picking at random among every branch that happens to
+                        // be ready on the same poll.
+                        let acquired = tokio::select! {
                             biased;
-                            result = run_tool(
-                                run_ctx.registry,
-                                &tool.provider,
-                                rendered_value,
-                                timeout_seconds,
-                            ) => Some(result),
+                            result = acquire_future => Some(result),
                             () = token.cancelled() => None,
                         };
-                        // Released before this attempt's own backoff
-                        // sleep (and before a model-mode `expect:` would
-                        // run, if M0-H ever dispatched one) -- a
-                        // retrying/`expect`-checking attempt must never
-                        // hold its slot while it isn't actually using it.
-                        // Also unconditionally the right thing to do on
-                        // the cancelled branch above: the slot is never
-                        // held past this `select!`, cancelled or not.
-                        drop(guard);
 
-                        let Some(dispatch) = dispatch else {
-                            return Err(VmError::Cancelled);
-                        };
-                        match dispatch {
-                            Err(err) => failure = Some(err.to_string()),
-                            Ok(result) => {
-                                let value_for_expect = result.value.clone();
-                                set_leaf(store, &effect_node, "value", result.value);
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "stdout",
-                                    result.stdout.map(Value::Str).unwrap_or(Value::None),
-                                );
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "stderr",
-                                    result.stderr.clone().map(Value::Str).unwrap_or(Value::None),
-                                );
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "exit_code",
-                                    result
-                                        .exit_code
-                                        .map(|code| Value::from(i64::from(code)))
-                                        .unwrap_or(Value::None),
-                                );
-                                set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+                        match acquired {
+                            None => return Err(VmError::Cancelled),
+                            Some(Err(limiter_err)) => {
+                                failure = Some(electricity_tools::ToolError::message(
+                                    limiter_err.to_string(),
+                                ));
+                            }
+                            Some(Ok(guard)) => {
+                                // `run_tool`'s own future is not itself
+                                // cancellation-aware (it has no token to check),
+                                // so this `select!` is the only thing standing
+                                // between a cancelled run and a tool dispatch
+                                // that blocks indefinitely -- a hit here, like
+                                // every other cancellation point in this
+                                // function, is `VmError::Cancelled` and bypasses
+                                // `on_error` entirely, never folded into an
+                                // ordinary `VmError::Raised` failure.
+                                // Biased, for the same reason as the acquire
+                                // `select!` above: a `run_tool` future that is
+                                // already finished at the first poll (an
+                                // instantly-completed json tool, say) must keep
+                                // its result, never race a concurrent
+                                // cancellation to a coin flip -- Python's own
+                                // `ToolRuntime.execute` (`core/tool.py`) has no
+                                // cancellation check once a dispatched call has
+                                // actually returned, only before the next attempt.
+                                let dispatch = tokio::select! {
+                                    biased;
+                                    result = run_tool(
+                                        &resolved,
+                                        &tool.provider,
+                                        rendered_value,
+                                        run_ctx.runtime_config,
+                                        timeout_seconds,
+                                        token,
+                                        run_ctx.armed,
+                                    ) => Some(result),
+                                    () = token.cancelled() => None,
+                                };
+                                // Released before this attempt's own backoff
+                                // sleep (and before a model-mode `expect:` would
+                                // run, if M0-H ever dispatched one) -- a
+                                // retrying/`expect`-checking attempt must never
+                                // hold its slot while it isn't actually using it.
+                                // Also unconditionally the right thing to do on
+                                // the cancelled branch above: the slot is never
+                                // held past this `select!`, cancelled or not.
+                                drop(guard);
 
-                                if !result.ok {
-                                    let message = result
-                                        .stderr
-                                        .filter(|s| !s.is_empty())
-                                        .unwrap_or_else(|| {
-                                            format!(
-                                                "{} tool reported failure (ok=False)",
-                                                tool.provider
-                                            )
-                                        });
-                                    failure = Some(message);
-                                } else if let Some(expect) = &tool.expect {
-                                    let ExpectCondition::Cel { expr } = expect else {
-                                        unreachable!(
-                                            "a tool expect in model mode is refused before a run starts"
-                                        )
-                                    };
-                                    let meta_snapshot = store.snapshot(&meta_node);
-                                    let mut expect_meta = IndexMap::new();
-                                    expect_meta.insert(Value::from("mode"), Value::from("cel"));
-                                    expect_meta
-                                        .insert(Value::from("expr"), Value::from(expr.as_str()));
-                                    match electricity_cel::evaluate_expect(
-                                        expr,
-                                        &value_for_expect,
-                                        &meta_snapshot,
-                                        ctx,
-                                    ) {
-                                        Ok(passed) => {
-                                            expect_meta
-                                                .insert(Value::from("result"), Value::Bool(passed));
-                                            set_leaf(
-                                                store,
-                                                &meta_node,
-                                                "expect",
-                                                Value::Dict(expect_meta),
-                                            );
-                                            if !passed {
-                                                failure = Some(format!("expect failed: {expr}"));
-                                            }
+                                let Some(dispatch) = dispatch else {
+                                    return Err(VmError::Cancelled);
+                                };
+                                match dispatch {
+                                    Err(err) => failure = Some(err),
+                                    Ok(result) => {
+                                        let value_for_expect = result.value.clone();
+                                        set_leaf(store, &effect_node, "value", result.value);
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "stdout",
+                                            result.stdout.map(Value::Str).unwrap_or(Value::None),
+                                        );
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "stderr",
+                                            result
+                                                .stderr
+                                                .clone()
+                                                .map(Value::Str)
+                                                .unwrap_or(Value::None),
+                                        );
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "exit_code",
+                                            result
+                                                .exit_code
+                                                .map(|code| Value::from(i64::from(code)))
+                                                .unwrap_or(Value::None),
+                                        );
+                                        // Generic across every provider (`core/
+                                        // tool.py:822-823`): a `meta.binary` write
+                                        // this gate owns, not lane C/E's own HTTP-
+                                        // family status-code machinery -- `json`
+                                        // never sets `raw.binary`, so this is a
+                                        // no-op for M0's own output; a later
+                                        // provider (`shell`, `http`, ...) whose
+                                        // `raw` carries one needs no change here.
+                                        if let Some(binary) = result
+                                            .raw
+                                            .as_dict()
+                                            .and_then(|d| d.get(&Value::Str("binary".to_string())))
+                                            .cloned()
+                                        {
+                                            set_leaf(store, &meta_node, "binary", binary);
                                         }
-                                        Err(cel_err) => {
-                                            expect_meta.insert(
-                                                Value::from("error"),
-                                                Value::from(cel_err.to_string().as_str()),
-                                            );
-                                            expect_meta
-                                                .insert(Value::from("result"), Value::Bool(false));
-                                            set_leaf(
-                                                store,
-                                                &meta_node,
-                                                "expect",
-                                                Value::Dict(expect_meta),
-                                            );
-                                            failure = Some(format!("expect failed: {expr}"));
+                                        set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+
+                                        if !result.ok {
+                                            let message = result
+                                                .stderr
+                                                .filter(|s| !s.is_empty())
+                                                .unwrap_or_else(|| {
+                                                    format!(
+                                                        "{} tool reported failure (ok=False)",
+                                                        tool.provider
+                                                    )
+                                                });
+                                            failure = Some(electricity_tools::ToolError::message(
+                                                message,
+                                            ));
+                                        } else if let Some(expect) = &tool.expect {
+                                            match expect {
+                                                ExpectCondition::Cel { expr } => {
+                                                    let meta_snapshot = store.snapshot(&meta_node);
+                                                    let mut expect_meta = IndexMap::new();
+                                                    expect_meta.insert(
+                                                        Value::from("mode"),
+                                                        Value::from("cel"),
+                                                    );
+                                                    expect_meta.insert(
+                                                        Value::from("expr"),
+                                                        Value::from(expr.as_str()),
+                                                    );
+                                                    match electricity_cel::evaluate_expect(
+                                                        expr,
+                                                        &value_for_expect,
+                                                        &meta_snapshot,
+                                                        ctx,
+                                                    ) {
+                                                        Ok(passed) => {
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(passed),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            if !passed {
+                                                                expect_failed = true;
+                                                                failure = Some(
+                                                                    electricity_tools::ToolError::message(
+                                                                        format!("expect failed: {expr}"),
+                                                                    ),
+                                                                );
+                                                            }
+                                                        }
+                                                        Err(cel_err) => {
+                                                            expect_meta.insert(
+                                                                Value::from("error"),
+                                                                Value::from(
+                                                                    cel_err.to_string().as_str(),
+                                                                ),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(false),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            expect_failed = true;
+                                                            failure = Some(
+                                                                electricity_tools::ToolError::message(
+                                                                    format!("expect failed: {expr}"),
+                                                                ),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                // Review P2-4 on PR #454's second review: wired to
+                                                // `condition_model::evaluate_model_expect` now, so
+                                                // lane G2's own PR only ever fills that module's
+                                                // stub bodies, never this file -- unreachable in any
+                                                // real run today (`Supported::model_expect` stays
+                                                // `false` until G2 flips it, and the refusal walker
+                                                // refuses a model-mode `expect:` before any run
+                                                // starts), but a real call site instead of a panic
+                                                // if that ever changed without the matching wiring.
+                                                ExpectCondition::Model { template } => {
+                                                    match super::condition_model::evaluate_model_expect(
+                                                        template,
+                                                        &value_for_expect,
+                                                        ctx,
+                                                        &effect_path,
+                                                        frame,
+                                                        run_ctx,
+                                                        token,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(outcome) => {
+                                                            let mut expect_meta = IndexMap::new();
+                                                            expect_meta.insert(
+                                                                Value::from("mode"),
+                                                                Value::from("model"),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("template"),
+                                                                Value::from(
+                                                                    template.source.as_str(),
+                                                                ),
+                                                            );
+                                                            expect_meta.insert(
+                                                                Value::from("result"),
+                                                                Value::Bool(outcome.passed),
+                                                            );
+                                                            set_leaf(
+                                                                store,
+                                                                &meta_node,
+                                                                "expect",
+                                                                Value::Dict(expect_meta),
+                                                            );
+                                                            if !outcome.passed {
+                                                                expect_failed = true;
+                                                                failure = Some(
+                                                                    electricity_tools::ToolError::message(
+                                                                        format!(
+                                                                            "expect failed: {}",
+                                                                            template.source
+                                                                        ),
+                                                                    ),
+                                                                );
+                                                            }
+                                                        }
+                                                        Err(err) => return Err(err),
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -735,15 +937,35 @@ pub async fn execute_tool(
 
         set_leaf(store, &meta_node, "completed_at", now_iso());
 
-        if let Some(message) = failure {
-            set_leaf(store, &meta_node, "error", Value::Str(message.clone()));
+        if let Some(failure) = failure {
+            set_leaf(
+                store,
+                &meta_node,
+                "error",
+                Value::Str(failure.message.clone()),
+            );
             let is_last_attempt = attempt_index + 1 >= max_attempts;
-            // Every failure in M0-H is retryable: the only provider
-            // `run_tool` can dispatch to is `json`, never one of
-            // `core/tool.py`'s own `_HTTP_FAMILY_PROVIDERS` (this
-            // module's own doc comment).
-            if !is_last_attempt {
-                next_delay_ms = full_jitter_backoff_ms(attempt_index, base_backoff_ms);
+            // `core/tool.py::ToolRuntime._is_retryable_failure` -- every
+            // non-HTTP-family provider (every provider this crate can
+            // build today: `json`, plus `sleep`/`fail` under
+            // `test-tools`) retries on any failure, unchanged from
+            // M0-H; lane E's own HTTP-family tool is what first makes
+            // *retryable* ever come back `false` here for a dispatch
+            // failure -- never for a failed `expect:`, which is always
+            // retryable regardless of provider (review P2-8 on PR
+            // #454's second review, `expect_failed` above).
+            let retryable = crate::retry::is_tool_failure_retryable(
+                &tool.provider,
+                None,
+                Some(&failure.cause),
+                expect_failed,
+            );
+            if !is_last_attempt && retryable {
+                next_delay_ms = crate::retry::next_backoff_delay_ms(
+                    &crate::retry::RetryInfo::retryable(),
+                    attempt_index,
+                    base_backoff_ms,
+                );
                 continue;
             }
             // Set on failure too (#421), same as success below -- absent,
@@ -759,7 +981,7 @@ pub async fn execute_tool(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            observer.effect_complete(&op.path, Some(&message));
+            observer.effect_complete(&effect_path, instance, Some(&failure.message));
             // The final store write for this effect (whichever
             // `on_error` branch below actually returns) -- same
             // contract as the per-attempt reset's own `observer.
@@ -767,7 +989,7 @@ pub async fn execute_tool(
             // fresh attempt's.
             observer.write();
             if op.on_error == OnError::Fail {
-                return Err(VmError::Tool(message));
+                return Err(failure.into());
             }
             return Ok(());
         }
@@ -780,7 +1002,7 @@ pub async fn execute_tool(
                 Value::from(i64::from(attempt_index)),
             );
         }
-        observer.effect_complete(&op.path, None);
+        observer.effect_complete(&effect_path, instance, None);
         observer.write();
         return Ok(());
     }
@@ -791,33 +1013,59 @@ pub async fn execute_tool(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn an_unregistered_provider_is_reported_by_name() {
+    #[test]
+    fn an_unknown_provider_lists_pythons_full_registry() {
         let registry = ToolRegistry::new();
-        let err = run_tool(&registry, "json", Value::None, 300)
-            .await
-            .unwrap_err();
-        assert_eq!(err, VmError::ToolNotFound("json".to_string()));
+        let err = match resolve_plugin(&registry, "bogus", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an unknown-plugin error"),
+        };
+        assert!(err.message.starts_with("Unknown plugin: 'bogus'."));
+        assert_eq!(err.py_class, electricity_tools::PyExc::ValueError);
     }
 
     #[tokio::test]
-    async fn a_provider_name_is_normalized_before_lookup() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(electricity_tools::json::JsonTool));
-        let err = run_tool(&registry, "  JSON ", Value::None, 300)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, VmError::Tool(_)));
+    async fn a_provider_name_is_normalized_before_dispatch() {
+        let registry = ToolRegistry::new();
+        let resolved = resolve_plugin(&registry, "  JSON ", &Value::None).unwrap();
+        let token = CancellationToken::new();
+        let err = run_tool(
+            &resolved,
+            "  JSON ",
+            Value::None,
+            &Value::None,
+            300,
+            &token,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "JsonPlugin: parse mode requires params['input'] as a string."
+        );
     }
 
     #[tokio::test]
-    async fn a_registered_providers_own_error_is_wrapped() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(electricity_tools::json::JsonTool));
-        let err = run_tool(&registry, "json", Value::None, 300)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, VmError::Tool(_)));
+    async fn a_built_providers_own_error_is_wrapped() {
+        let registry = ToolRegistry::new();
+        let resolved = resolve_plugin(&registry, "json", &Value::None).unwrap();
+        let token = CancellationToken::new();
+        let err = run_tool(
+            &resolved,
+            "json",
+            Value::None,
+            &Value::None,
+            300,
+            &token,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.message,
+            "JsonPlugin: parse mode requires params['input'] as a string."
+        );
     }
 
     fn tool_op(params: IndexMap<Value, ParamNode>) -> ToolOp {
@@ -865,6 +1113,20 @@ mod tests {
         limiter: &'a crate::Limiter,
         runtime_config: &'a Value,
     ) -> RunContext<'a> {
+        // Leaked (test-only helper, called many times across this
+        // module's own tests): every M1-A field below has no test here
+        // that reads it, so there is nothing to thread a real lifetime
+        // through -- a `'static` default is simpler than adding four
+        // more parameters to every one of this function's own callers.
+        let adapters: &'a crate::adapter::AdapterRegistry =
+            Box::leak(Box::new(crate::adapter::AdapterRegistry::new()));
+        let complexity: &'a electricity_config::ComplexitySettings =
+            Box::leak(Box::new(electricity_config::ComplexitySettings::default()));
+        let dir: &'static std::path::PathBuf = Box::leak(Box::new(std::path::PathBuf::from(".")));
+        let declared_prompts: &'a indexmap::IndexMap<String, String> =
+            Box::leak(Box::new(indexmap::IndexMap::new()));
+        let effect_names: &'a std::collections::BTreeSet<String> =
+            Box::leak(Box::new(std::collections::BTreeSet::new()));
         RunContext {
             registry,
             limiter,
@@ -872,6 +1134,17 @@ mod tests {
             adapter: "_noop",
             runtime_config,
             dry_run: false,
+            armed: false,
+            adapters,
+            default_adapter: std::rc::Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts,
+            effect_names,
+            display_depth: 0,
         }
     }
 
@@ -909,6 +1182,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -975,13 +1249,14 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
         )
         .await
         .unwrap_err();
-        assert_eq!(err, VmError::Tool("json: unknown mode 'bogus'".to_string()));
+        assert_eq!(err.to_string(), "json: unknown mode 'bogus'");
     }
 
     #[tokio::test]
@@ -1018,6 +1293,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1025,12 +1301,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not \
-                 resolve to a value."
-                    .to_string()
-            )
+            err.to_string(),
+            "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not \
+             resolve to a value."
         );
     }
 
@@ -1057,6 +1330,7 @@ mod tests {
             fn effect_complete(
                 &self,
                 _path: &electricity_bytecode::EffectPath,
+                _instance: crate::observer::InstanceId,
                 _error: Option<&str>,
             ) {
                 self.0.set(self.0.get() + 1);
@@ -1070,6 +1344,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &observer,
             &token,
@@ -1077,10 +1352,8 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "tool 'json' not in enabled_tools allowlist (enabled: ['other'])".to_string()
-            )
+            err.to_string(),
+            "tool 'json' not in enabled_tools allowlist (enabled: ['other'])"
         );
         assert_eq!(observer.0.get(), 0);
 
@@ -1121,6 +1394,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1174,6 +1448,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1181,12 +1456,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "params_json must not set ['allowed_commands']: security-sensitive \
-                 settings are only honoured from a document's literal params block."
-                    .to_string()
-            )
+            err.to_string(),
+            "params_json must not set ['allowed_commands']: security-sensitive \
+             settings are only honoured from a document's literal params block."
         );
     }
 
@@ -1217,6 +1489,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1224,12 +1497,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "params.allowed_commands must be a literal list of strings; a templated \
-                 value is not honoured for this security-sensitive setting."
-                    .to_string()
-            )
+            err.to_string(),
+            "params.allowed_commands must be a literal list of strings; a templated \
+             value is not honoured for this security-sensitive setting."
         );
     }
 
@@ -1265,6 +1535,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1338,6 +1609,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1394,6 +1666,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1415,6 +1688,60 @@ mod tests {
         assert_eq!(
             expect_meta.get(&Value::from("result")),
             Some(&Value::Bool(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_mode_expect_reaches_condition_models_own_stub_not_a_panic() {
+        // Review P2-4 on PR #454's second review: this call site used
+        // to `unreachable!()` for `ExpectCondition::Model` -- wired
+        // now to `condition_model::evaluate_model_expect`, so lane
+        // G2's own PR only ever fills that module's stub bodies. This
+        // path is refused before any real run starts
+        // (`Supported::model_expect` stays `false` until G2 flips it),
+        // reachable only through a direct call like this one -- the
+        // actual probe is that it returns that function's own M1-G2
+        // stub error instead of panicking.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("2"));
+        let mut tool = tool_op(params);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "well?",
+                false,
+                electricity_bytecode::Escape::None,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, VmError::NotImplemented(ref msg) if msg.contains("M1-G2")),
+            "expected condition_model::evaluate_model_expect's own M1-G2 stub error, got: {err:?}"
         );
     }
 
@@ -1446,6 +1773,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1520,6 +1848,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &observer,
                 &token,
@@ -1558,6 +1887,76 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_build_error_never_waits_for_the_limiter_or_sets_waiting_for() {
+        // Review finding 6 on PR #454: `core/tool.py::ToolRuntime.
+        // execute` builds the plugin (`tool.py:702`) *before* the
+        // limiter wait (`tool.py:724`), so a per-plugin config error
+        // fails the attempt without ever touching the limiter. Proven
+        // here by holding the *only* slot in a group this tool
+        // dispatches into, then dispatching a provider `resolve_plugin`
+        // can never resolve -- if the build happened after acquiring
+        // (the old ordering), this call would hang forever waiting for
+        // the held slot; instead it must return promptly, having never
+        // set `meta.waiting_for` at all.
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "bogus".to_string();
+        tool.group = Some("io".to_string());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 1,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::with_limits(None, [("io".to_string(), 1)]);
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        // Hold the group's only slot for the whole call -- a build
+        // that incorrectly waited on it first would never see it
+        // freed within this test's own timeout.
+        let holder = limiter.acquire(Some("io")).await.unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &Frame::root(),
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            ),
+        )
+        .await
+        .expect("a build error must fail immediately, never waiting on the held slot");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .starts_with("Unknown plugin: 'bogus'.")
+        );
+
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        assert_eq!(get_leaf(&meta_node, "waiting_for"), Some(Value::None));
+        drop(holder);
+    }
+
     /// A test-only [`electricity_tools::ToolPlugin`] that fails its
     /// first *fail_times* calls (an `ok: false` [`electricity_tools::
     /// ToolResult`], never a raised error, so it exercises the `not
@@ -1581,7 +1980,7 @@ mod tests {
         async fn execute(
             &self,
             _params: Value,
-            _timeout_seconds: u32,
+            _call: &electricity_tools::ToolCall<'_>,
         ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
             let call = self.calls.get();
             self.calls.set(call + 1);
@@ -1638,6 +2037,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1663,6 +2063,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_build_error_fails_one_attempt_and_is_retried_like_any_other_failure() {
+        // S1 (M1 gate seam round 2): `registry::Builder` is now
+        // fallible, like `plugins/factory.py::_build_shell`/
+        // `plugin_env_override`, which validate their own config and
+        // raise. `flaky_build` (`test-tools` feature) fails its first
+        // build, succeeds on the second -- dispatched entirely through
+        // `resolve_plugin`'s own fallback to `electricity_tools::
+        // build_plugin` (never registered in `registry` directly), so
+        // this exercises the real per-attempt rebuild, not a stand-in.
+        let mut plugins = Dict::new();
+        let mut flaky_build_cfg = Dict::new();
+        flaky_build_cfg.insert(
+            Value::from("id"),
+            Value::from("a_build_error_fails_one_attempt_and_is_retried"),
+        );
+        flaky_build_cfg.insert(Value::from("fail_times"), Value::from(1i64));
+        plugins.insert(Value::from("flaky_build"), Value::Dict(flaky_build_cfg));
+        let mut runtime = Dict::new();
+        runtime.insert(Value::from("plugins"), Value::Dict(plugins));
+        let runtime_config = Value::Dict(runtime);
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "flaky_build".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::from("ok")));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+        assert_eq!(meta.get(&Value::from("waiting_for")), Some(&Value::None));
+    }
+
+    #[tokio::test]
     async fn a_not_ok_result_with_no_stderr_uses_the_default_failure_text() {
         struct AlwaysNotOk;
         #[async_trait::async_trait(?Send)]
@@ -1673,7 +2145,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 let mut result =
                     electricity_tools::ToolResult::new(Value::None, Value::Dict(Dict::new()));
@@ -1711,16 +2183,233 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
         )
         .await
         .unwrap_err();
+        assert_eq!(err.to_string(), "flaky tool reported failure (ok=False)");
+    }
+
+    #[tokio::test]
+    async fn meta_binary_is_set_generically_from_any_providers_own_raw_binary_key() {
+        // S2 (M1 gate seam round 2): `core/tool.py:822-823`'s own
+        // `if "binary" in result.raw: meta["binary"] = result.raw[
+        // "binary"]` is generic across every provider, not lane E's
+        // own HTTP-family write -- `json` never produces one, so this
+        // uses a test-only tool whose `raw` does.
+        struct BinaryTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for BinaryTool {
+            fn name(&self) -> &str {
+                "binary_tool"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                let mut raw = Dict::new();
+                raw.insert(Value::from("binary"), Value::from("/usr/bin/widget"));
+                Ok(electricity_tools::ToolResult::new(
+                    Value::from("ok"),
+                    Value::Dict(raw),
+                ))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "binary_tool".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(BinaryTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
         assert_eq!(
-            err,
-            VmError::Tool("flaky tool reported failure (ok=False)".to_string())
+            meta.get(&Value::from("binary")),
+            Some(&Value::from("/usr/bin/widget"))
         );
+    }
+
+    #[tokio::test]
+    async fn meta_binary_is_popped_at_the_start_of_the_next_attempt() {
+        // `core/tool.py:662`'s own `meta.pop("binary", None)` at every
+        // attempt start -- a reused node (an unnamed loop's next pass,
+        // or this effect's own next attempt) must not keep a prior
+        // pass's `binary` sitting next to a provider that never sets
+        // one, the same reason `stdout`/`stderr`/`raw` are reset too.
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "json".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        set_leaf(&store, &meta_node, "binary", Value::from("/usr/bin/stale"));
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("binary")), None);
+    }
+
+    /// A test-only [`electricity_tools::ToolPlugin`] that always raises
+    /// a typed [`electricity_tools::ToolError`] -- review finding 1 on
+    /// PR #454's own probe: "a FailTool returning `ErrorCause::NoReply`/
+    /// `PyExc::ValueError` reaches `execute_tool` with both fields
+    /// intact".
+    struct RaisingTool;
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for RaisingTool {
+        fn name(&self) -> &str {
+            "raising"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            Err(electricity_tools::ToolError {
+                py_class: electricity_tools::PyExc::ValueError,
+                message: "no reply from the server".to_string(),
+                cause: electricity_tools::ErrorCause::NoReply,
+            })
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_raised_tool_errors_class_and_cause_reach_execute_tool_intact() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "raising".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 1,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(RaisingTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let VmError::Raised {
+            py_class,
+            message,
+            cause,
+            ..
+        } = err
+        else {
+            panic!("expected a VmError::Raised, got a different VmError variant");
+        };
+        assert_eq!(py_class, electricity_tools::PyExc::ValueError);
+        assert_eq!(cause, electricity_tools::ErrorCause::NoReply);
+        assert_eq!(message, "no reply from the server");
     }
 
     #[tokio::test]
@@ -1740,7 +2429,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 let mut raw = Dict::new();
                 let body = "a".repeat(electricity_redaction::RAW_META_MAX_BYTES + 1);
@@ -1781,6 +2470,7 @@ mod tests {
             &store,
             &store.root,
             &Value::None,
+            &Frame::root(),
             &run_ctx,
             &crate::NullObserver,
             &token,
@@ -1868,6 +2558,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -1893,7 +2584,7 @@ mod tests {
     // clears_it`'s own `Waiting` assertions, but this test is the one
     // that actually cancels the token while blocked there and checks
     // the function returns `Err(VmError::Cancelled)`, not an ordinary
-    // `VmError::Tool` failure or a successful completion once the slot
+    // `VmError::Raised` failure or a successful completion once the slot
     // frees up later).
     async fn a_cancelled_token_stops_a_queued_limiter_wait() {
         let mut params = IndexMap::new();
@@ -1925,6 +2616,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -1960,7 +2652,7 @@ mod tests {
             async fn execute(
                 &self,
                 _params: Value,
-                _timeout_seconds: u32,
+                _call: &electricity_tools::ToolCall<'_>,
             ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
                 std::future::pending::<()>().await;
                 unreachable!("never resolves")
@@ -1997,6 +2689,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2054,6 +2747,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2116,6 +2810,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,
@@ -2184,6 +2879,7 @@ mod tests {
                 &store,
                 &store.root,
                 &Value::None,
+                &Frame::root(),
                 &run_ctx,
                 &crate::NullObserver,
                 &token,

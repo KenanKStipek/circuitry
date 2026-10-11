@@ -8,7 +8,7 @@
 //! ReadError::Syntax`'s Display), not merely at the same character
 //! offset.
 
-use crate::{CheckResult, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_json::{Separators, WriteMode, dumps_default_str, loads};
 use electricity_value::{Dict, Value};
@@ -71,7 +71,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 end += 1;
             }
             if end == digits_start || end >= chars.len() || chars[end] != ']' {
-                return Err(ToolError(format!(
+                return Err(ToolError::message(format!(
                     "json: invalid path token at offset {pos}"
                 )));
             }
@@ -112,7 +112,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 _ => return Ok((Value::None, false)),
             }
         } else {
-            return Err(ToolError(format!(
+            return Err(ToolError::message(format!(
                 "json: invalid path token at offset {pos}"
             )));
         }
@@ -140,7 +140,7 @@ impl ToolPlugin for JsonTool {
         "json"
     }
 
-    async fn execute(&self, params: Value, _timeout_seconds: u32) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
         // `mode = str(params.get("mode", "parse")).lower()` -- the
         // Python default applies only when the key is *absent*; an
         // explicit `mode: null` still becomes the literal string
@@ -155,14 +155,14 @@ impl ToolPlugin for JsonTool {
                 let text = match get(&params, "input") {
                     Some(Value::Str(s)) => s.clone(),
                     _ => {
-                        return Err(ToolError(
+                        return Err(ToolError::message(
                             "JsonPlugin: parse mode requires params['input'] as a string."
                                 .to_string(),
                         ));
                     }
                 };
-                let value =
-                    loads(&text).map_err(|err| ToolError(format!("json: parse failed: {err}")))?;
+                let value = loads(&text)
+                    .map_err(|err| ToolError::message(format!("json: parse failed: {err}")))?;
                 (value, mode.clone())
             }
             "stringify" => {
@@ -170,7 +170,7 @@ impl ToolPlugin for JsonTool {
                 let indent = match get(&params, "indent") {
                     None | Some(Value::None) => None,
                     Some(value) => {
-                        let parsed = python_int(value).map_err(ToolError)?;
+                        let parsed = python_int(value).map_err(ToolError::message)?;
                         Some(parsed.clamp(0, u8::MAX as i64) as u8)
                     }
                 };
@@ -183,14 +183,14 @@ impl ToolPlugin for JsonTool {
                         separators: Separators::Default,
                     },
                 )
-                .map_err(|err| ToolError(err.to_string()))?;
+                .map_err(|err| ToolError::message(err.to_string()))?;
                 (Value::Str(text), mode.clone())
             }
             "extract" => {
                 let mut subject = get(&params, "input").cloned().unwrap_or(Value::None);
                 if let Value::Str(text) = &subject {
                     subject = loads(text).map_err(|err| {
-                        ToolError(format!(
+                        ToolError::message(format!(
                             "json: extract input is a string but not valid JSON: {err}"
                         ))
                     })?;
@@ -198,7 +198,7 @@ impl ToolPlugin for JsonTool {
                 let path = match get(&params, "path") {
                     Some(Value::Str(s)) if !s.is_empty() => s.clone(),
                     _ => {
-                        return Err(ToolError(
+                        return Err(ToolError::message(
                             "JsonPlugin: extract mode requires params['path'].".to_string(),
                         ));
                     }
@@ -212,7 +212,7 @@ impl ToolPlugin for JsonTool {
                 (value, mode.clone())
             }
             _ => {
-                return Err(ToolError(format!(
+                return Err(ToolError::message(format!(
                     "json: unknown mode {}",
                     Value::Str(mode).py_repr()
                 )));
@@ -238,6 +238,18 @@ impl ToolPlugin for JsonTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_value::CancellationToken;
+
+    async fn run(tool: &JsonTool, params: Value) -> Result<ToolResult, ToolError> {
+        let token = CancellationToken::new();
+        let call = ToolCall {
+            timeout_seconds: 30,
+            config: &Value::None,
+            token: &token,
+            armed: false,
+        };
+        tool.execute(params, &call).await
+    }
 
     fn dict(pairs: Vec<(&str, Value)>) -> Value {
         let mut d = Dict::new();
@@ -261,7 +273,7 @@ mod tests {
             ("mode", Value::from("parse")),
             ("input", Value::from("{\"a\": 1}")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         let mut expected = Dict::new();
         expected.insert(Value::Str("a".to_string()), Value::from(1i64));
         assert_eq!(result.value, Value::Dict(expected));
@@ -274,9 +286,9 @@ mod tests {
             ("mode", Value::from("parse")),
             ("input", Value::from(1i64)),
         ]);
-        let err = tool.execute(params, 30).await.unwrap_err();
+        let err = run(&tool, params).await.unwrap_err();
         assert_eq!(
-            err.0,
+            err.message,
             "JsonPlugin: parse mode requires params['input'] as a string."
         );
     }
@@ -285,7 +297,7 @@ mod tests {
     async fn mode_defaults_to_parse_when_absent() {
         let tool = JsonTool;
         let params = dict(vec![("input", Value::from("null"))]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::None);
     }
 
@@ -293,8 +305,8 @@ mod tests {
     async fn an_explicit_null_mode_is_not_the_default() {
         let tool = JsonTool;
         let params = dict(vec![("mode", Value::None), ("input", Value::from("null"))]);
-        let err = tool.execute(params, 30).await.unwrap_err();
-        assert_eq!(err.0, "json: unknown mode 'none'");
+        let err = run(&tool, params).await.unwrap_err();
+        assert_eq!(err.message, "json: unknown mode 'none'");
     }
 
     #[tokio::test]
@@ -306,7 +318,7 @@ mod tests {
             ("mode", Value::from("stringify")),
             ("input", Value::Dict(input)),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("{\"a\": 1}"));
     }
 
@@ -320,7 +332,7 @@ mod tests {
             ("input", Value::Dict(input)),
             ("indent", Value::from(2i64)),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("{\n  \"a\": 1\n}"));
     }
 
@@ -339,7 +351,7 @@ mod tests {
             ("input", Value::Dict(input)),
             ("path", Value::from("foo.bar[1]")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from(2i64));
     }
 
@@ -360,7 +372,7 @@ mod tests {
             ("path", Value::from("a[99999999999999999999]")),
             ("default", Value::from("d")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("d"));
     }
 
@@ -376,7 +388,7 @@ mod tests {
             ("path", Value::from("a[-99999999999999999999]")),
             ("default", Value::from("d")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("d"));
     }
 
@@ -389,7 +401,7 @@ mod tests {
             ("path", Value::from("missing")),
             ("default", Value::from("fallback")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("fallback"));
     }
 
@@ -400,8 +412,11 @@ mod tests {
             ("mode", Value::from("extract")),
             ("input", Value::Dict(Dict::new())),
         ]);
-        let err = tool.execute(params, 30).await.unwrap_err();
-        assert_eq!(err.0, "JsonPlugin: extract mode requires params['path'].");
+        let err = run(&tool, params).await.unwrap_err();
+        assert_eq!(
+            err.message,
+            "JsonPlugin: extract mode requires params['path']."
+        );
     }
 
     #[tokio::test]
@@ -412,7 +427,7 @@ mod tests {
             ("input", Value::from("{\"a\": 1}")),
             ("path", Value::from("a")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from(1i64));
     }
 
@@ -424,9 +439,9 @@ mod tests {
             ("input", Value::from("not json")),
             ("path", Value::from("a")),
         ]);
-        let err = tool.execute(params, 30).await.unwrap_err();
+        let err = run(&tool, params).await.unwrap_err();
         assert!(
-            err.0
+            err.message
                 .starts_with("json: extract input is a string but not valid JSON:")
         );
     }
@@ -435,8 +450,8 @@ mod tests {
     async fn an_unknown_mode_names_itself_by_python_repr() {
         let tool = JsonTool;
         let params = dict(vec![("mode", Value::from("bogus"))]);
-        let err = tool.execute(params, 30).await.unwrap_err();
-        assert_eq!(err.0, "json: unknown mode 'bogus'");
+        let err = run(&tool, params).await.unwrap_err();
+        assert_eq!(err.message, "json: unknown mode 'bogus'");
     }
 
     #[tokio::test]
@@ -446,7 +461,7 @@ mod tests {
             ("mode", Value::from("PARSE")),
             ("input", Value::from("1")),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         let mut expected_raw = Dict::new();
         expected_raw.insert(Value::Str("mode".to_string()), Value::from("parse"));
         assert_eq!(result.raw, Value::Dict(expected_raw));
@@ -469,7 +484,7 @@ mod tests {
             ("mode", Value::from("stringify")),
             ("input", Value::Dict(input)),
         ]);
-        let result = tool.execute(params, 30).await.unwrap();
+        let result = run(&tool, params).await.unwrap();
         // `Value::Bool(true)` and `Value::Int(1)` collide as dict keys
         // under Python's own numeric-tower equality (`True == 1`,
         // `hash(True) == hash(1)`) -- a *second* insert under an

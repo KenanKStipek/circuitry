@@ -113,6 +113,17 @@ pub enum Region {
     },
     /// A `loop` (`each`/`while`, chain or tree).
     Loop {
+        /// The loop's own validated name, or `None` for an unnamed
+        /// (transparent) loop -- the same value the compiler also
+        /// gives the enclosing `Op::name`, carried here too so a
+        /// caller holding only this `Region` (not the enclosing `Op`)
+        /// can still build a `Frame::iteration(name, index)` path
+        /// without having to recover the name by parsing a body path's
+        /// own segments (M1 gate seam round 2, item S8) -- lane H's
+        /// own seam, since `groups.rs::collect_region_groups` and the
+        /// refusal walker's own `walk_region` both already recurse
+        /// into `body` with no `Op` in hand.
+        name: Option<String>,
         spec: LoopSpec,
         body: Box<Region>,
         flow: LoopFlow,
@@ -203,6 +214,7 @@ mod tests {
         assert_eq!(cond.dynamic_flow(), None);
 
         let loop_region = Region::Loop {
+            name: None,
             spec: LoopSpec::Each {
                 in_path: "input.items".to_string(),
                 as_name: "item".to_string(),

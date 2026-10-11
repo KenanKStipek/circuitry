@@ -17,13 +17,16 @@
 //!   [`Value::py_str`]/[`Value::py_repr`], byte-identical to CPython
 //!   3.11's `str()`/`repr()`.
 
+pub mod cancel;
 mod datetime_repr;
 mod float_repr;
 mod generated;
 pub mod int_value;
 mod numeric;
+pub mod pycompat;
 mod string_repr;
 
+pub use cancel::CancellationToken;
 pub use int_value::IntValue;
 
 /// The nesting-depth limit shared by every crate in this workspace that

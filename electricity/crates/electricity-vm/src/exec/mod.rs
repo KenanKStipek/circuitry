@@ -8,11 +8,20 @@
 //! conventions) -- shared, rather than duplicated, between
 //! `dynamic.rs` and `conditional.rs`.
 
+pub mod condition_model;
 pub mod conditional;
+pub mod disabled;
 pub mod dynamic;
+pub mod loop_;
+pub mod prompt;
+pub mod reflector;
 pub mod tool;
+pub mod use_;
+pub mod yield_;
 
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
+use crate::{
+    CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, StoreError, VmError,
+};
 use electricity_bytecode::{LeafKind, NodeKind, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -215,6 +224,30 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
         VmError::Cancelled => err,
+        // A typed tool failure keeps its own `cause` through the wrap --
+        // `message` grows the label prefix, and `py_class` becomes
+        // `RuntimeError` (review finding 1 on PR #454: #442's own tree
+        // text needs the error to survive a chain/tree wrap as a typed
+        // `Raised`, not collapse to a bare `VmError::Message`; review
+        // P2-1 on the second review: `core/dynamic.py`'s own `raise
+        // RuntimeError(...) from e` means the *wrapping* exception is
+        // always a `RuntimeError`, never `e`'s own class -- `cause_class`
+        // remembers *e*'s own `py_class` for `VmError::displayed_class`'s
+        // one-level unwrap, discarding `e`'s own `cause_class` rather
+        // than propagating it further, so a doubly-wrapped error's own
+        // displayed class is `RuntimeError` (the inner wrap), never the
+        // original leaf failure's class two levels down).
+        VmError::Raised {
+            py_class,
+            message,
+            cause,
+            ..
+        } => VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: format!("{label}: {message}"),
+            cause,
+            cause_class: Some(py_class),
+        },
         other => VmError::Message(format!("{label}: {other}")),
     }
 }
@@ -244,44 +277,214 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// refused before a real run ever starts (lane A's `first_unsupported`),
 /// so reaching one here is a defect, not a reachable document shape --
 /// reported as [`VmError::NotImplemented`] rather than panicking.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_op<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
+        // Review P2-4 on PR #454's second review: wired now (`core/
+        // dynamic.py::DynamicRuntime._execute_effect`'s own single
+        // `is_enabled` check, before dispatching to any effect type,
+        // leaf or container -- disabling a container disables its
+        // whole subtree because nothing inside it ever gets this far)
+        // so lane J2's own PR only ever fills `disabled.rs`'s own stub
+        // bodies, never this file. `op.enabled` is `true` for every
+        // `Op` this build can compile today -- orchestration YAML
+        // itself never sets the field (only a profile's own `effects.
+        // <path>.enabled: false`, `electricity-compiler::overrides`,
+        // not created until lane J2), so this branch is unreachable in
+        // any real or test run, same as the model-mode `expect`/
+        // condition wiring below.
+        if disabled::skip_disabled(op, &Value::None) {
+            if op.name.is_some() {
+                let effect_path = frame.effect_path(&op.path);
+                let instance = observer.effect_start(&effect_path);
+                disabled::write_disabled_node(store, parent, op)?;
+                observer.effect_complete(&effect_path, instance, None);
+            }
+            return Ok(());
+        }
         match &op.kind {
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
                 LeafKind::Tool(tool_op) => {
                     let ctx = live_ctx(ctx_chain, store);
-                    tool::execute_tool(op, tool_op, store, parent, &ctx, run_ctx, observer, token)
-                        .await
+                    tool::execute_tool(
+                        op, tool_op, store, parent, &ctx, frame, run_ctx, observer, token,
+                    )
+                    .await
                 }
-                _ => Err(VmError::NotImplemented(format!(
-                    "{}: unsupported effect type in the M0-H interpreter",
-                    op.path
-                ))),
+                LeafKind::Prompt(prompt_op) => {
+                    prompt::execute_prompt(
+                        op, prompt_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                    )
+                    .await
+                }
+                LeafKind::Use(use_op) => {
+                    use_::execute_use(
+                        op, use_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                    )
+                    .await
+                }
+                LeafKind::Reflector(reflector_op) => {
+                    reflector::execute_reflector(
+                        op,
+                        reflector_op,
+                        store,
+                        parent,
+                        ctx_chain,
+                        frame,
+                        run_ctx,
+                        observer,
+                        token,
+                    )
+                    .await
+                }
+                LeafKind::Yield(yield_op) => {
+                    yield_::execute_yield(
+                        op, yield_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                    )
+                    .await
+                }
             },
             NodeKind::Control(region) => match region {
                 Region::If { .. } => {
                     conditional::execute_conditional(
-                        op, store, parent, ctx_chain, run_ctx, observer, token,
+                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
                     )
                     .await
                 }
                 Region::Block { .. } | Region::Parallel { .. } | Region::TryFinally { .. } => {
-                    dynamic::execute_dynamic(op, store, parent, ctx_chain, run_ctx, observer, token)
-                        .await
+                    dynamic::execute_dynamic(
+                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                    )
+                    .await
                 }
-                Region::Loop { .. } => Err(VmError::NotImplemented(format!(
-                    "{}: `loop` is not supported by the M0-H interpreter",
-                    op.path
-                ))),
+                Region::Loop {
+                    // Not read here: `op.name` below is the same
+                    // value (`compile_loop`'s own `validated_name`),
+                    // and `execute_loop` already receives `op`.
+                    name: _,
+                    spec,
+                    body,
+                    flow,
+                    max_concurrency,
+                    max_iterations,
+                    min_iterations,
+                    collect,
+                } => {
+                    loop_::execute_loop(
+                        op,
+                        spec,
+                        body,
+                        *flow,
+                        *max_concurrency,
+                        *max_iterations,
+                        *min_iterations,
+                        collect.as_deref(),
+                        store,
+                        parent,
+                        ctx_chain,
+                        frame,
+                        run_ctx,
+                        observer,
+                        token,
+                    )
+                    .await
+                }
             },
         }
     })
+}
+
+#[cfg(test)]
+mod wrap_effect_error_tests {
+    use super::wrap_effect_error;
+    use crate::VmError;
+    use electricity_tools::{ErrorCause, PyExc};
+
+    #[test]
+    fn a_raised_failures_cause_survives_the_chain_wrap_but_its_class_becomes_runtime_error() {
+        // Review finding 1 on PR #454: a chain/tree wrap must keep
+        // `VmError::Raised` a `Raised`, not collapse to a bare
+        // `VmError::Message` -- a nested `dynamic`'s own error-collection
+        // point (`execute_chain`/`execute_tree`, both of which call this
+        // function) is exactly where #442's tree text would otherwise
+        // lose the real exception class entirely. Review P2-1 on the
+        // second review: `core/dynamic.py`'s own `raise RuntimeError(...)
+        // from e` means the *wrapping* exception's own class is always
+        // `RuntimeError`, never `e`'s class -- that survives one level
+        // in as `cause_class` instead, for `VmError::displayed_class`.
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+            cause_class: None,
+        };
+        let wrapped = wrap_effect_error("outer.fetch", raised);
+        let VmError::Raised {
+            py_class,
+            message,
+            cause,
+            cause_class,
+        } = wrapped
+        else {
+            panic!("expected a VmError::Raised to stay Raised through the wrap");
+        };
+        assert_eq!(py_class, PyExc::RuntimeError);
+        assert_eq!(cause, ErrorCause::NoReply);
+        assert_eq!(message, "outer.fetch: no reply");
+        assert_eq!(cause_class, Some(PyExc::ValueError));
+    }
+
+    #[test]
+    fn displayed_class_is_the_tools_own_class_before_any_wrap() {
+        // Review P2-1 on the second review's own first probe: a direct
+        // tool failure, never wrapped, displays its own real class --
+        // Python's `err.__cause__ or err` with `__cause__` still `None`.
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+            cause_class: None,
+        };
+        assert_eq!(raised.displayed_class(), Some(PyExc::ValueError));
+    }
+
+    #[test]
+    fn displayed_class_is_runtime_error_for_a_doubly_wrapped_chain_failure() {
+        // Review P2-1 on the second review's own second probe: a nested
+        // chain failure (two container wraps deep) displays
+        // `RuntimeError` -- the *inner* wrap's own class, one level in
+        // from the outer wrap, never the original leaf failure's class
+        // two levels down (`err.__cause__ or err` peels exactly one
+        // level, same as `dynamic.py:56-57`).
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+            cause_class: None,
+        };
+        let wrapped_once = wrap_effect_error("inner.fetch", raised);
+        let wrapped_twice = wrap_effect_error("outer.inner", wrapped_once);
+        assert_eq!(wrapped_twice.displayed_class(), Some(PyExc::RuntimeError));
+    }
+
+    #[test]
+    fn a_cancellation_passes_through_the_wrap_unchanged() {
+        let wrapped = wrap_effect_error("outer.fetch", VmError::Cancelled);
+        assert_eq!(wrapped, VmError::Cancelled);
+    }
+
+    #[test]
+    fn a_plain_message_still_collapses_to_message() {
+        let wrapped = wrap_effect_error("outer.fetch", VmError::Message("boom".to_string()));
+        assert_eq!(wrapped, VmError::Message("outer.fetch: boom".to_string()));
+    }
 }

@@ -18,6 +18,7 @@ path = "src/lib.rs"
 test-tools = ["electricity-tools/test-tools"]
 
 [dependencies]
+electricity-adapters = { path = "../electricity-adapters" }
 electricity-bytecode = { path = "../electricity-bytecode" }
 electricity-compiler = { path = "../electricity-compiler" }
 electricity-config = { path = "../electricity-config" }

@@ -829,6 +829,13 @@ fn compile_loop(
     let labels = labels_of(effect);
 
     let region = Region::Loop {
+        // The same `validated_name` the enclosing `Op::name` below
+        // gets -- M1 gate seam round 2, item S8: carried on the
+        // `Region` itself too, for a caller (lane H's own tree-flow
+        // per-pass dispatch, `groups.rs::collect_region_groups`, the
+        // refusal walker's own `walk_region`) that recurses into a
+        // loop's body with no enclosing `Op` in hand.
+        name: validated_name.clone(),
         spec,
         body: Box::new(Region::Block {
             ops: compiled_body,

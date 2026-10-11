@@ -53,7 +53,7 @@
 //! meant to build that text themselves from [`SchemaError`]'s `location`
 //! and `message` (or [`SchemaError::describe`] for the per-line part) --
 //! the compiler lane (`DESIGN.md` §4 step 2, milestone M0-G) and the
-//! profile-loading lane (`DESIGN.md` §6.11, milestone M1-I) respectively,
+//! profile-loading lane (`DESIGN.md` §6.11, milestone M1-J1) respectively,
 //! neither of which exists yet. A byte-exact header also can't be produced
 //! from this crate's output alone even once a caller exists: Python sorts
 //! profile errors by `str(err)` (`cli/profiles.py`), which is third-party

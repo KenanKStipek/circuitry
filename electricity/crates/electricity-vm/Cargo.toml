@@ -10,12 +10,30 @@ description = "The M0-H VM: store, execution, cancellation, limiter (electricity
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-bytecode = { path = "../electricity-bytecode" }
+# `RunContext::complexity` (issue #449's gate lane item 6) -- this crate
+# depends on `electricity-config`, matching DESIGN.md §2's own direction
+# ("config → compiler, vm, tools, adapters, runtime-plugins": everyone
+# reads config, config reads nothing).
+electricity-config = { path = "../electricity-config" }
 electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
+# Review P2-2 on PR #454's second review, pre-added now so neither lane
+# has to touch this file: a path-`use` child is compiled at run time
+# (lane I, `exec::use_::execute_use`), which needs this crate's own
+# `prepare_document`/compile pipeline; a `prompt` effect's own `schema:`
+# (lane G) is validated the same way `electricity-compiler` already
+# validates Circuitry's own schemas, through `electricity-schema`.
+# Neither creates a cycle: `electricity-compiler`/`electricity-schema`
+# depend on neither `electricity-vm` nor each other in that direction.
+electricity-compiler = { path = "../electricity-compiler" }
+electricity-schema = { path = "../electricity-schema" }
 # `exec::conditional`'s own CEL `if` evaluation (`evaluate_condition`).
 electricity-cel = { path = "../electricity-cel" }
+# `adapter::Adapter`'s own object-safety (issue #449's gate lane item 4),
+# the same reason `electricity-tools::ToolPlugin` needs it.
+async-trait = "0.1"
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros", "time"] }
 # `exec::dynamic`'s own tree-flow dispatch: a bounded set of concurrent,
@@ -42,3 +60,7 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
+# `test-tools`'s own `flaky_build` builder (S1's own test: a fallible
+# per-attempt plugin *builder*, not just a flaky `execute`) -- only ever
+# active for this crate's own test target, never a release build.
+electricity-tools = { path = "../electricity-tools", features = ["test-tools"] }

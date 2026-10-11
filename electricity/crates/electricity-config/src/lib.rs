@@ -30,6 +30,7 @@
 //! [mod]: crate::effective_settings
 
 mod allowlist;
+mod capability_gate;
 mod complexity;
 mod config;
 mod effective_settings;
@@ -41,9 +42,13 @@ pub use allowlist::{
     Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist, tool_denial,
     walk_orchestration_refs,
 };
+pub use capability_gate::{
+    CAPABILITY_CEILING_KEY, CapabilityConsentError, capabilities_beyond_ceiling,
+    capability_ceiling, require_within_ceiling,
+};
 pub use complexity::{
     ComplexityBand, ComplexitySettings, DecompositionSettings, RoutingSettings, SCORE_MAX,
-    SCORE_MIN, ScoringSettings,
+    SCORE_MIN, ScoringSettings, resolve_complexity_settings,
 };
 pub use config::{CircuitryConfig, ConfigError, resolve_config};
 pub use effective_settings::{EffectiveSettings, effective_settings};

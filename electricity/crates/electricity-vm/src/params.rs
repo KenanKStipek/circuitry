@@ -1,14 +1,18 @@
 //! Lane C: tool params rendering -- `ParamNode` -> `Value`, the
 //! `{from: ...}` walk (with `default:`), Mustache leaves, and a tool's
 //! `params_json` overlay (`core/tool.py::_render_params`/
-//! `_render_params_json`/`_deep_merge_params`, ported exactly, minus the
-//! `{{> name}}` prompt-composition splice: out of scope through M0-H --
-//! a document containing one is refused before a run starts, so plain
-//! Mustache rendering is `render_with_composition`'s own behaviour on
-//! every document that reaches this point). A `use` effect's own
-//! `inputs:` follow a different contract (`core/use.py::_render_inputs`
-//! -- no `default:`, and a `{from:}` that resolves to `None` passes
-//! through as `None` rather than raising) and isn't rendered here.
+//! `_render_params_json`/`_deep_merge_params`, ported exactly). Every
+//! Mustache leaf renders through [`crate::compose::render_with_composition`]
+//! rather than calling `render_template` directly (review finding 1 on
+//! PR #454): a document containing a `{{> name}}` partial is refused
+//! before a run starts, so that function's own pass-through path is
+//! this file's whole behaviour today, and lane P's own landing never
+//! has to add *declared_prompts*/*effect_names* to this file's own
+//! signatures -- they are already threaded through from
+//! `RunContext`/`execute_tool`. A `use` effect's own `inputs:` follow a
+//! different contract (`core/use.py::_render_inputs` -- no `default:`,
+//! and a `{from:}` that resolves to `None` passes through as `None`
+//! rather than raising) and isn't rendered here.
 //!
 //! `exec::tool::execute_tool` (this crate's own lane C stub, filled in
 //! once lane B's `Store` lands) is the only caller: it renders a tool's
@@ -17,11 +21,12 @@
 //! [`deep_merge_params`] -- the `params_json` override takes precedence,
 //! same as `core/tool.py`.
 
-use electricity_bytecode::ParamNode;
+use electricity_bytecode::{Escape, ParamNode};
 use electricity_json::{Separators, WriteMode};
-use electricity_template::{JsonAwareCtx, PlainCtx, render_template};
+use electricity_template::{JsonAwareCtx, PlainCtx};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 /// `core/tool.py::_render_params`'s own failure: a `{from: ...}` leaf
@@ -73,11 +78,20 @@ pub fn render_params(
     effect_name: &str,
     params: &IndexMap<Value, ParamNode>,
     ctx: &Value,
+    declared_prompts: &IndexMap<String, String>,
+    effect_names: &BTreeSet<String>,
 ) -> Result<Dict, RenderParamsError> {
     let mut rendered = IndexMap::with_capacity(params.len());
     for (key, node) in params {
         let path = format!("params.{}", key.py_str());
-        let value = render_node(effect_name, node, ctx, &path)?;
+        let value = render_node(
+            effect_name,
+            node,
+            ctx,
+            &path,
+            declared_prompts,
+            effect_names,
+        )?;
         rendered.insert(key.clone(), value);
     }
     Ok(rendered)
@@ -88,12 +102,22 @@ fn render_node(
     node: &ParamNode,
     ctx: &Value,
     path: &str,
+    declared_prompts: &IndexMap<String, String>,
+    effect_names: &BTreeSet<String>,
 ) -> Result<Value, RenderParamsError> {
     match node {
         ParamNode::Literal(value) => Ok(value.clone()),
-        ParamNode::Template(text) => render_template(&text.source, ctx, &PlainCtx, path)
-            .map(Value::Str)
-            .map_err(|err| RenderParamsError::Template(err.to_string())),
+        ParamNode::Template(text) => crate::compose::render_with_composition(
+            &text.source,
+            ctx,
+            declared_prompts,
+            effect_names,
+            path,
+            &PlainCtx,
+            matches!(text.escape, Escape::Html),
+        )
+        .map(Value::Str)
+        .map_err(RenderParamsError::Template),
         ParamNode::From {
             path: reference_path,
             default,
@@ -117,7 +141,14 @@ fn render_node(
             let mut map = IndexMap::with_capacity(entries.len());
             for (key, child) in entries {
                 let child_path = format!("{path}.{}", key.py_str());
-                let value = render_node(effect_name, child, ctx, &child_path)?;
+                let value = render_node(
+                    effect_name,
+                    child,
+                    ctx,
+                    &child_path,
+                    declared_prompts,
+                    effect_names,
+                )?;
                 map.insert(key.clone(), value);
             }
             Ok(Value::Dict(map))
@@ -126,7 +157,14 @@ fn render_node(
             let mut list = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
                 let child_path = format!("{path}[{index}]");
-                list.push(render_node(effect_name, item, ctx, &child_path)?);
+                list.push(render_node(
+                    effect_name,
+                    item,
+                    ctx,
+                    &child_path,
+                    declared_prompts,
+                    effect_names,
+                )?);
             }
             Ok(Value::List(list))
         }
@@ -220,11 +258,24 @@ fn json_aware_splice(value: &Value) -> Result<String, String> {
 /// the rendered text as JSON -- `core/tool.py::_render_params_json`. The
 /// result must be a JSON object; anything else is
 /// [`RenderParamsJsonError::NotObject`].
-pub fn render_params_json(template: &str, ctx: &Value) -> Result<Dict, RenderParamsJsonError> {
+pub fn render_params_json(
+    template: &str,
+    ctx: &Value,
+    declared_prompts: &IndexMap<String, String>,
+    effect_names: &BTreeSet<String>,
+) -> Result<Dict, RenderParamsJsonError> {
     let serializer: &dyn Fn(&Value) -> Result<String, String> = &json_aware_splice;
     let json_ctx = JsonAwareCtx::new(serializer);
-    let rendered_text = render_template(template, ctx, &json_ctx, "params_json")
-        .map_err(|err| RenderParamsJsonError::Template(err.to_string()))?;
+    let rendered_text = crate::compose::render_with_composition(
+        template,
+        ctx,
+        declared_prompts,
+        effect_names,
+        "params_json",
+        &json_ctx,
+        false,
+    )
+    .map_err(RenderParamsJsonError::Template)?;
     let mut parsed = electricity_json::loads(&rendered_text).map_err(|err| {
         RenderParamsJsonError::Json(format!("params_json did not render to valid JSON: {err}"))
     })?;
@@ -280,6 +331,16 @@ mod tests {
         Value::Dict(dict)
     }
 
+    /// Every render site needs an environment argument
+    /// ([`render_with_composition`]'s own *declared_prompts*/
+    /// *effect_names*) now even though nothing in this module's own
+    /// tests exercises composition itself (review finding 1 on PR
+    /// #454) -- empty is the correct value for every document with no
+    /// `prompts:` map, same as [`crate::compose`]'s own tests use.
+    fn empty_env() -> (IndexMap<String, String>, BTreeSet<String>) {
+        (IndexMap::new(), BTreeSet::new())
+    }
+
     #[test]
     fn a_literal_passes_through_unrendered() {
         let mut params = IndexMap::new();
@@ -287,7 +348,15 @@ mod tests {
             Value::Str("count".to_string()),
             ParamNode::Literal(Value::from(3i64)),
         );
-        let rendered = render_params("fetch", &params, &Value::None).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered = render_params(
+            "fetch",
+            &params,
+            &Value::None,
+            &declared_prompts,
+            &effect_names,
+        )
+        .unwrap();
         assert_eq!(
             rendered.get(&Value::Str("count".to_string())),
             Some(&Value::from(3i64))
@@ -305,10 +374,49 @@ mod tests {
             "input",
             ctx_from(vec![("name", Value::from("world"))]),
         )]);
-        let rendered = render_params("fetch", &params, &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap();
         assert_eq!(
             rendered.get(&Value::Str("greeting".to_string())),
             Some(&Value::from("hi world"))
+        );
+    }
+
+    #[test]
+    fn a_partial_leaf_reaches_the_m1_p_stub_error_not_templates_own_rejection() {
+        // Review finding 1's own probe on PR #454: before this fix,
+        // `render_node` called `render_template` directly, so a `{{>
+        // name}}` leaf failed with electricity-template's own
+        // "partials are not supported" malformed-template error
+        // instead of ever reaching `render_with_composition`'s stub --
+        // the walker keeps this unreachable through a real run (a
+        // partial is refused up front), but lane P must be able to
+        // fill this one function's own body without this file's own
+        // signature changing again.
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("greeting".to_string()),
+            ParamNode::Template(TemplateText::new("{{> greeting}}", true, Escape::Html)),
+        );
+        let (declared_prompts, effect_names) = empty_env();
+        let err = render_params(
+            "fetch",
+            &params,
+            &Value::None,
+            &declared_prompts,
+            &effect_names,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("run-time prompt composition is not supported"),
+            "expected the M1-P stub error, got: {message}"
+        );
+        assert!(
+            !message.contains("partials are not supported"),
+            "a partial leaf must reach render_with_composition's own \
+             stub, not electricity-template's partial rejection: {message}"
         );
     }
 
@@ -323,7 +431,9 @@ mod tests {
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("n", Value::from(5i64))]))]);
-        let rendered = render_params("fetch", &params, &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap();
         assert_eq!(
             rendered.get(&Value::Str("n".to_string())),
             Some(&Value::from(5i64))
@@ -341,7 +451,9 @@ mod tests {
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
-        let err = render_params("fetch", &params, &ctx).unwrap_err();
+        let (declared_prompts, effect_names) = empty_env();
+        let err =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not resolve to a value."
@@ -359,7 +471,9 @@ mod tests {
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
-        let rendered = render_params("fetch", &params, &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap();
         assert_eq!(
             rendered.get(&Value::Str("n".to_string())),
             Some(&Value::from(7i64))
@@ -380,7 +494,8 @@ mod tests {
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
-        let rendered = render_params("t", &params, &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered = render_params("t", &params, &ctx, &declared_prompts, &effect_names).unwrap();
         assert_eq!(
             rendered.get(&Value::Str("n".to_string())),
             Some(&Value::from(5i64))
@@ -398,7 +513,8 @@ mod tests {
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
-        let err = render_params("t", &params, &ctx).unwrap_err();
+        let (declared_prompts, effect_names) = empty_env();
+        let err = render_params("t", &params, &ctx, &declared_prompts, &effect_names).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Tool effect 't' param 'params.n': '{from: input.x}' did not resolve to a value."
@@ -426,7 +542,9 @@ mod tests {
                 ]),
             )]),
         )]);
-        let rendered = render_params("fetch", &params, &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("fetch", &params, &ctx, &declared_prompts, &effect_names).unwrap();
         assert_eq!(
             rendered.get(&Value::Str("last".to_string())),
             Some(&Value::from(3i64))
@@ -442,7 +560,15 @@ mod tests {
         );
         let mut params = IndexMap::new();
         params.insert(Value::Str("input".to_string()), ParamNode::Map(inner));
-        let rendered = render_params("fetch", &params, &Value::None).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered = render_params(
+            "fetch",
+            &params,
+            &Value::None,
+            &declared_prompts,
+            &effect_names,
+        )
+        .unwrap();
         let Some(Value::Dict(input)) = rendered.get(&Value::Str("input".to_string())) else {
             panic!("expected a rendered dict");
         };
@@ -461,7 +587,14 @@ mod tests {
                 Value::List(vec![Value::from("AAPL"), Value::from("MSFT")]),
             )]),
         )]);
-        let rendered = render_params_json("{\"tickers\": {{{prime.symbols}}}}", &ctx).unwrap();
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered = render_params_json(
+            "{\"tickers\": {{{prime.symbols}}}}",
+            &ctx,
+            &declared_prompts,
+            &effect_names,
+        )
+        .unwrap();
         assert_eq!(
             rendered.get(&Value::Str("tickers".to_string())),
             Some(&Value::List(vec![Value::from("AAPL"), Value::from("MSFT")]))
@@ -470,7 +603,9 @@ mod tests {
 
     #[test]
     fn params_json_rejects_a_non_object_result() {
-        let err = render_params_json("[1, 2]", &Value::None).unwrap_err();
+        let (declared_prompts, effect_names) = empty_env();
+        let err = render_params_json("[1, 2]", &Value::None, &declared_prompts, &effect_names)
+            .unwrap_err();
         assert_eq!(
             err.to_string(),
             "params_json must render to a JSON object (dict), got list"
@@ -479,7 +614,9 @@ mod tests {
 
     #[test]
     fn params_json_rejects_malformed_json_naming_the_failure() {
-        let err = render_params_json("not json", &Value::None).unwrap_err();
+        let (declared_prompts, effect_names) = empty_env();
+        let err = render_params_json("not json", &Value::None, &declared_prompts, &effect_names)
+            .unwrap_err();
         assert!(
             err.to_string()
                 .starts_with("params_json did not render to valid JSON:")

@@ -165,33 +165,52 @@ use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
 use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Instant;
 
-/// Tool providers the M0-H VM accepts beyond `json` -- only ever the
-/// `test-tools` cargo feature's own `sleep`/`fail`, and only when that
-/// feature is actually compiled in (`electricity_bytecode::refusal::
-/// first_unsupported`'s own *extra_allowed_providers* seam, issue
-/// #431's gate lane). Empty, and so a strict no-op, in every ordinary
-/// build -- `electricity-cli`'s own `Cargo.toml` never enables this
-/// feature (that crate's own doc comment).
+/// Extra tool providers this crate's own [`tool_registry`] dispatches
+/// on top of `json` (always on -- [`electricity_bytecode::refusal::
+/// Supported::allows_provider`]) -- just the `test-tools` cargo
+/// feature's own `sleep`/`fail` when that feature is compiled in
+/// (`electricity_bytecode::refusal::Supported::providers`). Empty in
+/// every ordinary build -- `electricity-cli`'s own `Cargo.toml` never
+/// enables this feature (that crate's own doc comment). M1 gate seam
+/// round 2, item S3: this function used to return the walker's *entire*
+/// provider allow-list (`&["json"]`); `shell`/`awk`/`imagemagick`/
+/// `ffmpeg` (lane C), `fs`/`env_vars`/`hash`/`uuid`/`clock` (lane D1),
+/// `regex` (lane D2) and `http` (lane E) are now each their own
+/// capability flag on [`electricity_bytecode::refusal::Supported`]
+/// instead, flipped in [`electricity_bytecode::refusal::Supported::
+/// current`], so no lane needs to touch this slice at all.
 #[cfg(feature = "test-tools")]
-fn extra_allowed_providers() -> &'static [&'static str] {
+fn extra_supported_providers() -> &'static [&'static str] {
     &["sleep", "fail"]
 }
 
 #[cfg(not(feature = "test-tools"))]
-fn extra_allowed_providers() -> &'static [&'static str] {
+fn extra_supported_providers() -> &'static [&'static str] {
     &[]
 }
 
 /// A fresh tool registry: `json` (M0-H's only real provider), plus
 /// `sleep`/`fail` when the `test-tools` feature is enabled -- the one
-/// place both are ever registered, so [`extra_allowed_providers`] (the
-/// refusal walker's own allow-list) never drifts from what the registry
-/// actually dispatches.
+/// place both are ever registered, so [`extra_supported_providers`]
+/// (the refusal walker's own extra allow-list) never drifts from what
+/// the registry actually dispatches.
+/// `json`, like every other provider this crate can build, now goes
+/// through [`electricity_vm::exec::tool::resolve_plugin`]'s own
+/// per-attempt [`electricity_tools::build_plugin`] fallback instead of
+/// a long-lived singleton here (review finding 6 on PR #454) -- a
+/// production run's own [`electricity_vm::RunContext::registry`] is
+/// left with nothing registered at all through M1-A; `test-tools`'
+/// `sleep`/`fail` still register as singletons (stateless, so there is
+/// nothing per-attempt for either to restart).
 fn tool_registry() -> electricity_tools::ToolRegistry {
+    // `mut` is only exercised under `test-tools` -- a plain release
+    // build's own registry is never mutated after construction, now
+    // that `json` no longer registers a singleton here.
+    #[allow(unused_mut)]
     let mut registry = electricity_tools::ToolRegistry::new();
-    registry.register(Box::new(electricity_tools::json::JsonTool));
     #[cfg(feature = "test-tools")]
     {
         registry.register(Box::new(electricity_tools::test_tools::SleepTool));
@@ -221,6 +240,10 @@ fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::DocumentAdapter(adapter) => format!(
             "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
         ),
+        RefusalReason::ComplexityEnabled => {
+            "a run whose effective config enables complexity scoring, routing or decomposition"
+                .to_string()
+        }
     }
 }
 
@@ -446,19 +469,36 @@ struct Observer<'a> {
     totals: &'a Totals,
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
+    /// Issue #449's gate lane item 7's own per-instance `--events`
+    /// pairing seam -- the fallback id source when `--events` itself
+    /// is off, so `effect_start` always has *some* value to hand back
+    /// regardless. When `--events` is on, [`events::EventLog::on_start`]'s
+    /// own id is used instead (review finding 3 on PR #454: a *second*,
+    /// independent counter here could never line up with `EventLog`'s
+    /// own per-path stack, which is keyed by the ids `EventLog::on_start`
+    /// itself hands out).
+    next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
 }
 
 impl RunObserver for Observer<'_> {
-    fn effect_start(&self, path: &EffectPath) {
+    fn effect_start(&self, path: &EffectPath) -> electricity_vm::observer::InstanceId {
         if let Some(log) = self.events {
-            log.on_start(&path.to_string());
+            return log.on_start(&path.to_string());
         }
+        let instance = self.next_instance.get() + 1;
+        self.next_instance.set(instance);
+        instance
     }
 
-    fn effect_complete(&self, path: &EffectPath, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        instance: electricity_vm::observer::InstanceId,
+        error: Option<&str>,
+    ) {
         self.totals.observe_complete();
         if let Some(log) = self.events {
-            log.on_complete(&path.to_string(), error);
+            log.on_complete(&path.to_string(), instance, error);
         }
     }
 
@@ -979,11 +1019,24 @@ pub async fn run_orchestration_with_config(
         Err(err) => fail!(err.to_string()),
     };
 
+    // Resolved before the refusal walker below needs it (review P2-10
+    // on PR #454's second review: whether this run's own effective
+    // config enables complexity scoring/routing/decomposition isn't a
+    // property of *program* itself, so the walker takes it as an
+    // argument rather than re-deriving it) -- the same value `run_ctx.
+    // complexity` below reuses, resolved only once.
+    let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
+        .unwrap_or_default();
+
     // Lane A's own refusal walker (issue #408's gate lane), wired in
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(&program, extra_allowed_providers()) {
+    if let Some(refusal) = first_unsupported(
+        &program,
+        complexity.enabled(),
+        &electricity_bytecode::Supported::current(extra_supported_providers()),
+    ) {
         return RunResult {
             ok: false,
             state: None,
@@ -1025,10 +1078,24 @@ pub async fn run_orchestration_with_config(
         totals: &totals,
         events: event_log.as_ref(),
         live_state: live_mirror.as_ref(),
+        next_instance: std::cell::Cell::new(0),
     };
 
     let model = effective.model.clone().unwrap_or_default();
     let registry = tool_registry();
+    // Review P2-3 on PR #454's second review: `electricity_adapters::
+    // build_registry()` (today identical to a fresh
+    // `AdapterRegistry::new()` -- lane F1 hasn't registered a builder
+    // yet) replaces a direct `AdapterRegistry::new()` call here, so
+    // lane F1/F2's own PR only ever adds a builder line inside
+    // `build_registry()`'s own crate, never touches this file to wire
+    // a real registry into the run for the first time.
+    let adapters = electricity_adapters::build_registry();
+    let orchestration_dir: &Path = program
+        .document
+        .as_ref()
+        .map(|doc| doc.resolved_directory.as_path())
+        .unwrap_or_else(|| Path::new("."));
     let run_ctx = RunContext {
         registry: &registry,
         limiter: &limiter,
@@ -1040,6 +1107,17 @@ pub async fn run_orchestration_with_config(
         adapter: "_noop",
         runtime_config: &runtime_config_value,
         dry_run: false,
+        armed: req.armed,
+        adapters: &adapters,
+        default_adapter: Rc::new(electricity_vm::adapter::NoopAdapter),
+        model_locked: false,
+        adapter_timeout_seconds: 120,
+        complexity: &complexity,
+        decomposition_depth: 0,
+        orchestration_dir,
+        declared_prompts: &program.prompts,
+        effect_names: &program.effect_names,
+        display_depth: 0,
     };
 
     // Step 17/18: execute the root, then the success or failure tail.

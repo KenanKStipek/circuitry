@@ -10,7 +10,7 @@
 
 use super::dynamic::now_iso;
 use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
-use crate::{CancellationToken, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -27,11 +27,13 @@ use std::collections::HashSet;
 /// anything *outside* its own branch loop). [`decide_and_run`] resolves
 /// this chain itself, fresh, every time it is actually needed -- never
 /// once, up front -- see that function's own doc comment for why.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_conditional<'a>(
     op: &'a Op,
     store: &'a Store,
     parent: &'a NodeRef,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
@@ -54,7 +56,8 @@ pub(crate) fn execute_conditional<'a>(
                 let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
                 write_conditional_meta_start(store, &meta, cond, *threshold, op.labels.as_ref());
 
-                observer.effect_start(&op.path);
+                let effect_path = frame.effect_path(&op.path);
+                let instance = observer.effect_start(&effect_path);
                 let result = decide_and_run(
                     op,
                     cond,
@@ -64,6 +67,7 @@ pub(crate) fn execute_conditional<'a>(
                     &node,
                     Some((&node, &meta)),
                     ctx_chain,
+                    frame,
                     run_ctx,
                     observer,
                     token,
@@ -77,13 +81,17 @@ pub(crate) fn execute_conditional<'a>(
                 // still returns `Ok`) and for an interrupted branch
                 // (`decide_and_run` returns `Err(Cancelled)`, but
                 // meta.error is never written for a cancellation).
-                observer.effect_complete(&op.path, node_error(store, &meta).as_deref());
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    node_error(store, &meta).as_deref(),
+                );
                 result
             }
             None => {
                 decide_and_run(
-                    op, cond, then_, else_, store, parent, None, ctx_chain, run_ctx, observer,
-                    token,
+                    op, cond, then_, else_, store, parent, None, ctx_chain, frame, run_ctx,
+                    observer, token,
                 )
                 .await
             }
@@ -186,51 +194,74 @@ async fn decide_and_run<'a>(
     branch_parent: &'a NodeRef,
     named: Option<(&'a NodeRef, &'a NodeRef)>,
     ctx_chain: &'a CtxChain,
+    frame: &'a Frame,
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
 ) -> Result<(), VmError> {
-    let Condition::Cel { expr, strict } = cond else {
-        return Err(VmError::NotImplemented(format!(
-            "{}: a `mode: model` `if` is not supported by the M0-H interpreter",
-            op.path
-        )));
-    };
-
     let ctx = super::live_ctx(ctx_chain, store);
-    let result = match electricity_cel::evaluate_condition(expr, &ctx, *strict) {
-        Ok(b) => b,
-        Err(e) => {
-            let text = e.to_string();
-            if let Some((_, meta)) = named {
-                store.set_leaf(meta, key("error"), Value::Str(text.clone()));
-                store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
-            }
-            match op.on_error {
-                OnError::Fail => return Err(VmError::Message(text)),
-                OnError::Skip => {
-                    if let Some((node, _)) = named {
-                        let mut v = IndexMap::new();
-                        v.insert(key("result"), Value::None);
-                        v.insert(key("branch"), Value::None);
-                        v.insert(key("effects"), Value::Dict(IndexMap::new()));
-                        store.set_leaf(node, key("value"), Value::Dict(v));
+    let result = match cond {
+        Condition::Cel { expr, strict } => {
+            match electricity_cel::evaluate_condition(expr, &ctx, *strict) {
+                Ok(b) => b,
+                Err(e) => {
+                    let text = e.to_string();
+                    if let Some((_, meta)) = named {
+                        store.set_leaf(meta, key("error"), Value::Str(text.clone()));
+                        store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
                     }
-                    return Ok(());
+                    match op.on_error {
+                        OnError::Fail => return Err(VmError::Message(text)),
+                        OnError::Skip => {
+                            if let Some((node, _)) = named {
+                                let mut v = IndexMap::new();
+                                v.insert(key("result"), Value::None);
+                                v.insert(key("branch"), Value::None);
+                                v.insert(key("effects"), Value::Dict(IndexMap::new()));
+                                store.set_leaf(node, key("value"), Value::Dict(v));
+                            }
+                            return Ok(());
+                        }
+                        OnError::Continue => {
+                            // `core/conditional.py`'s own `logger.warning("Conditional
+                            // %r: condition failed (%s); on_error=continue, taking
+                            // the else branch", self.defn.name or "<unnamed>", e)`
+                            // (issue #442).
+                            log::warn!(
+                                "Conditional {}: condition failed ({text}); on_error=continue, taking the else branch",
+                                Value::Str(
+                                    op.name.clone().unwrap_or_else(|| "<unnamed>".to_string())
+                                )
+                                .py_repr()
+                            );
+                            false
+                        }
+                        OnError::Break => {
+                            unreachable!("a conditional's own on_error is never `break`")
+                        }
+                    }
                 }
-                OnError::Continue => {
-                    // `core/conditional.py`'s own `logger.warning("Conditional
-                    // %r: condition failed (%s); on_error=continue, taking
-                    // the else branch", self.defn.name or "<unnamed>", e)`
-                    // (issue #442).
-                    log::warn!(
-                        "Conditional {}: condition failed ({text}); on_error=continue, taking the else branch",
-                        Value::Str(op.name.clone().unwrap_or_else(|| "<unnamed>".to_string()))
-                            .py_repr()
-                    );
-                    false
-                }
-                OnError::Break => unreachable!("a conditional's own on_error is never `break`"),
+            }
+        }
+        // Review P2-4 on PR #454's second review: wired to
+        // `condition_model::evaluate_model_condition` now, so lane
+        // G2's own PR only ever fills that module's stub bodies,
+        // never this file -- unreachable in any real run today
+        // (`Supported::model_condition` stays `false` until G2 flips
+        // it, and the refusal walker refuses a model-mode `if` before
+        // any run starts), but a real call site instead of a panic if
+        // that ever changed without the matching wiring. `on_error`'s
+        // own skip/continue degradation for a failed model call is
+        // G2's own body to design, same as the CEL branch's -- this
+        // call site only has to exist, not finish that design.
+        Condition::Model { template } => {
+            match super::condition_model::evaluate_model_condition(
+                template, &ctx, &op.path, frame, run_ctx, token,
+            )
+            .await
+            {
+                Ok(outcome) => outcome.passed,
+                Err(err) => return Err(err),
             }
         }
     };
@@ -264,6 +295,7 @@ async fn decide_and_run<'a>(
             store,
             branch_parent,
             &step_chain,
+            frame,
             run_ctx,
             observer,
             token,

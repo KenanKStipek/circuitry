@@ -27,6 +27,14 @@ pub struct RunRequest {
     pub pretty: bool,
     pub live_state_path: Option<PathBuf>,
     pub events_path: Option<PathBuf>,
+    /// `true` only for a CLI-driven run (`ToolCall::armed`'s own doc
+    /// comment, `electricity_tools::ToolCall`) -- a run option on
+    /// *this* struct, not a literal `run_orchestration` hard-codes
+    /// (review P2-g on PR #454), so an embedding caller that isn't
+    /// `electricity-cli` can pass `false`. `electricity-cli`'s own
+    /// `main` always passes `true`: this crate has no embedding
+    /// caller of its own yet (M1-A).
+    pub armed: bool,
 }
 
 /// `run_orchestration`'s own result -- success and failure both carry a

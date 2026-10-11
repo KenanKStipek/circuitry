@@ -437,6 +437,7 @@ mod golden_tests {
                         path: fan_path,
                         name: Some("fan".to_string()),
                         kind: NodeKind::Control(Region::Loop {
+                            name: Some("fan".to_string()),
                             spec: LoopSpec::Each {
                                 in_path: "prime.items".to_string(),
                                 as_name: "item".to_string(),
