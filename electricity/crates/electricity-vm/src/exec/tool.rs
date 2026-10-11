@@ -69,14 +69,38 @@ use electricity_tools::{ToolCall, ToolRegistry};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 
-/// Runs *provider* (a tool effect's own `provider:`) against *registry*,
-/// with *params* already rendered (lane B/C's own `params.rs` -- `{from:
-/// ...}` resolved, templates rendered, `params_json` deep-merged; out of
-/// scope for this function) -- *runtime_config* is the merged `runtime:`
-/// block [`crate::RunContext::runtime_config`] carries, read for the
-/// [`electricity_tools::ToolCall::config`] slice the plugin's own
-/// `execute` receives (and, on the fallback path below, for
-/// `build_plugin`'s own per-attempt build too).
+/// Either half of the plugin a `tool` effect ends up dispatching
+/// through -- [`resolve_plugin`]'s own result. An embedder's own
+/// long-lived [`electricity_tools::ToolPlugin`] instance borrows
+/// straight through; one [`electricity_tools::build_plugin`] just
+/// built owns its own box (review finding 6 on PR #454: resolving
+/// *before* the limiter slot is acquired, as `core/tool.py::
+/// ToolRuntime.execute` does, needs a value this enum's own caller can
+/// hold across that wait -- a bare `&dyn ToolPlugin` can't borrow from
+/// a `Box` [`resolve_plugin`] itself only just created and is about to
+/// drop).
+pub enum ResolvedPlugin<'a> {
+    Registered(&'a dyn electricity_tools::ToolPlugin),
+    Built(Box<dyn electricity_tools::ToolPlugin>),
+}
+
+impl ResolvedPlugin<'_> {
+    fn as_dyn(&self) -> &dyn electricity_tools::ToolPlugin {
+        match self {
+            ResolvedPlugin::Registered(plugin) => *plugin,
+            ResolvedPlugin::Built(plugin) => plugin.as_ref(),
+        }
+    }
+}
+
+/// Looks *provider* (a tool effect's own `provider:`) up in *registry*,
+/// falling through to [`electricity_tools::build_plugin`] -- `core/
+/// tool.py::ToolRuntime.execute`'s own `build_plugin(...)` call,
+/// `tool.py:702`, which runs *before* that same attempt's limiter wait
+/// (`tool.py:724`) -- [`execute_tool`] calls this first, outside its
+/// own acquire `select!`, so a per-plugin config error fails the
+/// attempt immediately, never waiting for a concurrency slot it will
+/// only turn around and release unused (review finding 6 on PR #454).
 ///
 /// *registry* (still [`crate::RunContext::registry`]) is tried first --
 /// an embedder's own long-lived [`electricity_tools::ToolPlugin`]
@@ -84,10 +108,15 @@ use indexmap::IndexMap;
 /// still register) always wins when one is registered under
 /// *provider*'s own normalized name. Only a *provider* with no such
 /// entry falls through to [`electricity_tools::build_plugin`] (issue
-/// #449's gate lane item 2) -- called fresh on *this* call, i.e. inside
-/// the retry loop below, exactly where `core/tool.py::ToolRuntime.
-/// execute` calls Python's own `build_plugin` every attempt -- so a
-/// per-plugin config error on that path fails just the one attempt.
+/// #449's gate lane item 2) -- called fresh on *this* call, i.e. once
+/// per attempt, exactly where `core/tool.py::ToolRuntime.execute` calls
+/// Python's own `build_plugin` every attempt -- so a per-plugin config
+/// error on that path fails just the one attempt. `json` is never
+/// registered as a singleton on the production path
+/// (`electricity::tool_registry`) for exactly this reason: every
+/// attempt builds its own fresh [`electricity_tools::json::JsonTool`]
+/// through this same fallback, the way any other `build_plugin`-only
+/// provider would.
 ///
 /// `Err` is a typed [`electricity_tools::ToolError`] (review finding 1
 /// on PR #454 -- a previous revision wrapped it into a bare
@@ -96,12 +125,36 @@ use indexmap::IndexMap;
 /// for retry or report its real exception class) -- `build_plugin`'s
 /// own exact unknown-plugin text (naming Circuitry's **full**
 /// registry, [`electricity_tools::PyExc::ValueError`]) for a *provider*
-/// neither *registry* nor `build_plugin` knows, or the resolved
-/// plugin's own raised [`electricity_tools::ToolError`] unchanged.
-/// [`execute_tool`] is the one place this crate ever turns it into a
-/// [`VmError::Raised`].
+/// neither *registry* nor `build_plugin` knows.
+pub fn resolve_plugin<'a>(
+    registry: &'a ToolRegistry,
+    provider: &str,
+    runtime_config: &Value,
+) -> Result<ResolvedPlugin<'a>, electricity_tools::ToolError> {
+    let normalized = provider.trim().to_lowercase();
+    if let Some(plugin) = registry.get(&normalized) {
+        return Ok(ResolvedPlugin::Registered(plugin));
+    }
+    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)?;
+    Ok(ResolvedPlugin::Built(plugin))
+}
+
+/// Dispatches *params* (already rendered -- lane B/C's own `params.rs`:
+/// `{from: ...}` resolved, templates rendered, `params_json`
+/// deep-merged; out of scope for this function) through *plugin*
+/// ([`resolve_plugin`]'s own result, resolved by the caller *before*
+/// this call). *runtime_config* is the merged `runtime:` block
+/// [`crate::RunContext::runtime_config`] carries, read again here only
+/// for the [`electricity_tools::ToolCall::config`] slice *plugin*'s own
+/// `execute` receives (`resolve_plugin`'s own build already read it
+/// once, for the build itself; a plugin's own `execute`, e.g. `shell`'s
+/// host pin, can still need the same slice again at dispatch time).
+///
+/// `Err` is the resolved plugin's own raised
+/// [`electricity_tools::ToolError`], unchanged. [`execute_tool`] is the
+/// one place this crate ever turns it into a [`VmError::Raised`].
 pub async fn run_tool(
-    registry: &ToolRegistry,
+    plugin: &ResolvedPlugin<'_>,
     provider: &str,
     params: Value,
     runtime_config: &Value,
@@ -117,11 +170,7 @@ pub async fn run_tool(
         token,
         armed,
     };
-    if let Some(plugin) = registry.get(&normalized) {
-        return plugin.execute(params, &call).await;
-    }
-    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)?;
-    plugin.execute(params, &call).await
+    plugin.as_dyn().execute(params, &call).await
 }
 
 /// `core/tool.py::DEFAULT_TOOL_TIMEOUT_SECONDS`.
@@ -518,182 +567,212 @@ pub async fn execute_tool(
                     electricity_redaction::redact(rendered_value.clone()),
                 );
 
-                let group = tool.group.as_deref();
-                let acquire_future =
-                    run_ctx
-                        .limiter
-                        .acquire_reporting(group, |event| match event {
-                            crate::limiter::SlotEvent::Waiting(label) => {
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "waiting_for",
-                                    Value::Str(label.to_string()),
-                                );
-                                observer.write();
-                            }
-                            crate::limiter::SlotEvent::Acquired => {
-                                set_leaf(store, &meta_node, "waiting_for", Value::None);
-                                observer.write();
-                            }
-                        });
-                // Biased: a free slot must be taken even if the token
-                // is already cancelled, never raced against it -- Python's
-                // own `_acquire_one` (`core/concurrency.py`) takes a free
-                // slot with a non-blocking `sem.acquire(blocking=False)`
-                // and returns before ever looking at the cancellation
-                // token, which is only checked once this call actually
-                // has to block. Listing the work branch first only
-                // matters because of `biased;`: tokio polls branches in
-                // source order and takes the first *ready* one, instead
-                // of picking at random among every branch that happens to
-                // be ready on the same poll.
-                let acquired = tokio::select! {
-                    biased;
-                    result = acquire_future => Some(result),
-                    () = token.cancelled() => None,
-                };
-
-                match acquired {
-                    None => return Err(VmError::Cancelled),
-                    Some(Err(limiter_err)) => {
-                        failure = Some(electricity_tools::ToolError::message(
-                            limiter_err.to_string(),
-                        ));
+                // `core/tool.py::ToolRuntime.execute`'s own
+                // `build_plugin(...)` call (`tool.py:702`) runs *before*
+                // that same attempt's limiter wait (`tool.py:724`) --
+                // resolved here, outside the acquire `select!` below, so
+                // a per-plugin config error fails this attempt at once,
+                // never waiting for (and then releasing unused) a
+                // concurrency slot (review finding 6 on PR #454).
+                match resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config) {
+                    Err(err) => {
+                        failure = Some(err);
                     }
-                    Some(Ok(guard)) => {
-                        // `run_tool`'s own future is not itself
-                        // cancellation-aware (it has no token to check),
-                        // so this `select!` is the only thing standing
-                        // between a cancelled run and a tool dispatch
-                        // that blocks indefinitely -- a hit here, like
-                        // every other cancellation point in this
-                        // function, is `VmError::Cancelled` and bypasses
-                        // `on_error` entirely, never folded into an
-                        // ordinary `VmError::Raised` failure.
-                        // Biased, for the same reason as the acquire
-                        // `select!` above: a `run_tool` future that is
-                        // already finished at the first poll (an
-                        // instantly-completed json tool, say) must keep
-                        // its result, never race a concurrent
-                        // cancellation to a coin flip -- Python's own
-                        // `ToolRuntime.execute` (`core/tool.py`) has no
-                        // cancellation check once a dispatched call has
-                        // actually returned, only before the next attempt.
-                        let dispatch = tokio::select! {
+                    Ok(resolved) => {
+                        let group = tool.group.as_deref();
+                        let acquire_future =
+                            run_ctx
+                                .limiter
+                                .acquire_reporting(group, |event| match event {
+                                    crate::limiter::SlotEvent::Waiting(label) => {
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "waiting_for",
+                                            Value::Str(label.to_string()),
+                                        );
+                                        observer.write();
+                                    }
+                                    crate::limiter::SlotEvent::Acquired => {
+                                        set_leaf(store, &meta_node, "waiting_for", Value::None);
+                                        observer.write();
+                                    }
+                                });
+                        // Biased: a free slot must be taken even if the token
+                        // is already cancelled, never raced against it -- Python's
+                        // own `_acquire_one` (`core/concurrency.py`) takes a free
+                        // slot with a non-blocking `sem.acquire(blocking=False)`
+                        // and returns before ever looking at the cancellation
+                        // token, which is only checked once this call actually
+                        // has to block. Listing the work branch first only
+                        // matters because of `biased;`: tokio polls branches in
+                        // source order and takes the first *ready* one, instead
+                        // of picking at random among every branch that happens to
+                        // be ready on the same poll.
+                        let acquired = tokio::select! {
                             biased;
-                            result = run_tool(
-                                run_ctx.registry,
-                                &tool.provider,
-                                rendered_value,
-                                run_ctx.runtime_config,
-                                timeout_seconds,
-                                token,
-                                run_ctx.armed,
-                            ) => Some(result),
+                            result = acquire_future => Some(result),
                             () = token.cancelled() => None,
                         };
-                        // Released before this attempt's own backoff
-                        // sleep (and before a model-mode `expect:` would
-                        // run, if M0-H ever dispatched one) -- a
-                        // retrying/`expect`-checking attempt must never
-                        // hold its slot while it isn't actually using it.
-                        // Also unconditionally the right thing to do on
-                        // the cancelled branch above: the slot is never
-                        // held past this `select!`, cancelled or not.
-                        drop(guard);
 
-                        let Some(dispatch) = dispatch else {
-                            return Err(VmError::Cancelled);
-                        };
-                        match dispatch {
-                            Err(err) => failure = Some(err),
-                            Ok(result) => {
-                                let value_for_expect = result.value.clone();
-                                set_leaf(store, &effect_node, "value", result.value);
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "stdout",
-                                    result.stdout.map(Value::Str).unwrap_or(Value::None),
-                                );
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "stderr",
-                                    result.stderr.clone().map(Value::Str).unwrap_or(Value::None),
-                                );
-                                set_leaf(
-                                    store,
-                                    &meta_node,
-                                    "exit_code",
-                                    result
-                                        .exit_code
-                                        .map(|code| Value::from(i64::from(code)))
-                                        .unwrap_or(Value::None),
-                                );
-                                set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+                        match acquired {
+                            None => return Err(VmError::Cancelled),
+                            Some(Err(limiter_err)) => {
+                                failure = Some(electricity_tools::ToolError::message(
+                                    limiter_err.to_string(),
+                                ));
+                            }
+                            Some(Ok(guard)) => {
+                                // `run_tool`'s own future is not itself
+                                // cancellation-aware (it has no token to check),
+                                // so this `select!` is the only thing standing
+                                // between a cancelled run and a tool dispatch
+                                // that blocks indefinitely -- a hit here, like
+                                // every other cancellation point in this
+                                // function, is `VmError::Cancelled` and bypasses
+                                // `on_error` entirely, never folded into an
+                                // ordinary `VmError::Raised` failure.
+                                // Biased, for the same reason as the acquire
+                                // `select!` above: a `run_tool` future that is
+                                // already finished at the first poll (an
+                                // instantly-completed json tool, say) must keep
+                                // its result, never race a concurrent
+                                // cancellation to a coin flip -- Python's own
+                                // `ToolRuntime.execute` (`core/tool.py`) has no
+                                // cancellation check once a dispatched call has
+                                // actually returned, only before the next attempt.
+                                let dispatch = tokio::select! {
+                                    biased;
+                                    result = run_tool(
+                                        &resolved,
+                                        &tool.provider,
+                                        rendered_value,
+                                        run_ctx.runtime_config,
+                                        timeout_seconds,
+                                        token,
+                                        run_ctx.armed,
+                                    ) => Some(result),
+                                    () = token.cancelled() => None,
+                                };
+                                // Released before this attempt's own backoff
+                                // sleep (and before a model-mode `expect:` would
+                                // run, if M0-H ever dispatched one) -- a
+                                // retrying/`expect`-checking attempt must never
+                                // hold its slot while it isn't actually using it.
+                                // Also unconditionally the right thing to do on
+                                // the cancelled branch above: the slot is never
+                                // held past this `select!`, cancelled or not.
+                                drop(guard);
 
-                                if !result.ok {
-                                    let message = result
-                                        .stderr
-                                        .filter(|s| !s.is_empty())
-                                        .unwrap_or_else(|| {
-                                            format!(
-                                                "{} tool reported failure (ok=False)",
-                                                tool.provider
-                                            )
-                                        });
-                                    failure = Some(electricity_tools::ToolError::message(message));
-                                } else if let Some(expect) = &tool.expect {
-                                    let ExpectCondition::Cel { expr } = expect else {
-                                        unreachable!(
-                                            "a tool expect in model mode is refused before a run starts"
-                                        )
-                                    };
-                                    let meta_snapshot = store.snapshot(&meta_node);
-                                    let mut expect_meta = IndexMap::new();
-                                    expect_meta.insert(Value::from("mode"), Value::from("cel"));
-                                    expect_meta
-                                        .insert(Value::from("expr"), Value::from(expr.as_str()));
-                                    match electricity_cel::evaluate_expect(
-                                        expr,
-                                        &value_for_expect,
-                                        &meta_snapshot,
-                                        ctx,
-                                    ) {
-                                        Ok(passed) => {
-                                            expect_meta
-                                                .insert(Value::from("result"), Value::Bool(passed));
-                                            set_leaf(
-                                                store,
-                                                &meta_node,
-                                                "expect",
-                                                Value::Dict(expect_meta),
-                                            );
-                                            if !passed {
-                                                failure =
-                                                    Some(electricity_tools::ToolError::message(
-                                                        format!("expect failed: {expr}"),
-                                                    ));
-                                            }
-                                        }
-                                        Err(cel_err) => {
-                                            expect_meta.insert(
-                                                Value::from("error"),
-                                                Value::from(cel_err.to_string().as_str()),
-                                            );
-                                            expect_meta
-                                                .insert(Value::from("result"), Value::Bool(false));
-                                            set_leaf(
-                                                store,
-                                                &meta_node,
-                                                "expect",
-                                                Value::Dict(expect_meta),
-                                            );
+                                let Some(dispatch) = dispatch else {
+                                    return Err(VmError::Cancelled);
+                                };
+                                match dispatch {
+                                    Err(err) => failure = Some(err),
+                                    Ok(result) => {
+                                        let value_for_expect = result.value.clone();
+                                        set_leaf(store, &effect_node, "value", result.value);
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "stdout",
+                                            result.stdout.map(Value::Str).unwrap_or(Value::None),
+                                        );
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "stderr",
+                                            result
+                                                .stderr
+                                                .clone()
+                                                .map(Value::Str)
+                                                .unwrap_or(Value::None),
+                                        );
+                                        set_leaf(
+                                            store,
+                                            &meta_node,
+                                            "exit_code",
+                                            result
+                                                .exit_code
+                                                .map(|code| Value::from(i64::from(code)))
+                                                .unwrap_or(Value::None),
+                                        );
+                                        set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+
+                                        if !result.ok {
+                                            let message = result
+                                                .stderr
+                                                .filter(|s| !s.is_empty())
+                                                .unwrap_or_else(|| {
+                                                    format!(
+                                                        "{} tool reported failure (ok=False)",
+                                                        tool.provider
+                                                    )
+                                                });
                                             failure = Some(electricity_tools::ToolError::message(
-                                                format!("expect failed: {expr}"),
+                                                message,
                                             ));
+                                        } else if let Some(expect) = &tool.expect {
+                                            let ExpectCondition::Cel { expr } = expect else {
+                                                unreachable!(
+                                                    "a tool expect in model mode is refused before a run starts"
+                                                )
+                                            };
+                                            let meta_snapshot = store.snapshot(&meta_node);
+                                            let mut expect_meta = IndexMap::new();
+                                            expect_meta
+                                                .insert(Value::from("mode"), Value::from("cel"));
+                                            expect_meta.insert(
+                                                Value::from("expr"),
+                                                Value::from(expr.as_str()),
+                                            );
+                                            match electricity_cel::evaluate_expect(
+                                                expr,
+                                                &value_for_expect,
+                                                &meta_snapshot,
+                                                ctx,
+                                            ) {
+                                                Ok(passed) => {
+                                                    expect_meta.insert(
+                                                        Value::from("result"),
+                                                        Value::Bool(passed),
+                                                    );
+                                                    set_leaf(
+                                                        store,
+                                                        &meta_node,
+                                                        "expect",
+                                                        Value::Dict(expect_meta),
+                                                    );
+                                                    if !passed {
+                                                        failure = Some(
+                                                            electricity_tools::ToolError::message(
+                                                                format!("expect failed: {expr}"),
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                                Err(cel_err) => {
+                                                    expect_meta.insert(
+                                                        Value::from("error"),
+                                                        Value::from(cel_err.to_string().as_str()),
+                                                    );
+                                                    expect_meta.insert(
+                                                        Value::from("result"),
+                                                        Value::Bool(false),
+                                                    );
+                                                    set_leaf(
+                                                        store,
+                                                        &meta_node,
+                                                        "expect",
+                                                        Value::Dict(expect_meta),
+                                                    );
+                                                    failure = Some(
+                                                        electricity_tools::ToolError::message(
+                                                            format!("expect failed: {expr}"),
+                                                        ),
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -765,21 +844,13 @@ pub async fn execute_tool(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn an_unknown_provider_lists_pythons_full_registry() {
+    #[test]
+    fn an_unknown_provider_lists_pythons_full_registry() {
         let registry = ToolRegistry::new();
-        let token = CancellationToken::new();
-        let err = run_tool(
-            &registry,
-            "bogus",
-            Value::None,
-            &Value::None,
-            300,
-            &token,
-            false,
-        )
-        .await
-        .unwrap_err();
+        let err = match resolve_plugin(&registry, "bogus", &Value::None) {
+            Err(err) => err,
+            Ok(_) => panic!("expected an unknown-plugin error"),
+        };
         assert!(err.message.starts_with("Unknown plugin: 'bogus'."));
         assert_eq!(err.py_class, electricity_tools::PyExc::ValueError);
     }
@@ -787,9 +858,10 @@ mod tests {
     #[tokio::test]
     async fn a_provider_name_is_normalized_before_dispatch() {
         let registry = ToolRegistry::new();
+        let resolved = resolve_plugin(&registry, "  JSON ", &Value::None).unwrap();
         let token = CancellationToken::new();
         let err = run_tool(
-            &registry,
+            &resolved,
             "  JSON ",
             Value::None,
             &Value::None,
@@ -808,9 +880,10 @@ mod tests {
     #[tokio::test]
     async fn a_built_providers_own_error_is_wrapped() {
         let registry = ToolRegistry::new();
+        let resolved = resolve_plugin(&registry, "json", &Value::None).unwrap();
         let token = CancellationToken::new();
         let err = run_tool(
-            &registry,
+            &resolved,
             "json",
             Value::None,
             &Value::None,
@@ -1589,6 +1662,76 @@ mod tests {
             4,
             "a write for Acquired, then one more for the final store write"
         );
+    }
+
+    #[tokio::test]
+    async fn a_build_error_never_waits_for_the_limiter_or_sets_waiting_for() {
+        // Review finding 6 on PR #454: `core/tool.py::ToolRuntime.
+        // execute` builds the plugin (`tool.py:702`) *before* the
+        // limiter wait (`tool.py:724`), so a per-plugin config error
+        // fails the attempt without ever touching the limiter. Proven
+        // here by holding the *only* slot in a group this tool
+        // dispatches into, then dispatching a provider `resolve_plugin`
+        // can never resolve -- if the build happened after acquiring
+        // (the old ordering), this call would hang forever waiting for
+        // the held slot; instead it must return promptly, having never
+        // set `meta.waiting_for` at all.
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "bogus".to_string();
+        tool.group = Some("io".to_string());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 1,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::with_limits(None, [("io".to_string(), 1)]);
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        // Hold the group's only slot for the whole call -- a build
+        // that incorrectly waited on it first would never see it
+        // freed within this test's own timeout.
+        let holder = limiter.acquire(Some("io")).await.unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            execute_tool(
+                &op,
+                &tool,
+                &store,
+                &store.root,
+                &Value::None,
+                &Frame::root(),
+                &run_ctx,
+                &crate::NullObserver,
+                &token,
+            ),
+        )
+        .await
+        .expect("a build error must fail immediately, never waiting on the held slot");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .starts_with("Unknown plugin: 'bogus'.")
+        );
+
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        assert_eq!(get_leaf(&meta_node, "waiting_for"), Some(Value::None));
+        drop(holder);
     }
 
     /// A test-only [`electricity_tools::ToolPlugin`] that fails its

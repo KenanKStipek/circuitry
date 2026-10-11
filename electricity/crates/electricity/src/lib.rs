@@ -190,9 +190,20 @@ fn supported_providers() -> &'static [&'static str] {
 /// place both are ever registered, so [`supported_providers`] (the
 /// refusal walker's own allow-list) never drifts from what the registry
 /// actually dispatches.
+/// `json`, like every other provider this crate can build, now goes
+/// through [`electricity_vm::exec::tool::resolve_plugin`]'s own
+/// per-attempt [`electricity_tools::build_plugin`] fallback instead of
+/// a long-lived singleton here (review finding 6 on PR #454) -- a
+/// production run's own [`electricity_vm::RunContext::registry`] is
+/// left with nothing registered at all through M1-A; `test-tools`'
+/// `sleep`/`fail` still register as singletons (stateless, so there is
+/// nothing per-attempt for either to restart).
 fn tool_registry() -> electricity_tools::ToolRegistry {
+    // `mut` is only exercised under `test-tools` -- a plain release
+    // build's own registry is never mutated after construction, now
+    // that `json` no longer registers a singleton here.
+    #[allow(unused_mut)]
     let mut registry = electricity_tools::ToolRegistry::new();
-    registry.register(Box::new(electricity_tools::json::JsonTool));
     #[cfg(feature = "test-tools")]
     {
         registry.register(Box::new(electricity_tools::test_tools::SleepTool));
