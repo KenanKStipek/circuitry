@@ -35,9 +35,15 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    // Issue #433's comments: a default `--out-dir` leaves an `osp-*`
+    // run directory in the real `$TMPDIR` -- every e2e test must give
+    // osp its own, inside this test's own temp dir.
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()
@@ -114,9 +120,15 @@ fn on_error_continue_still_exits_ok() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
+    // See the comment in `a_simple_run_succeeds_and_prints_the_log`: a
+    // default `--out-dir` leaves an `osp-*` directory in the real
+    // `$TMPDIR`.
+    let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
         .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
         .arg("--log")
         .current_dir(work.path())
         .spawn()

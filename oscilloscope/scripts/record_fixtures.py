@@ -602,12 +602,22 @@ def record_one(
             final_state = snapshots[-1]["state"]
         if final_state is not None:
             observed_adapter = final_state.get("runtime", {}).get("effective_settings", {}).get("adapter")
-            if observed_adapter is not None:
-                assert observed_adapter == "scripted", (
-                    f"{case.name}: runtime.effective_settings.adapter was "
-                    f"{observed_adapter!r}, not 'scripted' — the scripted "
-                    "adapter was never selected (K1)"
-                )
+            # Issue #433: a missing key failed open here (silently
+            # skipping the check instead of catching a fixture whose
+            # final state doesn't even carry `effective_settings` at
+            # all) -- always assert, so a missing adapter fails loudly
+            # with its own message instead of either passing silently
+            # or being folded into the generic "not 'scripted'" one.
+            assert observed_adapter is not None, (
+                f"{case.name}: runtime.effective_settings.adapter is missing "
+                "from the final state entirely — the scripted adapter's own "
+                "selection can't be checked at all (K1)"
+            )
+            assert observed_adapter == "scripted", (
+                f"{case.name}: runtime.effective_settings.adapter was "
+                f"{observed_adapter!r}, not 'scripted' — the scripted "
+                "adapter was never selected (K1)"
+            )
 
         events_text = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
 

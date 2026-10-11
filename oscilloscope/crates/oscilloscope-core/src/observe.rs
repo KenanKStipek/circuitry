@@ -79,6 +79,14 @@ pub struct EventsTailer {
     path: PathBuf,
     offset: u64,
     partial: String,
+    /// The last file this tailer actually read from, by device and
+    /// inode (issue #433): a replacement file that happens to be
+    /// *longer* than `offset` isn't caught by the length check alone
+    /// (a fresh run reusing the same path, started again right after
+    /// a short one) -- without this, the tailer would seek into the
+    /// new file at a leftover offset from the old one and read
+    /// nonsense from the middle of it instead of starting over.
+    identity: Option<(u64, u64)>,
 }
 
 impl EventsTailer {
@@ -87,6 +95,7 @@ impl EventsTailer {
             path: path.into(),
             offset: 0,
             partial: String::new(),
+            identity: None,
         }
     }
 
@@ -102,28 +111,42 @@ impl EventsTailer {
         let Ok(meta) = file.metadata() else {
             return Vec::new();
         };
-        if meta.len() < self.offset {
-            // Truncated/replaced (a fresh run reusing the same path):
-            // start over.
+        let identity = (meta.dev(), meta.ino());
+        if meta.len() < self.offset || self.identity.is_some_and(|prev| prev != identity) {
+            // Truncated, or a different file at the same path
+            // entirely (a fresh run reusing it, replaced by rename --
+            // the length check alone misses a replacement that
+            // happens to be longer than the old offset): start over.
             self.offset = 0;
             self.partial.clear();
         }
+        self.identity = Some(identity);
         if meta.len() == self.offset {
             return Vec::new();
         }
         if file.seek(SeekFrom::Start(self.offset)).is_err() {
             return Vec::new();
         }
-        let mut buf = String::new();
-        if file.read_to_string(&mut buf).is_err() {
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err() {
             return Vec::new();
         }
-        // Not `meta.len()`: `read_to_string` reads to whatever EOF is
+        // Not `meta.len()`: the read above reads to whatever EOF is
         // *now*, which can be past the length `meta` reported if the
         // file grew between the two calls. Advancing by the metadata's
         // (possibly stale) length instead left the next poll re-reading
         // -- and re-emitting -- the overlap (F7).
-        self.offset += buf.len() as u64;
+        self.offset += bytes.len() as u64;
+        // Lossy, not `String::from_utf8` (issue #433): cof writes
+        // ASCII JSON, so this never actually loses anything in
+        // practice, but a strict decode failing here would leave
+        // `self.partial` holding bytes this tailer can never advance
+        // past -- the same offset, the same error, forever. A lossy
+        // decode always makes progress; any byte range it had to
+        // substitute just fails that one line's own JSON parse below,
+        // the same tolerance an unparseable-but-valid line already
+        // gets.
+        let buf = String::from_utf8_lossy(&bytes).into_owned();
 
         self.partial.push_str(&buf);
         let mut lines = Vec::new();
@@ -352,6 +375,74 @@ mod tests {
 
         let second = tailer.poll();
         assert_eq!(second, vec![serde_json::json!({"ev": "b"})]);
+    }
+
+    #[test]
+    fn tailer_detects_a_replacement_file_even_when_it_is_longer_than_the_old_offset() {
+        // Issue #433: a fresh run reusing the same events path,
+        // replaced by rename, whose own content happens to be longer
+        // than wherever the previous run's tailer had gotten to --
+        // the length-only truncation check never catches this, so
+        // without tracking the file's own identity (device, inode)
+        // the tailer would seek into the new file at a leftover
+        // offset and read nonsense instead of starting over.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        fs::write(&path, b"{\"ev\":\"a\"}\n{\"ev\":\"b\"}\n").unwrap();
+
+        let mut tailer = EventsTailer::new(&path);
+        let first = tailer.poll();
+        assert_eq!(
+            first,
+            vec![
+                serde_json::json!({"ev": "a"}),
+                serde_json::json!({"ev": "b"}),
+            ]
+        );
+
+        // A longer replacement, written to a temp file and renamed
+        // over the original -- a new inode, a length well past the
+        // old offset.
+        let tmp = dir.path().join("events.jsonl.tmp");
+        fs::write(&tmp, b"{\"ev\":\"c\"}\n{\"ev\":\"d\"}\n{\"ev\":\"e\"}\n").unwrap();
+        fs::rename(&tmp, &path).unwrap();
+
+        let second = tailer.poll();
+        assert_eq!(
+            second,
+            vec![
+                serde_json::json!({"ev": "c"}),
+                serde_json::json!({"ev": "d"}),
+                serde_json::json!({"ev": "e"}),
+            ],
+            "should have started over from the new file's own beginning"
+        );
+    }
+
+    #[test]
+    fn tailer_skips_invalid_utf8_without_stalling_on_the_rest_of_the_file() {
+        // Issue #433: invalid UTF-8 must never permanently stall the
+        // tailer -- a strict decode failing here, with no bytes
+        // consumed, would leave every later poll retrying the exact
+        // same bytes and failing the exact same way forever.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"{\"ev\":\"a\"}\n");
+        bytes.extend_from_slice(&[0xFF, 0xFE]);
+        bytes.extend_from_slice(b"\n{\"ev\":\"b\"}\n");
+        fs::write(&path, &bytes).unwrap();
+
+        let mut tailer = EventsTailer::new(&path);
+        let lines = tailer.poll();
+        assert_eq!(
+            lines,
+            vec![
+                serde_json::json!({"ev": "a"}),
+                serde_json::json!({"ev": "b"})
+            ],
+            "the invalid line should be skipped, not block the valid ones around it"
+        );
     }
 
     #[test]

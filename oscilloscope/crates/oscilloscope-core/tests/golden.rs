@@ -139,6 +139,62 @@ fn replay(name: &str) -> String {
     out
 }
 
+/// `replay`, with a real compiled plan (from the fixture's own
+/// `do.yml`) instead of the no-plan fallback every other golden test
+/// here uses (issue #433's Tests item: "a golden with a compiled
+/// plan") -- exercises the plan-only behaviour `replay` structurally
+/// can't: an untaken `if` branch's own skip reason, and a container
+/// suppressed by the plan before it has ever shown up in state at
+/// all.
+fn replay_with_plan(name: &str) -> String {
+    let fixture = load_fixture(name);
+    let doc = fixtures_dir().join(name).join("do.yml");
+    let program = oscilloscope_core::plan::compile(&doc, None, &indexmap::IndexMap::new())
+        .unwrap_or_else(|e| panic!("{name}: couldn't compile do.yml: {e}"));
+    let plan = PlanTree::from_program(&program);
+    let mut differ = Differ::new();
+    let mut model = RunModel::new();
+    let mut out = String::new();
+
+    let interrupted_exit = fixture
+        .snapshots
+        .last()
+        .and_then(|s| s.pointer("/prime/meta/error"))
+        .and_then(Value::as_str)
+        .is_some_and(|e| e.starts_with("Interrupted"));
+    let last_index = fixture.snapshots.len().saturating_sub(1);
+
+    for (i, state) in fixture.snapshots.iter().enumerate() {
+        let is_last = i == last_index;
+        let process = if is_last {
+            ProcessState::exited(interrupted_exit)
+        } else {
+            ProcessState::Running
+        };
+
+        let mut lines = differ.diff(state, &plan);
+        if is_last {
+            if let Some(summary) = differ.finish(state, None) {
+                lines.push(summary);
+            }
+            sort_log_lines(&mut lines);
+        }
+        let rows = model.observe(state, &plan, process);
+
+        let _ = writeln!(out, "--- observation {i} ---");
+        let _ = writeln!(out, "log:");
+        for line in &lines {
+            let _ = writeln!(out, "  {}", line.text);
+        }
+        let _ = writeln!(out, "status:");
+        out.push_str(&format_rows(&rows));
+    }
+
+    let _ = writeln!(out, "--- exit ---");
+    let _ = writeln!(out, "exit_code: {}", fixture.exit_code);
+    out
+}
+
 /// Replays `name`'s recorded `events.jsonl` through a fresh `Differ`/
 /// `RunModel` — every `start`/`end` in file order, feeding both the
 /// per-event log lines (`Differ::diff_event`) and the model's own
@@ -228,6 +284,17 @@ golden_events_test!(
 );
 golden_events_test!(sigint_once_events, "sigint_once");
 golden_events_test!(aborted_second_sigint_events, "aborted_second_sigint");
+
+#[test]
+fn on_error_continue_with_a_compiled_plan() {
+    // Issue #433's Tests item: a golden with a real compiled plan,
+    // not just the no-plan fallback every other case here exercises
+    // -- the `(on_error: continue)` log suffix, and the
+    // failed-handled status, both come from the plan's own
+    // `on_error`, which `PlanTree::empty()` can never answer.
+    let rendered = replay_with_plan("on_error_continue");
+    insta::assert_snapshot!("on_error_continue_with_plan", rendered);
+}
 
 /// Committed fixtures must never carry a local machine's own path (the
 /// lane contract's standing rule for generated/recorded files): this

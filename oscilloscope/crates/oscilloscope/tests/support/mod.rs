@@ -151,10 +151,25 @@ pub fn wait_with_timeout_capturing_stdout(
         let _ = stdout_pipe.read_to_string(&mut buf);
         let _ = tx.send(buf);
     });
+    // Issue #433's comments: every caller of this helper spawns an
+    // `osp` whose own stderr is piped too (`osp_command`), and this
+    // helper otherwise never reads it -- a child that writes more
+    // than a pipe buffer's worth to stderr would block on the write
+    // end forever, with no timeout of its own. Drained on its own
+    // thread and discarded; a caller that needs the text itself uses
+    // `wait_with_timeout_capturing_stdout_and_stderr` instead.
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let (stderr_done_tx, stderr_done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        let _ = stderr_done_tx.send(());
+    });
     let status = wait_with_timeout(child, timeout);
     let stdout = rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|_| String::from("<stdout reader thread did not finish>"));
+    let _ = stderr_done_rx.recv_timeout(Duration::from_secs(5));
     (status, stdout)
 }
 
