@@ -198,6 +198,8 @@ def _describe_user_env(result: UserEnvResult | None) -> str:
     parts.append(f"supplied: {', '.join(result.supplied) or '(none)'}")
     if result.skipped:
         parts.append(f"already set in environment: {', '.join(result.skipped)}")
+    if result.invalid:
+        parts.append(f"invalid (skipped): {', '.join(result.invalid)}")
     if result.warning:
         parts.append(f"[yellow]WARN[/yellow] {result.warning}")
     return "; ".join(parts)

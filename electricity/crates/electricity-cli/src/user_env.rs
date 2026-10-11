@@ -74,6 +74,28 @@ fn mode_octal(mode: u32) -> String {
     format!("0o{mode:o}")
 }
 
+/// Python `repr(s)` of a plain string -- the invalid-entry warning's
+/// own `{key!r}` f-string interpolation (#473), quoted with Python's
+/// own rules rather than Rust's `{key:?}` Debug formatting.
+fn py_repr_str(s: &str) -> String {
+    electricity_value::Value::Str(s.to_string()).py_repr()
+}
+
+/// `cli/config.py::load_user_env`'s own f-string, verbatim: `{path}:
+/// skipping {key!r}: not a valid environment variable name or
+/// value.` -- factored out from [`load_user_env_at`]'s loop so a unit
+/// test can check the exact text without needing a real `.env` entry
+/// `dotenv_values` would actually produce (an empty key, for one,
+/// never reaches here from a real file either side's parser can
+/// produce -- this check stays defensive, matching the reference).
+fn invalid_entry_warning(path: &Path, key: &str) -> String {
+    format!(
+        "{}: skipping {}: not a valid environment variable name or value.",
+        path.display(),
+        py_repr_str(key),
+    )
+}
+
 /// POSIX ownership/mode bits are meaningless on a non-Unix target
 /// (there is no `getuid`, and a file's reported mode there doesn't
 /// reflect a real ACL) -- `cli/config.py::load_user_env`'s own
@@ -278,24 +300,25 @@ fn load_user_env_at(path: &Path) -> UserEnvResult {
         let Some(value) = value else { continue };
         // `std::env::set_var` panics on a key that is empty or
         // contains `=`/NUL, or a value containing NUL -- `cof`'s own
-        // `os.environ[key] = value` instead raises a `ValueError`
+        // `os.environ[key] = value` would instead raise a `ValueError`
         // ("illegal environment variable name" / "embedded null
-        // byte"), which `load_user_env` never catches, so cof fails
-        // the whole command too. Neither side's error text ever names
-        // the *value* -- but `set_var`'s panic message does (`failed
-        // to set environment variable {key:?} to {value:?}`), and with
-        // no custom panic hook that would reach stderr verbatim (#471
-        // review finding 2: a secret leak). A single-quoted key can
-        // contain `=` (`'A=B'=secret`), and a literal NUL byte decodes
-        // as valid UTF-8 inside a quoted or unquoted value -- both
-        // reachable from a real file, not just a hostile one. Skipped,
-        // not propagated as a hard failure: naming only the key keeps
+        // byte"); `cli/config.py::load_user_env` catches neither case
+        // by the type, it rejects the entry itself before ever
+        // assigning it, with the exact warning built below (#473).
+        // Neither side's warning text ever names the *value* -- but
+        // `set_var`'s panic message does (`failed to set environment
+        // variable {key:?} to {value:?}`), and with no custom panic
+        // hook that would reach stderr verbatim (#471 review finding
+        // 2: a secret leak). A single-quoted key can contain `=`
+        // (`'A=B'=secret`), and a literal NUL byte decodes as valid
+        // UTF-8 inside a quoted or unquoted value -- both reachable
+        // from a real file, not just a hostile one. Skipped, not
+        // propagated as a hard failure: naming only the key keeps
         // every other line in the same file loading, the same
         // robustness this function already gives an unreadable or
         // undecodable file.
         if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
-            let warning =
-                format!("{key:?} is not a valid environment variable name or value; skipping it.");
+            let warning = invalid_entry_warning(path, &key);
             log::warn!("{warning}");
             skipped.push(key);
             continue;
@@ -558,6 +581,31 @@ mod tests {
         assert!(result.supplied.is_empty());
         assert_eq!(result.skipped, vec!["K_468_NUL".to_string()]);
         assert!(std::env::var("K_468_NUL").is_err());
+    }
+
+    #[test]
+    fn invalid_entry_warning_quotes_the_key_with_python_repr_not_rust_debug() {
+        // #473: the reference's own `{path}: skipping {key!r}: not a
+        // valid environment variable name or value.`, byte for byte --
+        // Rust's `{key:?}` Debug formatting would double-quote instead.
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        assert_eq!(
+            invalid_entry_warning(path, "A=B"),
+            "/home/someone/.config/circuitry/.env: skipping 'A=B': \
+             not a valid environment variable name or value."
+        );
+    }
+
+    #[test]
+    fn invalid_entry_warning_never_contains_a_value() {
+        let path = Path::new("/home/someone/.config/circuitry/.env");
+        let warning = invalid_entry_warning(path, "K_468_NUL");
+        assert!(!warning.contains('\0'));
+        assert_eq!(
+            warning,
+            "/home/someone/.config/circuitry/.env: skipping 'K_468_NUL': \
+             not a valid environment variable name or value."
+        );
     }
 
     #[test]

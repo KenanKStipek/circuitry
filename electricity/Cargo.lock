@@ -414,6 +414,7 @@ version = "0.1.0"
 dependencies = [
  "electricity",
  "electricity-config",
+ "electricity-value",
  "libc",
  "log",
  "serde",

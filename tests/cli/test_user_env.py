@@ -9,6 +9,7 @@ writing `.env` there never touches the developer's real
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -166,6 +167,63 @@ def test_bare_key_with_no_value_is_not_reported_as_supplied():
         assert result.supplied == ("OPENAI_API_KEY",)
     finally:
         os.environ.pop("BARE_KEY", None)
+
+
+def test_equals_in_single_quoted_key_is_skipped_with_one_warning(caplog):
+    """A single-quoted key can contain `=` (`'A=B'=...`); `os.environ[key]
+    = value` would raise `ValueError` ("illegal environment variable
+    name") for it (#473)."""
+    path = _write_env("'A=B'=" + _CANARY + "\nOPENAI_API_KEY=" + _CANARY + "\n")
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("A=B",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    assert "A=B" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
+    assert _CANARY not in caplog.text
+    expected = f"{path}: skipping 'A=B': not a valid environment variable name or value."
+    assert expected in caplog.text
+    assert caplog.text.count("not a valid environment variable name or value") == 1
+
+
+def test_nul_byte_in_value_is_skipped_with_one_warning(caplog):
+    """A raw NUL byte decodes as valid UTF-8 inside a value, but
+    `os.environ[key] = value` would raise `ValueError` ("embedded null
+    byte") for it (#473)."""
+    path = _write_env("NUL_KEY=ab\x00cd\nOPENAI_API_KEY=" + _CANARY + "\n")
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("NUL_KEY",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    assert "NUL_KEY" not in os.environ
+    assert os.environ["OPENAI_API_KEY"] == _CANARY
+    assert "ab" not in caplog.text or "cd" not in caplog.text
+    expected = f"{path}: skipping 'NUL_KEY': not a valid environment variable name or value."
+    assert expected in caplog.text
+
+
+def test_empty_key_is_skipped_with_one_warning(monkeypatch, caplog):
+    """`python-dotenv` never actually hands `load_user_env` an empty key
+    (its own line grammar has no way to produce one), but the check is
+    defensive, matching electricity's port (#473)."""
+    path = _write_env("OPENAI_API_KEY=" + _CANARY + "\n")
+    import dotenv
+
+    monkeypatch.setattr(
+        dotenv, "dotenv_values", lambda _path: {"": "something", "OPENAI_API_KEY": _CANARY}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="circuitry.cli.config"):
+        result = load_user_env()
+
+    assert result.invalid == ("",)
+    assert result.supplied == ("OPENAI_API_KEY",)
+    expected = f"{path}: skipping '': not a valid environment variable name or value."
+    assert expected in caplog.text
 
 
 def test_doctor_reports_names_only_never_a_value(tmp_path):
