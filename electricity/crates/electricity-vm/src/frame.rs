@@ -66,7 +66,15 @@ pub struct Frame {
     /// that being a cycle, and which the same child document reached
     /// through two different `use` effects would wrongly miss), one
     /// per level, extended by [`Frame::push_use`], for lane I's own
-    /// cycle detection (M1 gate seam round 2, item S6).
+    /// cycle detection (M1 gate seam round 2, item S6). A path-`use`'s
+    /// own identity is its resolved absolute path, verbatim; an inline
+    /// `use`'s own identity (review P2-7 on PR #454's second review,
+    /// documenting `core/use.py::_load_child_orch`'s own exact form)
+    /// is `format!("inline:{:016x}", ...)`-shaped but not literally
+    /// that macro call -- `"inline:"` plus the first 16 **hex
+    /// characters** (not bytes) of the SHA-256 hex digest of the
+    /// rendered, fence-cleaned YAML text, UTF-8 encoded, lowercase
+    /// (Python's own `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]`).
     use_call_stack: Rc<Vec<String>>,
 }
 
@@ -90,10 +98,32 @@ impl Frame {
     /// `path`/`dispatch` fields and [`crate::adapter::CallContext::path`]
     /// -- `effect_identity.py`'s own docstring: the two always
     /// coincide.
+    ///
+    /// `resolve_passes` fails only when *path* still carries a
+    /// [`electricity_bytecode::PathSegment::Pass`] placeholder this
+    /// frame's own [`Frame::pass_indices`] has no entry for yet --
+    /// every real caller resolves a loop's own body path through
+    /// [`Frame::with_pass`] before ever asking this frame for one of
+    /// its paths, so that can only mean a caller bug (review P2-7 on
+    /// PR #454's second review: this used to fall back to *path*
+    /// silently, placeholder segment and all, which would have
+    /// shipped a malformed `--events` path instead of catching the
+    /// bug that produced it). The `debug_assert!` below catches that
+    /// in every debug build (every test in this workspace included);
+    /// a release build still falls back to the unresolved *path*
+    /// rather than panicking a real run over a cosmetic one.
     pub fn effect_path(&self, path: &EffectPath) -> EffectPath {
         let resolved = path
             .resolve_passes(&self.pass_indices)
-            .unwrap_or_else(|_| path.clone());
+            .unwrap_or_else(|loop_id| {
+                debug_assert!(
+                    false,
+                    "{path}: no pass index resolved yet for {loop_id:?} -- every caller must \
+                 resolve a loop's own body path through Frame::with_pass before asking \
+                 this frame for one of its paths"
+                );
+                path.clone()
+            });
         if self.prefix.0.is_empty() {
             return resolved;
         }
@@ -209,6 +239,23 @@ mod tests {
             frame.effect_path(&p).to_string(),
             "prime.shots.iter_2.describe"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "no pass index resolved yet")]
+    #[cfg(debug_assertions)]
+    fn effect_path_with_no_pass_index_resolved_yet_panics_in_debug() {
+        // Review P2-7 on PR #454's second review: a caller asking for a
+        // loop body's own path before `Frame::with_pass` has resolved
+        // that pass is a caller bug, not a legitimate path shape -- the
+        // `debug_assert!` catches it here rather than silently handing
+        // back a path with the placeholder segment still in it.
+        let loop_id = LoopId(0);
+        let p = EffectPath::root()
+            .push_name("shots")
+            .push_pass(loop_id)
+            .push_name("describe");
+        let _ = Frame::root().effect_path(&p);
     }
 
     #[test]

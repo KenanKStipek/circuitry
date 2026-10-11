@@ -5,6 +5,20 @@
 //! [`run_isolated`] is shared with M1-L2's decomposition lane (the same
 //! "run a child document with its own store, grafted back under the
 //! parent" primitive `core/use.py::_run_isolated` is).
+//!
+//! Review P2-7 on PR #454's second review: the child's own root
+//! container (`core/use.py`'s own `_CHILD_ROOT`, `"prime"`) fires no
+//! `effect_start`/`effect_complete` of its own when forwarded to the
+//! parent's own observer (`core/use.py:43-56`'s own
+//! `_relative_child_path`/`_namespaced_effect_cb`, `None` for the
+//! child root specifically) -- the parent's own `use` effect node
+//! already represents it, so forwarding a pair for it too would be a
+//! duplicate. Every other child effect's own pair forwards normally,
+//! relative to the child root. Lane I must filter the child root's
+//! own pair out of whatever [`RunObserver`] it hands [`run_isolated`]
+//! (or the child's own freshly-built store/observer plumbing,
+//! whichever this lane's own design ends up threading it through),
+//! not just relabel every path.
 
 use crate::exec::CtxChain;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
