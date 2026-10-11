@@ -39,8 +39,8 @@ mod persistence;
 mod util;
 
 pub use allowlist::{
-    Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist, tool_denial,
-    walk_orchestration_refs,
+    Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist,
+    orchestration_denials, tool_denial, walk_orchestration_refs,
 };
 pub use capability_gate::{
     CAPABILITY_CEILING_KEY, CapabilityConsentError, capabilities_beyond_ceiling,
