@@ -17,12 +17,25 @@ use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+pub mod awk;
+pub mod clock;
+pub mod env_vars;
+pub mod ffmpeg;
+pub mod fs;
+pub mod hash;
+pub mod http;
+pub mod http_client;
+pub mod imagemagick;
 pub mod json;
 pub mod plugin_names;
 pub mod process;
+pub mod regex;
 pub mod registry;
+pub mod shell;
+pub mod subprocess_tool;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
+pub mod uuid;
 
 /// The one canonical Python-exception-class-name enum every crate that
 /// needs to report one shares -- `electricity_value::pycompat::PyExc`'s

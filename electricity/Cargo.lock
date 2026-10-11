@@ -312,6 +312,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-adapters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "electricity-value",
+ "electricity-vm",
+ "tokio",
+]
+
+[[package]]
 name = "electricity-bytecode"
 version = "0.1.0"
 dependencies = [

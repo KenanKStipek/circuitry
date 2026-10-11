@@ -1,0 +1,16 @@
+[package]
+name = "electricity-adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Concrete model adapters: the Rust scripted adapter, host_claude's registration stub, and the real providers (electricity-adapters, lane F1/F2 stub)"
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+electricity-vm = { path = "../electricity-vm" }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

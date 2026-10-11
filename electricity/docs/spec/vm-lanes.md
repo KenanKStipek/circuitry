@@ -58,14 +58,29 @@ value M0 ran with (every capability flag `false`); each M1 lane flips its own fl
 effect type actually runs, rather than this table's own "final"/"stub" status changing the
 walker's body again.
 
+**Every file in this table already exists** (M1 gate seam round 2, item S9): lane C's own
+process-backed tool files (`subprocess_tool.rs`, `shell.rs`, `awk.rs`, `imagemagick.rs`,
+`ffmpeg.rs`), D1's five plugin files, D2's `regex/` module, E's `http.rs`/`http_client/`, and F1's
+own `electricity-adapters` crate are all created now, each with a not-implemented stub body and
+already registered in its own crate's `pub mod` list -- so a later lane's PR only ever fills a
+body inside the file this table already names, never adds a `mod` line to a list another lane
+might also be adding to in the same window. If a `mod` list ever does need to change again, the
+gate adds every module it will ever need in one PR, the same way, rather than leaving it for
+whichever lane gets there first.
+
 | Crate | File | Function/type | Lane | Status after lane A |
 |---|---|---|---|---|
 | `electricity-tools` | `src/lib.rs` | `ToolPlugin` (v2), `ToolCall`, `ToolError`, `PyExc`, `ErrorCause`, `ToolResult::validate` | A | Final and complete. |
 | `electricity-tools` | `src/registry.rs` | `build_plugin`, the generated `plugin_names::PLUGIN_NAMES` (from `plugins/factory.py`, `electricity/scripts/generate_plugin_names.py --check`), the unknown-plugin text | A | Final. `run_tool` (electricity-vm) tries the caller's own `ToolRegistry` first (an embedder's own long-lived instance, or a test double -- every M0 test keeps working unchanged), then falls back to this per-attempt builder for a provider not registered there; each native-tool lane adds its own builder entry here in its own PR. |
 | `electricity-tools` | `src/process.rs` | `run_tracked`, `RunOpts`, `Completed`, `ProcError`, `kill_process_group`, `resolve_binary` | A (stub) -> C | Signature final. |
-| `electricity-tools` | `src/{fs,env_vars,hash,uuid,clock}.rs` | the five plugins | D1 | New. |
-| `electricity-tools` | `src/regex/{mod,translate,replace}.rs` | `RegexPlugin`, the Python-`re` translator | D2 | New. |
-| `electricity-tools` | `src/http.rs` + `src/http_client/` | `HttpPlugin`, `http_error_excerpt`, the client builder, redirect policy, proxy resolver | E | New (the client is shared with F2). |
+| `electricity-tools` | `src/subprocess_tool.rs` | `GenericSubprocessTool`, `plugin_binary_override`, `plugin_env_override` | A (stub) -> C | Created by the gate (M1 gate seam round 2, item S9), registered in `src/lib.rs`'s own `pub mod` list already -- lane C's PR only ever fills a body, never adds a module line here. |
+| `electricity-tools` | `src/shell.rs` | `ShellPlugin` | A (stub) -> C | Created by the gate (item S9), same as `subprocess_tool.rs` above. |
+| `electricity-tools` | `src/awk.rs` | `make_plugin` (`GenericSubprocessTool`-backed) | A (stub) -> C | Created by the gate (item S9), same as `subprocess_tool.rs` above. |
+| `electricity-tools` | `src/imagemagick.rs` | `make_plugin` (`GenericSubprocessTool`-backed) | A (stub) -> C | Created by the gate (item S9), same as `subprocess_tool.rs` above. |
+| `electricity-tools` | `src/ffmpeg.rs` | `FfmpegPlugin`, `make_plugin` | A (stub) -> C | Created by the gate (item S9); its own plugin type, not `GenericSubprocessTool`-backed -- Python's own version rejects shell metacharacters in several params fields and escapes `drawtext` text, neither of which the plain wrapper can express. |
+| `electricity-tools` | `src/{fs,env_vars,hash,uuid,clock}.rs` | `FsPlugin`, `EnvVarsPlugin`, `HashPlugin`, `UuidPlugin`, `ClockPlugin` | A (stub) -> D1 | Created by the gate (item S9), registered in `src/lib.rs`'s own `pub mod` list already -- lane D1's PR only ever fills a body, never adds a module line here. |
+| `electricity-tools` | `src/regex/{mod,translate,replace}.rs` | `RegexPlugin`, `translate`, `replace` | A (stub) -> D2 | Created by the gate (item S9), same as the D1 row above. |
+| `electricity-tools` | `src/http.rs` + `src/http_client/mod.rs` | `HttpPlugin`, `http_error_excerpt`, `build_client`, `redirect_policy`, `resolve_proxy` | A (stub) -> E | Created by the gate (item S9), same as the D1 row above (the client is shared with F2). |
 | `electricity-tools` | `src/validate_yaml.rs` | `ValidateYamlPlugin` | L2 | New. |
 | `electricity-value` | `src/pycompat.rs` | `py_int`, `is_py_whitespace`/`py_strip`, `round6`, `PyExc` | A | Final and complete -- golden-tested against CPython's own `round(x, 6)` (`electricity/scripts/generate_round6_corpus.py --check`). `PyExc` is the one canonical copy every crate that reports a Python exception class shares (review finding 1 on PR #454; re-exported as `electricity_tools::PyExc`/`electricity_vm::adapter::PyExc`). |
 | `electricity-value` | `src/pycompat.rs` | `shlex_split`, `shlex_quote` | A (stub) -> C | Signature final. |
@@ -83,13 +98,13 @@ walker's body again.
 | `electricity-vm` | `src/exec/condition_model.rs` | `evaluate_model_condition`, `evaluate_model_expect` | A (stub) -> G2 | Not yet routed from anywhere (`Condition::Model`/`ExpectCondition::Model` are refused before a real run reaches either call site) -- G2 wires both in when it flips `Supported::model_condition`/`model_expect`. |
 | `electricity-vm` | `src/exec/loop_.rs` | `execute_loop`, `loop_progress` | A (stub) -> H | |
 | `electricity-vm` | `src/exec/mod.rs` | `live_ctx`'s own per-render context copy | H | Still M0-H lane B2's own file (`execute_dynamic`/`execute_conditional`/`execute_op` above stay B2's, final) -- #448's decision 10 and #442 both single out `live_ctx` itself: the whole-context copy it takes on every render is replaced in lane H's own PR, before a loop's own repeated passes multiply its cost, rather than waiting for a lane whose file list already includes `exec/mod.rs` (M1 gate seam round 2, item S5). Lane H touches only this one function in this file; every other M0-H call site in it is unchanged. |
-| `electricity-vm` | `src/exec/use_.rs` | `execute_use`, `run_isolated` (shared with L2) | A (stub) -> I | A path-`use` child is compiled and loaded at run time, so lane A's own refusal walker never sees it ahead of time -- lane I must call `electricity_bytecode::refusal::first_unsupported` on the freshly-compiled child `Program` itself (the same `Supported` value the parent run already checked against) before executing it. A refused child fails the same way a refused parent would: the preview marker, naming the child's own effect path and reason, no state/`--out`/`--events`/`--live-state` file written for that `use` (M1 gate seam round 2, item S4(c)).
+| `electricity-vm` | `src/exec/use_.rs` | `execute_use`, `run_isolated` (shared with L2) | A (stub) -> I | A path-`use` child is compiled and loaded at run time, so lane A's own refusal walker never sees it ahead of time -- lane I must call `electricity_bytecode::refusal::first_unsupported` on the freshly-compiled child `Program` itself (the same `Supported` value the parent run already checked against) before executing it. A refused child fails the same way a refused parent would: the preview marker, naming the child's own effect path and reason, no state/`--out`/`--events`/`--live-state` file written for that `use` (M1 gate seam round 2, item S4(c)). |
 | `electricity-vm` | `src/exec/yield_.rs` + `src/compose.rs` | `execute_yield`, `render_with_composition` | A (stub) -> P | |
 | `electricity-vm` | `src/exec/disabled.rs` | `write_disabled_node`, `skip_disabled` | A (stub) -> J2 | Not yet routed from anywhere (`Op::enabled` exists on the IR since M0-G but the VM never reads it) -- every M0 test with `enabled: false` on an effect still runs it, unchanged. |
 | `electricity-vm` | `src/exec/reflector.rs` | `execute_reflector` | A (stub) -> L1 | |
 | `electricity-vm` | `src/complexity/` | the scorer, `score_and_route` | K1 (library) -> K2 (wiring) | |
-| `electricity-adapters` | `src/{lib,scripted,host_claude}.rs` | the registry builders, `ScriptedAdapter` | A (stub) -> F1 | New crate; not created yet (lane A left the seam in `electricity-vm::adapter` instead -- the trait and registry are final there, so this crate's own first PR is purely additive). |
-| `electricity-adapters` | `src/{openai_compat,openai,anthropic,curl_text}.rs` | the providers, the `curl_failure_message` equivalent | F2 | |
+| `electricity-adapters` | `src/{lib,scripted,host_claude}.rs` | `build_registry`, `ScriptedAdapter`, `build_scripted`, `build_host_claude` | A (stub) -> F1 | Crate created by the gate (M1 gate seam round 2, item S9) -- the trait and `AdapterRegistry` stay final in `electricity-vm::adapter`; this crate's own first PR only ever fills a body, never adds a module line to `src/lib.rs`'s own `pub mod` list. |
+| `electricity-adapters` | `src/{openai_compat,openai,anthropic,curl_text}.rs` | the providers, the `curl_failure_message` equivalent | F2 | Not created yet -- lane F2's own first PR adds these modules (outside this gate's S9 scope: F2 needs E's shared HTTP client first). |
 | `electricity-bytecode` | `src/refusal.rs` | `first_unsupported`, `Supported` | A | Final and complete -- `Supported::m0` is golden-tested to refuse exactly what M0 refused, never edited again; every later lane flips one field of its own in `Supported::current` instead (review P2-b on PR #454), the one value `electricity` (lib)'s own run wiring actually passes to `first_unsupported`. |
 | `electricity-bytecode` | `src/path_index.rs` | the profile effect-path index (`_collect_effect_paths` port) | A (stub) -> J2 | Not created yet. |
 | `electricity-compiler` | `src/overrides.rs` | `apply_effect_overrides(&mut Program, ...)` | A (stub) -> J2 | Not created yet. |
