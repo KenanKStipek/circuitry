@@ -1,0 +1,1518 @@
+{
+  "urlencode_cases": [
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ],
+      "expected": "q=1"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "0"
+          }
+        ]
+      ],
+      "expected": "q=0"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "-5"
+          }
+        ]
+      ],
+      "expected": "q=-5"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bool",
+            "v": true
+          }
+        ]
+      ],
+      "expected": "q=True"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bool",
+            "v": false
+          }
+        ]
+      ],
+      "expected": "q=False"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "none"
+          }
+        ]
+      ],
+      "expected": "q=None"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "float",
+            "bits": "3ff8000000000000"
+          }
+        ]
+      ],
+      "expected": "q=1.5"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "float",
+            "bits": "8000000000000000"
+          }
+        ]
+      ],
+      "expected": "q=-0.0"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "plain"
+          }
+        ]
+      ],
+      "expected": "q=plain"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "hello world/slash~tilde"
+          }
+        ]
+      ],
+      "expected": "q=hello+world%2Fslash~tilde"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "héllo wörld"
+          }
+        ]
+      ],
+      "expected": "q=h%C3%A9llo+w%C3%B6rld"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "réservé:/?#[]@!$&'()*+,;="
+          }
+        ]
+      ],
+      "expected": "q=r%C3%A9serv%C3%A9%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bytes",
+            "hex": "62797465732076616c"
+          }
+        ]
+      ],
+      "expected": "q=bytes+val"
+    },
+    {
+      "doseq": false,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      ],
+      "expected": "q="
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ],
+      "expected": "q=1"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "0"
+          }
+        ]
+      ],
+      "expected": "q=0"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "int",
+            "v": "-5"
+          }
+        ]
+      ],
+      "expected": "q=-5"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bool",
+            "v": true
+          }
+        ]
+      ],
+      "expected": "q=True"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bool",
+            "v": false
+          }
+        ]
+      ],
+      "expected": "q=False"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "none"
+          }
+        ]
+      ],
+      "expected": "q=None"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "float",
+            "bits": "3ff8000000000000"
+          }
+        ]
+      ],
+      "expected": "q=1.5"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "float",
+            "bits": "8000000000000000"
+          }
+        ]
+      ],
+      "expected": "q=-0.0"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "plain"
+          }
+        ]
+      ],
+      "expected": "q=plain"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "hello world/slash~tilde"
+          }
+        ]
+      ],
+      "expected": "q=hello+world%2Fslash~tilde"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "héllo wörld"
+          }
+        ]
+      ],
+      "expected": "q=h%C3%A9llo+w%C3%B6rld"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": "réservé:/?#[]@!$&'()*+,;="
+          }
+        ]
+      ],
+      "expected": "q=r%C3%A9serv%C3%A9%3A%2F%3F%23%5B%5D%40%21%24%26%27%28%29%2A%2B%2C%3B%3D"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "bytes",
+            "hex": "62797465732076616c"
+          }
+        ]
+      ],
+      "expected": "q=bytes+val"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "q",
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      ],
+      "expected": "q="
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      ],
+      "expected": "tag=1&tag=2&tag=3"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "bool",
+                "v": true
+              },
+              {
+                "t": "none"
+              },
+              {
+                "t": "float",
+                "bits": "3ff8000000000000"
+              },
+              {
+                "t": "str",
+                "v": "x"
+              }
+            ]
+          }
+        ]
+      ],
+      "expected": "tag=True&tag=None&tag=1.5&tag=x"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "list",
+            "v": []
+          }
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "bytes",
+                "hex": "61"
+              },
+              {
+                "t": "bytes",
+                "hex": "622063"
+              }
+            ]
+          }
+        ]
+      ],
+      "expected": "tag=a&tag=b+c"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "y"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            ]
+          }
+        ]
+      ],
+      "expected": "tag=x&tag=y"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "dict",
+            "v": []
+          }
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "tag",
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "list",
+                "v": [
+                  {
+                    "t": "str",
+                    "v": "not"
+                  },
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "str",
+                    "v": "pair"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      ],
+      "expected": "tag=%5B%27not%27%2C+%27a%27%2C+%27pair%27%5D"
+    },
+    {
+      "doseq": true,
+      "params": [
+        [
+          "a",
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          "b",
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          }
+        ],
+        [
+          "a",
+          {
+            "t": "str",
+            "v": "again"
+          }
+        ]
+      ],
+      "expected": "a=1&b=1&b=2&a=again"
+    }
+  ],
+  "http_error_excerpt_cases": [
+    {
+      "body": "",
+      "expected": ""
+    },
+    {
+      "body": "   ",
+      "expected": ""
+    },
+    {
+      "body": "plain text error",
+      "expected": "plain text error"
+    },
+    {
+      "body": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "body": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "expected": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    {
+      "body": "{\"error\": {\"message\": \"nested message\"}}",
+      "expected": "nested message"
+    },
+    {
+      "body": "{\"error\": \"flat error\"}",
+      "expected": "flat error"
+    },
+    {
+      "body": "{\"message\": \"message key\"}",
+      "expected": "message key"
+    },
+    {
+      "body": "{\"detail\": \"detail key\"}",
+      "expected": "detail key"
+    },
+    {
+      "body": "{\"error\": {\"message\": \"\"}}",
+      "expected": "{\"error\": {\"message\": \"\"}}"
+    },
+    {
+      "body": "{\"error\": {}}",
+      "expected": "{\"error\": {}}"
+    },
+    {
+      "body": "{\"errors\": [{\"msg\": \"graphql\"}]}",
+      "expected": "{\"errors\": [{\"msg\": \"graphql\"}]}"
+    },
+    {
+      "body": "{\"unrelated\": \"field\"}",
+      "expected": "{\"unrelated\": \"field\"}"
+    },
+    {
+      "body": "[1, 2, 3]",
+      "expected": "[1, 2, 3]"
+    },
+    {
+      "body": "[\"a\", \"b\"]",
+      "expected": "[\"a\", \"b\"]"
+    },
+    {
+      "body": "42",
+      "expected": "42"
+    },
+    {
+      "body": "null",
+      "expected": "null"
+    },
+    {
+      "body": "true",
+      "expected": "true"
+    },
+    {
+      "body": "\"just a json string\"",
+      "expected": "\"just a json string\""
+    },
+    {
+      "body": "not json at all {",
+      "expected": "not json at all {"
+    },
+    {
+      "body": "{\"error\": {\"message\": \"token=sk-live-abcdefghijklmnopqrstuvwxyz0123456789\"}}",
+      "expected": "token=sk-live-abcdefghijklmnopqrstuvwxyz0123456789"
+    },
+    {
+      "body": "{\"api_key\": \"sk-live-abcdefghijklmnopqrstuvwxyz0123456789\", \"error\": \"bad key\"}",
+      "expected": "bad key"
+    },
+    {
+      "body": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+      "expected": "***REDACTED***"
+    },
+    {
+      "body": "{\"errors\": [{\"msg\": \"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}]}",
+      "expected": "{\"errors\": [{\"msg\": \"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    }
+  ],
+  "utf8_replace_cases": [
+    {
+      "hex": "",
+      "expected": ""
+    },
+    {
+      "hex": "68656c6c6f",
+      "expected": "hello"
+    },
+    {
+      "hex": "fffe0001",
+      "expected": "��\u0000\u0001"
+    },
+    {
+      "hex": "c3a9",
+      "expected": "é"
+    },
+    {
+      "hex": "e282ac",
+      "expected": "€"
+    },
+    {
+      "hex": "f09f9880",
+      "expected": "😀"
+    },
+    {
+      "hex": "c3",
+      "expected": "�"
+    },
+    {
+      "hex": "e282",
+      "expected": "�"
+    },
+    {
+      "hex": "f09f98",
+      "expected": "�"
+    },
+    {
+      "hex": "80",
+      "expected": "�"
+    },
+    {
+      "hex": "c080",
+      "expected": "��"
+    },
+    {
+      "hex": "68656c6c6fff776f726c64",
+      "expected": "hello�world"
+    },
+    {
+      "hex": "eda080",
+      "expected": "���"
+    },
+    {
+      "hex": "6f6bc3a9ff6d6f7265e282",
+      "expected": "oké�more�"
+    },
+    {
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "expected": "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~��������������������������������������������������������������������������������������������������������������������������������"
+    }
+  ],
+  "bytes_coercion_cases": [
+    {
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          }
+        ]
+      },
+      "error": null,
+      "result": "010203"
+    },
+    {
+      "value": {
+        "t": "list",
+        "v": []
+      },
+      "error": null,
+      "result": ""
+    },
+    {
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "0"
+          },
+          {
+            "t": "int",
+            "v": "255"
+          }
+        ]
+      },
+      "error": null,
+      "result": "00ff"
+    },
+    {
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "256"
+          }
+        ]
+      },
+      "error": "ValueError",
+      "result": "bytes must be in range(0, 256)"
+    },
+    {
+      "value": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "-1"
+          }
+        ]
+      },
+      "error": "ValueError",
+      "result": "bytes must be in range(0, 256)"
+    },
+    {
+      "value": {
+        "t": "int",
+        "v": "5"
+      },
+      "error": null,
+      "result": "0000000000"
+    },
+    {
+      "value": {
+        "t": "int",
+        "v": "0"
+      },
+      "error": null,
+      "result": ""
+    },
+    {
+      "value": {
+        "t": "int",
+        "v": "-1"
+      },
+      "error": "ValueError",
+      "result": "negative count"
+    },
+    {
+      "value": {
+        "t": "bool",
+        "v": true
+      },
+      "error": null,
+      "result": "00"
+    },
+    {
+      "value": {
+        "t": "bool",
+        "v": false
+      },
+      "error": null,
+      "result": ""
+    },
+    {
+      "value": {
+        "t": "float",
+        "bits": "3ff8000000000000"
+      },
+      "error": "TypeError",
+      "result": "cannot convert 'float' object to bytes"
+    },
+    {
+      "value": {
+        "t": "str",
+        "v": "not bytes"
+      },
+      "error": "TypeError",
+      "result": "string argument without an encoding"
+    },
+    {
+      "value": {
+        "t": "none"
+      },
+      "error": "TypeError",
+      "result": "cannot convert 'NoneType' object to bytes"
+    }
+  ],
+  "request_header_cases": [
+    {
+      "headers_in": [
+        [
+          "Content-Type",
+          "text/plain"
+        ]
+      ],
+      "header_items": [
+        [
+          "Content-type",
+          "text/plain"
+        ]
+      ]
+    },
+    {
+      "headers_in": [
+        [
+          "content-type",
+          "text/plain"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ]
+      ],
+      "header_items": [
+        [
+          "Content-type",
+          "application/json"
+        ]
+      ]
+    },
+    {
+      "headers_in": [
+        [
+          "X-A",
+          "1"
+        ],
+        [
+          "x-a",
+          "2"
+        ]
+      ],
+      "header_items": [
+        [
+          "X-a",
+          "2"
+        ]
+      ]
+    },
+    {
+      "headers_in": [
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "header_items": [
+        [
+          "Accept-encoding",
+          "gzip"
+        ]
+      ]
+    },
+    {
+      "headers_in": [
+        [
+          "a-b-c",
+          "x"
+        ]
+      ],
+      "header_items": [
+        [
+          "A-b-c",
+          "x"
+        ]
+      ]
+    },
+    {
+      "headers_in": [],
+      "header_items": []
+    }
+  ],
+  "unknown_url_type_cases": [
+    {
+      "url": "not a url",
+      "error": "unknown url type: 'not a url'"
+    },
+    {
+      "url": "http://example.com/x",
+      "error": null
+    },
+    {
+      "url": "https://example.com/x",
+      "error": null
+    },
+    {
+      "url": "ftp://example.com/x",
+      "error": null
+    },
+    {
+      "url": ":::",
+      "error": "unknown url type: ':::'"
+    },
+    {
+      "url": "javascript:alert(1)",
+      "error": null
+    },
+    {
+      "url": "//example.com/x",
+      "error": "unknown url type: '//example.com/x'"
+    }
+  ],
+  "redirect_decision_cases": [
+    {
+      "method": "GET",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "GET",
+      "status": 301,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "GET",
+      "status": 302,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "GET",
+      "status": 303,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "GET",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "GET",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "GET",
+      "status": 307,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "GET",
+      "status": 308,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "GET",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "HEAD",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "HEAD",
+      "status": 301,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "HEAD",
+      "status": 302,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "HEAD",
+      "status": 303,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "HEAD",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "HEAD",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "HEAD",
+      "status": 307,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "HEAD",
+      "status": 308,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "HEAD",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 301,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "POST",
+      "status": 302,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "POST",
+      "status": 303,
+      "followed": true,
+      "new_method": "GET"
+    },
+    {
+      "method": "POST",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 307,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 308,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "POST",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 301,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 302,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 303,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 307,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 308,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PUT",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 301,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 302,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 303,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 307,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 308,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "DELETE",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 300,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 301,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 302,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 303,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 304,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 305,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 307,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 308,
+      "followed": false,
+      "new_method": null
+    },
+    {
+      "method": "PATCH",
+      "status": 309,
+      "followed": false,
+      "new_method": null
+    }
+  ],
+  "proxy_env_cases": [
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy:3128"
+        ]
+      ],
+      "proxies": {
+        "http": "http://proxy:3128"
+      },
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTP_PROXY",
+          "http://upper:1"
+        ],
+        [
+          "http_proxy",
+          "http://lower:2"
+        ]
+      ],
+      "proxies": {
+        "http": "http://lower:2"
+      },
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTP_PROXY",
+          "http://upper:1"
+        ],
+        [
+          "REQUEST_METHOD",
+          "GET"
+        ]
+      ],
+      "proxies": {},
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTP_PROXY",
+          "http://upper:1"
+        ],
+        [
+          "http_proxy",
+          "http://lower:2"
+        ],
+        [
+          "REQUEST_METHOD",
+          "GET"
+        ]
+      ],
+      "proxies": {
+        "http": "http://lower:2"
+      },
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTPS_PROXY",
+          "http://upper:1"
+        ],
+        [
+          "https_proxy",
+          ""
+        ]
+      ],
+      "proxies": {},
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy:3128"
+        ],
+        [
+          "no_proxy",
+          "example.com"
+        ]
+      ],
+      "proxies": {
+        "http": "http://proxy:3128",
+        "no": "example.com"
+      },
+      "bypass": {
+        "example.com": true,
+        "api.example.com": true,
+        "example.com:8080": true,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy:3128"
+        ],
+        [
+          "no_proxy",
+          "*"
+        ]
+      ],
+      "proxies": {
+        "http": "http://proxy:3128",
+        "no": "*"
+      },
+      "bypass": {
+        "example.com": true,
+        "api.example.com": true,
+        "example.com:8080": true,
+        "other.com": true,
+        "notexample.com": true
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy:3128"
+        ],
+        [
+          "no_proxy",
+          ".example.com"
+        ]
+      ],
+      "proxies": {
+        "http": "http://proxy:3128",
+        "no": ".example.com"
+      },
+      "bypass": {
+        "example.com": true,
+        "api.example.com": true,
+        "example.com:8080": true,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy:3128"
+        ],
+        [
+          "no_proxy",
+          "example.com:8080"
+        ]
+      ],
+      "proxies": {
+        "http": "http://proxy:3128",
+        "no": "example.com:8080"
+      },
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": true,
+        "other.com": false,
+        "notexample.com": false
+      }
+    },
+    {
+      "env": [],
+      "proxies": {},
+      "bypass": {
+        "example.com": false,
+        "api.example.com": false,
+        "example.com:8080": false,
+        "other.com": false,
+        "notexample.com": false
+      }
+    }
+  ]
+}

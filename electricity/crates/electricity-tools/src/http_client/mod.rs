@@ -636,31 +636,36 @@ pub struct RedirectRequest {
 
 /// `None` when *method*/*status* isn't followed at all (surfaces as a
 /// returned result with that status instead, `src/http.rs`'s own
-/// job) -- 301/302/303/307/308 for `GET`/`HEAD` (a `HEAD` stays a
-/// `HEAD`; everything else becomes `GET`), 301/302/303 for `POST`
-/// (always becomes `GET`); any other method is never followed.
+/// job) -- 301/302/303/307/308 for `GET`/`HEAD`, 301/302/303 for
+/// `POST`; any other method/status pair is never followed.
+///
+/// The followed request is always `GET`, including for a `HEAD`
+/// (issue #485's own open question, pinned by
+/// `generate_http_corpus.py`'s `redirect_decision_cases`, checked
+/// directly against CPython: a real loopback HEAD-then-307 round
+/// trip sends GET on the second request, confirmed empirically, not
+/// assumed). `HTTPRedirectHandler.redirect_request` builds the
+/// follow-up `Request` with no `method=`/`data=` of its own, and
+/// `Request.get_method()`'s own fallback for that shape is
+/// unconditionally `"GET"` -- the original method only ever gated
+/// *whether* a redirect is followed at all, never *what* the
+/// follow-up request's own method is.
 pub fn redirect_policy(method: &str, status: u16) -> Option<RedirectRequest> {
     let method = method.to_ascii_uppercase();
-    let always_get = matches!(status, 301..=303);
-    let same_method_only_for_head = matches!(status, 307 | 308);
-    match method.as_str() {
-        "GET" | "HEAD" if always_get || same_method_only_for_head => {
-            let new_method = if same_method_only_for_head {
-                method.clone()
-            } else {
-                "GET".to_string()
-            };
-            Some(RedirectRequest {
-                method: new_method,
-                drop_body: true,
-            })
-        }
-        "POST" if always_get => Some(RedirectRequest {
-            method: "GET".to_string(),
-            drop_body: true,
-        }),
-        _ => None,
+    let get_or_head_redirect = matches!(status, 301..=303 | 307 | 308);
+    let post_redirect = matches!(status, 301..=303);
+    let followed = match method.as_str() {
+        "GET" | "HEAD" => get_or_head_redirect,
+        "POST" => post_redirect,
+        _ => false,
+    };
+    if !followed {
+        return None;
     }
+    Some(RedirectRequest {
+        method: "GET".to_string(),
+        drop_body: true,
+    })
 }
 
 /// `urllib.request.getproxies_environment`/`proxy_bypass_environment`'s
@@ -688,15 +693,15 @@ mod tests {
     }
 
     #[test]
-    fn redirect_policy_narrows_307_308_to_the_same_method() {
-        assert_eq!(
-            redirect_policy("HEAD", 307).unwrap().method,
-            "HEAD".to_string()
-        );
-        assert_eq!(
-            redirect_policy("GET", 308).unwrap().method,
-            "GET".to_string()
-        );
+    fn redirect_policy_always_follows_with_get_even_for_a_head_request() {
+        // Confirmed against real CPython (`generate_http_corpus.py`'s
+        // own `redirect_decision_cases`, and a live loopback round
+        // trip): `HTTPRedirectHandler.redirect_request` never carries
+        // the original method forward, for any status, including 307/
+        // 308 where common intuition expects a `HEAD` to stay a `HEAD`.
+        assert_eq!(redirect_policy("HEAD", 307).unwrap().method, "GET");
+        assert_eq!(redirect_policy("HEAD", 308).unwrap().method, "GET");
+        assert_eq!(redirect_policy("GET", 308).unwrap().method, "GET");
     }
 
     #[test]

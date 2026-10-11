@@ -427,8 +427,15 @@ pub fn http_error_excerpt(body: &str, max_chars: usize) -> String {
             .unwrap_or_default();
             slice_chars(&dumped)
         }
-        other => {
-            let redacted = electricity_redaction::redact(Value::Str(other.py_str()));
+        // A parsed JSON scalar (`None`/bool/number) falls through to
+        // the same `redact(text)` the no-JSON-at-all branch above
+        // uses -- the *raw wire text* (`"null"`, `"42"`, ...), never
+        // `str()` of the parsed value (`None.py_str()` would give
+        // Python's `"None"`, not the JSON literal `"null"` actually
+        // on the wire; confirmed against CPython directly,
+        // `generate_http_corpus.py`'s own `http_error_excerpt_cases`).
+        _ => {
+            let redacted = electricity_redaction::redact(Value::Str(text.to_string()));
             match &redacted {
                 Value::Str(s) => slice_chars(s),
                 other => slice_chars(&other.py_str()),
