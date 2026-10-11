@@ -1058,10 +1058,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         adapter: "_noop",
         runtime_config: &runtime_config_value,
         dry_run: false,
-        // This function is `electricity-cli`'s own entry point -- always
-        // an armed, CLI-driven run (M1-A has no embedding caller of its
-        // own yet).
-        armed: true,
+        armed: req.armed,
         adapters: &adapters,
         default_adapter: Rc::new(electricity_vm::adapter::NoopAdapter),
         model_locked: false,

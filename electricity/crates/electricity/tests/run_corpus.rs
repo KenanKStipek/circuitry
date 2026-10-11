@@ -233,6 +233,7 @@ async fn run_case(name: &str, orchestration: &str, inputs: &[(&str, &str)]) -> R
         pretty: false,
         live_state_path: Some(live_state_path.clone()),
         events_path: Some(events_path.clone()),
+        armed: true,
     };
     let token = CancellationToken::new();
     let result = electricity::run_orchestration(&req, &token).await;

@@ -608,6 +608,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
             pretty: run_args.pretty,
             live_state_path: run_args.live_state.map(PathBuf::from),
             events_path: run_args.events.map(PathBuf::from),
+            armed: true,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
