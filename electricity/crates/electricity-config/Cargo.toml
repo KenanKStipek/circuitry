@@ -16,3 +16,8 @@ regex = "1"
 # environment" fallback (issue #442) -- a no-op unless a binary later
 # installs a logger, same as electricity-cel's own use of this crate.
 log = "0.4"
+
+[dev-dependencies]
+# `Value::Date`/`Value::DateTime` test fixtures only -- the CompareError
+# text ported in `profile.rs`'s own `py_sort_values`.
+chrono = { version = "0.4", default-features = false, features = ["std"] }

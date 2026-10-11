@@ -164,6 +164,7 @@ pub mod digest;
 pub mod groups;
 pub mod load;
 pub mod pipeline;
+pub mod profile;
 pub mod project_root;
 pub mod prompt_files;
 pub mod reflector_prime;

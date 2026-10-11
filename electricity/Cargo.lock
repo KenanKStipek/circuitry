@@ -470,6 +470,7 @@ dependencies = [
 name = "electricity-config"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "electricity-json",
  "electricity-value",
  "indexmap",

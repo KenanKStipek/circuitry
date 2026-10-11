@@ -1353,8 +1353,11 @@ for how the file itself is located:
   Draft7-validated the same way, word-for-word on Circuitry's own validation-failure message
   shape, third-party `jsonschema` text normalized the same way (Decisions, §1).
 - **The loaded record** mirrors `ProfileSettings` field-for-field: `adapter`, `model`, `out`,
-  `inputs` (a dict), `effects` (a map of dotted effect path → `{model?, provider?, enabled?,
-  routing?}`, every other key dropped), `persistence`, and `raw` (the whole parsed document, used
+  `inputs` (a dict), `effects` (a map of dotted effect path → its own override mapping, kept
+  *whole* — `_settings_from_raw` keeps every key of a dict-valued `effects.<path>` entry, not
+  just `model`/`provider`/`enabled`/`routing`; those four are all the bundled
+  `profile.schema.json` itself ever lets through, not a filter the loader applies on top of it),
+  `persistence`, and `raw` (the whole parsed document, used
   only for the `effective_settings.profile` record below). The one field the reference derives
   differently is `name`: the reference's own `name` is whatever the operator typed as
   `--profile <name>`, which — because discovery only ever finds a file called exactly
@@ -1385,9 +1388,14 @@ for how the file itself is located:
   electricity's path is the one the operator gave directly rather than one the reference
   assembled from a discovered name; §12's normalization rules compare that segment structurally
   (a valid path to the same file), not byte-for-byte, the same way every other
-  path-dependent field is normalized. Malformed-YAML text already has no reference-side
-  equivalent to reproduce for the same reason as not-found: `load_profile` raises its own
-  `yaml.YAMLError`-wrapping text keyed to the name it discovered, which a direct path never has.
+  path-dependent field is normalized. **Malformed-YAML text, unlike not-found text, is shared
+  with the reference** rather than invented: `load_profile` never catches the YAML parser's own
+  exception at all — it propagates straight out of `yaml.safe_load`, unwrapped, with no
+  reference-assembled name or path woven into it anywhere (`electricity_yaml::
+  load_yaml_last_key_wins` already *is* that same plain `yaml.safe_load`, not Circuitry's own
+  duplicate-key-checking loader — no new YAML mode was needed to match it). electricity's own
+  loader raises the same way, equally unwrapped, so this text is compared by location (§12),
+  the same way every other third-party-library message is.
 - **Inputs.** Profile `inputs:` merge into the `input` namespace as the lowest-priority layer:
   any `-e`/`--state`-sourced value already in `input` wins outright, and — if persistence
   auto-load (§6.8) hydrates this run's starting state from a prior snapshot — that snapshot's own
