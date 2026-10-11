@@ -514,6 +514,7 @@ fn profile_validator() -> &'static jsonschema::Validator {
     VALIDATOR.get_or_init(|| {
         jsonschema::draft7::options()
             .should_validate_formats(false)
+            .with_keyword("type", type_keyword_factory)
             .build(profile_schema())
             .expect("bundled profile.schema.json compiles as Draft 7")
     })
@@ -570,10 +571,17 @@ fn is_spurious_marker_error(err: &ValidationError<'_>) -> bool {
 /// Every schema violation in `document` against Circuitry's
 /// `schema/profile.schema.json`; empty when it conforms. Mirrors
 /// `cli.profiles._validate_profile_schema`'s accept/reject verdict and, for
-/// each violation, its `/`-joined location exactly.
+/// each violation, its `/`-joined location exactly. Carries the same
+/// [`is_spurious_marker_error`] filter [`orchestration_errors`] applies,
+/// for the same reason: a `Date`/`DateTime`/`Bytes`/`NaN`/`Infinity`
+/// marker under `effects`/`persistence`/`inputs` is a real JSON object as
+/// far as the object-shape keywords (`required`, `additionalProperties`,
+/// ...) are concerned, where Python's own `isinstance(value, dict)` is
+/// `False` for every one of those values.
 pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
     profile_validator()
         .iter_errors(document)
+        .filter(|err| !is_spurious_marker_error(err))
         .map(|err| SchemaError {
             location: profile_location(err.instance_path.as_str()),
             message: substitute_value_prefix(&err.instance, err.to_string()),
@@ -616,16 +624,153 @@ fn orchestration_location(document: &Value, instance_pointer: &str) -> String {
 }
 
 /// `cli.profiles._validate_profile_schema`'s location: raw path segments
-/// joined with `/`, or `"<root>"` for the document root.
+/// joined with `/`, or `"<root>"` for the document root. Each segment is
+/// `str(p)`, not `repr(p)` (`"/".join(str(p) for p in e.path)`) -- for
+/// every marker type but a date/datetime the two forms are identical
+/// (`int`/`bool`/`float`/`None`/`bytes` all have `str() == repr()` in
+/// CPython), so [`decode_non_string_key_segment`] only has real work to
+/// do for one.
 fn profile_location(instance_pointer: &str) -> String {
     let segments: Vec<String> = pointer_segments(instance_pointer)
         .map(unescape_json_pointer_segment)
+        .map(|segment| decode_non_string_key_segment(&segment))
         .collect();
     if segments.is_empty() {
         "<root>".to_string()
     } else {
         segments.join("/")
     }
+}
+
+/// `str(p)` for a profile location path segment: unchanged for an
+/// ordinary string segment or a [`non_string_key_marker`] whose own
+/// `repr()` text already equals its `str()` (every marker type but a
+/// date/datetime); for a `datetime.date(...)`/`datetime.datetime(...)`
+/// marker, the equivalent `str()` rendering, parsed back out of the
+/// fixed shape `electricity-compiler`'s own `schema_instance.rs` always
+/// produces for one -- see [`python_str_of_marker_repr`]'s own doc
+/// comment for the one residual gap (an aware `datetime.datetime`).
+fn decode_non_string_key_segment(segment: &str) -> String {
+    match segment.strip_prefix(NON_STRING_KEY_PREFIX) {
+        Some(repr_text) => python_str_of_marker_repr(repr_text),
+        None => segment.to_string(),
+    }
+}
+
+/// Python's `str(key)` for a non-string `Dict` key the schema instance
+/// encodes as [`NON_STRING_KEY_PREFIX`] plus the key's own `repr()` text
+/// -- `cli.profiles`' own location format joins `str(p)` for each
+/// `jsonschema` error path segment, not `repr(p)`. A `datetime.date`'s
+/// `repr()` (`"datetime.date(2024, 1, 1)"`) and `str()` (`"2024-01-01"`)
+/// differ, so this parses the fixed, deterministic repr shape back into
+/// the `str()` form directly, without needing the original value (the
+/// marker's own repr text is all this crate has by the time a location
+/// is rendered).
+///
+/// An aware `datetime.datetime` (one whose repr carries a trailing
+/// `tzinfo=...`) *is* reachable here: `effects` validates with
+/// `additionalProperties` over arbitrary keys, so `effects: {<aware
+/// datetime>: {}}` fails `minProperties` at a key segment. Its `str()`
+/// adds the `tzinfo`'s own UTC-offset suffix (`±HH:MM[:SS]`), computed
+/// by [`tzinfo_offset_seconds`] and [`iso_offset`] below.
+fn python_str_of_marker_repr(repr_text: &str) -> String {
+    if let Some(args) = repr_text
+        .strip_prefix("datetime.date(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let parts = parse_decimal_args(args);
+        if let [y, m, d] = parts.as_slice() {
+            return format!("{y:04}-{m:02}-{d:02}");
+        }
+    }
+    if let Some(args) = repr_text
+        .strip_prefix("datetime.datetime(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        // The `tzinfo=...` keyword argument, when present, is always
+        // the repr's last component (`datetime_repr`'s own
+        // construction), so splitting on its literal `, tzinfo=`
+        // marker -- rather than a naive comma split, which would also
+        // split the timedelta's own nested `days=`/`seconds=` args --
+        // cleanly separates the positional fields from it.
+        let (positional, tzinfo) = match args.find(", tzinfo=") {
+            Some(idx) => (&args[..idx], Some(&args[idx + ", tzinfo=".len()..])),
+            None => (args, None),
+        };
+        let parts = parse_decimal_args(positional);
+        if parts.len() >= 3 {
+            let (y, m, d) = (parts[0], parts[1], parts[2]);
+            let h = parts.get(3).copied().unwrap_or(0);
+            let mi = parts.get(4).copied().unwrap_or(0);
+            let s = parts.get(5).copied().unwrap_or(0);
+            let us = parts.get(6).copied().unwrap_or(0);
+            let mut rendered = if us == 0 {
+                format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+            } else {
+                format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}")
+            };
+            if let Some(tzinfo_repr) = tzinfo {
+                if let Some(total_seconds) = tzinfo_offset_seconds(tzinfo_repr) {
+                    rendered.push_str(&iso_offset(total_seconds));
+                }
+            }
+            return rendered;
+        }
+    }
+    repr_text.to_string()
+}
+
+/// Python's `_format_offset` (`±HH:MM[:SS]`): ported locally from
+/// `electricity_value::datetime_repr`'s own private `iso_offset` (that
+/// module isn't `pub`, and this crate doesn't depend on
+/// `electricity-value` for its own sake), for the one caller above that
+/// renders an aware `datetime.datetime` marker's `str()` form.
+fn iso_offset(total_seconds: i64) -> String {
+    let sign = if total_seconds < 0 { '-' } else { '+' };
+    let abs = total_seconds.unsigned_abs();
+    let (hh, mm, ss) = (abs / 3600, (abs % 3600) / 60, abs % 60);
+    if ss == 0 {
+        format!("{sign}{hh:02}:{mm:02}")
+    } else {
+        format!("{sign}{hh:02}:{mm:02}:{ss:02}")
+    }
+}
+
+/// The UTC-offset total seconds a `tzinfo=...` repr argument encodes:
+/// `datetime.timezone.utc` is zero; `datetime.timezone(datetime.
+/// timedelta(...))` sums its `days=`/`seconds=` keyword arguments (the
+/// only two `electricity_value::datetime_repr::timezone_repr`/
+/// `timedelta_repr` ever emit for a whole-second UTC offset -- never
+/// `microseconds=`, and never both omitted at once).
+fn tzinfo_offset_seconds(tzinfo_repr: &str) -> Option<i64> {
+    if tzinfo_repr == "datetime.timezone.utc" {
+        return Some(0);
+    }
+    let args = tzinfo_repr
+        .strip_prefix("datetime.timezone(datetime.timedelta(")
+        .and_then(|rest| rest.strip_suffix("))"))?;
+    let mut days = 0i64;
+    let mut seconds = 0i64;
+    for part in args.split(',') {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("days=") {
+            days = v.parse().ok()?;
+        } else if let Some(v) = part.strip_prefix("seconds=") {
+            seconds = v.parse().ok()?;
+        }
+    }
+    Some(days * 86_400 + seconds)
+}
+
+/// Every comma-separated argument in a `datetime.date(...)`/`datetime.
+/// datetime(...)` repr's parenthesized body, parsed as a plain decimal
+/// integer -- `None` (dropped) for anything that isn't one, so a
+/// `tzinfo=...` trailing keyword argument (never reached here; callers
+/// check for it first) wouldn't corrupt the positional list either way.
+fn parse_decimal_args(args: &str) -> Vec<i64> {
+    args.split(',')
+        .filter_map(|part| part.trim().parse::<i64>().ok())
+        .collect()
 }
 
 /// JSON Pointer segments, root (`""`) yielding none: `split('/')` always
@@ -862,6 +1007,76 @@ mod tests {
         let errors = profile_errors(&doc);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].location, "<root>");
+    }
+
+    #[test]
+    fn profile_non_json_scalar_marker_under_a_bare_object_position_fails_type_not_additional_properties()
+     {
+        // `inputs`/`effects.<path>`/`persistence` are all bare `"type":
+        // "object"` positions a non-JSON scalar marker would otherwise
+        // vacuously pass -- same fix as `orchestration_validator`'s.
+        let marker = non_json_scalar("2024-01-01", false);
+        let doc = json!({"inputs": marker});
+        let errors = profile_errors(&doc);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].location, "inputs");
+        assert!(errors[0].message.contains("not of type"));
+    }
+
+    #[test]
+    fn profile_non_string_date_key_location_renders_str_not_repr() {
+        // Not a schema failure on its own (inputs is free-form) -- probe
+        // the decoder directly instead of through a real error path.
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.date(2024, 1, 1)"
+            )),
+            "2024-01-01"
+        );
+    }
+
+    #[test]
+    fn profile_aware_datetime_key_location_renders_the_utc_offset_suffix() {
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)"
+            )),
+            "2024-01-01 00:00:00+00:00"
+        );
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))"
+            )),
+            "2024-01-01 03:04:05+05:30"
+        );
+        assert_eq!(
+            decode_non_string_key_segment(&format!(
+                "{NON_STRING_KEY_PREFIX}datetime.datetime(2024, 1, 1, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66585)))"
+            )),
+            "2024-01-01 03:04:05-05:30:15"
+        );
+    }
+
+    #[test]
+    fn profile_aware_datetime_key_is_reachable_through_effects_minproperties() {
+        let marker_key =
+            non_string_key_marker("datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)");
+        let doc = json!({"effects": {marker_key: {}}});
+        let errors = profile_errors(&doc);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.location == "effects/2024-01-01 00:00:00+00:00"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn profile_non_string_int_key_str_equals_repr() {
+        assert_eq!(
+            decode_non_string_key_segment(&format!("{NON_STRING_KEY_PREFIX}1")),
+            "1"
+        );
     }
 
     #[test]

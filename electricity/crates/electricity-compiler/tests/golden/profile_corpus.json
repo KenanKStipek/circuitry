@@ -1,0 +1,4129 @@
+[
+  {
+    "name": "missing_file",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": true,
+      "directory": false,
+      "file_text": null,
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "FileNotFoundError",
+      "error": "[Errno 2] No such file or directory: '{path}'",
+      "mode": "electricity_own"
+    }
+  },
+  {
+    "name": "path_is_a_directory",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": true,
+      "file_text": null,
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "IsADirectoryError",
+      "error": "[Errno 21] Is a directory: '{path}'",
+      "mode": "electricity_own"
+    }
+  },
+  {
+    "name": "empty_file_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "whitespace_only_file_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "   \n   \n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "comment_only_file_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "# just a comment\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "null_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "null\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "false_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "false\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "empty_list_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "[]\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "zero_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "0\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "empty_string_root_becomes_empty_mapping",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "''\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "empty_mapping_root",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "{}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "non_empty_list_root_is_rejected",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "- 1\n- 2\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} must be a mapping/object at the root.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "scalar_root_is_rejected",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "hello\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} must be a mapping/object at the root.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "duplicate_key_last_wins",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: a\nmodel: b\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "b"
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "crlf_duplicate_key_last_wins",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: a\r\nmodel: b\r\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "b"
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "lone_cr_duplicate_key_last_wins",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: a\rmodel: b\r",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "b"
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "yaml_1_1_scalars_yes_and_octal_and_date",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: 'x'\ninputs:\n  flag: yes\n  legacy_octal: 017\n  day: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "flag"
+                  },
+                  {
+                    "t": "bool",
+                    "v": true
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "legacy_octal"
+                  },
+                  {
+                    "t": "int",
+                    "v": "15"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "day"
+                  },
+                  {
+                    "t": "date",
+                    "v": "2024-01-01"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "merge_key_is_applied",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs:\n  base: &base\n    x: 1\n  merged:\n    <<: *base\n    y: 2\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "base"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "x"
+                        },
+                        {
+                          "t": "int",
+                          "v": "1"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "merged"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "x"
+                        },
+                        {
+                          "t": "int",
+                          "v": "1"
+                        }
+                      ],
+                      [
+                        {
+                          "t": "str",
+                          "v": "y"
+                        },
+                        {
+                          "t": "int",
+                          "v": "2"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "leading_bom_is_kept_and_skipped_by_the_yaml_loader",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": null,
+      "file_bytes_hex": "efbbbf616461707465723a206f70656e61690a"
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "openai"
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "invalid_utf8_at_a_start_byte",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": null,
+      "file_bytes_hex": "616461707465723a20ff0a"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "UnicodeDecodeError",
+      "error": "'utf-8' codec can't decode byte 0xff in position 9: invalid start byte",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "invalid_utf8_at_a_continuation_byte",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": null,
+      "file_bytes_hex": "616461707465723a20e2280a"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "UnicodeDecodeError",
+      "error": "'utf-8' codec can't decode byte 0xe2 in position 9: invalid continuation byte",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "invalid_utf8_at_the_end_of_data",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": null,
+      "file_bytes_hex": "616461707465723a20e282"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "UnicodeDecodeError",
+      "error": "'utf-8' codec can't decode bytes in position 9-10: unexpected end of data",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "malformed_yaml_syntax",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: [unterminated\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ParserError",
+      "error": "while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 10:\n    adapter: [unterminated\n             ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^",
+      "mode": "location"
+    }
+  },
+  {
+    "name": "schema_unknown_root_key",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "bogus_key: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - <root>: Additional properties are not allowed ('bogus_key' was unexpected)",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_adapter",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - adapter: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_effects_entry_min_properties",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_effects_entry_additional_properties",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    bogus: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize: Additional properties are not allowed ('bogus' was unexpected)",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_routing_false_is_valid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    routing: false\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "summarize"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "routing"
+                        },
+                        {
+                          "t": "bool",
+                          "v": false
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "schema_routing_true_is_invalid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    routing: true\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize/routing: True is not valid under any of the given schemas",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_routing_empty_string_is_invalid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    routing: ''\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize/routing: '' is not valid under any of the given schemas",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_persistence_missing_backend",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "persistence:\n  path: x.jsonl\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - persistence: 'backend' is a required property",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_several_errors_at_once",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: 5\nmodel: 6\nbogus: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - adapter: 5 is not of type 'string'\n  - model: 6 is not of type 'string'\n  - <root>: Additional properties are not allowed ('bogus' was unexpected)",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_json_date_at_bare_object_position",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - inputs: datetime.date(2024, 1, 1) is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_key_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  1:\n    model: x\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "x"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "schema_non_string_key_under_inputs_is_valid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs:\n  yes: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "value": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "bool",
+                    "v": true
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "schema_type_error_on_model",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - model: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_out",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "out: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - out: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_inputs",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - inputs: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_type_error_on_persistence",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "persistence: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - persistence: 5 is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_routing_int_is_invalid",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  summarize:\n    routing: 1\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/summarize/routing: 1 is not valid under any of the given schemas",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_under_persistence_fails_type_not_required",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "persistence: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - persistence: datetime.date(2024, 1, 1) is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_under_an_effects_path_fails_type_not_additional_properties",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  x: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/x: datetime.date(2024, 1, 1) is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_bytes_marker_under_inputs_fails_type_not_object",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "inputs: !!binary aGk=\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - inputs: b'hi' is not of type 'object'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_nan_marker_on_adapter_fails_type_not_string",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "adapter: .nan\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - adapter: nan is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_date_marker_on_model_fails_type_not_string",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "model: 2024-01-01\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - model: datetime.date(2024, 1, 1) is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_int_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  1: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/1: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_date_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_naive_datetime_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01 00:00:00: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01 00:00:00: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "schema_non_string_aware_datetime_key_location_under_effects",
+    "kind": "parse_profile_document",
+    "input": {
+      "profile_name": "demo",
+      "missing": false,
+      "directory": false,
+      "file_text": "effects:\n  2024-01-01T00:00:00Z: {}\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - effects/2024-01-01 00:00:00+00:00: {} should be non-empty",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "named_dynamic_with_named_child",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "name": "d",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "d",
+        "d.t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "unnamed_dynamic_contributes_no_segment",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "steps_key_in_place_of_effects",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "steps": [
+          {
+            "type": "tool",
+            "name": "t",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "named_if_then_and_else_with_conditions",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ],
+            "else": [
+              {
+                "type": "tool",
+                "name": "b",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "c",
+        "c.a",
+        "c.b"
+      ],
+      "condition_paths": [
+        "c.condition",
+        "c.if"
+      ]
+    }
+  },
+  {
+    "name": "unnamed_if_contributes_no_condition",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "if",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "a"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "named_loop_body_with_conditions",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "loop",
+            "name": "l",
+            "while": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "body": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "l",
+        "l.t"
+      ],
+      "condition_paths": [
+        "l.condition",
+        "l.while"
+      ]
+    }
+  },
+  {
+    "name": "named_reflector_recurses_like_dynamic",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "reflector",
+            "name": "r",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "r",
+        "r.t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "unnamed_reflector_contributes_no_segment",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "reflector",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "unnamed_loop_contributes_no_segment_or_condition",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "loop",
+            "while": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "body": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "conditional_alias_behaves_like_if",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "conditional",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ],
+            "else": [
+              {
+                "type": "tool",
+                "name": "b",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "c",
+        "c.a",
+        "c.b"
+      ],
+      "condition_paths": [
+        "c.condition",
+        "c.if"
+      ]
+    }
+  },
+  {
+    "name": "use_children_are_never_entered",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "use",
+            "name": "u",
+            "path": "child.yml",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "u"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "top_level_finally_is_never_walked",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "t",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ],
+        "finally": [
+          {
+            "type": "tool",
+            "name": "f",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "nested_finally_inside_dynamic_is_never_walked",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "name": "d",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ],
+            "finally": [
+              {
+                "type": "tool",
+                "name": "f",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "d",
+        "d.t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "whitespace_only_name_counts_as_unnamed",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "   ",
+            "provider": "json"
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "non_string_name_counts_as_unnamed",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": 5,
+            "provider": "json"
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "upper_case_type_is_normalized",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "DYNAMIC",
+            "name": "d",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "d",
+        "d.t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "non_string_type_is_stringified_and_then_never_matches",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": 5,
+            "name": "x",
+            "effects": [
+              {
+                "type": "tool",
+                "name": "t",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "x"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "non_mapping_list_elements_are_skipped",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          "not a mapping",
+          {
+            "type": "tool",
+            "name": "t",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "t"
+      ],
+      "condition_paths": []
+    }
+  },
+  {
+    "name": "deeply_nested_named_containers",
+    "kind": "collect_effect_paths",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "name": "outer",
+            "effects": [
+              {
+                "type": "if",
+                "name": "inner",
+                "if": {
+                  "mode": "cel",
+                  "expr": "true"
+                },
+                "then": [
+                  {
+                    "type": "tool",
+                    "name": "leaf",
+                    "provider": "json",
+                    "params": {
+                      "mode": "stringify",
+                      "input": 1
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "expect": {
+      "effect_paths": [
+        "outer",
+        "outer.inner",
+        "outer.inner.leaf"
+      ],
+      "condition_paths": [
+        "outer.inner.condition",
+        "outer.inner.if"
+      ]
+    }
+  },
+  {
+    "name": "valid_known_path_is_accepted",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "condition_target_alone",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "c.if"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "condition_target_several",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "c.if"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "c.condition"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): c.condition, c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "unknown_path_with_named_effects_present",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "bogus"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' references unknown effect path(s): bogus. Valid effect paths: c, c.a, summarize",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "unknown_path_with_no_named_effects",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "bogus"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' references unknown effect path(s): bogus. Valid effect paths: (orchestration defines no named effects)",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "conditions_win_over_unknown_keys",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "c.if"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "bogus"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "empty_effects_is_skipped",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "non_mapping_effects_is_skipped",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "not"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "mapping"
+          }
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          },
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "one_non_string_unknown_key",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "TypeError",
+      "error": "sequence item 0: expected str instance, int found",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "several_non_string_unknown_keys_of_one_type",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "int",
+              "v": "2"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "TypeError",
+      "error": "sequence item 0: expected str instance, int found",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "mixed_string_and_int_unknown_keys_raise_sort_type_error",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "TypeError",
+      "error": "'<' not supported between instances of 'int' and 'str'",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "nested_condition_target_uses_the_last_dot_rsplit",
+    "kind": "validate_effect_paths",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "d.c.if"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "enabled"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "document": {
+        "effects": [
+          {
+            "type": "dynamic",
+            "name": "d",
+            "effects": [
+              {
+                "type": "if",
+                "name": "c",
+                "if": {
+                  "mode": "cel",
+                  "expr": "true"
+                },
+                "then": [
+                  {
+                    "type": "tool",
+                    "name": "t",
+                    "provider": "json",
+                    "params": {
+                      "mode": "stringify",
+                      "input": 1
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): d.c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. d.c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "matching_named_band",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "heavy"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": "heavy"
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "unmatched_single_pin",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "heavy"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": "light"
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'summarize' -> 'heavy'. Valid band names: light",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "unmatched_several_pins_sorted_across_paths",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b_path"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "nope"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "a_path"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "also_nope"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": "light"
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'a_path' -> 'also_nope', 'b_path' -> 'nope'. Valid band names: light",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "unnamed_band_never_matches",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "heavy"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": null
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'summarize' -> 'heavy'. Valid band names: (no named bands configured)",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "no_bands_at_all",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "heavy"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'summarize' -> 'heavy'. Valid band names: (no named bands configured)",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "routing_false_is_skipped",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "bool",
+                    "v": false
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "non_dict_override_is_skipped",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "str",
+              "v": "not-a-dict"
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": true,
+        "bands": []
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": true
+    }
+  },
+  {
+    "name": "pin_checked_through_resolve_complexity_settings_even_when_routing_disabled",
+    "kind": "validate_profile_routing_pins",
+    "input": {
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "routing"
+                  },
+                  {
+                    "t": "str",
+                    "v": "missing"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "routing": {
+        "enabled": false,
+        "bands": [
+          {
+            "model": "big",
+            "max": null,
+            "name": "heavy"
+          }
+        ]
+      },
+      "profile_name": "demo"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' pins effect(s) to unknown routing band(s): 'summarize' -> 'missing'. Valid band names: heavy",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "every_field_present",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "openai"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "gpt-4"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "out"
+            },
+            {
+              "t": "str",
+              "v": "result.json"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "x"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "summarize"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "x"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "persistence"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "backend"
+                  },
+                  {
+                    "t": "str",
+                    "v": "sqlite"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "a.db"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": "openai",
+      "model": "gpt-4",
+      "out": "result.json",
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "persistence": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "backend"
+            },
+            {
+              "t": "str",
+              "v": "sqlite"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "path"
+            },
+            {
+              "t": "str",
+              "v": "a.db"
+            }
+          ]
+        ]
+      },
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "openai"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "gpt-4"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "out"
+            },
+            {
+              "t": "str",
+              "v": "result.json"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "x"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "summarize"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "x"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "persistence"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "backend"
+                  },
+                  {
+                    "t": "str",
+                    "v": "sqlite"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "path"
+                  },
+                  {
+                    "t": "str",
+                    "v": "a.db"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "colliding_stringified_keys_first_position_last_value_wins",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "a"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "1"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "b"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "z"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "c"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "1"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "b"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "z"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "c"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "a"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "1"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "b"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "z"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "c"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "non_dict_effects_values_are_dropped",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "str",
+                    "v": "not-a-dict"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "b"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "x"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "str",
+                    "v": "not-a-dict"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "b"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "x"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "non_dict_persistence_is_none",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "persistence"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "persistence"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "truthy_non_dict_adapter_stringifies",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": "True",
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "absent_fields_default_empty",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": []
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "falsy_inputs_becomes_empty_dict",
+    "kind": "settings_from_raw",
+    "input": {
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "profile_name": "demo",
+      "path": "/profiles/demo.yml"
+    },
+    "expect": {
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "end_to_end_success",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ]
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "adapter: openai\nmodel: gpt-4\ninputs:\n  x: 1\neffects:\n  summarize:\n    model: override\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "name": "demo",
+      "adapter": "openai",
+      "model": "gpt-4",
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "effects": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "summarize"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "model"
+                  },
+                  {
+                    "t": "str",
+                    "v": "override"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "adapter"
+            },
+            {
+              "t": "str",
+              "v": "openai"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "model"
+            },
+            {
+              "t": "str",
+              "v": "gpt-4"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "inputs"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "x"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "effects"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "summarize"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "model"
+                        },
+                        {
+                          "t": "str",
+                          "v": "override"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "name": "end_to_end_succeeds_with_an_empty_profile",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": true,
+      "name": "demo",
+      "adapter": null,
+      "model": null,
+      "out": null,
+      "inputs": {
+        "t": "dict",
+        "v": []
+      },
+      "effects": {
+        "t": "dict",
+        "v": []
+      },
+      "persistence": null,
+      "raw": {
+        "t": "dict",
+        "v": []
+      }
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_not_found",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": true,
+      "file_text": null,
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "FileNotFoundError",
+      "error": "[Errno 2] No such file or directory: '{path}'",
+      "mode": "electricity_own"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_schema",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "adapter: 5\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} failed schema validation:\n  - adapter: 5 is not of type 'string'",
+      "mode": "schema"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_effect_path_validation",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "tool",
+            "name": "summarize",
+            "provider": "json",
+            "params": {
+              "mode": "stringify",
+              "input": 1
+            }
+          }
+        ]
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "effects:\n  bogus:\n    model: x\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' references unknown effect path(s): bogus. Valid effect paths: summarize",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_malformed_yaml",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "adapter: [unterminated\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ParserError",
+      "error": "while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 10:\n    adapter: [unterminated\n             ^\nexpected ',' or ']', but got '<stream end>'\n  in \"<unicode string>\", line 2, column 1:\n    \n    ^",
+      "mode": "location"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_invalid_utf8",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": null,
+      "file_bytes_hex": "616461707465723a20ff0a"
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "UnicodeDecodeError",
+      "error": "'utf-8' codec can't decode byte 0xff in position 9: invalid start byte",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_a_non_mapping_root",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": []
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "- 1\n- 2\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' at {path} must be a mapping/object at the root.",
+      "mode": "exact"
+    }
+  },
+  {
+    "name": "end_to_end_fails_at_condition_target",
+    "kind": "load_profile",
+    "input": {
+      "document": {
+        "effects": [
+          {
+            "type": "if",
+            "name": "c",
+            "if": {
+              "mode": "cel",
+              "expr": "true"
+            },
+            "then": [
+              {
+                "type": "tool",
+                "name": "a",
+                "provider": "json",
+                "params": {
+                  "mode": "stringify",
+                  "input": 1
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "profile_name": "demo",
+      "missing": false,
+      "file_text": "effects:\n  c.if:\n    enabled: false\n",
+      "file_bytes_hex": null
+    },
+    "expect": {
+      "ok": false,
+      "error_class": "ProfileValidationError",
+      "error": "Profile 'demo' targets condition path(s): c.if. A conditional's 'if' and a loop's 'while' are conditions, not effects — they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. c: {enabled: false}), which disables its entire subtree.",
+      "mode": "exact"
+    }
+  }
+]
