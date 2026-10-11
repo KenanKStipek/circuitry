@@ -8,13 +8,13 @@ effects:
   - type: tool
     name: make_dir
     provider: fs
-    params: {mode: write, path: "nonempty/file.txt", content: "x"}
+    params: {mode: write, path: "scratch/file.txt", content: "x"}
   - type: tool
     name: delete_without_recursive
     provider: fs
     on_error: continue
-    params: {mode: delete, path: "nonempty"}
+    params: {mode: delete, path: "scratch"}
   - type: tool
     name: delete_with_recursive
     provider: fs
-    params: {mode: delete, path: "nonempty", recursive: true}
+    params: {mode: delete, path: "scratch", recursive: true}

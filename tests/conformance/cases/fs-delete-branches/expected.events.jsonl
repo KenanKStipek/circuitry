@@ -1,12 +1,12 @@
-{"v":1,"seq":0,"ts":"2026-10-11T08:38:59.736Z","ev":"run_start","run_id":"bb90702e-03c9-4fa7-b850-6940de5c3768","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":68827}
-{"v":1,"seq":1,"ts":"2026-10-11T08:38:59.739Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-11T08:38:59.739Z","ev":"start","id":1,"path":"prime.delete_missing"}
-{"v":1,"seq":3,"ts":"2026-10-11T08:38:59.740Z","ev":"end","id":1,"path":"prime.delete_missing","ok":true,"ms":0}
-{"v":1,"seq":4,"ts":"2026-10-11T08:38:59.740Z","ev":"start","id":2,"path":"prime.make_dir"}
-{"v":1,"seq":5,"ts":"2026-10-11T08:38:59.740Z","ev":"end","id":2,"path":"prime.make_dir","ok":true,"ms":0}
-{"v":1,"seq":6,"ts":"2026-10-11T08:38:59.740Z","ev":"start","id":3,"path":"prime.delete_without_recursive"}
-{"v":1,"seq":7,"ts":"2026-10-11T08:38:59.740Z","ev":"end","id":3,"path":"prime.delete_without_recursive","ok":false,"ms":0,"error":"fs: refusing to delete directory without recursive=True: nonempty"}
-{"v":1,"seq":8,"ts":"2026-10-11T08:38:59.740Z","ev":"start","id":4,"path":"prime.delete_with_recursive"}
-{"v":1,"seq":9,"ts":"2026-10-11T08:38:59.740Z","ev":"end","id":4,"path":"prime.delete_with_recursive","ok":true,"ms":0}
-{"v":1,"seq":10,"ts":"2026-10-11T08:38:59.740Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
-{"v":1,"seq":11,"ts":"2026-10-11T08:38:59.740Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-10-11T09:46:20.494Z","ev":"run_start","run_id":"7e2d1446-9db2-42a9-8995-973745420f66","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":72435}
+{"v":1,"seq":1,"ts":"2026-10-11T09:46:20.516Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T09:46:20.516Z","ev":"start","id":1,"path":"prime.delete_missing"}
+{"v":1,"seq":3,"ts":"2026-10-11T09:46:20.517Z","ev":"end","id":1,"path":"prime.delete_missing","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-11T09:46:20.517Z","ev":"start","id":2,"path":"prime.make_dir"}
+{"v":1,"seq":5,"ts":"2026-10-11T09:46:20.517Z","ev":"end","id":2,"path":"prime.make_dir","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-11T09:46:20.517Z","ev":"start","id":3,"path":"prime.delete_without_recursive"}
+{"v":1,"seq":7,"ts":"2026-10-11T09:46:20.517Z","ev":"end","id":3,"path":"prime.delete_without_recursive","ok":false,"ms":0,"error":"fs: refusing to delete directory without recursive=True: scratch"}
+{"v":1,"seq":8,"ts":"2026-10-11T09:46:20.518Z","ev":"start","id":4,"path":"prime.delete_with_recursive"}
+{"v":1,"seq":9,"ts":"2026-10-11T09:46:20.526Z","ev":"end","id":4,"path":"prime.delete_with_recursive","ok":true,"ms":1}
+{"v":1,"seq":10,"ts":"2026-10-11T09:46:20.528Z","ev":"end","id":0,"path":"prime","ok":true,"ms":12}
+{"v":1,"seq":11,"ts":"2026-10-11T09:46:20.528Z","ev":"run_end","ok":true}

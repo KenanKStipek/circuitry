@@ -99,6 +99,19 @@ _CASE_JSON_KEYS = frozenset(
         "env",
     }
 )
+#: A case's own `case.json` 'env' key may not reintroduce exactly what
+#: `_sandboxed_env`'s own filter above just stripped from the caller's
+#: shell: one of its `CREDENTIAL_ENV_VARS` names, or any `CIRCUITRY_*`
+#: name. This is a denylist of *exact* names, not a substring heuristic --
+#: a synthetic name that merely *contains* a word like "API_KEY" (§7 case
+#: 12's own `..._MY_API_KEY_SUFFIX`, there to exercise `env_vars`' own
+#: secret-masking pattern) is not itself a credential and stays allowed.
+def _is_safe_case_env_key(key: str) -> bool:
+    if key.upper().startswith("CIRCUITRY_"):
+        return False
+    return key not in CREDENTIAL_ENV_VARS
+
+
 _VALID_EXPECT = frozenset({"success", "failure"})
 _VALID_ERROR_COMPARE = frozenset({"exact", "location"})
 _VALID_ENGINES = frozenset({"python", "electricity"})
@@ -135,6 +148,15 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())
     ):
         raise ValueError(f"{case_dir.name}: case.json 'env' must be a mapping of str to str")
+    if env is not None:
+        bad_keys = sorted(k for k in env if not _is_safe_case_env_key(k))
+        if bad_keys:
+            raise ValueError(
+                f"{case_dir.name}: case.json 'env' key(s) {bad_keys} look like a credential "
+                "or a CIRCUITRY_* config override -- a case subprocess must never see a live "
+                "credential, and `_sandboxed_env` already drops every CIRCUITRY_* variable "
+                "the caller's own shell might export, so 'env' may not reintroduce one"
+            )
 
     if not isinstance(metadata["electricity_preview_ok"], bool):
         raise ValueError(f"{case_dir.name}: case.json 'electricity_preview_ok' must be a bool")
@@ -239,10 +261,10 @@ def _sandboxed_env(
     # A case's own `case.json` 'env' key (issue #460's own test plan: "if a
     # case needs a controlled variable, add an env key to case.json in the
     # harness") -- applied after every filter above, so a case can set a
-    # name the filter would otherwise have dropped (nothing here can ever
-    # be a credential or a `CIRCUITRY_*` override: `load_case` validates
-    # 'env' is a plain `str -> str` mapping, and a case author controls
-    # its own contents).
+    # name the filter would otherwise have dropped. `load_case` rejects any
+    # key that looks like a credential or a `CIRCUITRY_*` override before a
+    # case ever reaches this function, so `extra_env` is already known-safe
+    # by the time it gets here.
     if extra_env:
         env.update(extra_env)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
