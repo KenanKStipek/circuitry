@@ -34,14 +34,24 @@ osp watch ./run --plan do-thing.yml --config config.json -e key=value
   project, environment) exactly as `cof run` would. The plan osp compiles
   from the document uses the same `config.json`/`-e` pair passed on the
   command line (`electricity::check_options`, the exact options a real
-  `electricity <config> <doc> -e k=v...` run would check it against) —
-  **osp does not reproduce `cof`'s own config discovery**, so a document
-  that relies on a `group:`/`concurrency_groups` defined only in the
-  global or project `circuitry.config.json` layer, not in an explicit
-  `config.json` given here, still falls back to no plan, on either engine.
-  `osp watch --plan do-thing.yml` takes its own `--config`/`-e` for the
-  same reason, independent of whatever the watched run itself was started
-  with.
+  `electricity <config> <doc> -e k=v...` run would check it against). With
+  no `config.json` given here either, osp now mirrors `cof`'s own
+  discovery for the plan too: `CIRCUITRY_CONFIG`, if set, replaces
+  discovery entirely (the same precedence `cof run` itself uses);
+  otherwise the global config (`~/.config/circuitry/config.json`) and a
+  *trusted* project `circuitry.config.json`/`config.json` found in osp's
+  own working directory are deep-merged the same way `cof run` layers
+  them (`cof trust` still governs whether a discovered project config
+  applies at all). A document whose plan depends on a
+  `group:`/`concurrency_groups` defined only there no longer falls back
+  to no plan. `CIRCUITRY_*` per-setting environment overlays
+  (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, ...) still apply on top once
+  there's a file for them to layer onto, the same as `cof run`. An
+  explicit `config.json` given here already wins over all of the above,
+  same as `cof run` itself. `osp watch --plan do-thing.yml` takes its own
+  `--config`/`-e` for the same reason, independent of whatever the
+  watched run itself was started with, and gets the same discovery with
+  neither.
 - `--engine electricity` needs a config (electricity has no config
   discovery yet). For a document outside electricity's current scope, it
   shows electricity's own preview-marker refusal and exit code, the same

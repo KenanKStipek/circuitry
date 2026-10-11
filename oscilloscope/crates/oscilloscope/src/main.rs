@@ -274,6 +274,7 @@ macro_rules! compile_plan {
                 let trust_env =
                     std::env::var(oscilloscope_core::config_discovery::TRUST_PROJECT_CONFIG_ENV)
                         .ok();
+                let env_config = std::env::var_os("CIRCUITRY_CONFIG").map(PathBuf::from);
                 oscilloscope_core::plan::compile_with_discovery(
                     $orchestration,
                     $config,
@@ -281,6 +282,7 @@ macro_rules! compile_plan {
                     Path::new(&home),
                     &cwd,
                     trust_env.as_deref(),
+                    env_config.as_deref(),
                 )
             }
             _ => oscilloscope_core::plan::compile($orchestration, $config, $inputs),

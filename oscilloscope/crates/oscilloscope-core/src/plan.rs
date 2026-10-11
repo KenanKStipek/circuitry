@@ -63,11 +63,16 @@ pub fn compile(
 /// `config` is `None` -- the global config plus a *trusted* project
 /// config found in `cwd`. With an explicit `config`, this is exactly
 /// `compile`: discovery only ever stands in for the no-`--config`
-/// case, the same as `cof run` itself. Falls back to `compile`'s own
-/// existing no-config behaviour whenever discovery finds nothing, or
-/// a temp file for its own output can't be made or written -- this
-/// must never be the reason a plan compile fails that otherwise
-/// wouldn't have.
+/// case, the same as `cof run` itself. `circuitry_config_env` is
+/// `CIRCUITRY_CONFIG`'s own value, when set -- `cli/config.py::
+/// find_config_path`'s precedence has it *replace* global/project
+/// discovery entirely, the same as `config` itself, not layer on top
+/// of them (and, like `config`, needs no trust check: a file named by
+/// the environment is already trusted as given). Falls back to
+/// `compile`'s own existing no-config behaviour whenever discovery
+/// finds nothing, or a temp file for its own output can't be made or
+/// written -- this must never be the reason a plan compile fails that
+/// otherwise wouldn't have.
 pub fn compile_with_discovery(
     path: &Path,
     config: Option<&Path>,
@@ -75,9 +80,13 @@ pub fn compile_with_discovery(
     home: &Path,
     cwd: &Path,
     trust_env: Option<&str>,
+    circuitry_config_env: Option<&Path>,
 ) -> Result<Program, RunCheckError> {
     if config.is_some() {
         return compile(path, config, inputs);
+    }
+    if let Some(env_config) = circuitry_config_env {
+        return compile(path, Some(env_config), inputs);
     }
     let Some(discovered) = crate::config_discovery::discover_merged_config(home, cwd, trust_env)
     else {
@@ -1020,6 +1029,7 @@ mod tests {
             home.path(),
             cwd.path(),
             None,
+            None,
         )
         .expect("the discovered global config's own runtime block should still compile");
         let plan = PlanTree::from_program(&program);
@@ -1044,8 +1054,46 @@ mod tests {
             home.path(),
             cwd.path(),
             None,
+            None,
         )
         .expect("should compile exactly as compile(..., None, ...) already does");
+        let plan = PlanTree::from_program(&program);
+        assert!(plan.has_plan());
+    }
+
+    #[test]
+    fn compile_with_discovery_prefers_circuitry_config_env_over_global_and_project_discovery() {
+        // `cli/config.py::find_config_path`'s own precedence:
+        // CIRCUITRY_CONFIG replaces global/project discovery
+        // entirely, the same as an explicit --config, rather than
+        // layering on top of them.
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/circuitry")).unwrap();
+        std::fs::write(
+            home.path().join(".config/circuitry/config.json"),
+            r#"{"runtime": {"max_concurrency": 99}}"#,
+        )
+        .unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+        )
+        .unwrap();
+        let env_config = cwd.path().join("from-env.json");
+        std::fs::write(&env_config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
+
+        let program = compile_with_discovery(
+            &doc,
+            None,
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+            Some(&env_config),
+        )
+        .expect("CIRCUITRY_CONFIG's own file should still compile");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
     }
@@ -1079,6 +1127,7 @@ mod tests {
             &indexmap::IndexMap::new(),
             home.path(),
             cwd.path(),
+            None,
             None,
         )
         .expect("an explicit config should still compile, discovery or not");
