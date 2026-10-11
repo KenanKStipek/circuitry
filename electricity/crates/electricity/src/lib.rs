@@ -168,28 +168,35 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
-/// Tool providers this crate's own [`tool_registry`] actually
-/// dispatches -- `json`, plus the `test-tools` cargo feature's own
-/// `sleep`/`fail` when that feature is compiled in
-/// (`electricity_bytecode::refusal::Supported::providers`, issue #449's
-/// gate lane). Just `&["json"]` in every ordinary build --
-/// `electricity-cli`'s own `Cargo.toml` never enables this feature
-/// (that crate's own doc comment).
+/// Extra tool providers this crate's own [`tool_registry`] dispatches
+/// on top of `json` (always on -- [`electricity_bytecode::refusal::
+/// Supported::allows_provider`]) -- just the `test-tools` cargo
+/// feature's own `sleep`/`fail` when that feature is compiled in
+/// (`electricity_bytecode::refusal::Supported::providers`). Empty in
+/// every ordinary build -- `electricity-cli`'s own `Cargo.toml` never
+/// enables this feature (that crate's own doc comment). M1 gate seam
+/// round 2, item S3: this function used to return the walker's *entire*
+/// provider allow-list (`&["json"]`); `shell`/`awk`/`imagemagick`/
+/// `ffmpeg` (lane C), `fs`/`env_vars`/`hash`/`uuid`/`clock` (lane D1),
+/// `regex` (lane D2) and `http` (lane E) are now each their own
+/// capability flag on [`electricity_bytecode::refusal::Supported`]
+/// instead, flipped in [`electricity_bytecode::refusal::Supported::
+/// current`], so no lane needs to touch this slice at all.
 #[cfg(feature = "test-tools")]
-fn supported_providers() -> &'static [&'static str] {
-    &["json", "sleep", "fail"]
+fn extra_supported_providers() -> &'static [&'static str] {
+    &["sleep", "fail"]
 }
 
 #[cfg(not(feature = "test-tools"))]
-fn supported_providers() -> &'static [&'static str] {
-    &["json"]
+fn extra_supported_providers() -> &'static [&'static str] {
+    &[]
 }
 
 /// A fresh tool registry: `json` (M0-H's only real provider), plus
 /// `sleep`/`fail` when the `test-tools` feature is enabled -- the one
-/// place both are ever registered, so [`supported_providers`] (the
-/// refusal walker's own allow-list) never drifts from what the registry
-/// actually dispatches.
+/// place both are ever registered, so [`extra_supported_providers`]
+/// (the refusal walker's own extra allow-list) never drifts from what
+/// the registry actually dispatches.
 /// `json`, like every other provider this crate can build, now goes
 /// through [`electricity_vm::exec::tool::resolve_plugin`]'s own
 /// per-attempt [`electricity_tools::build_plugin`] fallback instead of
@@ -1014,7 +1021,7 @@ pub async fn run_orchestration_with_config(
     // doc comment).
     if let Some(refusal) = first_unsupported(
         &program,
-        &electricity_bytecode::Supported::current(supported_providers()),
+        &electricity_bytecode::Supported::current(extra_supported_providers()),
     ) {
         return RunResult {
             ok: false,

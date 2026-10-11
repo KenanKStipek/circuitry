@@ -45,6 +45,21 @@ use crate::program::Program;
 use crate::region::{Condition, ExpectCondition, Region};
 use crate::template::TemplateText;
 
+/// Lane C's own native providers (#448) -- process-backed, so they
+/// share one capability flag ([`Supported::tools_process`]) rather
+/// than a flag each, the way `supported_providers()` in `electricity`
+/// (lib)'s own `src/lib.rs` used to be one shared slice every one of
+/// lanes C/D1/D2/E would otherwise all edit (M1 gate seam round 2,
+/// item S3).
+const TOOLS_PROCESS_PROVIDERS: &[&str] = &["shell", "awk", "imagemagick", "ffmpeg"];
+/// Lane D1's own native providers (#448) -- pure Rust/stdlib, no
+/// subprocess.
+const TOOLS_STDLIB_PROVIDERS: &[&str] = &["fs", "env_vars", "hash", "uuid", "clock"];
+/// Lane D2's own native provider (#448).
+const TOOL_REGEX_PROVIDERS: &[&str] = &["regex"];
+/// Lane E's own native provider (#448).
+const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
+
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefusalReason {
@@ -136,22 +151,35 @@ pub struct Supported<'a> {
     /// other flag here, standing in for the preflight check M0-H never
     /// ran (#451).
     pub preflight: bool,
-    /// A `tool` effect's own normalized `provider:` is accepted only
-    /// when it is one of these (already-normalized, lower-case)
-    /// names -- the caller's own [`electricity_tools::ToolRegistry`]/
-    /// `registry::build_plugin` allow-list, e.g. `&["json"]` for M0,
-    /// widened by lanes C/D1/D2/E/F2 as each native tool lands.
+    /// Lane C (#448): the process-backed providers (`shell`, `awk`,
+    /// `imagemagick`, `ffmpeg` -- [`TOOLS_PROCESS_PROVIDERS`]).
+    pub tools_process: bool,
+    /// Lane D1 (#448): the Python-stdlib-backed providers (`fs`,
+    /// `env_vars`, `hash`, `uuid`, `clock` -- [`TOOLS_STDLIB_PROVIDERS`]).
+    pub tools_stdlib: bool,
+    /// Lane D2 (#448): `regex` ([`TOOL_REGEX_PROVIDERS`]).
+    pub tool_regex: bool,
+    /// Lane E (#448): `http` ([`TOOL_HTTP_PROVIDERS`]).
+    pub tool_http: bool,
+    /// Extra provider names accepted on top of `json` (always on) and
+    /// the four capability flags above -- only ever non-empty for the
+    /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
+    /// belong to any M1 lane's own provider set (M1 gate seam round 2,
+    /// item S3: this field used to be the *entire* allow-list,
+    /// `electricity` (lib)'s own `supported_providers()`, one shared
+    /// slice every one of lanes C/D1/D2/E would otherwise all edit).
     pub providers: &'a [&'a str],
 }
 
 impl<'a> Supported<'a> {
     /// The exact capability set the M0-H VM ran with: every M1 effect
-    /// type refused, *providers* naming exactly the tool providers the
-    /// caller's own [`electricity_tools::ToolRegistry`]/`build_plugin`
-    /// combination actually dispatches (`"json"`, plus `"sleep"`/
-    /// `"fail"` under the `test-tools` cargo feature) -- this module's
-    /// own golden tests below pin that this walker refuses *exactly*
-    /// what M0 refused, for this value.
+    /// type refused, every native-tool capability flag `false`, and
+    /// *providers* naming only the extra provider names the caller's
+    /// own [`electricity_tools::ToolRegistry`]/`build_plugin`
+    /// combination actually dispatches on top of `json` (always on --
+    /// just `"sleep"`/`"fail"` under the `test-tools` cargo feature,
+    /// for M0) -- this module's own golden tests below pin that this
+    /// walker refuses *exactly* what M0 refused, for this value.
     pub fn m0(providers: &'a [&'a str]) -> Self {
         Supported {
             prompt: false,
@@ -163,6 +191,10 @@ impl<'a> Supported<'a> {
             model_expect: false,
             declared_prompts: false,
             preflight: false,
+            tools_process: false,
+            tools_stdlib: false,
+            tool_regex: false,
+            tool_http: false,
             providers,
         }
     }
@@ -176,23 +208,62 @@ impl<'a> Supported<'a> {
     /// site, each PR's own diff colliding with every other lane's).
     /// Each M1 lane flips exactly one field here, in its own PR, never
     /// [`Supported::m0`] (pinned by this module's own golden tests to
-    /// the exact M0 value forever) -- one field per line, so two
-    /// lanes landing around the same time touch different lines of
-    /// this function, not the same expression. Identical to
-    /// [`Supported::m0`]'s own value until the first M1 lane lands.
+    /// the exact M0 value forever) -- one field per line, with a
+    /// `// lane X (#448)` comment line of its own between each pair of
+    /// flags (M1 gate seam round 2, item S3), so two lanes landing
+    /// around the same time, each flipping a different flag, touch
+    /// neither the same line nor an adjacent one -- a git merge of
+    /// both lanes' own one-line diffs can never conflict. *providers*
+    /// is still only ever the `test-tools` feature's own extras;
+    /// `tools_process`/`tools_stdlib`/`tool_regex`/`tool_http` replace
+    /// what used to be `electricity` (lib)'s own `supported_providers()`
+    /// -- one shared slice every one of lanes C/D1/D2/E would
+    /// otherwise all have to edit, each on the very same line. Identical
+    /// to [`Supported::m0`]'s own value until the first M1 lane lands.
     pub fn current(providers: &'a [&'a str]) -> Self {
         Supported {
-            prompt: false,           // M1-G
-            loop_: false,            // M1-H
-            use_: false,             // M1-I
-            yield_: false,           // M1-P
-            reflector: false,        // M1-L1
-            model_condition: false,  // M1-G2
-            model_expect: false,     // M1-G2
-            declared_prompts: false, // M1-P
-            preflight: false,        // R
+            prompt: false,
+            // lane G (#448)
+            loop_: false,
+            // lane H (#448)
+            use_: false,
+            // lane I (#448)
+            yield_: false,
+            // lane P (#448)
+            reflector: false,
+            // lane L1 (#448)
+            model_condition: false,
+            // lane G2 (#448)
+            model_expect: false,
+            // lane G2 (#448)
+            declared_prompts: false,
+            // lane P (#448)
+            preflight: false,
+            // lane R (#448)
+            tools_process: false,
+            // lane C (#448)
+            tools_stdlib: false,
+            // lane D1 (#448)
+            tool_regex: false,
+            // lane D2 (#448)
+            tool_http: false,
+            // lane E (#448)
             providers,
         }
+    }
+
+    /// Whether a `tool` effect's own normalized `provider:` is one
+    /// this build can actually dispatch: `json` (always), one of
+    /// *providers* (the `test-tools` feature's own extras), or a name
+    /// in one of the four native-tool sets whose own capability flag
+    /// is set.
+    fn allows_provider(&self, name: &str) -> bool {
+        name == "json"
+            || self.providers.contains(&name)
+            || (self.tools_process && TOOLS_PROCESS_PROVIDERS.contains(&name))
+            || (self.tools_stdlib && TOOLS_STDLIB_PROVIDERS.contains(&name))
+            || (self.tool_regex && TOOL_REGEX_PROVIDERS.contains(&name))
+            || (self.tool_http && TOOL_HTTP_PROVIDERS.contains(&name))
     }
 }
 
@@ -277,7 +348,7 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             // lookup would miss on.
             let normalized_provider =
                 electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
-            if !supported.providers.contains(&normalized_provider.as_str()) {
+            if !supported.allows_provider(&normalized_provider) {
                 return refusal(
                     path,
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
@@ -375,6 +446,10 @@ mod tests {
         assert_eq!(current.model_expect, m0.model_expect);
         assert_eq!(current.declared_prompts, m0.declared_prompts);
         assert_eq!(current.preflight, m0.preflight);
+        assert_eq!(current.tools_process, m0.tools_process);
+        assert_eq!(current.tools_stdlib, m0.tools_stdlib);
+        assert_eq!(current.tool_regex, m0.tool_regex);
+        assert_eq!(current.tool_http, m0.tool_http);
     }
 
     fn tool_op(params: ParamNode) -> ToolOp {
@@ -503,6 +578,143 @@ mod tests {
             RefusalReason::UnsupportedToolProvider("shell".to_string())
         );
         assert_eq!(refusal.path, tool_path);
+    }
+
+    #[test]
+    fn a_shell_provider_is_accepted_once_tools_process_is_set() {
+        // S3: `shell`/`awk`/`imagemagick`/`ffmpeg` share lane C's own
+        // `tools_process` flag, not an individual entry in `providers`.
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "shell",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tools_process: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn awk_imagemagick_and_ffmpeg_are_all_accepted_once_tools_process_is_set() {
+        let supported = Supported {
+            tools_process: true,
+            ..m0()
+        };
+        for provider in ["awk", "imagemagick", "ffmpeg"] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("run"),
+                LeafKind::Tool(tool_op_with_provider(
+                    provider,
+                    ParamNode::Map(IndexMap::new()),
+                )),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            assert!(
+                first_unsupported(&program, &supported).is_none(),
+                "{provider} should be accepted once tools_process is set"
+            );
+        }
+    }
+
+    #[test]
+    fn tools_process_providers_are_still_refused_while_the_flag_is_off() {
+        for provider in ["shell", "awk", "imagemagick", "ffmpeg"] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("run"),
+                LeafKind::Tool(tool_op_with_provider(
+                    provider,
+                    ParamNode::Map(IndexMap::new()),
+                )),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            let refusal = first_unsupported(&program, &m0()).unwrap();
+            assert_eq!(
+                refusal.reason,
+                RefusalReason::UnsupportedToolProvider(provider.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn fs_env_vars_hash_uuid_and_clock_are_all_accepted_once_tools_stdlib_is_set() {
+        let supported = Supported {
+            tools_stdlib: true,
+            ..m0()
+        };
+        for provider in ["fs", "env_vars", "hash", "uuid", "clock"] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("run"),
+                LeafKind::Tool(tool_op_with_provider(
+                    provider,
+                    ParamNode::Map(IndexMap::new()),
+                )),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            assert!(
+                first_unsupported(&program, &supported).is_none(),
+                "{provider} should be accepted once tools_stdlib is set"
+            );
+        }
+    }
+
+    #[test]
+    fn tools_stdlib_providers_are_refused_while_tools_process_is_set_instead() {
+        // The four capability flags are independent -- setting the
+        // wrong one must not accidentally accept a provider that
+        // belongs to a different lane's own set.
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider("fs", ParamNode::Map(IndexMap::new()))),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tools_process: true,
+            ..m0()
+        };
+        let refusal = first_unsupported(&program, &supported).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("fs".to_string())
+        );
+    }
+
+    #[test]
+    fn regex_is_accepted_once_tool_regex_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "regex",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_regex: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn http_is_accepted_once_tool_http_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "http",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_http: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
     }
 
     #[test]

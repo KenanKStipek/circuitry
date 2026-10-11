@@ -156,9 +156,10 @@ mod tests {
         // "Supported plugins" list the message above names), but this
         // crate has no builder for it yet (lane C) -- reachable only
         // through a direct call like this one, since the refusal
-        // walker's own `Supported.providers` already keeps a real
-        // document with `provider: shell` from ever reaching this
-        // function.
+        // walker's own `Supported::allows_provider` (its own
+        // `tools_process` flag, off until lane C flips it) already
+        // keeps a real document with `provider: shell` from ever
+        // reaching this function.
         let err = match build_plugin("shell", &Value::None) {
             Err(err) => err,
             Ok(_) => panic!("expected an unknown-plugin error"),
