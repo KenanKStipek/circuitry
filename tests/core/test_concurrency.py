@@ -17,17 +17,26 @@ from circuitry.core.concurrency import (
 
 
 class _Tracker:
-    """Records how many `with` bodies were inside the limiter at once."""
+    """Records how many `with` bodies were inside the limiter at once.
+
+    An optional ``barrier`` passed to ``work``, sized to the concurrency a
+    test expects, makes the peak deterministic instead of inferred from
+    the wall clock (#456): a body waits on it while counted as in flight,
+    so a lower peak than expected times out with ``BrokenBarrierError``
+    instead of racing a sleep.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._in_flight = 0
         self.max_in_flight = 0
 
-    def work(self, delay: float = 0.03) -> None:
+    def work(self, delay: float = 0.03, barrier: threading.Barrier | None = None) -> None:
         with self._lock:
             self._in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        if barrier is not None:
+            barrier.wait()
         time.sleep(delay)
         with self._lock:
             self._in_flight -= 1
@@ -48,12 +57,16 @@ def test_max_concurrency_serializes_acquirers() -> None:
 
 
 def test_unset_max_concurrency_imposes_no_cap() -> None:
+    """A barrier sized to all five acquirers (#456), not a sleep, proves
+    the peak: on a slow runner the fifth acquirer can start after the
+    first has already finished."""
     limiter = RunConcurrencyLimiter()
     tracker = _Tracker()
+    barrier = threading.Barrier(5, timeout=5)
 
     def run_one() -> None:
         with limiter.acquire(group=None):
-            tracker.work(delay=0.05)
+            tracker.work(delay=0.05, barrier=barrier)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(lambda _: run_one(), range(5)))
@@ -76,12 +89,18 @@ def test_group_cap_serializes_within_the_named_group() -> None:
 
 
 def test_different_groups_run_independently() -> None:
+    """A barrier shared by both groups (#456), not a sleep, proves the two
+    ran at once: on a slow runner one call can finish before the other
+    even starts, hiding exactly the cross-group blocking this test exists
+    to catch.
+    """
     limiter = RunConcurrencyLimiter(groups={"gpu": 1, "cpu": 1})
     gpu_tracker = _Tracker()
     cpu_tracker = _Tracker()
     combined_lock = threading.Lock()
     combined_count = 0
     max_combined = 0
+    barrier = threading.Barrier(2, timeout=5)
 
     def bump(delta: int) -> None:
         nonlocal combined_count, max_combined
@@ -92,13 +111,13 @@ def test_different_groups_run_independently() -> None:
     def run_gpu() -> None:
         with limiter.acquire(group="gpu"):
             bump(1)
-            gpu_tracker.work(delay=0.05)
+            gpu_tracker.work(delay=0.05, barrier=barrier)
             bump(-1)
 
     def run_cpu() -> None:
         with limiter.acquire(group="cpu"):
             bump(1)
-            cpu_tracker.work(delay=0.05)
+            cpu_tracker.work(delay=0.05, barrier=barrier)
             bump(-1)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -116,18 +135,25 @@ def test_different_groups_run_independently() -> None:
 
 def test_global_cap_and_group_cap_compose() -> None:
     """runtime.max_concurrency and a group both apply at once: a grouped
-    effect counts against both the group's own cap and the run-wide one."""
-    limiter = RunConcurrencyLimiter(max_concurrency=2, groups={"gpu": 5})
+    effect counts against both the group's own cap and the run-wide one.
+
+    A barrier sized to the global cap (#456), not a sleep, proves hitting
+    it: four acquirers (an even multiple of the cap, so the barrier's two
+    waves each fill exactly) arrive in two waves of two rather than a
+    sleep-window race deciding how many overlap.
+    """
+    limiter = RunConcurrencyLimiter(max_concurrency=2, groups={"gpu": 4})
     tracker = _Tracker()
+    barrier = threading.Barrier(2, timeout=5)
 
     def run_one() -> None:
         with limiter.acquire(group="gpu"):
-            tracker.work()
+            tracker.work(barrier=barrier)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        list(pool.map(lambda _: run_one(), range(5)))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: run_one(), range(4)))
 
-    # The group alone would allow 5 at once; the run-wide cap of 2 still wins.
+    # The group alone would allow 4 at once; the run-wide cap of 2 still wins.
     assert tracker.max_in_flight == 2
 
 
