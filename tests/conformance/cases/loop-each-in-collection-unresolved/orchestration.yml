@@ -1,0 +1,10 @@
+name: loop-each-in-collection-unresolved
+effects:
+  - type: loop
+    name: shots
+    each: {in: "prime.missing.value", as: "item"}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {item: "{{item}}"}}

@@ -1,0 +1,23 @@
+name: loop-with-if-inside-body
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: loop
+    name: shots
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: if
+        name: gate
+        if: {mode: cel, expr: "state.item > 1"}
+        then:
+          - type: tool
+            name: branch
+            provider: json
+            params: {mode: stringify, input: {branch: "big"}}
+        else:
+          - type: tool
+            name: branch
+            provider: json
+            params: {mode: stringify, input: {branch: "small"}}

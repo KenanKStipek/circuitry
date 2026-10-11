@@ -142,12 +142,14 @@ async fn run_each_chain_of(
 /// time) -- the quadratic shape #463 tracks (today's `live_ctx`
 /// re-copies the whole accumulated state on every render), not yet
 /// fixed by this lane (see `exec::live_ctx`'s own doc comment and this
-/// PR's own body for why). The two bounds below are deliberately far
-/// looser than that measurement: generous enough to never be
-/// timing-flaky on a loaded or slower CI runner, while still catching
-/// a future accidental cubic-or-worse blow-up (4x the passes would
-/// cost ≈64x the time at a cubic growth rate) or a large constant-
-/// factor regression.
+/// PR's own body for why #463's own asymptotic fix, not this guard,
+/// is the right place for that). Only the growth *ratio* is asserted,
+/// not a wall-clock ceiling (a fixed-seconds ceiling is exactly what
+/// flakes on a loaded or slower CI runner): 40x gives headroom over
+/// today's measured ≈18x (tolerating the quadratic shape itself plus
+/// noise) while still catching a future accidental cubic-or-worse
+/// blow-up (4x the passes would cost ≈64x the time at a cubic growth
+/// rate).
 #[tokio::test]
 #[ignore]
 async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
@@ -156,10 +158,6 @@ async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() 
 
     eprintln!("chain each: 250 passes = {small:?}, 1000 passes = {large:?}");
 
-    assert!(
-        large < std::time::Duration::from_secs(30),
-        "1000-pass chain each took {large:?}, expected well under 30s"
-    );
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
@@ -188,8 +186,12 @@ async fn tree_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
 
     eprintln!("tree each (max_concurrency=8): 250 passes = {small:?}, 1000 passes = {large:?}");
 
-    assert!(
-        large < std::time::Duration::from_secs(10),
-        "1000-pass tree each took {large:?}, expected well under 10s"
-    );
+    if small.as_millis() > 0 {
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        assert!(
+            ratio < 40.0,
+            "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
+             expected well under a 40x blow-up (today's own measured ≈6x)"
+        );
+    }
 }

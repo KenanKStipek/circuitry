@@ -198,8 +198,10 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// `IndexMap`'s own `IntoIterator`) instead of cloning them a second
 /// time removes that double-clone, with no behaviour change: every M0
 /// case and every new loop case in this PR stays byte-identical
-/// (`generate_loop_corpus.py`'s own replay test; the existing golden
-/// corpora).
+/// (the existing golden corpora, and loop's own conformance cases run
+/// on both engines -- control flow like this is covered by running
+/// real documents, not a golden-corpus replay; see this PR's own
+/// orchestrator-confirmed ruling).
 ///
 /// The underlying asymptotic cost is **not** fixed here: `electricity_value::Value`'s
 /// `Dict`/`List` hold plain, non-shared children (`#[derive(Clone)]` is

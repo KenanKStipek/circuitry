@@ -1,0 +1,7 @@
+{
+  "spec_case": "#466 review finding 1",
+  "description": "A while loop with the default on_error: fail whose body fails on pass index 2 (gate's own expect): the loop raises, and value.iterations on the loop's own node must still show the real completed-pass count (2), not 0 -- PR #466 review finding 1.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

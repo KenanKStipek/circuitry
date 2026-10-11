@@ -95,6 +95,31 @@ fn parse_item_gated(path: EffectPath, name: &str, expect_expr: &str) -> Op {
     )
 }
 
+/// Like [`parse_item_gated`], but templates *template* (e.g.
+/// `"{{iter.index}}"`) rather than hard-coding `{{item}}` -- lets a
+/// `while` loop's own body (no `item` binding) fail deterministically
+/// on a given pass.
+fn parse_template_gated(path: EffectPath, name: &str, template: &str, expect_expr: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        k("mode"),
+        ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        k("input"),
+        ParamNode::Template(TemplateText::new(template, false, Escape::None)),
+    );
+    tool_op(
+        path,
+        name,
+        params,
+        Some(ExpectCondition::Cel {
+            expr: expect_expr.to_string(),
+        }),
+        RetryPolicy::default(),
+    )
+}
+
 /// A `json` tool leaf, `mode: parse`, with a fixed malformed `input:` --
 /// always fails.
 fn failing_tool(path: EffectPath, name: &str) -> Op {
@@ -195,16 +220,18 @@ fn seed_items(store: &Store, items: Vec<Value>) {
 #[derive(Default)]
 struct DispatchObserver {
     dispatches: std::cell::RefCell<Vec<(usize, usize)>>,
+    paths: std::cell::RefCell<Vec<String>>,
 }
 
 impl RunObserver for DispatchObserver {
     fn dispatch(
         &self,
-        _path: &electricity_bytecode::EffectPath,
+        path: &electricity_bytecode::EffectPath,
         branches: usize,
         concurrency: usize,
     ) {
         self.dispatches.borrow_mut().push((branches, concurrency));
+        self.paths.borrow_mut().push(path.to_string());
     }
     fn effect_start(&self, _path: &electricity_bytecode::EffectPath) -> InstanceId {
         0
@@ -721,6 +748,143 @@ async fn named_while_min_iterations_runs_without_consulting_the_condition() {
     );
 }
 
+/// Review of #466, finding 1 (the condition-error half): a failing
+/// *condition* under the default `on_error: fail` had the same bug as
+/// a failing body (see `named_while_failing_body_under_on_error_fail_
+/// keeps_the_real_iteration_count`) -- the `OnError::Fail` arm of the
+/// condition-error match returned before copying the local counter
+/// into `RunState`. `min_iterations` forces two real passes before the
+/// condition (an absent path under `strict: true`, always an error) is
+/// ever consulted, so a correct run must still show `iterations: 2`.
+#[tokio::test]
+async fn named_while_failing_condition_under_on_error_fail_keeps_the_real_iteration_count() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("w");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("w"),
+        LoopSpec::While(Condition::Cel {
+            expr: "state.prime.typo.value <= 10".to_string(),
+            strict: true,
+        }),
+        LoopFlow::Chain,
+        None,
+        None,
+        2,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    assert!(run(single(loop_op_), &store).await.is_err());
+
+    let pr = prime(&store);
+    let w = as_dict(get(&pr, "w").unwrap());
+    let value = as_dict(get(w, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("error".to_string()))
+    );
+}
+
+/// Review of #466, finding 1: a failing body under the default
+/// `on_error: fail` used to leave `state.iteration_count` at its
+/// default (0) because the Fail branch returned before the only line
+/// that copied the local counter into `RunState`. cof's own
+/// `LoopRuntime.execute` records the real count reached in its own
+/// `except` block (`core/loop.py`).
+#[tokio::test]
+async fn named_while_failing_body_under_on_error_fail_keeps_the_real_iteration_count() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("w");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![parse_template_gated(
+        body_prefix.push_name("gate"),
+        "gate",
+        "{{iter.index}}",
+        "value < 2",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("w"),
+        cel_while("true"),
+        LoopFlow::Chain,
+        None,
+        Some(5),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    assert!(run(single(loop_op_), &store).await.is_err());
+
+    let pr = prime(&store);
+    let w = as_dict(get(&pr, "w").unwrap());
+    let value = as_dict(get(w, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("error".to_string()))
+    );
+}
+
+/// Review of #466, finding 2: the while-condition's own ctx used to go
+/// through `step_overlay` (`scope_ctx`'s own `prime` mirroring), so
+/// `prime.<loop>.iter` leaked a `{index, count}` dict that cof's own
+/// plain `{**ctx, "iter": ...}` construction never adds. A condition
+/// that reads `prime.<loop>.iter` (here, this loop's own `prime.w.iter`)
+/// must see it absent.
+#[tokio::test]
+async fn named_while_condition_ctx_does_not_leak_iter_into_prime() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("w");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("w"),
+        cel_while("!has(state.prime.iter) && state.iter.count < 2"),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let w = as_dict(get(&pr, "w").unwrap());
+    let value = as_dict(get(w, "value").unwrap());
+    assert_eq!(value.get(&k("iterations")), Some(&Value::from(2_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(
+        get(termination, "reason"),
+        Some(&Value::Str("condition_false".to_string()))
+    );
+}
+
 // ---------------------------------------------------------------------
 // tree each
 // ---------------------------------------------------------------------
@@ -874,4 +1038,351 @@ async fn prev_is_absent_before_the_first_completed_pass_and_present_after() {
     // Pass 1's own `prev` sees pass 0's `echo.value` ("1", stringified
     // again by `check_prev` itself into `"\"1\""`).
     assert_eq!(get(check1, "value"), Some(&Value::Str("\"1\"".to_string())));
+}
+
+// ---------------------------------------------------------------------
+// a reused named node (a named loop that runs more than once against
+// the same store node -- the shape #448/#461 call "reused node": a
+// named loop inside an unnamed outer loop, or a second top-level run
+// against persisted state)
+// ---------------------------------------------------------------------
+
+/// A `json`-registry-free tool plugin that requests cancellation as
+/// its own side effect, then reports success -- lets a unit test
+/// trigger a genuine mid-run cancellation (the real [`CancellationToken`]
+/// a running loop itself polls) deterministically, with no real signal
+/// or sleep involved.
+struct CancelOnceTool;
+
+#[async_trait::async_trait(?Send)]
+impl electricity_tools::ToolPlugin for CancelOnceTool {
+    fn name(&self) -> &str {
+        "cancel_once"
+    }
+
+    async fn execute(
+        &self,
+        _params: Value,
+        call: &electricity_tools::ToolCall<'_>,
+    ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+        call.token.request(2);
+        Ok(electricity_tools::ToolResult::new(
+            Value::None,
+            Value::Dict(IndexMap::new()),
+        ))
+    }
+
+    fn check(&self) -> electricity_tools::CheckResult {
+        electricity_tools::CheckResult {
+            ok: true,
+            missing: Vec::new(),
+            message: None,
+        }
+    }
+}
+
+fn cancel_once_op(path: EffectPath, name: &str) -> Op {
+    Op {
+        path,
+        name: Some(name.to_string()),
+        kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+            provider: "cancel_once".to_string(),
+            params: ParamNode::Map(IndexMap::new()),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+        }))),
+        on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    }
+}
+
+/// Review of #466, finding 3: `execute_loop` used to reset `value` to
+/// `None` unconditionally on every call (`store.set_leaf`), rather
+/// than `node.setdefault("value", None)` as `core/loop.py` does. Only
+/// observable when a call bails out *before* its own final write (a
+/// cancellation, [`is_fatal`]) -- the setdefault only matters in the
+/// gap between the reset and that final write.
+#[tokio::test]
+async fn value_on_a_reused_node_survives_a_cancellation_that_skips_the_final_write() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("w");
+    let body_prefix = own_path.push_pass(loop_id);
+
+    // First call: a real pass runs and writes a real `value`.
+    let body1 = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_1 = loop_op(
+        own_path.clone(),
+        Some("w"),
+        cel_while("state.iter.count < 1"),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body1,
+    );
+    run(single(loop_op_1), &store).await.unwrap();
+    let pr = prime(&store);
+    let w = as_dict(get(&pr, "w").unwrap());
+    assert_ne!(get(w, "value"), Some(&Value::None));
+
+    // Second call on the same node: `each` over two items, whose own
+    // body is `cancel_once` -- pass 0 completes normally (it requests
+    // cancellation as a side effect, but still reports success), so
+    // the loop's own `token.is_set()` check ahead of pass 1 is what
+    // actually stops it. `execute_loop`'s own outer `except` never
+    // runs for a `VmError::Cancelled` (`is_fatal`), so nothing rewrites
+    // `value` at the end -- the reset/setdefault line is the only
+    // thing that touches it on this call.
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+    let token = CancellationToken::new();
+    let mut registry = json_registry();
+    registry.register(Box::new(CancelOnceTool));
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let body2 = vec![cancel_once_op(body_prefix.push_name("cancel"), "cancel")];
+    let loop_op_2 = loop_op(
+        own_path,
+        Some("w"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body2,
+    );
+    let result = electricity_vm::execute_root(
+        &support::program(single(loop_op_2)),
+        &store,
+        &Value::None,
+        &ctx,
+        &electricity_vm::NullObserver,
+        &token,
+    )
+    .await;
+    assert!(matches!(result, Err(VmError::Cancelled)));
+
+    let pr = prime(&store);
+    let w = as_dict(get(&pr, "w").unwrap());
+    assert_ne!(
+        get(w, "value"),
+        Some(&Value::None),
+        "a cancelled re-run must not wipe a reused node's previous value"
+    );
+}
+
+/// Review of #466, finding 4: `core/loop.py`'s success path pops
+/// `meta.failed_passes` when empty, but its own `except` path never
+/// pops -- it only ever sets the key, when non-empty. A reused node's
+/// stale `failed_passes` from an earlier run must survive a
+/// `LoopBoundsError` under `on_error: fail` on a later call.
+#[tokio::test]
+async fn failed_passes_on_a_reused_node_survives_a_later_bounds_error_under_fail() {
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![Value::from(1_i64), Value::from(2_i64), Value::from(3_i64)],
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![
+        stringify_from(body_prefix.push_name("step"), "step", "item", "0"),
+        parse_item_gated(body_prefix.push_name("gate"), "gate", "value == 2"),
+    ];
+    let loop_op_1 = loop_op(
+        own_path.clone(),
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Continue,
+        None,
+        body,
+    );
+    run(single(loop_op_1), &store).await.unwrap();
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let failed = as_list(get(meta, "failed_passes").unwrap());
+    assert_eq!(failed, &vec![Value::from(0_i64), Value::from(2_i64)]);
+
+    // Second call on the same node: a `LoopBoundsError` under `fail`
+    // raises before any pass runs, so this call's own `failed_passes`
+    // stays empty -- cof leaves the stale key from the first call
+    // untouched rather than popping it.
+    let body2 = vec![stringify_from(
+        own_path.push_pass(loop_id).push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_2 = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        Some(1),
+        0,
+        OnError::Fail,
+        None,
+        body2,
+    );
+    assert!(run(single(loop_op_2), &store).await.is_err());
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let failed = as_list(get(meta, "failed_passes").unwrap());
+    assert_eq!(
+        failed,
+        &vec![Value::from(0_i64), Value::from(2_i64)],
+        "a LoopBoundsError under fail must not pop a reused node's stale failed_passes"
+    );
+}
+
+/// Review of #466, finding 6: Python's own `effective_concurrency`
+/// formula (`max(1, min(max_concurrency, total))`) applies even when
+/// `total` is 0 -- `electricity-vm` used to special-case `total == 0`
+/// back to a flat 0 instead, changing the `dispatch` event's own
+/// `concurrency` field.
+#[tokio::test]
+async fn tree_each_with_zero_passes_and_a_concurrency_cap_still_dispatches_one() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", true),
+        LoopFlow::Tree,
+        Some(4),
+        Some(0),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    let observer = DispatchObserver::default();
+    run_with_observer(single(loop_op_), &store, &observer)
+        .await
+        .unwrap();
+
+    assert_eq!(observer.dispatches.borrow().as_slice(), &[(0, 1)]);
+}
+
+/// Conformance case `loop-unnamed-each-tree`'s own discovery: cof's
+/// `core/store/store.py::Store.fire_concurrent_dispatch`/`effect_path`
+/// take *name* as `str`, but `LoopRuntime.execute`'s tree-each branch
+/// passes `self.defn.name` -- `None` for an unnamed loop -- straight
+/// through, and `effect_path`'s own f-string literally stringifies
+/// that `None` (`f"{prefix}.{name}"`), landing `"prime.None"` in
+/// `--events`' own `dispatch` path. Reproduced here, not fixed --
+/// "Behaviour must match cof run" -- an unnamed loop's every other
+/// event still carries the plain, unsuffixed enclosing path.
+#[tokio::test]
+async fn unnamed_tree_each_dispatches_with_cofs_own_literal_none_suffix() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let own_path = root_path();
+    let body = vec![stringify_from(own_path.push_name("x"), "x", "item", "0")];
+    let loop_op_ = loop_op(
+        own_path,
+        None,
+        each_spec("items", "item", false),
+        LoopFlow::Tree,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    let observer = DispatchObserver::default();
+    run_with_observer(single(loop_op_), &store, &observer)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        observer.paths.borrow().as_slice(),
+        &["prime.None".to_string()]
+    );
+}
+
+/// Review of #466, finding 5: `_resolve_collection`'s own error text
+/// uses `type(x).__name__` (`"date"`/`"datetime"`), not
+/// `Value::type_name`'s fuller `"datetime.date"`/`"datetime.datetime"`.
+#[tokio::test]
+async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() {
+    let store = Store::new();
+    store.set_leaf(
+        &store.root,
+        k("items"),
+        Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    let err = as_str(get(meta, "each_in_error").unwrap());
+    assert!(
+        err.contains("resolved to date instead of list"),
+        "unexpected each_in_error: {err}"
+    );
 }

@@ -513,6 +513,58 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     assert!(!live_state.exists());
 }
 
+/// A `loop`'s own `while:` in `mode: model` -- the compiler's own
+/// default (`while_config.get("mode") or "model"`) whenever `mode:` is
+/// absent, though cof's own schema requires the key explicitly, so
+/// every real document spells it out -- is refused the same way as any
+/// other unsupported content, even though `loop_` itself is supported
+/// (lane H, #461): the walker recurses into a supported container's own
+/// condition and refuses `RefusalReason::ModelCondition` before the run
+/// ever starts (`model_condition` stays `false` until lane G2 lands).
+/// A real document-level, CLI-driven companion of `electricity-bytecode`'s
+/// own hand-built-`Op` unit test,
+/// `a_while_loops_model_mode_condition_is_refused_even_once_loop_is_supported`.
+#[test]
+fn a_model_mode_while_condition_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("while-model-mode");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: poll\n    type: loop\n    while: {mode: model, template: \"done?\"}\n    \
+         body:\n      - name: step\n        type: tool\n        provider: json\n        \
+         params: {mode: stringify, input: {x: 1}}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let live_state = home.path.join("live.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+            "--live-state",
+            live_state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(
+        error.contains("is a preview and cannot run orchestrations yet"),
+        "{error}"
+    );
+    assert!(!out.exists());
+    assert!(!events.exists());
+    assert!(!live_state.exists());
+}
+
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, with no file written at all, even though the rest of the
 /// document (`json`/`dynamic` only) is otherwise fully supported --

@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "each.in points at a path that never resolves (no prime.missing at all) -- the loop runs zero passes, terminates with collection_unresolved, meta.each_in_error is set, and the run emits the 'Loop collection ...; running zero iterations' warning line.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,12 @@
+name: loop-while-failure
+effects:
+  - type: loop
+    name: w
+    max_iterations: 5
+    while: {mode: cel, expr: "true"}
+    body:
+      - type: tool
+        name: gate
+        provider: json
+        params: {mode: parse, input: "{{iter.index}}"}
+        expect: {mode: cel, expr: "value < 2"}

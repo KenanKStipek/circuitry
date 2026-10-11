@@ -85,7 +85,13 @@ pub(crate) async fn execute_loop(
 
     let (node, meta): (Option<NodeRef>, Option<NodeRef>) = if let Some(name) = loop_name {
         let node = store.ensure_dict(parent, key(name)).map_err(store_err)?;
-        store.set_leaf(&node, key("value"), Value::None);
+        // `node.setdefault("value", None)` -- a reused node (a named
+        // loop inside an unnamed outer loop) keeps its previous pass's
+        // `value` until this run's own write replaces it at the end,
+        // the same presence-check convention `execute_tool` uses.
+        if !node.borrow().contains_key(&key("value")) {
+            store.set_leaf(&node, key("value"), Value::None);
+        }
         let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
         write_loop_meta_start(
             store,
@@ -204,8 +210,14 @@ pub(crate) async fn execute_loop(
                     .collect(),
             ),
         );
+        // `core/loop.py`: the success path pops `failed_passes` when
+        // empty; the `except` path only ever sets it (never pops),
+        // so a reused node's stale `failed_passes` from an earlier run
+        // survives a `LoopBoundsError` under `fail`.
         if state.failed_passes.is_empty() {
-            meta.borrow_mut().shift_remove(&key("failed_passes"));
+            if error_text.is_none() {
+                meta.borrow_mut().shift_remove(&key("failed_passes"));
+            }
         } else {
             store.set_leaf(
                 meta,
@@ -394,8 +406,20 @@ fn resolve_collection(in_path: &str, ctx: &Value) -> Result<Vec<Value>, String> 
         other => Err(format!(
             "path {} resolved to {} instead of list",
             py_repr_str(in_path),
-            other.type_name()
+            py_class_name(other)
         )),
+    }
+}
+
+/// `type(x).__name__` -- unqualified, unlike [`Value::type_name`]'s
+/// `"datetime.date"`/`"datetime.datetime"` (meant for a fuller,
+/// Python-repr-style name elsewhere). `_resolve_collection`'s own error
+/// text is the only place this lane needs the bare class name.
+fn py_class_name(v: &Value) -> &'static str {
+    match v {
+        Value::Date(_) => "date",
+        Value::DateTime(..) => "datetime",
+        other => other.type_name(),
     }
 }
 
@@ -1000,11 +1024,30 @@ async fn run_each_tree<'a>(
     }
 
     let effective_concurrency: u32 = match max_concurrency {
-        Some(mc) if total > 0 => std::cmp::max(1, std::cmp::min(mc, total)),
-        _ => total,
+        Some(mc) => std::cmp::max(1, std::cmp::min(mc, total)),
+        None => total,
     };
     let effect_path = frame.effect_path(&op.path);
-    observer.dispatch(&effect_path, total as usize, effective_concurrency as usize);
+    // `core/store/store.py::Store.fire_concurrent_dispatch`/`effect_path`
+    // take *name* as `str`, but `LoopRuntime.execute`'s own tree-each
+    // branch passes `self.defn.name` -- `None` for an unnamed loop --
+    // straight through; `effect_path`'s own f-string (`f"{prefix}.{name}"`)
+    // stringifies that `None` literally. An unnamed loop's own `op.path`
+    // already equals its enclosing container's path (transparent, no
+    // `Name` segment of its own), so reproducing cof's own dispatch path
+    // exactly means appending that literal `".None"` ourselves here --
+    // only for this one event; every per-pass body path stays the shared
+    // enclosing path the loop's own transparency already gives it.
+    let dispatch_path = if is_named {
+        effect_path.clone()
+    } else {
+        effect_path.push_name("None")
+    };
+    observer.dispatch(
+        &dispatch_path,
+        total as usize,
+        effective_concurrency as usize,
+    );
 
     if total == 0 {
         if full_total > 0 {
@@ -1219,7 +1262,15 @@ async fn run_while<'a>(
             iter_map.insert(key("count"), Value::from(i64::from(iteration_count)));
             let mut cond_local = IndexMap::new();
             cond_local.insert(key("iter"), Slot::Value(Value::Dict(iter_map)));
-            let cond_base: CtxChain = vec![CtxSource::Live(step_overlay(outer_chain, &cond_local))];
+            // `{**ctx, "iter": {...}}` -- a top-level-only overlay, no
+            // `prime` mirror, unlike the body's own `step_overlay`
+            // (Q1): Python builds this dict literally, never through
+            // `scope_ctx`. `last_writes` is layered on top of *this*
+            // with `step_overlay` below, which *is* `scope_ctx` and
+            // does mirror into `prime` -- matching `core/loop.py`'s own
+            // `scope_ctx({**ctx, "iter": ...}, last_writes)`.
+            let cond_base: CtxChain =
+                vec![CtxSource::Live(plain_overlay(outer_chain, &cond_local))];
             let cond_chain: CtxChain = if last_writes.is_empty() {
                 cond_base
             } else {
@@ -1232,6 +1283,7 @@ async fn run_while<'a>(
                 Err(e) => match on_error {
                     OnError::Fail => {
                         state.termination_reason = "error".to_string();
+                        state.iteration_count = iteration_count;
                         return Err(e);
                     }
                     OnError::Break | OnError::Continue => {
@@ -1327,6 +1379,7 @@ async fn run_while<'a>(
                 match on_error {
                     OnError::Fail => {
                         state.termination_reason = "error".to_string();
+                        state.iteration_count = iteration_count;
                         return Err(e);
                     }
                     OnError::Break => {

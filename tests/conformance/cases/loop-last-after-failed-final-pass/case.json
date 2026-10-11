@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "Named each loop, on_error: continue, whose final pass (item 3) fails its own gate: last aliases the last *completed* pass (iter_1, item 2), not the attempted-but-failed iter_2.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
