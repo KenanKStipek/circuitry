@@ -955,6 +955,7 @@ mod tests {
                         path: loop_path,
                         name: None,
                         kind: NodeKind::Control(Region::Loop {
+                            name: None,
                             spec: electricity_bytecode::LoopSpec::Each {
                                 in_path: "prime.items".to_string(),
                                 as_name: "item".to_string(),
