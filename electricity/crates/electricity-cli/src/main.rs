@@ -468,12 +468,21 @@ fn write_stderr(text: &str) {
 /// own --live-state/--events mid-run write failures) reaches stderr
 /// through this one sink (issue #442) -- a no-op until this is
 /// installed, same as the reference's own NullHandler default for an
-/// embedding caller that never calls configure_cli_logging.
+/// embedding caller that never calls configure_cli_logging. Filtered
+/// to this workspace's own crates (`enabled`'s own `target`-prefix
+/// check): `cli/logging_setup.py`'s own handler sits on Circuitry's
+/// own `"circuitry"` logger alone, never the root logger, so a
+/// dependency that happens to log doesn't reach `cof run`'s stderr
+/// either -- `log`'s `target` defaults to the logging call site's own
+/// module path, which for every crate in this workspace starts with
+/// `electricity` (hyphens become underscores in a Rust module path),
+/// so this is the narrowest prefix that admits all of them and
+/// nothing outside this workspace.
 struct StderrWarnLogger;
 
 impl log::Log for StderrWarnLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Warn
+        metadata.level() <= log::Level::Warn && metadata.target().starts_with("electricity")
     }
 
     fn log(&self, record: &log::Record) {
@@ -759,6 +768,33 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use log::Log;
+
+    fn warn_metadata(target: &str) -> log::Metadata<'_> {
+        log::Metadata::builder()
+            .level(log::Level::Warn)
+            .target(target)
+            .build()
+    }
+
+    #[test]
+    fn the_warning_logger_admits_this_workspaces_own_crate_targets() {
+        for target in [
+            "electricity_vm::exec::dynamic",
+            "electricity_config::config",
+            "electricity",
+        ] {
+            assert!(
+                StderrWarnLogger.enabled(&warn_metadata(target)),
+                "{target} should be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn the_warning_logger_ignores_a_record_from_outside_this_workspace() {
+        assert!(!StderrWarnLogger.enabled(&warn_metadata("some_other_crate")));
+    }
 
     #[test]
     fn version_flag_wins_over_everything() {
