@@ -34,11 +34,26 @@ fn is_http_family_provider(provider: &str) -> bool {
 /// rather than returned. A non-HTTP-family provider (every provider
 /// this crate can build today) always retries, exactly as every M0-H
 /// `json` failure already did.
+///
+/// *is_expect_failure* (review P2-8 on PR #454's second review) is
+/// `core/tool.py:838-840`'s own override: a failed `expect:` (raised
+/// or not) is *always* retryable, regardless of what *provider*/
+/// *status_code*/*cause* would otherwise say -- unlike an HTTP status,
+/// a failed `expect:` carries no classification of its own, and the
+/// motivating case (a flaky image-generation result) is exactly "try
+/// again". Checked before the HTTP-family short-circuit below, not
+/// just folded into one of *cause*'s own arms, so lane E's own
+/// HTTP-family expect check doesn't have to invent a dedicated
+/// [`electricity_tools::ErrorCause`] variant just to reach it.
 pub fn is_tool_failure_retryable(
     provider: &str,
     status_code: Option<u16>,
     cause: Option<&electricity_tools::ErrorCause>,
+    is_expect_failure: bool,
 ) -> bool {
+    if is_expect_failure {
+        return true;
+    }
     if !is_http_family_provider(provider) {
         return true;
     }
@@ -127,18 +142,19 @@ mod tests {
 
     #[test]
     fn non_http_family_providers_always_retry() {
-        assert!(is_tool_failure_retryable("json", None, None));
+        assert!(is_tool_failure_retryable("json", None, None, false));
         assert!(is_tool_failure_retryable(
             "shell",
             None,
-            Some(&electricity_tools::ErrorCause::None)
+            Some(&electricity_tools::ErrorCause::None),
+            false
         ));
     }
 
     #[test]
     fn http_family_classifies_by_status_code_first() {
-        assert!(is_tool_failure_retryable("http", Some(500), None));
-        assert!(!is_tool_failure_retryable("http", Some(404), None));
+        assert!(is_tool_failure_retryable("http", Some(500), None, false));
+        assert!(!is_tool_failure_retryable("http", Some(404), None, false));
     }
 
     #[test]
@@ -146,7 +162,8 @@ mod tests {
         assert!(is_tool_failure_retryable(
             "http",
             None,
-            Some(&electricity_tools::ErrorCause::NoReply)
+            Some(&electricity_tools::ErrorCause::NoReply),
+            false
         ));
         assert!(is_tool_failure_retryable(
             "webhook",
@@ -154,7 +171,8 @@ mod tests {
             Some(&electricity_tools::ErrorCause::Http {
                 status: 503,
                 retry_after: None,
-            })
+            }),
+            false
         ));
         assert!(!is_tool_failure_retryable(
             "webhook",
@@ -162,14 +180,35 @@ mod tests {
             Some(&electricity_tools::ErrorCause::Http {
                 status: 400,
                 retry_after: None,
-            })
+            }),
+            false
         ));
         assert!(!is_tool_failure_retryable(
             "linear",
             None,
-            Some(&electricity_tools::ErrorCause::None)
+            Some(&electricity_tools::ErrorCause::None),
+            false
         ));
-        assert!(!is_tool_failure_retryable("linear", None, None));
+        assert!(!is_tool_failure_retryable("linear", None, None, false));
+    }
+
+    #[test]
+    fn an_expect_failure_always_retries_even_for_an_http_family_tool() {
+        // Review P2-8 on PR #454's second review: `core/tool.py:838-840`'s
+        // own `retryable = True` on any failed `expect:` overrides even
+        // an HTTP-family provider's own non-retryable status/cause --
+        // 400 alone would never retry (the test above pins that), but a
+        // failed `expect:` on that same call always does.
+        assert!(is_tool_failure_retryable(
+            "webhook",
+            None,
+            Some(&electricity_tools::ErrorCause::Http {
+                status: 400,
+                retry_after: None,
+            }),
+            true
+        ));
+        assert!(is_tool_failure_retryable("linear", Some(404), None, true));
     }
 
     #[test]

@@ -607,6 +607,7 @@ name = "electricity"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "electricity-adapters",
  "electricity-bytecode",
  "electricity-compiler",
  "electricity-config",
@@ -620,6 +621,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "electricity-adapters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "electricity-value",
+ "electricity-vm",
 ]
 
 [[package]]
@@ -731,9 +741,11 @@ dependencies = [
  "chrono",
  "electricity-bytecode",
  "electricity-cel",
+ "electricity-compiler",
  "electricity-config",
  "electricity-json",
  "electricity-redaction",
+ "electricity-schema",
  "electricity-template",
  "electricity-tools",
  "electricity-value",

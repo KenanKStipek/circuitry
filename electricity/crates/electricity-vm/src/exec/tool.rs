@@ -610,6 +610,16 @@ pub async fn execute_tool(
         observer.write();
 
         let mut failure: Option<electricity_tools::ToolError> = None;
+        // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
+        // `expect:` check, raised or not, overriding whatever this
+        // provider's own HTTP-family status/cause classification would
+        // otherwise say -- unlike an HTTP status, a failed `expect:`
+        // carries no classification of its own, and the motivating case
+        // (a flaky image-generation result) is exactly "try again"
+        // (review P2-8 on PR #454's second review). Set only in the two
+        // `expect` branches below, never the dispatch-failure branch
+        // above them.
+        let mut expect_failed = false;
 
         match render_tool_call(
             name,
@@ -822,6 +832,7 @@ pub async fn execute_tool(
                                                                 Value::Dict(expect_meta),
                                                             );
                                                             if !passed {
+                                                                expect_failed = true;
                                                                 failure = Some(
                                                                     electricity_tools::ToolError::message(
                                                                         format!("expect failed: {expr}"),
@@ -846,6 +857,7 @@ pub async fn execute_tool(
                                                                 "expect",
                                                                 Value::Dict(expect_meta),
                                                             );
+                                                            expect_failed = true;
                                                             failure = Some(
                                                                 electricity_tools::ToolError::message(
                                                                     format!("expect failed: {expr}"),
@@ -898,6 +910,7 @@ pub async fn execute_tool(
                                                                 Value::Dict(expect_meta),
                                                             );
                                                             if !outcome.passed {
+                                                                expect_failed = true;
                                                                 failure = Some(
                                                                     electricity_tools::ToolError::message(
                                                                         format!(
@@ -937,9 +950,16 @@ pub async fn execute_tool(
             // build today: `json`, plus `sleep`/`fail` under
             // `test-tools`) retries on any failure, unchanged from
             // M0-H; lane E's own HTTP-family tool is what first makes
-            // *retryable* ever come back `false` here.
-            let retryable =
-                crate::retry::is_tool_failure_retryable(&tool.provider, None, Some(&failure.cause));
+            // *retryable* ever come back `false` here for a dispatch
+            // failure -- never for a failed `expect:`, which is always
+            // retryable regardless of provider (review P2-8 on PR
+            // #454's second review, `expect_failed` above).
+            let retryable = crate::retry::is_tool_failure_retryable(
+                &tool.provider,
+                None,
+                Some(&failure.cause),
+                expect_failed,
+            );
             if !is_last_attempt && retryable {
                 next_delay_ms = crate::retry::next_backoff_delay_ms(
                     &crate::retry::RetryInfo::retryable(),
