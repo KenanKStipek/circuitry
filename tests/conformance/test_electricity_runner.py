@@ -20,11 +20,13 @@ import pytest
 
 from . import harness
 from .normalize import (
+    apply_known_divergence,
     assert_errors_equal,
     assert_events_equal,
     assert_out_serialization,
     assert_states_equal,
-    normalize,
+    normalize_for_comparison,
+    redact_runtime_strings,
 )
 
 CASE_DIRS = harness.list_case_dirs()
@@ -90,6 +92,8 @@ def _run_electricity(
     pretty: bool = False,
     events_path: Path | None = None,
     live_state_path: Path | None = None,
+    leftover_replies_path: Path | None = None,
+    mock_http_port: int | None = None,
 ) -> harness.CaseResult:
     """Invoke `electricity` the same way `harness.run_case` invokes `cof
     run`, so the two engines are given the same inputs: cwd set to the case
@@ -98,10 +102,19 @@ def _run_electricity(
     byte-for-byte message like `"orchestration.yml: duplicate key ..."`
     could never match), and `harness._sandboxed_env` for the environment
     (the case's own `fakes/` first on `PATH`, no credential or
-    `CIRCUITRY_*` variables)."""
-    config_path = (
-        case_dir / metadata["config"] if metadata.get("config") else DEFAULT_CONFIG_PATH
-    )
+    `CIRCUITRY_*` variables). `mock_http_port`, when given, is materialized
+    into the config/cli_args the same way `harness.run_case` does, via the
+    same `harness.materialize_config`/`materialize_cli_args` helpers, so
+    generation and verification never diverge on how the port reaches
+    either engine."""
+    if metadata.get("config") and mock_http_port is not None:
+        config_path = harness.materialize_config(
+            case_dir, metadata["config"], mock_http_port=mock_http_port, tmp_dir=out_path.parent
+        )
+    elif metadata.get("config"):
+        config_path = case_dir / metadata["config"]
+    else:
+        config_path = DEFAULT_CONFIG_PATH
     cmd = [
         str(binary),
         str(config_path),
@@ -115,11 +128,13 @@ def _run_electricity(
         cmd += ["--events", str(events_path)]
     if live_state_path is not None:
         cmd += ["--live-state", str(live_state_path)]
-    cmd += [str(arg) for arg in metadata.get("cli_args", [])]
+    cmd += harness.materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
     proc = subprocess.run(
         cmd,
         cwd=case_dir,
-        env=harness._sandboxed_env(case_dir, home_dir),
+        env=harness._sandboxed_env(
+            case_dir, home_dir, leftover_replies_path=leftover_replies_path
+        ),
         capture_output=True,
         text=True,
         timeout=metadata.get("timeout_seconds", harness.DEFAULT_TIMEOUT_SECONDS),
@@ -141,26 +156,50 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     out_path = tmp_path / "out.json"
     events_path = tmp_path / "events.jsonl"
     live_state_path = tmp_path / "live.json"
-    result = _run_electricity(
-        electricity_binary,
-        case_dir,
-        metadata,
-        out_path=out_path,
-        home_dir=home_dir,
-        events_path=events_path,
-        live_state_path=live_state_path,
-    )
+    leftover_replies_path = tmp_path / "leftover-replies.json"
+
+    with harness.mock_http_server(case_dir, metadata) as server:
+        replacements = harness.case_redaction_replacements(
+            case_dir, mock_http_port=server.port if server else None
+        )
+        result = _run_electricity(
+            electricity_binary,
+            case_dir,
+            metadata,
+            out_path=out_path,
+            home_dir=home_dir,
+            events_path=events_path,
+            live_state_path=live_state_path,
+            leftover_replies_path=leftover_replies_path,
+            mock_http_port=server.port if server else None,
+        )
+        recorded_requests = list(server.requests) if server is not None else None
 
     combined_output = result.stdout + result.stderr
     if (
-        metadata["expect"] != "success"
-        and result.returncode == 1
+        result.returncode == 1
         and PREVIEW_MESSAGE_MARKER in combined_output
+        and (metadata["expect"] != "success" or metadata["electricity_preview_ok"])
     ):
         pytest.skip(
             "this case's real document is content M0-H's own preview "
             "doesn't support yet — electricity/crates/electricity-cli"
         )
+    # A *success* case never skips through the preview marker on its own
+    # (PR #441 review finding 6) -- a success case electricity wrongly
+    # refuses is a real regression, and must fail loudly. The one declared
+    # exception is `case.json`'s own `electricity_preview_ok: true` (issue
+    # #450): a sample case whose document uses content M0-H's preview
+    # genuinely doesn't support yet (`prompt`/`shell`/`http`/...), kept
+    # passing on the Python engine and deliberately still refused by
+    # electricity until the lane that implements that capability flips it
+    # (never `known_divergence`, which means *both* engines succeeded with
+    # one documented difference -- not applicable when one engine never ran
+    # the document at all).
+
+    harness.assert_no_leftover_replies(
+        leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
+    )
 
     if metadata["expect"] == "success":
         assert result.returncode == 0, (
@@ -171,7 +210,21 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         assert_out_serialization(actual_text, pretty=False)
         actual_state = json.loads(actual_text)
         expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
-        assert_states_equal(normalize(actual_state), normalize(expected_state))
+        known_divergence = metadata.get("known_divergence")
+        if known_divergence is not None:
+            expected_state = apply_known_divergence(
+                expected_state,
+                location=known_divergence["location"],
+                value=known_divergence["electricity_value"],
+            )
+        assert_states_equal(
+            normalize_for_comparison(actual_state, replacements),
+            normalize_for_comparison(expected_state, replacements),
+        )
+
+        harness.assert_recorded_http_requests(
+            case_dir, metadata, recorded_requests, replacements=replacements
+        )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
         assert_events_equal(events_path.read_text(encoding="utf-8"), expected_events_text)
@@ -205,7 +258,8 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
                 (case_dir / "expected.pretty.json").read_text(encoding="utf-8")
             )
             assert_states_equal(
-                normalize(actual_pretty_state), normalize(expected_pretty_state)
+                normalize_for_comparison(actual_pretty_state, replacements),
+                normalize_for_comparison(expected_pretty_state, replacements),
             )
         return
 
@@ -224,8 +278,8 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         ]
         error_compare = metadata.get("error_compare", "exact")
         assert_errors_equal(
-            actual_error,
-            expected_error,
+            redact_runtime_strings(actual_error, replacements),
+            redact_runtime_strings(expected_error, replacements),
             byte_for_byte=error_compare == "exact",
             location_pattern=metadata.get("location_pattern"),
         )
@@ -236,7 +290,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         expected_out_state = json.loads(
             (case_dir / "expected.out.json").read_text(encoding="utf-8")
         )
-        assert_states_equal(normalize(actual_out_state), normalize(expected_out_state))
+        assert_states_equal(
+            normalize_for_comparison(actual_out_state, replacements),
+            normalize_for_comparison(expected_out_state, replacements),
+        )
         return
 
     raise AssertionError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")

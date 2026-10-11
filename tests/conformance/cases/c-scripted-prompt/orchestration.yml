@@ -1,0 +1,7 @@
+name: c-scripted-prompt
+adapter: scripted
+model: test
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

@@ -1,0 +1,8 @@
+{
+  "spec_case": "electricity/docs/spec/scripted-replies.md",
+  "description": "A `prompt` effect through the `scripted` adapter (#362), keyed by its own absolute state path (`prime.greeting`) in `config.json`'s `runtime.adapters.scripted.replies_file`. Both engines run with the case directory as `cwd`, so the relative replies-file path resolves the same way for either.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "electricity_preview_ok": true
+}

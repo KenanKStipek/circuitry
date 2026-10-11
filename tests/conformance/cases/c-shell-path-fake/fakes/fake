@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""A fake process-backed binary for the conformance suite (issue #450, item
+4): one script, argv-parameterized, that a case's own `fakes/` directory
+copies in to fake whatever a process-backed tool (`shell`, `awk`,
+`imagemagick`, `ffmpeg`) needs for one effect call. Covers the four fake
+behaviours item 4 asks for; a case passes the matching flag(s) as the
+`shell` tool's own `params.args`:
+
+    --stdout TEXT      write TEXT (plus a trailing newline if it has none)
+    --stderr TEXT      write TEXT to stderr the same way
+    --exit N           exit with code N (default 0)
+    --sleep            ignore SIGTERM and sleep until killed (SIGKILL) --
+                        for a subprocess-timeout/cancellation case
+    --crlf             ignore every other flag; write two CRLF-terminated
+                        stdout lines
+    --invalid-utf8     ignore every other flag; write a fixed, deliberately
+                        invalid UTF-8 byte sequence to stdout
+
+Each case keeps its own copy of this exact file (the suite's `fakes/`
+contract is per-case, not a shared library -- `harness._sandboxed_env`
+only ever puts one case's own directory on `PATH`).
+"""
+
+from __future__ import annotations
+
+import argparse
+import signal
+import sys
+import time
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stdout")
+    parser.add_argument("--stderr")
+    parser.add_argument("--exit", type=int, default=0)
+    parser.add_argument("--sleep", action="store_true")
+    parser.add_argument("--crlf", action="store_true")
+    parser.add_argument("--invalid-utf8", action="store_true")
+    args = parser.parse_args()
+
+    if args.sleep:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(3600)
+
+    if args.invalid_utf8:
+        sys.stdout.buffer.write(b"invalid utf-8 follows: \xff\xfe\n")
+        sys.stdout.buffer.flush()
+        return args.exit
+
+    if args.crlf:
+        sys.stdout.buffer.write(b"line one\r\nline two\r\n")
+        sys.stdout.buffer.flush()
+        return args.exit
+
+    if args.stdout is not None:
+        sys.stdout.write(args.stdout if args.stdout.endswith("\n") else args.stdout + "\n")
+    if args.stderr is not None:
+        sys.stderr.write(args.stderr if args.stderr.endswith("\n") else args.stderr + "\n")
+    return args.exit
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
