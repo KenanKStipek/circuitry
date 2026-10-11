@@ -22,6 +22,7 @@ pub mod clock;
 pub mod env_vars;
 pub mod ffmpeg;
 pub mod fs;
+mod generated;
 pub mod hash;
 pub mod http;
 pub mod http_client;

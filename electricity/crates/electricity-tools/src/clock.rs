@@ -5,35 +5,36 @@
 use crate::fs::{as_bool, get, py_truthy, value_error};
 use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Timelike, Utc};
 use electricity_value::{Dict, Value};
-use std::cell::Cell;
 use std::ffi::CString;
 use std::os::raw::c_char;
 
-thread_local! {
-    static OVERRIDE_NOW: Cell<Option<DateTime<Utc>>> = const { Cell::new(None) };
-}
+/// A zone lookup's own failure -- unknown name, or a name `jiff`
+/// accepts but can't place this *instant* in (never actually reached:
+/// every zone `jiff` resolves at all can place any `i64` second count).
+struct UnknownZone;
 
-/// The plugin's own wall clock -- overridable by [`with_fixed_now`] so
-/// the corpus-replay test can drive `ClockPlugin::execute` from a
-/// fixed instant (vm-lanes.md's D1 row: "a module-level function in
-/// clock.rs", never a struct field on [`ClockPlugin`] itself, so the
-/// plugin stays the same unit struct `registry.rs`'s builder already
-/// constructs).
-fn now() -> DateTime<Utc> {
-    OVERRIDE_NOW
-        .with(|cell| cell.get())
-        .unwrap_or_else(Utc::now)
-}
-
-/// Runs *body* with [`now`] fixed to *instant* on this thread,
-/// restoring the real clock afterward even if *body* panics.
-pub fn with_fixed_now<T>(instant: DateTime<Utc>, body: impl FnOnce() -> T) -> T {
-    let previous = OVERRIDE_NOW.with(|cell| cell.replace(Some(instant)));
-    let result = body();
-    OVERRIDE_NOW.with(|cell| cell.set(previous));
-    result
+/// *name*'s own UTC offset and abbreviation at *instant*, read from the
+/// system tz database the way `zoneinfo.ZoneInfo` does: `jiff`, not a
+/// zone compiled into a crate (`chrono-tz`) or a reader that only
+/// understands a TZif file's explicit transition table (`tzfile`
+/// 0.1.3's own docs: it never evaluates the file's trailing POSIX-TZ
+/// rule string, so a "slim" tzdata build -- explicit transitions ending
+/// years ago, everything past them left to that rule -- would pin the
+/// zone at its last explicit transition's offset forever; #460's own
+/// fix-pass finding 5). `jiff`'s own `TimeZone::get` searches `TZDIR`/
+/// the usual zoneinfo search path first, falling back to its bundled
+/// database, matching `zoneinfo.TZPATH`'s own search order closely
+/// enough that every name this preview needs to resolve, it does.
+fn zone_offset_and_abbreviation(
+    name: &str,
+    instant: DateTime<Utc>,
+) -> Result<(i32, String), UnknownZone> {
+    let tz = jiff::tz::TimeZone::get(name).map_err(|_| UnknownZone)?;
+    let timestamp = jiff::Timestamp::from_second(instant.timestamp()).map_err(|_| UnknownZone)?;
+    let info = tz.to_offset_info(timestamp);
+    Ok((info.offset().seconds(), info.abbreviation().to_string()))
 }
 
 /// `_format_offset(off, sep="")` -- `%z`'s own replacement text:
@@ -172,6 +173,53 @@ fn platform_strftime(format: &str, naive: &NaiveDateTime) -> String {
     }
 }
 
+/// `ClockPlugin::execute`'s own body, taking *now* as a parameter
+/// instead of reading a live clock -- the injection point #460's lane
+/// D1 ruling asks for ("a module-level function..., never a global
+/// mutable"), so a test (or the corpus-replay test) calls this
+/// directly with a fixed instant rather than overriding a thread-local
+/// or a process-wide global.
+pub fn execute_at(params: &Value, now: DateTime<Utc>) -> Result<ToolResult, ToolError> {
+    let epoch_mode = as_bool(get(params, "epoch"), false);
+    let tz_value = get(params, "timezone").cloned().unwrap_or(Value::None);
+    let instant_epoch = now.timestamp();
+
+    let (naive_local, offset_seconds, tz_display, tz_abbr) = if py_truthy(&tz_value) {
+        let name = tz_value.py_str();
+        let (offset_seconds, abbr) = zone_offset_and_abbreviation(&name, now)
+            .map_err(|_| value_error(format!("clock: unknown timezone {}", tz_value.py_repr())))?;
+        let local = now.naive_utc() + Duration::seconds(i64::from(offset_seconds));
+        (local, offset_seconds, name, abbr)
+    } else {
+        (now.naive_utc(), 0, "UTC".to_string(), "UTC".to_string())
+    };
+
+    let value = if epoch_mode {
+        Value::from(instant_epoch)
+    } else {
+        let format_value = get(params, "format")
+            .cloned()
+            .unwrap_or_else(|| Value::Str("%Y-%m-%dT%H:%M:%S%z".to_string()));
+        let format = format_value.py_str();
+        Value::Str(wrap_strftime(
+            &format,
+            &naive_local,
+            offset_seconds,
+            &tz_abbr,
+        ))
+    };
+
+    let mut raw = Dict::new();
+    raw.insert(
+        Value::Str("iso".to_string()),
+        Value::Str(isoformat(&naive_local, offset_seconds)),
+    );
+    raw.insert(Value::Str("epoch".to_string()), Value::from(instant_epoch));
+    raw.insert(Value::Str("timezone".to_string()), Value::Str(tz_display));
+
+    Ok(ToolResult::new(value, Value::Dict(raw)))
+}
+
 pub struct ClockPlugin;
 
 #[async_trait(?Send)]
@@ -181,55 +229,7 @@ impl ToolPlugin for ClockPlugin {
     }
 
     async fn execute(&self, params: Value, _call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
-        let epoch_mode = as_bool(get(&params, "epoch"), false);
-        let tz_value = get(&params, "timezone").cloned().unwrap_or(Value::None);
-
-        // One `now()` call for the whole request -- `datetime.now(tz)`
-        // is captured once in Python too, so the formatted value, the
-        // `raw.iso`/`raw.epoch` fields and the epoch-mode `value` all
-        // describe the exact same instant.
-        let instant = now();
-        let instant_epoch = instant.timestamp();
-
-        let (naive_local, offset_seconds, tz_display, tz_abbr) = if py_truthy(&tz_value) {
-            let name = tz_value.py_str();
-            let tz = tzfile::Tz::named(&name).map_err(|_| {
-                value_error(format!("clock: unknown timezone {}", tz_value.py_repr()))
-            })?;
-            let utc_naive = instant.naive_utc();
-            let offset = (&tz).offset_from_utc_datetime(&utc_naive);
-            let fixed = offset.fix();
-            let abbr = offset.to_string();
-            let local = instant.with_timezone(&fixed).naive_local();
-            (local, fixed.local_minus_utc(), name, abbr)
-        } else {
-            (instant.naive_utc(), 0, "UTC".to_string(), "UTC".to_string())
-        };
-
-        let value = if epoch_mode {
-            Value::from(instant_epoch)
-        } else {
-            let format_value = get(&params, "format")
-                .cloned()
-                .unwrap_or_else(|| Value::Str("%Y-%m-%dT%H:%M:%S%z".to_string()));
-            let format = format_value.py_str();
-            Value::Str(wrap_strftime(
-                &format,
-                &naive_local,
-                offset_seconds,
-                &tz_abbr,
-            ))
-        };
-
-        let mut raw = Dict::new();
-        raw.insert(
-            Value::Str("iso".to_string()),
-            Value::Str(isoformat(&naive_local, offset_seconds)),
-        );
-        raw.insert(Value::Str("epoch".to_string()), Value::from(instant_epoch));
-        raw.insert(Value::Str("timezone".to_string()), Value::Str(tz_display));
-
-        Ok(ToolResult::new(value, Value::Dict(raw)))
+        execute_at(&params, Utc::now())
     }
 
     fn check(&self) -> CheckResult {
@@ -244,7 +244,7 @@ impl ToolPlugin for ClockPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use electricity_value::CancellationToken;
+    use chrono::TimeZone;
 
     fn dict(pairs: Vec<(&str, Value)>) -> Value {
         let mut d = Dict::new();
@@ -254,36 +254,8 @@ mod tests {
         Value::Dict(d)
     }
 
-    /// A minimal, dependency-free `block_on`: [`ClockPlugin::execute`]
-    /// never actually suspends (no real I/O, no timer), so a single
-    /// poll always finishes it -- this exists only so a test can call
-    /// [`with_fixed_now`]'s own synchronous closure and run the async
-    /// `execute` to completion *inside* it, before the override is
-    /// restored (awaiting the returned `Future` after `with_fixed_now`
-    /// already returned would run it against the real clock instead).
-    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-        let mut fut = std::pin::pin!(fut);
-        let waker = std::task::Waker::noop();
-        let mut cx = std::task::Context::from_waker(waker);
-        loop {
-            if let std::task::Poll::Ready(output) = fut.as_mut().poll(&mut cx) {
-                return output;
-            }
-            std::thread::yield_now();
-        }
-    }
-
-    fn run_sync(params: Value) -> Result<ToolResult, ToolError> {
-        block_on(async {
-            let token = CancellationToken::new();
-            let call = ToolCall {
-                timeout_seconds: 30,
-                config: &Value::None,
-                token: &token,
-                armed: false,
-            };
-            ClockPlugin.execute(params, &call).await
-        })
+    fn run_at(now: DateTime<Utc>, params: Value) -> Result<ToolResult, ToolError> {
+        execute_at(&params, now)
     }
 
     fn fixed_instant() -> DateTime<Utc> {
@@ -295,15 +267,13 @@ mod tests {
 
     #[test]
     fn default_format_matches_cpythons_own_strftime() {
-        let result =
-            with_fixed_now(fixed_instant(), || run_sync(Value::Dict(Dict::new()))).unwrap();
+        let result = run_at(fixed_instant(), Value::Dict(Dict::new())).unwrap();
         assert_eq!(result.value, Value::from("2024-07-04T12:30:45+0000"));
     }
 
     #[test]
     fn isoformat_and_epoch_in_raw_match_cpython() {
-        let result =
-            with_fixed_now(fixed_instant(), || run_sync(Value::Dict(Dict::new()))).unwrap();
+        let result = run_at(fixed_instant(), Value::Dict(Dict::new())).unwrap();
         let raw = result.raw.as_dict().unwrap();
         assert_eq!(
             raw.get(&Value::Str("iso".to_string())),
@@ -321,22 +291,20 @@ mod tests {
 
     #[test]
     fn epoch_mode_returns_the_integer_epoch() {
-        let result = with_fixed_now(fixed_instant(), || {
-            run_sync(dict(vec![("epoch", Value::from(true))]))
-        })
-        .unwrap();
+        let result = run_at(fixed_instant(), dict(vec![("epoch", Value::from(true))])).unwrap();
         assert_eq!(result.value, Value::from(1_720_096_245i64));
     }
 
     #[test]
     fn a_named_timezone_resolves_through_the_system_tzdata_and_applies_dst() {
         let instant = chrono::Utc.with_ymd_and_hms(2024, 1, 15, 8, 0, 0).unwrap();
-        let result = with_fixed_now(instant, || {
-            run_sync(dict(vec![
+        let result = run_at(
+            instant,
+            dict(vec![
                 ("timezone", Value::from("America/New_York")),
                 ("format", Value::from("%Y-%m-%d %H:%M:%S %Z %z")),
-            ]))
-        })
+            ]),
+        )
         .unwrap();
         assert_eq!(result.value, Value::from("2024-01-15 03:00:00 EST -0500"));
         let raw = result.raw.as_dict().unwrap();
@@ -351,42 +319,54 @@ mod tests {
     }
 
     #[test]
+    fn a_named_timezone_applies_dst_in_summer_too() {
+        let result = run_at(
+            fixed_instant(),
+            dict(vec![
+                ("timezone", Value::from("America/New_York")),
+                ("format", Value::from("%Z %z")),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(result.value, Value::from("EDT -0400"));
+    }
+
+    #[test]
     fn unknown_timezone_names_itself_by_repr() {
-        let err = with_fixed_now(fixed_instant(), || {
-            run_sync(dict(vec![("timezone", Value::from("Not/AZone"))]))
-        })
+        let err = run_at(
+            fixed_instant(),
+            dict(vec![("timezone", Value::from("Not/AZone"))]),
+        )
         .unwrap_err();
         assert_eq!(err.message, "clock: unknown timezone 'Not/AZone'");
     }
 
     #[test]
+    fn unknown_timezone_reprs_a_non_string_value_without_quotes() {
+        let err = run_at(fixed_instant(), dict(vec![("timezone", Value::from(5i64))])).unwrap_err();
+        assert_eq!(err.message, "clock: unknown timezone 5");
+    }
+
+    #[test]
     fn percent_percent_format_is_time_independent() {
-        let result = with_fixed_now(fixed_instant(), || {
-            run_sync(dict(vec![("format", Value::from("%%"))]))
-        })
-        .unwrap();
+        let result = run_at(fixed_instant(), dict(vec![("format", Value::from("%%"))])).unwrap();
         assert_eq!(result.value, Value::from("%"));
     }
 
     #[test]
-    fn an_explicit_null_format_becomes_the_literal_string_none() {
-        let result = with_fixed_now(fixed_instant(), || {
-            run_sync(dict(vec![("format", Value::None)]))
-        })
-        .unwrap();
-        // `now.strftime(str(None))` == `now.strftime("None")` -- no `%`
-        // directive in it, so the platform strftime returns it verbatim.
-        assert_eq!(result.value, Value::from("None"));
+    fn literal_percent_followed_by_a_directive_does_not_swallow_it() {
+        // `"%%z"` is a literal `%` (from `%%`) followed by the literal
+        // character `z` -- not `%z` re-interpreted as a directive.
+        let result = run_at(fixed_instant(), dict(vec![("format", Value::from("%%z"))])).unwrap();
+        assert_eq!(result.value, Value::from("%z"));
     }
 
     #[test]
-    fn with_fixed_now_restores_the_real_clock_afterward() {
-        let before = now();
-        let fixed = fixed_instant();
-        with_fixed_now(fixed, || {
-            assert_eq!(now(), fixed);
-        });
-        assert!(now() >= before);
+    fn an_explicit_null_format_becomes_the_literal_string_none() {
+        let result = run_at(fixed_instant(), dict(vec![("format", Value::None)])).unwrap();
+        // `now.strftime(str(None))` == `now.strftime("None")` -- no `%`
+        // directive in it, so the platform strftime returns it verbatim.
+        assert_eq!(result.value, Value::from("None"));
     }
 
     #[test]
@@ -394,5 +374,69 @@ mod tests {
         assert_eq!(format_offset_z(0), "+0000");
         assert_eq!(format_offset_z(-5 * 3600), "-0500");
         assert_eq!(format_offset_z(5 * 3600 + 30 * 60), "+0530");
+    }
+
+    // ---------------------------------------------------------------
+    // Finding 5: the tz reader must evaluate a TZif file's own
+    // trailing POSIX-TZ rule (its "footer"), not just its explicit
+    // transition table -- a "slim" tzdata build relies on exactly that
+    // for every instant past its last explicit transition.
+    // ---------------------------------------------------------------
+
+    fn be32(v: i32) -> [u8; 4] {
+        v.to_be_bytes()
+    }
+
+    fn be64(v: i64) -> [u8; 8] {
+        v.to_be_bytes()
+    }
+
+    /// A hand-built, minimal TZif v2 file (RFC 8536) whose only
+    /// *explicit* transition is at the Unix epoch, into a fixed
+    /// `EST` (UTC-5) type -- with no further transitions at all, a tz
+    /// reader that ignores the trailing POSIX-TZ rule string would
+    /// report `EST`/`-0500` forever, including in July. Its footer,
+    /// `EST5EDT,M3.2.0,M11.1.0`, is the real post-2007 US daylight-
+    /// saving rule (2nd Sunday in March to 1st Sunday in November).
+    fn slim_tzif_with_us_dst_footer() -> Vec<u8> {
+        let footer = b"\nEST5EDT,M3.2.0,M11.1.0\n";
+        let mut out = Vec::new();
+        for time_width_is_64 in [false, true] {
+            out.extend_from_slice(b"TZif");
+            out.push(b'2');
+            out.extend_from_slice(&[0u8; 15]);
+            out.extend_from_slice(&be32(0)); // isutcnt
+            out.extend_from_slice(&be32(0)); // isstdcnt
+            out.extend_from_slice(&be32(0)); // leapcnt
+            out.extend_from_slice(&be32(1)); // timecnt
+            out.extend_from_slice(&be32(1)); // typecnt
+            out.extend_from_slice(&be32(4)); // charcnt: b"EST\0"
+            if time_width_is_64 {
+                out.extend_from_slice(&be64(0)); // transition at the epoch
+            } else {
+                out.extend_from_slice(&be32(0));
+            }
+            out.push(0); // transition type index
+            out.extend_from_slice(&be32(-5 * 3600)); // utoff: EST, UTC-5
+            out.push(0); // isdst
+            out.push(0); // desigidx
+            out.extend_from_slice(b"EST\0");
+        }
+        out.extend_from_slice(footer);
+        out
+    }
+
+    #[test]
+    fn a_slim_tzif_evaluates_its_own_posix_footer_past_the_last_transition() {
+        let data = slim_tzif_with_us_dst_footer();
+        let tz = jiff::tz::TimeZone::tzif("Synthetic/SlimEastern", &data).unwrap();
+        // 2024-07-04T12:30:45Z -- the same instant `fixed_instant()`
+        // names -- is high summer, long after this file's only
+        // explicit transition (the 1970 epoch): only the footer's own
+        // `M3.2.0,M11.1.0` rule can place it in EDT.
+        let timestamp = jiff::Timestamp::from_second(1_720_096_245).unwrap();
+        let info = tz.to_offset_info(timestamp);
+        assert_eq!(info.offset().seconds(), -4 * 3600);
+        assert_eq!(info.abbreviation(), "EDT");
     }
 }

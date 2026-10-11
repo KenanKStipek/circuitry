@@ -2,7 +2,10 @@
 //! supports there, `hex`/`base64` output, `from_path` and the error
 //! texts.
 
-use crate::fs::{as_bool, encode_text, get, os_error, resolve_codec, value_error};
+use crate::fs::{
+    EncodingOutcome, as_bool, classify_encoding, encode_text, encoding_param_name, get, os_error,
+    preview_marker_codec_error, unknown_encoding, value_error,
+};
 use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use base64::Engine;
@@ -17,20 +20,94 @@ const SUPPORTED_ALGORITHMS_SORTED: &[&str] = &[
     "sha512",
 ];
 
-fn digest_bytes(algorithm: &str, data: &[u8]) -> Vec<u8> {
-    match algorithm {
-        "md5" => md5::Md5::digest(data).to_vec(),
-        "sha1" => sha1::Sha1::digest(data).to_vec(),
-        "sha224" => sha2::Sha224::digest(data).to_vec(),
-        "sha256" => sha2::Sha256::digest(data).to_vec(),
-        "sha384" => sha2::Sha384::digest(data).to_vec(),
-        "sha512" => sha2::Sha512::digest(data).to_vec(),
-        "sha3_256" => sha3::Sha3_256::digest(data).to_vec(),
-        "sha3_512" => sha3::Sha3_512::digest(data).to_vec(),
-        "blake2b" => blake2::Blake2b512::digest(data).to_vec(),
-        "blake2s" => blake2::Blake2s256::digest(data).to_vec(),
-        other => unreachable!("unsupported algorithm reached digest_bytes: {other}"),
+/// One hasher per algorithm, each updated in 64KiB chunks -- `hashlib`'s
+/// own `hasher.update(chunk)` loop (`plugins/hash.py`'s own doc
+/// comment: "a file path read in 64KB chunks"), ported so `from_path`
+/// never has to hold a whole file in memory (issue #460's own fix-pass
+/// finding 2: `std::fs::read` on a multi-GB file cost electricity a
+/// multi-GB allocation it never needed).
+enum Hasher {
+    Md5(md5::Md5),
+    Sha1(sha1::Sha1),
+    Sha224(sha2::Sha224),
+    Sha256(sha2::Sha256),
+    Sha384(sha2::Sha384),
+    Sha512(sha2::Sha512),
+    Sha3_256(sha3::Sha3_256),
+    Sha3_512(sha3::Sha3_512),
+    Blake2b(blake2::Blake2b512),
+    Blake2s(blake2::Blake2s256),
+}
+
+impl Hasher {
+    fn new(algorithm: &str) -> Self {
+        match algorithm {
+            "md5" => Hasher::Md5(md5::Md5::new()),
+            "sha1" => Hasher::Sha1(sha1::Sha1::new()),
+            "sha224" => Hasher::Sha224(sha2::Sha224::new()),
+            "sha256" => Hasher::Sha256(sha2::Sha256::new()),
+            "sha384" => Hasher::Sha384(sha2::Sha384::new()),
+            "sha512" => Hasher::Sha512(sha2::Sha512::new()),
+            "sha3_256" => Hasher::Sha3_256(sha3::Sha3_256::new()),
+            "sha3_512" => Hasher::Sha3_512(sha3::Sha3_512::new()),
+            "blake2b" => Hasher::Blake2b(blake2::Blake2b512::new()),
+            "blake2s" => Hasher::Blake2s(blake2::Blake2s256::new()),
+            other => unreachable!("unsupported algorithm reached Hasher::new: {other}"),
+        }
     }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Hasher::Md5(h) => Digest::update(h, data),
+            Hasher::Sha1(h) => Digest::update(h, data),
+            Hasher::Sha224(h) => Digest::update(h, data),
+            Hasher::Sha256(h) => Digest::update(h, data),
+            Hasher::Sha384(h) => Digest::update(h, data),
+            Hasher::Sha512(h) => Digest::update(h, data),
+            Hasher::Sha3_256(h) => Digest::update(h, data),
+            Hasher::Sha3_512(h) => Digest::update(h, data),
+            Hasher::Blake2b(h) => Digest::update(h, data),
+            Hasher::Blake2s(h) => Digest::update(h, data),
+        }
+    }
+
+    fn finalize(self) -> Vec<u8> {
+        match self {
+            Hasher::Md5(h) => h.finalize().to_vec(),
+            Hasher::Sha1(h) => h.finalize().to_vec(),
+            Hasher::Sha224(h) => h.finalize().to_vec(),
+            Hasher::Sha256(h) => h.finalize().to_vec(),
+            Hasher::Sha384(h) => h.finalize().to_vec(),
+            Hasher::Sha512(h) => h.finalize().to_vec(),
+            Hasher::Sha3_256(h) => h.finalize().to_vec(),
+            Hasher::Sha3_512(h) => h.finalize().to_vec(),
+            Hasher::Blake2b(h) => h.finalize().to_vec(),
+            Hasher::Blake2s(h) => h.finalize().to_vec(),
+        }
+    }
+}
+
+fn digest_bytes(algorithm: &str, data: &[u8]) -> Vec<u8> {
+    let mut hasher = Hasher::new(algorithm);
+    hasher.update(data);
+    hasher.finalize()
+}
+
+const CHUNK_SIZE: usize = 65536;
+
+/// `with open(path, "rb") as fh: while chunk := fh.read(65536): hasher.update(chunk)`.
+fn digest_file(algorithm: &str, file: &mut std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut hasher = Hasher::new(algorithm);
+    let mut buf = [0u8; CHUNK_SIZE];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize())
 }
 
 pub struct HashPlugin;
@@ -74,7 +151,7 @@ impl ToolPlugin for HashPlugin {
             ));
         }
 
-        let bytes = if as_bool(get(&params, "from_path"), false) {
+        let digest: Vec<u8> = if as_bool(get(&params, "from_path"), false) {
             let src = match get(&params, "input") {
                 Some(Value::Str(s)) if !s.is_empty() => s.clone(),
                 _ => {
@@ -84,7 +161,9 @@ impl ToolPlugin for HashPlugin {
                 }
             };
             let fs_path = crate::fs::expand_user_path(&src);
-            std::fs::read(&fs_path.buf).map_err(|err| os_error(&err, &fs_path.display))?
+            let mut file = std::fs::File::open(&fs_path.buf)
+                .map_err(|err| os_error(&err, &fs_path.display))?;
+            digest_file(&algorithm, &mut file).map_err(|err| os_error(&err, &fs_path.display))?
         } else {
             let text = match get(&params, "input") {
                 Some(Value::Str(s)) => s.clone(),
@@ -94,18 +173,18 @@ impl ToolPlugin for HashPlugin {
                     ));
                 }
             };
-            let encoding_raw = get(&params, "encoding").cloned().unwrap_or(Value::None);
-            let encoding_name = if crate::fs::py_truthy(&encoding_raw) {
-                encoding_raw.py_str()
-            } else {
-                "utf-8".to_string()
+            let encoding_name = encoding_param_name(&params);
+            let codec = match classify_encoding(&encoding_name) {
+                EncodingOutcome::Supported(codec) => codec,
+                EncodingOutcome::NotImplemented(name) => {
+                    return Err(preview_marker_codec_error(&name));
+                }
+                EncodingOutcome::Unknown(name) => return Err(unknown_encoding(&name)),
             };
-            let codec = resolve_codec(&encoding_name)
-                .ok_or_else(|| crate::fs::unknown_encoding(&encoding_name))?;
-            encode_text(codec, &text)?
+            let encoded = encode_text(codec, &text)?;
+            digest_bytes(&algorithm, &encoded)
         };
 
-        let digest = digest_bytes(&algorithm, &bytes);
         let value = if output_format == "hex" {
             digest
                 .iter()
@@ -285,5 +364,62 @@ mod tests {
             Value::from("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn from_path_hashes_a_file_larger_than_one_chunk_without_loading_it_whole() {
+        // `hashlib`'s own 64KiB-chunk streaming loop (`plugins/
+        // hash.py`'s own doc comment) -- issue #460's own fix-pass
+        // finding 2: `std::fs::read` would have held the whole file in
+        // memory at once; three chunks' worth of repeated bytes
+        // exercises the loop boundary without needing a multi-GB fixture.
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-hash-streaming-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.bin");
+        let data = vec![0x42u8; 65536 * 3 + 17];
+        std::fs::write(&path, &data).unwrap();
+        let result = run(dict(vec![
+            ("algorithm", Value::from("sha256")),
+            ("from_path", Value::from(true)),
+            ("input", Value::from(path.to_str().unwrap())),
+        ]))
+        .await
+        .unwrap();
+        let expected = digest_bytes("sha256", &data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        assert_eq!(result.value, Value::from(expected.as_str()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn in_memory_mode_with_a_real_but_unimplemented_codec_gets_the_preview_marker() {
+        let err = run(dict(vec![
+            ("algorithm", Value::from("sha256")),
+            ("input", Value::from("x")),
+            ("encoding", Value::from("utf-16")),
+        ]))
+        .await
+        .unwrap_err();
+        assert!(
+            err.message
+                .contains("is a preview and cannot run orchestrations yet")
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_mode_with_an_unknown_codec_gets_pythons_own_text() {
+        let err = run(dict(vec![
+            ("algorithm", Value::from("sha256")),
+            ("input", Value::from("x")),
+            ("encoding", Value::from("bogus-codec")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "unknown encoding: bogus-codec");
     }
 }

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Generate the golden corpus for lane D1 of issue #448 (#460):
-`electricity-tools`'s `fs`/`env_vars`/`hash`/`uuid` tools, by actually
-running Circuitry's own real plugins (`plugins/{fs,env_vars,hash,
-uuid}.py`). `clock` is recorded a different way (see below) since its
-own `ClockPlugin.execute` always calls the live `datetime.now()`.
+`electricity-tools`'s `fs`/`env_vars`/`hash`/`uuid`/`clock` tools, by
+actually running Circuitry's own real plugins (`plugins/{fs,env_vars,
+hash,uuid,clock}.py`). `clock` is recorded a different way (see its own
+section below): `ClockPlugin.execute` always calls the live
+`datetime.now()`, so its cases freeze `circuitry.plugins.clock`'s own
+`datetime` name to a fixed instant for the length of each case, the
+same injection point the Rust side's own `execute_at(params, now)`
+gives a test.
 
 `fs`'s own cases run against a real temp directory; every string leaf
 in a case's recorded `ok`/`raw`/`err` has that directory's own absolute
@@ -25,14 +29,19 @@ Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 
 from __future__ import annotations
 
+import contextlib
 import json
 import struct
 import sys
+from datetime import datetime as _real_datetime
+from datetime import timezone as _real_timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import mock
 
+import circuitry.plugins.clock as _clock_module
+from circuitry.plugins.clock import ClockPlugin
 from circuitry.plugins.env_vars import EnvVarsPlugin
 from circuitry.plugins.fs import FsPlugin
 from circuitry.plugins.hash import HashPlugin
@@ -205,6 +214,22 @@ def build_fs_cases(root: Path) -> list[dict]:
     return cases
 
 
+def build_encode_run_hash_cases() -> list[dict]:
+    """A *run* of consecutive unencodable characters gets one error for
+    the whole run, not one per character (issue #460's own fix-pass
+    finding 3 -- "日本".encode("ascii")'s own text)."""
+    return [
+        hash_case(
+            "ascii_encode_error_run_of_two",
+            {"algorithm": "sha256", "input": "日本", "encoding": "ascii"},
+        ),
+        hash_case(
+            "latin1_encode_error_run_of_two",
+            {"algorithm": "sha256", "input": "a日本b", "encoding": "latin-1"},
+        ),
+    ]
+
+
 # ---------------------------------------------------------------------
 # env_vars
 # ---------------------------------------------------------------------
@@ -312,6 +337,14 @@ def build_hash_cases(root: Path) -> list[dict]:
             root=str(root),
         )
     )
+    cases.append(
+        hash_case(
+            "from_path_missing_file",
+            {"algorithm": "sha256", "from_path": True, "input": str(root / "nope.bin")},
+            root=str(root),
+        )
+    )
+    cases.extend(build_encode_run_hash_cases())
     return cases
 
 
@@ -379,6 +412,104 @@ def build_uuid_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
+# clock
+# ---------------------------------------------------------------------
+#
+# `ClockPlugin.execute` always calls the live `datetime.now(tz)`, so
+# unlike the other four plugins this can't just call the real thing
+# once and pin the result -- the same real call, run again at replay
+# time, would give a different answer. Instead, `circuitry.plugins.
+# clock`'s own module-level `datetime` name (imported with `from
+# datetime import datetime`) is swapped for a subclass whose `now(tz)`
+# always returns the *same* fixed instant, converted into whatever `tz`
+# the real code asks for -- exactly what the Rust side's own
+# `execute_at(params, now)` injection point does (#460's own lane D1
+# ruling: "a module-level function..., never a global mutable"), so
+# both sides inject the identical instant rather than one trying to
+# replay the other's wall-clock reading.
+
+_FIXED_INSTANT = _real_datetime(2024, 7, 4, 12, 30, 45, 0, tzinfo=_real_timezone.utc)
+_FIXED_INSTANT_WITH_MICROS = _real_datetime(2024, 7, 4, 12, 30, 45, 654321, tzinfo=_real_timezone.utc)
+_WINTER_INSTANT = _real_datetime(2024, 1, 15, 8, 0, 0, 0, tzinfo=_real_timezone.utc)
+
+
+@contextlib.contextmanager
+def _frozen_clock(instant: Any):
+    class _FrozenDatetime(_real_datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            return instant.astimezone(tz) if tz is not None else instant
+
+    original = _clock_module.datetime
+    _clock_module.datetime = _FrozenDatetime
+    try:
+        yield
+    finally:
+        _clock_module.datetime = original
+
+
+def clock_case(name: str, params: dict[str, Any], *, instant: Any = _FIXED_INSTANT) -> dict:
+    plugin = ClockPlugin()
+    # The instant itself travels with the case (as whole seconds since
+    # the epoch plus a microseconds remainder) so the Rust replay can
+    # reconstruct the exact same `DateTime<Utc>` to pass to its own
+    # `execute_at` -- there's no live clock on either side for this
+    # plugin to inject through a shared recording the way the other
+    # four tools' corpus entries do.
+    epoch_seconds = int(instant.timestamp())
+    epoch_micros = instant.microsecond
+    with _frozen_clock(instant):
+        try:
+            result = plugin.execute(params=params, timeout_seconds=30)
+        except Exception as exc:
+            return {
+                "case": name,
+                "params": encode(params),
+                "epoch_seconds": epoch_seconds,
+                "epoch_micros": epoch_micros,
+                "ok": None,
+                "raw": None,
+                "err": str(exc),
+            }
+        else:
+            return {
+                "case": name,
+                "params": encode(params),
+                "epoch_seconds": epoch_seconds,
+                "epoch_micros": epoch_micros,
+                "ok": encode(result.value),
+                "raw": encode(result.raw),
+                "err": None,
+            }
+
+
+def build_clock_cases() -> list[dict]:
+    return [
+        clock_case("default_format_utc", {}),
+        clock_case("epoch_mode", {"epoch": True}),
+        clock_case("percent_percent", {"format": "%%"}),
+        clock_case("percent_percent_then_z_literal", {"format": "%%z"}),
+        clock_case(
+            "microseconds_in_f_and_iso",
+            {"format": "%f"},
+            instant=_FIXED_INSTANT_WITH_MICROS,
+        ),
+        clock_case(
+            "named_timezone_summer_dst",
+            {"timezone": "America/New_York", "format": "%Y-%m-%d %H:%M:%S %Z %z"},
+        ),
+        clock_case(
+            "named_timezone_winter_no_dst",
+            {"timezone": "America/New_York", "format": "%Y-%m-%d %H:%M:%S %Z %z"},
+            instant=_WINTER_INSTANT,
+        ),
+        clock_case("unknown_timezone", {"timezone": "Not/AZone"}),
+        clock_case("unknown_timezone_non_string", {"timezone": 5}),
+        clock_case("explicit_null_format", {"format": None}),
+    ]
+
+
+# ---------------------------------------------------------------------
 # write / check
 # ---------------------------------------------------------------------
 
@@ -409,6 +540,7 @@ def main() -> int:
             "env_vars_cases": build_env_vars_cases(),
             "hash_cases": build_hash_cases(root),
             "uuid_cases": build_uuid_cases(),
+            "clock_cases": build_clock_cases(),
         }
     text = render(corpus)
     return 0 if write_or_check(OUTPUT, text, check=check) else 1

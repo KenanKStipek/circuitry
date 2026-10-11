@@ -98,6 +98,7 @@ fn strerror(err: &io::Error) -> String {
 pub(crate) fn os_error(err: &io::Error, path_display: &str) -> ToolError {
     let errno = err.raw_os_error().unwrap_or(0);
     let py_class = match errno {
+        1 => PyExc::PermissionError,     // EPERM
         2 => PyExc::FileNotFoundError,   // ENOENT
         13 => PyExc::PermissionError,    // EACCES
         21 => PyExc::IsADirectoryError,  // EISDIR
@@ -327,13 +328,30 @@ fn py_char_repr(ch: char) -> String {
     }
 }
 
-fn unicode_encode_error(codec: Codec, ch: char, position: usize, limit: u32) -> ToolError {
+/// CPython's own encoder scans forward from the first unencodable
+/// character to the end of the *run* of characters that are all also
+/// unencodable, and invokes the error handler once for that whole run
+/// -- `'ascii' codec can't encode characters in position 0-1: ...` for
+/// `"\u65e5\u672c".encode("ascii")`, not one error per character.
+/// *chars* is the run (`len() >= 1`); *start*/*end* are its inclusive
+/// bounds in the original string.
+fn unicode_encode_error_run(
+    codec: Codec,
+    chars: &[char],
+    start: usize,
+    end: usize,
+    limit: u32,
+) -> ToolError {
+    let body = if end > start {
+        format!("characters in position {start}-{end}")
+    } else {
+        format!("character {} in position {start}", py_char_repr(chars[0]))
+    };
     ToolError {
         py_class: PyExc::UnicodeEncodeError,
         message: format!(
-            "'{}' codec can't encode character {} in position {position}: ordinal not in range({limit})",
-            codec.display_name(),
-            py_char_repr(ch)
+            "'{}' codec can't encode {body}: ordinal not in range({limit})",
+            codec.display_name()
         ),
         cause: crate::ErrorCause::None,
     }
@@ -434,38 +452,86 @@ pub(crate) fn decode_text(codec: Codec, bytes: &[u8]) -> Result<String, ToolErro
 pub(crate) fn encode_text(codec: Codec, text: &str) -> Result<Vec<u8>, ToolError> {
     match codec {
         Codec::Utf8 => Ok(text.as_bytes().to_vec()),
-        Codec::Ascii => {
-            for (position, ch) in text.chars().enumerate() {
-                if (ch as u32) >= 0x80 {
-                    return Err(unicode_encode_error(Codec::Ascii, ch, position, 128));
-                }
-            }
-            Ok(text.bytes().collect())
-        }
-        Codec::Latin1 => {
-            let mut out = Vec::with_capacity(text.len());
-            for (position, ch) in text.chars().enumerate() {
-                let cp = ch as u32;
-                if cp > 0xFF {
-                    return Err(unicode_encode_error(Codec::Latin1, ch, position, 256));
-                }
-                out.push(cp as u8);
-            }
-            Ok(out)
-        }
+        Codec::Ascii => encode_single_byte(codec, text, 128),
+        Codec::Latin1 => encode_single_byte(codec, text, 256),
     }
 }
 
-/// `str(params.get("encoding") or "utf-8")`, resolved to a [`Codec`] --
-/// the one entry point every `fs`/`hash` encoding param goes through.
-pub(crate) fn resolve_encoding_param(params: &Value) -> Result<Codec, ToolError> {
+/// Shared by [`Codec::Ascii`] (limit 128) and [`Codec::Latin1`] (limit
+/// 256): both store one byte per codepoint, differing only in which
+/// codepoints are in range.
+fn encode_single_byte(codec: Codec, text: &str, limit: u32) -> Result<Vec<u8>, ToolError> {
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if (ch as u32) >= limit {
+            let mut end = i;
+            while end + 1 < chars.len() && (chars[end + 1] as u32) >= limit {
+                end += 1;
+            }
+            return Err(unicode_encode_error_run(
+                codec,
+                &chars[i..=end],
+                i,
+                end,
+                limit,
+            ));
+        }
+    }
+    Ok(chars.into_iter().map(|c| c as u8).collect())
+}
+
+/// What a requested codec name resolves to, three ways -- #460's own
+/// lane D1 fix pass ("R2"): a name CPython itself would also reject
+/// gets `cof run`'s own `LookupError: unknown encoding: x`
+/// ([`Unknown`](EncodingOutcome::Unknown)); a name CPython accepts but
+/// this preview doesn't implement gets the preview marker instead of a
+/// false `unknown encoding` claim ([`NotImplemented`](EncodingOutcome::NotImplemented)).
+pub(crate) enum EncodingOutcome {
+    Supported(Codec),
+    NotImplemented(String),
+    Unknown(String),
+}
+
+/// `str(params.get("encoding") or "utf-8")` -- the raw name every
+/// `fs`/`hash` encoding param resolves to before classification.
+pub(crate) fn encoding_param_name(params: &Value) -> String {
     let raw = get(params, "encoding").cloned().unwrap_or(Value::None);
-    let name = if py_truthy(&raw) {
+    if py_truthy(&raw) {
         raw.py_str()
     } else {
         "utf-8".to_string()
-    };
-    resolve_codec(&name).ok_or_else(|| unknown_encoding(&name))
+    }
+}
+
+/// Classifies *name* per [`EncodingOutcome`], against
+/// `generate_codec_names.py`'s own table of every name CPython's
+/// `codecs.lookup` accepts.
+pub(crate) fn classify_encoding(name: &str) -> EncodingOutcome {
+    if let Some(codec) = resolve_codec(name) {
+        return EncodingOutcome::Supported(codec);
+    }
+    let normalized = normalize_codec_name(name);
+    if crate::generated::python_codec_names::PYTHON_CODEC_NAMES.contains(&normalized.as_str()) {
+        EncodingOutcome::NotImplemented(name.to_string())
+    } else {
+        EncodingOutcome::Unknown(name.to_string())
+    }
+}
+
+/// The preview-marker refusal for a codec name real `cof run` supports
+/// but this preview doesn't implement -- raised *before* anything
+/// touches the filesystem, unlike the `Unknown`/`UnicodeEncodeError`
+/// cases below, which (R2's own ruling) reproduce `cof run`'s own
+/// filesystem effects first.
+pub(crate) fn preview_marker_codec_error(name: &str) -> ToolError {
+    ToolError {
+        py_class: PyExc::LookupError,
+        message: format!(
+            "electricity {} is a preview and cannot run orchestrations yet: the '{name}' codec is not supported; use `cof run` instead",
+            env!("CARGO_PKG_VERSION")
+        ),
+        cause: crate::ErrorCause::None,
+    }
 }
 
 /// `read_text()`'s own universal-newline translation: `\r\n` and a
@@ -474,7 +540,7 @@ fn universal_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn stat_dict(path: &Path, metadata: &std::fs::Metadata) -> Value {
+fn stat_dict(path: &Path, display: &str, metadata: &std::fs::Metadata) -> Result<Value, ToolError> {
     use std::os::unix::fs::MetadataExt;
     let mut dict = Dict::new();
     dict.insert(
@@ -483,18 +549,109 @@ fn stat_dict(path: &Path, metadata: &std::fs::Metadata) -> Value {
     );
     dict.insert(
         Value::Str("mtime".to_string()),
-        Value::from(metadata.mtime()),
+        Value::from(py_mtime(metadata)),
     );
     dict.insert(
         Value::Str("mode".to_string()),
         Value::from(metadata.mode() as i64),
     );
-    dict.insert(Value::Str("is_dir".to_string()), Value::from(path.is_dir()));
+    dict.insert(
+        Value::Str("is_dir".to_string()),
+        Value::from(py_is_dir(path, display)?),
+    );
     dict.insert(
         Value::Str("is_file".to_string()),
-        Value::from(path.is_file()),
+        Value::from(py_is_file(path, display)?),
     );
-    Value::Dict(dict)
+    Ok(Value::Dict(dict))
+}
+
+/// `int(st_mtime)` -- Python's own truncation toward zero of the
+/// *float* seconds-since-epoch, which for a pre-1970 timestamp with a
+/// nonzero fractional (nanosecond) part gives a *less* negative result
+/// than `st_mtime`'s own whole-seconds part (`MetadataExt::mtime()`,
+/// always rounded toward negative infinity: the kernel's `tv_nsec` is
+/// never negative, so `tv_sec` alone floors the true value).
+fn py_mtime(metadata: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    let seconds = metadata.mtime();
+    let nanos = metadata.mtime_nsec();
+    if seconds < 0 && nanos != 0 {
+        seconds + 1
+    } else {
+        seconds
+    }
+}
+
+/// The errno set `pathlib.Path.exists`/`is_file`/`is_dir` (CPython
+/// 3.11/3.12; 3.13 swallows every `OSError` instead, a documented
+/// narrowing -- `docs/spec/tools-adapters-plugins.md` §2.3) re-raise
+/// *through*, rather than reporting `False` for: everything except a
+/// missing path, a path through a non-directory, a bad descriptor or
+/// too many symlink levels.
+fn ignorable_stat_errno(errno: i32) -> bool {
+    matches!(
+        errno,
+        libc::ENOENT | libc::ENOTDIR | libc::EBADF | libc::ELOOP
+    )
+}
+
+pub(crate) fn py_exists(path: &Path, display: &str) -> Result<bool, ToolError> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if ignorable_stat_errno(err.raw_os_error().unwrap_or(-1)) => Ok(false),
+        Err(err) => Err(os_error(&err, display)),
+    }
+}
+
+pub(crate) fn py_is_dir(path: &Path, display: &str) -> Result<bool, ToolError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_dir()),
+        Err(err) if ignorable_stat_errno(err.raw_os_error().unwrap_or(-1)) => Ok(false),
+        Err(err) => Err(os_error(&err, display)),
+    }
+}
+
+pub(crate) fn py_is_file(path: &Path, display: &str) -> Result<bool, ToolError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if ignorable_stat_errno(err.raw_os_error().unwrap_or(-1)) => Ok(false),
+        Err(err) => Err(os_error(&err, display)),
+    }
+}
+
+/// `Path.mkdir(parents=True, exist_ok=True)` (CPython's own
+/// `pathlib._local.Path.mkdir`), ported exactly so a failure names the
+/// *directory that actually failed* rather than always the original
+/// write's own leaf path (issue #460's own fix-pass finding 7): try
+/// creating *path* itself first; on `ENOENT` (a missing parent),
+/// recurse into the parent and retry; on any other `OSError`, swallow
+/// it only if *path* already is a directory (the race-safe `exist_ok`
+/// case), else report *path* itself.
+fn mkdir_parents(path: &Path) -> Result<(), ToolError> {
+    let display = path.to_string_lossy().into_owned();
+    match std::fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.raw_os_error() == Some(libc::ENOENT) => match path.parent() {
+            Some(parent) if parent != path && !parent.as_os_str().is_empty() => {
+                mkdir_parents(parent)?;
+                match std::fs::create_dir(path) {
+                    Ok(()) => Ok(()),
+                    Err(retry_err) => mkdir_exist_ok_or_raise(path, &display, retry_err),
+                }
+            }
+            _ => Err(os_error(&err, &display)),
+        },
+        Err(err) => mkdir_exist_ok_or_raise(path, &display, err),
+    }
+}
+
+fn mkdir_exist_ok_or_raise(path: &Path, display: &str, err: io::Error) -> Result<(), ToolError> {
+    if py_is_dir(path, display)? {
+        Ok(())
+    } else {
+        Err(os_error(&err, display))
+    }
 }
 
 pub struct FsPlugin;
@@ -524,14 +681,21 @@ impl ToolPlugin for FsPlugin {
 
         let value: Value = match mode.as_str() {
             "read" => {
-                if !path.is_file() {
+                if !py_is_file(path, &display)? {
                     return Err(ToolError {
                         py_class: PyExc::FileNotFoundError,
                         message: format!("fs: not a file: {display}"),
                         cause: crate::ErrorCause::None,
                     });
                 }
-                let codec = resolve_encoding_param(&params)?;
+                let encoding_name = encoding_param_name(&params);
+                let codec = match classify_encoding(&encoding_name) {
+                    EncodingOutcome::Supported(codec) => codec,
+                    EncodingOutcome::NotImplemented(name) => {
+                        return Err(preview_marker_codec_error(&name));
+                    }
+                    EncodingOutcome::Unknown(name) => return Err(unknown_encoding(&name)),
+                };
                 let bytes = std::fs::read(path).map_err(|err| os_error(&err, &display))?;
                 let text = decode_text(codec, &bytes)?;
                 Value::Str(universal_newlines(&text))
@@ -545,13 +709,26 @@ impl ToolPlugin for FsPlugin {
                         ));
                     }
                 };
-                let codec = resolve_encoding_param(&params)?;
-                let encoded = encode_text(codec, &content)?;
+                // Codec classification happens before anything touches
+                // the filesystem, but only a `NotImplemented` name is
+                // actually raised this early (R2): a name CPython
+                // itself would reject, or one we do support, instead
+                // waits until after `mkdir`/`open` below, so a failure
+                // leaves the same filesystem state `cof run` does
+                // (issue #460's own fix-pass finding 6 -- CPython's
+                // `open(path, "w", encoding=...)` already created or
+                // truncated the file before either exception could
+                // fire).
+                let encoding_name = encoding_param_name(&params);
+                let encoding_outcome = classify_encoding(&encoding_name);
+                if let EncodingOutcome::NotImplemented(name) = &encoding_outcome {
+                    return Err(preview_marker_codec_error(name));
+                }
+
                 if as_bool(get(&params, "create_dirs"), true) {
                     if let Some(parent) = path.parent() {
                         if !parent.as_os_str().is_empty() {
-                            std::fs::create_dir_all(parent)
-                                .map_err(|err| os_error(&err, &display))?;
+                            mkdir_parents(parent)?;
                         }
                     }
                 }
@@ -562,11 +739,18 @@ impl ToolPlugin for FsPlugin {
                 } else {
                     open_options.truncate(true);
                 }
+                let mut file = open_options
+                    .open(path)
+                    .map_err(|err| os_error(&err, &display))?;
+
+                let codec = match encoding_outcome {
+                    EncodingOutcome::Supported(codec) => codec,
+                    EncodingOutcome::Unknown(name) => return Err(unknown_encoding(&name)),
+                    EncodingOutcome::NotImplemented(_) => unreachable!("returned above"),
+                };
+                let encoded = encode_text(codec, &content)?;
                 {
                     use std::io::Write;
-                    let mut file = open_options
-                        .open(path)
-                        .map_err(|err| os_error(&err, &display))?;
                     file.write_all(&encoded)
                         .map_err(|err| os_error(&err, &display))?;
                 }
@@ -577,7 +761,7 @@ impl ToolPlugin for FsPlugin {
                 Value::Str(display.clone())
             }
             "list" => {
-                if !path.is_dir() {
+                if !py_is_dir(path, &display)? {
                     return Err(ToolError {
                         py_class: PyExc::NotADirectoryError,
                         message: format!("fs: not a directory: {display}"),
@@ -598,7 +782,7 @@ impl ToolPlugin for FsPlugin {
                 Value::List(names.into_iter().map(Value::Str).collect())
             }
             "stat" => {
-                if !path.exists() {
+                if !py_exists(path, &display)? {
                     return Err(ToolError {
                         py_class: PyExc::FileNotFoundError,
                         message: format!("fs: path does not exist: {display}"),
@@ -606,13 +790,13 @@ impl ToolPlugin for FsPlugin {
                     });
                 }
                 let metadata = std::fs::metadata(path).map_err(|err| os_error(&err, &display))?;
-                stat_dict(path, &metadata)
+                stat_dict(path, &display, &metadata)?
             }
-            "exists" => Value::from(path.exists()),
+            "exists" => Value::from(py_exists(path, &display)?),
             "delete" => {
-                if !path.exists() {
+                if !py_exists(path, &display)? {
                     Value::from(false)
-                } else if path.is_dir() {
+                } else if py_is_dir(path, &display)? {
                     if !as_bool(get(&params, "recursive"), false) {
                         return Err(ToolError {
                             py_class: PyExc::IsADirectoryError,
@@ -626,13 +810,12 @@ impl ToolPlugin for FsPlugin {
                         .map(|m| m.file_type().is_symlink())
                         .unwrap_or(false);
                     if is_symlink {
-                        // `shutil.rmtree` refuses a symlink to a
-                        // directory outright -- compared by location
-                        // only (issue #460's own test plan), so the
-                        // message text doesn't need to match Python's.
+                        // `shutil.rmtree`'s own exact text for this
+                        // case (`Lib/shutil.py::rmtree`): no path
+                        // embedded.
                         return Err(ToolError {
                             py_class: PyExc::OSError,
-                            message: format!("fs: refusing to rmtree a symbolic link: '{display}'"),
+                            message: "Cannot call rmtree on a symbolic link".to_string(),
                             cause: crate::ErrorCause::None,
                         });
                     }
@@ -1029,5 +1212,200 @@ mod tests {
     fn normalize_path_drops_dot_segments_and_trailing_slash() {
         let resolved = expand_user_path("foo/./bar/");
         assert_eq!(resolved.display, "foo/bar");
+    }
+
+    #[test]
+    fn ascii_encode_reports_the_whole_run_of_unencodable_characters() {
+        // CPython's own encoder invokes the error handler once per
+        // *run* of consecutive unencodable characters, not once per
+        // character (`"\u65e5\u672c".encode("ascii")`'s own text) --
+        // issue #460's own fix-pass finding 3.
+        let err = encode_text(Codec::Ascii, "\u{65e5}\u{672c}").unwrap_err();
+        assert_eq!(
+            err.message,
+            "'ascii' codec can't encode characters in position 0-1: ordinal not in range(128)"
+        );
+    }
+
+    #[test]
+    fn latin1_encode_reports_the_whole_run_of_unencodable_characters() {
+        let err = encode_text(Codec::Latin1, "a\u{65e5}\u{672c}b").unwrap_err();
+        assert_eq!(
+            err.message,
+            "'latin-1' codec can't encode characters in position 1-2: ordinal not in range(256)"
+        );
+    }
+
+    #[tokio::test]
+    async fn mkdir_dash_p_through_a_file_names_the_directory_that_actually_failed() {
+        // `<root>/file.txt` is a regular file; `mkdir -p
+        // <root>/file.txt/sub` can never succeed, and CPython's own
+        // `Path.mkdir(parents=True, exist_ok=True)` names *that*
+        // directory in its error, not the write's own leaf path --
+        // issue #460's own fix-pass finding 7.
+        let dir = TempDir::new();
+        let blocker = dir.0.join("file.txt");
+        std::fs::write(&blocker, b"").unwrap();
+        let leaf = blocker.join("sub").join("x.txt");
+        let leaf_str = leaf.to_str().unwrap().to_string();
+        let err = run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(leaf_str.as_str())),
+            ("content", Value::from("x")),
+        ]))
+        .await
+        .unwrap_err();
+        let failing_dir = blocker.join("sub");
+        assert!(
+            err.message.contains(failing_dir.to_str().unwrap()),
+            "expected the failing directory {:?} in {:?}",
+            failing_dir,
+            err.message
+        );
+        assert!(
+            !err.message.contains(leaf_str.as_str()),
+            "expected the write's own leaf path NOT in {:?}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_that_fails_to_encode_leaves_the_file_truncated_like_cpython() {
+        // CPython's own `open(path, "w", encoding=...)` already
+        // creates/truncates the file before `fh.write(content)` can
+        // raise `UnicodeEncodeError` -- issue #460's own fix-pass
+        // finding 6: a prior write's content must not survive a later
+        // failed one.
+        let dir = TempDir::new();
+        let path = dir.0.join("f.txt");
+        let path_str = path.to_str().unwrap().to_string();
+        run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(path_str.as_str())),
+            ("content", Value::from("old")),
+        ]))
+        .await
+        .unwrap();
+        let err = run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(path_str.as_str())),
+            ("content", Value::from("caf\u{e9}")),
+            ("encoding", Value::from("ascii")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, PyExc::UnicodeEncodeError);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn a_write_with_an_unknown_codec_also_leaves_the_file_truncated() {
+        let dir = TempDir::new();
+        let path = dir.0.join("f.txt");
+        let path_str = path.to_str().unwrap().to_string();
+        run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(path_str.as_str())),
+            ("content", Value::from("old")),
+        ]))
+        .await
+        .unwrap();
+        let err = run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(path_str.as_str())),
+            ("content", Value::from("x")),
+            ("encoding", Value::from("bogus-codec")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, PyExc::LookupError);
+        assert_eq!(err.message, "unknown encoding: bogus-codec");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn a_write_with_a_real_but_unimplemented_codec_touches_nothing() {
+        // "utf-16" is a real Python codec (`cof run` would succeed);
+        // this preview doesn't implement it, and refuses up front --
+        // R2's own ruling: no file created at all, unlike the
+        // `bogus-codec`/`UnicodeEncodeError` cases above.
+        let dir = TempDir::new();
+        let path = dir.0.join("never-created.txt");
+        let path_str = path.to_str().unwrap().to_string();
+        let err = run(dict(vec![
+            ("mode", Value::from("write")),
+            ("path", Value::from(path_str.as_str())),
+            ("content", Value::from("x")),
+            ("encoding", Value::from("utf-16")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, PyExc::LookupError);
+        assert!(
+            err.message
+                .contains("is a preview and cannot run orchestrations yet")
+        );
+        assert!(err.message.contains("'utf-16'"));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_read_with_a_real_but_unimplemented_codec_gets_the_preview_marker() {
+        let dir = TempDir::new();
+        let path = dir.0.join("f.txt");
+        std::fs::write(&path, b"hi").unwrap();
+        let path_str = path.to_str().unwrap().to_string();
+        let err = run(dict(vec![
+            ("mode", Value::from("read")),
+            ("path", Value::from(path_str.as_str())),
+            ("encoding", Value::from("shift_jis")),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, PyExc::LookupError);
+        assert!(
+            err.message
+                .contains("is a preview and cannot run orchestrations yet")
+        );
+    }
+
+    #[test]
+    fn classify_encoding_tells_apart_unknown_from_not_yet_implemented() {
+        assert!(matches!(
+            classify_encoding("utf-8"),
+            EncodingOutcome::Supported(Codec::Utf8)
+        ));
+        assert!(matches!(
+            classify_encoding("utf-16"),
+            EncodingOutcome::NotImplemented(_)
+        ));
+        assert!(matches!(
+            classify_encoding("cp1252"),
+            EncodingOutcome::NotImplemented(_)
+        ));
+        assert!(matches!(
+            classify_encoding("bogus-codec-xyz"),
+            EncodingOutcome::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn py_mtime_truncates_toward_zero_not_floor() {
+        let dir = TempDir::new();
+        let path = dir.0.join("f.txt");
+        std::fs::write(&path, b"x").unwrap();
+        // A pre-1970 mtime 10.3s before the epoch: the kernel's own
+        // `tv_sec`/`tv_nsec` pair represents it as `tv_sec=-11,
+        // tv_nsec=700_000_000` (never a negative `tv_nsec`); CPython's
+        // `int(st_mtime)` truncates the *true* float value (-10.3)
+        // toward zero, i.e. -10, not -11 -- issue #460's own fix-pass
+        // finding 9.
+        use std::time::{Duration, SystemTime};
+        let mtime = SystemTime::UNIX_EPOCH - Duration::new(10, 300_000_000);
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(py_mtime(&metadata), -10);
     }
 }

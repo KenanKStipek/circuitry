@@ -24,7 +24,8 @@
 //! second test in this same binary running concurrently on another
 //! thread could otherwise observe -- or stomp on -- that window.
 
-use electricity_tools::clock::with_fixed_now;
+use chrono::{DateTime, TimeZone, Utc};
+use electricity_tools::clock::execute_at;
 use electricity_tools::{
     ToolCall, ToolPlugin, env_vars::EnvVarsPlugin, fs::FsPlugin, hash::HashPlugin, uuid::UuidPlugin,
 };
@@ -104,12 +105,29 @@ struct GenericCase {
     err: Option<String>,
 }
 
+/// `clock` cases carry their own frozen instant (whole seconds since
+/// the epoch, plus a microseconds remainder) -- there's no shared
+/// `ToolPlugin::execute` call this replay can drive the way the other
+/// four tools' [`GenericCase`]s do, since `clock`'s own entry point
+/// takes *now* as an explicit parameter ([`execute_at`]).
+#[derive(Deserialize)]
+struct ClockCase {
+    case: String,
+    params: TaggedValue,
+    epoch_seconds: i64,
+    epoch_micros: u32,
+    ok: Option<TaggedValue>,
+    raw: Option<TaggedValue>,
+    err: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct Corpus {
     fs_cases: Vec<GenericCase>,
     env_vars_cases: Vec<GenericCase>,
     hash_cases: Vec<GenericCase>,
     uuid_cases: Vec<GenericCase>,
+    clock_cases: Vec<ClockCase>,
 }
 
 fn call<'a>(token: &'a CancellationToken, config: &'a Value) -> ToolCall<'a> {
@@ -241,29 +259,43 @@ async fn golden_corpus_stdlib_tools() {
         unsafe { std::env::set_var(name, value) };
     }
 
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
+    // --- clock: each case carries its own frozen instant (there's no
+    // shared process environment or filesystem state to set up/tear
+    // down the way the other sections need).
+    assert!(!corpus.clock_cases.is_empty());
+    for case in corpus.clock_cases {
+        let now: DateTime<Utc> = Utc
+            .timestamp_opt(case.epoch_seconds, case.epoch_micros * 1000)
+            .single()
+            .expect("valid recorded instant");
+        let params = Value::from(case.params);
+        let got = execute_at(&params, now);
+        match (got, case.ok, case.raw, case.err) {
+            (Ok(got), Some(ok), Some(raw), None) => {
+                let expected_value = Value::from(ok);
+                let expected_raw = Value::from(raw);
+                if got.value != expected_value || got.raw != expected_raw {
+                    failures.push(format!(
+                        "clock/{}: expected value={expected_value:?} raw={expected_raw:?}, got value={:?} raw={:?}",
+                        case.case, got.value, got.raw
+                    ));
+                }
+            }
+            (Err(err), None, None, Some(expected)) => {
+                if err.message != expected {
+                    failures.push(format!(
+                        "clock/{}: expected err {expected:?}, got {:?}",
+                        case.case, err.message
+                    ));
+                }
+            }
+            (got, expected_ok, expected_raw, expected_err) => failures.push(format!(
+                "clock/{}: expected ok={expected_ok:?} raw={expected_raw:?} err={expected_err:?}, got {:?}",
+                case.case,
+                got.map(|r| (r.value, r.raw))
+            )),
+        }
+    }
 
-/// `clock`'s own corpus: unlike the other four, `ClockPlugin::execute`
-/// always reads the live `datetime.now()`, so there's no single real
-/// Python call this test can replay against a committed JSON file the
-/// way the others do. Instead, it fixes the same instant on both sides
-/// directly -- the generator's own doc comment (and issue #460's own
-/// test plan: "the Rust test injects the same instant") -- and checks a
-/// handful of `strftime`/`isoformat`/timezone combinations against
-/// values this PR's description/tests already verified against a real
-/// `python3.11` interpreter (see `clock.rs`'s own unit tests for the
-/// fully worked `America/New_York` DST case).
-#[test]
-fn clock_formats_a_fixed_instant_like_cpython_3_11() {
-    use chrono::TimeZone;
-    let instant = chrono::Utc
-        .with_ymd_and_hms(2024, 7, 4, 12, 30, 45)
-        .unwrap();
-    with_fixed_now(instant, || {
-        // Nothing further to assert here beyond what `clock.rs`'s own
-        // unit tests already cover end to end -- this test exists so a
-        // reviewer finds the clock corpus story next to the other
-        // four's, not scattered.
-    });
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

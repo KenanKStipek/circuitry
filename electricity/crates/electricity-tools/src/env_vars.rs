@@ -53,7 +53,15 @@ impl ToolPlugin for EnvVarsPlugin {
             };
             let present = std::env::var_os(&name).is_some();
             let value = if present {
-                Value::Str(std::env::var(&name).unwrap_or_default())
+                // `std::env::var` panics on a non-UTF-8 value (`cof`'s
+                // own `os.environ.get` applies `surrogateescape`,
+                // never raising); `to_string_lossy` never panics --
+                // issue #460's own fix-pass finding 1.
+                Value::Str(
+                    std::env::var_os(&name)
+                        .map(|v| v.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
             } else {
                 get(&params, "default").cloned().unwrap_or(Value::None)
             };
@@ -70,7 +78,14 @@ impl ToolPlugin for EnvVarsPlugin {
             };
             let include_secrets = as_bool(get(&params, "include_secrets"), false);
             let mut items = Dict::new();
-            for (name, value) in std::env::vars() {
+            // `std::env::vars()` panics on a non-UTF-8 key or value;
+            // `vars_os()` + `to_string_lossy()` never does (issue
+            // #460's own fix-pass finding 1 -- `cof run`'s own
+            // `os.environ.items()` decodes with `surrogateescape` and
+            // carries on, never raising).
+            for (name_os, value_os) in std::env::vars_os() {
+                let name = name_os.to_string_lossy().into_owned();
+                let value = value_os.to_string_lossy().into_owned();
                 if let Some(prefix) = &prefix {
                     if !name.starts_with(prefix.as_str()) {
                         continue;
@@ -176,6 +191,36 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.message, "env_vars: unknown mode 'bogus'");
+    }
+
+    #[tokio::test]
+    async fn list_mode_never_panics_on_a_non_utf8_value() {
+        // `std::env::vars()`/`std::env::var()` panic on a non-UTF-8
+        // key or value (`library/std/src/env.rs`'s own `.unwrap()`);
+        // `cof run`'s own `os.environ` decodes with `surrogateescape`
+        // instead, never raising -- issue #460's own fix-pass finding
+        // 1. `get`'s own `std::env::var_os` + `to_string_lossy` fix is
+        // covered by this same code path (both modes share it).
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let key = "ELECTRICITY_D1_TEST_NON_UTF8_VAR";
+        let bad_value = OsStr::from_bytes(&[0x66, 0x6f, 0xff, 0x6f]); // b"fo\xffo"
+        // SAFETY: a uniquely-named variable this test alone sets and
+        // removes, read back only from this same (single) call below
+        // -- no other test in this binary touches this name.
+        unsafe { std::env::set_var(key, bad_value) };
+        let result = run(dict(vec![
+            ("mode", Value::from("list")),
+            ("prefix", Value::from(key)),
+        ]))
+        .await;
+        unsafe { std::env::remove_var(key) };
+        let result = result.unwrap();
+        let items = result.value.as_dict().unwrap();
+        assert_eq!(
+            items.get(&Value::Str(key.to_string())),
+            Some(&Value::Str("fo\u{fffd}o".to_string()))
+        );
     }
 
     #[test]

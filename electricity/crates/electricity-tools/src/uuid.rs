@@ -119,7 +119,16 @@ impl ToolPlugin for UuidPlugin {
 
         let as_hex = as_bool(get(&params, "hex"), false);
 
-        let mut ids: Vec<String> = Vec::with_capacity(count as usize);
+        // Never `Vec::with_capacity(count as usize)` -- a huge *count*
+        // would abort the process on that allocation alone, before a
+        // v5 call's own per-iteration `uuid5` ever gets a chance to
+        // raise on its first iteration the way CPython's loop does
+        // (issue #460's own fix-pass finding 10). An unbounded `Vec`
+        // still does the same real work CPython's own loop would for a
+        // huge *count* of v1/v4 ids -- that's parity, not a bug; the
+        // bug was paying for the whole allocation up front regardless
+        // of whether the loop would ever get that far.
+        let mut ids: Vec<String> = Vec::new();
         for _ in 0..count {
             let generated = match version {
                 1 => uuid1(),
@@ -294,6 +303,21 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.message, "uuid: count must be >= 1.");
+    }
+
+    #[tokio::test]
+    async fn a_huge_count_with_an_invalid_v5_call_fails_fast_without_preallocating() {
+        // Pre-#460-fix-pass, `Vec::with_capacity(count as usize)` ran
+        // *before* the loop that would otherwise raise on its very
+        // first iteration -- a huge `count` aborted the process before
+        // `uuid5` ever got a chance to reject the missing `name`.
+        let err = run(dict(vec![
+            ("version", Value::from(5i64)),
+            ("count", Value::from(i64::MAX)),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "uuid: v5 requires params['name'].");
     }
 
     #[tokio::test]

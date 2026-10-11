@@ -40,7 +40,13 @@ uuid = { version = "1", features = ["v1", "v4", "v5"] }
 # system tz database the way `zoneinfo.ZoneInfo` does -- a zone
 # compiled into a crate (`chrono-tz`) would accept a different set of
 # names than the host's own `/usr/share/zoneinfo` (#448 decision 8).
-tzfile = "0.1"
+# `jiff`, not `tzfile`: `jiff` evaluates a TZif file's own POSIX-TZ
+# footer for an instant past its last explicit transition (a "slim"
+# tzdata build keeps only a handful of explicit transitions and relies
+# on the footer for everything past them) and searches `TZDIR`/the
+# usual zoneinfo search path the way `zoneinfo.ZoneInfo` does; `tzfile`
+# 0.1.3 documents that it does not evaluate the footer at all.
+jiff = "0.2"
 # `clock`'s own `%<other>` directives (everything but the `%f`/`%z`/
 # `%Z` CPython pre-processes itself -- #448 decision 8) go to the
 # platform's own C `strftime`, not a pure-Rust reimplementation of it.
