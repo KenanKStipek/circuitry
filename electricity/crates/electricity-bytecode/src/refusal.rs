@@ -42,7 +42,7 @@ use crate::op::{LeafKind, NodeKind, Op};
 use crate::param::ParamNode;
 use crate::path::EffectPath;
 use crate::program::Program;
-use crate::region::{Condition, ExpectCondition, Region};
+use crate::region::{Condition, ExpectCondition, LoopSpec, Region};
 use crate::template::TemplateText;
 
 /// Lane C's own native providers (#448) -- process-backed, so they
@@ -314,12 +314,22 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                 refusal(path, RefusalReason::Prompt)
             }
         }
-        LeafKind::Use(_) => {
-            if supported.use_ {
-                None
-            } else {
-                refusal(path, RefusalReason::Use)
+        LeafKind::Use(use_op) => {
+            if !supported.use_ {
+                return refusal(path, RefusalReason::Use);
             }
+            // Same `expect: {mode: model, ...}` check as `LeafKind::
+            // Tool` below -- S4(b) (M1 gate seam round 2): this walker
+            // never read `UseOp::expect` at all, so a `use` effect with
+            // a model-mode `expect:` was wrongly accepted the moment
+            // `use_` turned on, before lane G2 ever flips
+            // `model_expect` of its own.
+            if !supported.model_expect
+                && matches!(&use_op.expect, Some(ExpectCondition::Model { .. }))
+            {
+                return refusal(path, RefusalReason::ModelExpect);
+            }
+            None
         }
         LeafKind::Reflector(reflector) => {
             if supported.reflector {
@@ -384,17 +394,28 @@ fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) ->
                     .and_then(|region| walk_region(path, region, supported))
             })
         }
-        Region::Loop { body, .. } => {
-            if supported.loop_ {
-                walk_region(path, body, supported)
-            } else {
+        Region::Loop { spec, body, .. } => {
+            if !supported.loop_ {
                 // A `loop` is refused outright regardless of its own
                 // body or `while:` condition's mode -- M1-H's own
                 // milestone, not a narrower per-field gap this walker's
                 // `{{>`/model-mode checks would otherwise also catch
                 // inside it.
-                refusal(path, RefusalReason::Loop)
+                return refusal(path, RefusalReason::Loop);
             }
+            // S4(a) (M1 gate seam round 2): once `loop_` is on, a
+            // `while:` condition in `mode: model` needs the same
+            // `model_condition` check `Region::If`'s own `cond` gets
+            // above -- this walker never read `LoopSpec::While`'s own
+            // `Condition` at all, so it was wrongly accepted the
+            // moment `loop_` turned on, before lane G2 ever flips
+            // `model_condition` of its own.
+            if let LoopSpec::While(cond) = spec {
+                if !supported.model_condition && matches!(cond, Condition::Model { .. }) {
+                    return refusal(path, RefusalReason::ModelCondition);
+                }
+            }
+            walk_region(path, body, supported)
         }
     }
 }
@@ -1136,6 +1157,128 @@ mod tests {
         let program = program_with_root(root_block(vec![tool]));
         let supported = Supported {
             model_expect: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn a_use_expect_in_model_mode_is_refused_even_once_use_is_supported() {
+        // S4(b) (M1 gate seam round 2): `UseOp::expect` was never read
+        // by this walker at all -- a `use` effect with a model-mode
+        // `expect:` was wrongly accepted the instant `use_` turned on.
+        let use_path = EffectPath::root().push_name("sub");
+        let use_op = leaf_op(
+            use_path.clone(),
+            LeafKind::Use(crate::effects::UseOp {
+                source: crate::effects::UseSource::Path("child.yml".to_string()),
+                inputs: None,
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy::default(),
+                expect: Some(ExpectCondition::Model {
+                    template: TemplateText::new("ok?", false, Escape::None),
+                }),
+                description: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![use_op]));
+        let supported = Supported { use_: true, ..m0() };
+        let refusal = first_unsupported(&program, &supported).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::ModelExpect);
+        assert_eq!(refusal.path, use_path);
+    }
+
+    #[test]
+    fn a_use_expect_in_model_mode_is_accepted_once_model_expect_is_also_set() {
+        let use_op = leaf_op(
+            EffectPath::root().push_name("sub"),
+            LeafKind::Use(crate::effects::UseOp {
+                source: crate::effects::UseSource::Path("child.yml".to_string()),
+                inputs: None,
+                outputs: None,
+                validate: true,
+                retries: RetryPolicy::default(),
+                expect: Some(ExpectCondition::Model {
+                    template: TemplateText::new("ok?", false, Escape::None),
+                }),
+                description: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![use_op]));
+        let supported = Supported {
+            use_: true,
+            model_expect: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, &supported).is_none());
+    }
+
+    #[test]
+    fn a_while_loops_model_mode_condition_is_refused_even_once_loop_is_supported() {
+        // S4(a) (M1 gate seam round 2): `LoopSpec::While`'s own
+        // `Condition` was never read by this walker at all -- a
+        // `while` loop in `mode: model` was wrongly accepted the
+        // instant `loop_` turned on.
+        let loop_op = Op {
+            path: EffectPath::root().push_name("poll"),
+            name: Some("poll".to_string()),
+            kind: NodeKind::Control(Region::Loop {
+                spec: LoopSpec::While(Condition::Model {
+                    template: TemplateText::new("done?", false, Escape::None),
+                }),
+                body: Box::new(Region::Block {
+                    ops: Vec::new(),
+                    overlay: true,
+                }),
+                flow: crate::region::LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = program_with_root(root_block(vec![loop_op]));
+        let supported = Supported {
+            loop_: true,
+            ..m0()
+        };
+        let refusal = first_unsupported(&program, &supported).unwrap();
+        assert_eq!(refusal.reason, RefusalReason::ModelCondition);
+    }
+
+    #[test]
+    fn a_while_loops_model_mode_condition_is_accepted_once_model_condition_is_also_set() {
+        let use_path = EffectPath::root().push_name("poll").push_name("sub");
+        let loop_op = Op {
+            path: EffectPath::root().push_name("poll"),
+            name: Some("poll".to_string()),
+            kind: NodeKind::Control(Region::Loop {
+                spec: LoopSpec::While(Condition::Model {
+                    template: TemplateText::new("done?", false, Escape::None),
+                }),
+                body: Box::new(Region::Block {
+                    ops: vec![use_leaf(use_path.clone())],
+                    overlay: true,
+                }),
+                flow: crate::region::LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = program_with_root(root_block(vec![loop_op]));
+        let supported = Supported {
+            loop_: true,
+            model_condition: true,
+            use_: true,
             ..m0()
         };
         assert!(first_unsupported(&program, &supported).is_none());
