@@ -89,7 +89,7 @@ mod render;
 mod tokenizer;
 
 pub use electricity_value::Value;
-pub use render::{JsonAwareCtx, PlainCtx, SpliceCtx};
+pub use render::{JsonAwareCtx, PlainCtx, ScopeRoot, SpliceCtx, step};
 
 use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
@@ -391,6 +391,24 @@ pub fn tokens(template: &str) -> Result<Vec<TokenKind>, TokensError> {
 pub fn render_template(
     template: &str,
     root: &Value,
+    ctx: &dyn SpliceCtx,
+    label: &str,
+) -> Result<String, TemplateError> {
+    render_template_with_root(template, root, ctx, label)
+}
+
+/// [`render_template`], generalized over *root*'s own [`ScopeRoot`] impl
+/// instead of requiring an already-materialized [`Value`] -- the same
+/// render, byte for byte ([`render_template`] itself is this function
+/// with `R = Value`, not a second copy of it), against a root that
+/// resolves each dotted lookup itself, however it likes (issue #463: a
+/// caller with a live, mutable store -- `electricity-vm` -- implements
+/// [`ScopeRoot`] for its own store-backed root rather than
+/// materializing a whole `Value` up front just to hand it to this
+/// function).
+pub fn render_template_with_root<R: ScopeRoot>(
+    template: &str,
+    root: &R,
     ctx: &dyn SpliceCtx,
     label: &str,
 ) -> Result<String, TemplateError> {

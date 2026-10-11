@@ -16,8 +16,7 @@
 //! *effect_names*, the 8 MiB cap, and the "not-yet-run effect renders
 //! empty" rule.
 
-use electricity_template::SpliceCtx;
-use electricity_value::Value;
+use electricity_template::{ScopeRoot, SpliceCtx};
 use std::collections::BTreeSet;
 
 /// Renders *template* with `{{> name}}` partials spliced in from
@@ -36,9 +35,9 @@ use std::collections::BTreeSet;
 /// own "no-escape rendering" deliverable), kept here so that lane's
 /// landing only has to fill this function's own body, never widen its
 /// signature again.
-pub fn render_with_composition(
+pub fn render_with_composition<R: ScopeRoot>(
     template: &str,
-    ctx: &Value,
+    ctx: &R,
     _declared_prompts: &indexmap::IndexMap<String, String>,
     _effect_names: &BTreeSet<String>,
     label: &str,
@@ -46,7 +45,7 @@ pub fn render_with_composition(
     _escape: bool,
 ) -> Result<String, String> {
     if !has_partial(template) {
-        return electricity_template::render_template(template, ctx, splice_ctx, label)
+        return electricity_template::render_template_with_root(template, ctx, splice_ctx, label)
             .map_err(|err| err.to_string());
     }
     Err(format!(
@@ -69,6 +68,7 @@ fn has_partial(template: &str) -> bool {
 mod tests {
     use super::*;
     use electricity_template::PlainCtx;
+    use electricity_value::Value;
 
     fn env() -> (indexmap::IndexMap<String, String>, BTreeSet<String>) {
         (indexmap::IndexMap::new(), BTreeSet::new())

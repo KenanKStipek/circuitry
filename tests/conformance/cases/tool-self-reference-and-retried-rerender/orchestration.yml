@@ -1,0 +1,10 @@
+name: tool-self-reference-and-retried-rerender
+effects:
+  - type: tool
+    name: t
+    provider: json
+    retries: {max_attempts: 2, backoff_ms: 1}
+    params:
+      mode: stringify
+      input: "{{{prime.t.meta.provider}}}|{{{prime.t.value}}}"
+    expect: "state.prime.t.value != null && size(value) > 10"

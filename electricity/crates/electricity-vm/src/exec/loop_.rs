@@ -1274,8 +1274,17 @@ async fn run_while<'a>(
             } else {
                 vec![CtxSource::Live(step_overlay(&cond_base, &last_writes))]
             };
-            let ctx = super::live_ctx(&cond_chain, store);
-            match evaluate_while_condition(cond, &ctx, &op.path, frame, run_ctx, token).await {
+            match evaluate_while_condition(
+                cond,
+                &cond_chain,
+                store,
+                &op.path,
+                frame,
+                run_ctx,
+                token,
+            )
+            .await
+            {
                 Ok(b) => b,
                 Err(e) if e.is_fatal() => return Err(e),
                 Err(e) => match on_error {
@@ -1412,20 +1421,33 @@ async fn run_while<'a>(
 /// body.
 async fn evaluate_while_condition(
     cond: &Condition,
-    ctx: &Value,
+    cond_chain: &CtxChain,
+    store: &Store,
     path: &electricity_bytecode::EffectPath,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     token: &CancellationToken,
 ) -> Result<bool, VmError> {
     match cond {
-        Condition::Cel { expr, strict } => electricity_cel::evaluate_condition(expr, ctx, *strict)
-            .map_err(|e| VmError::Message(e.to_string())),
-        Condition::Model { template } => super::condition_model::evaluate_model_condition(
-            template, ctx, path, frame, run_ctx, token,
-        )
-        .await
-        .map(|outcome| outcome.passed),
+        // Issue #463: `state` is only the subtrees *expr* actually
+        // reads, walked live, not a whole-tree `live_ctx` snapshot of
+        // *cond_chain* -- see `live_scope::build_cel_state`'s own doc
+        // comment for why this is exactly `evaluate_condition`'s own
+        // internal narrowing, just performed before the snapshot
+        // rather than after it.
+        Condition::Cel { expr, strict } => {
+            let state = super::live_scope::build_cel_state(cond_chain, store, expr);
+            electricity_cel::evaluate_condition(expr, &state, *strict)
+                .map_err(|e| VmError::Message(e.to_string()))
+        }
+        Condition::Model { template } => {
+            let ctx = super::live_ctx(cond_chain, store);
+            super::condition_model::evaluate_model_condition(
+                template, &ctx, path, frame, run_ctx, token,
+            )
+            .await
+            .map(|outcome| outcome.passed)
+        }
     }
 }
 

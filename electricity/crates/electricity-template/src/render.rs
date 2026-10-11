@@ -159,65 +159,6 @@ fn is_zero_or_false(value: &Value) -> bool {
     }
 }
 
-/// A Mustache scope stack, nearest scope first, as a parent-linked chain
-/// rather than a `Vec`: pushing a new scope
-/// (`{{#section}}`/`{{^section}}`, [`render_with_pushed_scope`]) borrows
-/// the enclosing chain instead of cloning it, so rendering a section
-/// never copies the outer scopes — including the whole root context —
-/// on every push.
-pub(crate) enum Scope<'a> {
-    Root(&'a Value),
-    Pushed(Value, &'a Scope<'a>),
-}
-
-impl<'a> Scope<'a> {
-    pub(crate) fn root(value: &'a Value) -> Self {
-        Scope::Root(value)
-    }
-
-    fn nearest(&self) -> &Value {
-        match self {
-            Scope::Root(value) => value,
-            Scope::Pushed(value, _) => value,
-        }
-    }
-
-    fn parent(&self) -> Option<&Scope<'a>> {
-        match self {
-            Scope::Root(_) => None,
-            Scope::Pushed(_, parent) => Some(parent),
-        }
-    }
-}
-
-/// `_get_key`: resolve a (possibly dotted) name against the scope stack,
-/// nearest scope first. `"."` always means "the nearest scope, as a
-/// whole" and never falls back further. Any other key tries a full
-/// dotted walk against each scope in turn, keeping the *first* scope
-/// where every segment resolves (even if the resolved value is itself
-/// falsy) rather than the first scope with a *truthy* value — chevron
-/// never "sees past" a present-but-falsy key to an outer scope's same
-/// name. A key absent from every scope resolves to `""`, exactly like
-/// chevron's own fallback, so this function never needs a separate
-/// not-found signal: every call site already treats `""` as "missing or
-/// falsy", which is exactly what chevron's `_get_key` itself returns.
-pub(crate) fn get_key(key: &str, scope: &Scope) -> Result<Value, String> {
-    if key == "." {
-        return Ok(scope.nearest().clone());
-    }
-    let mut current = Some(scope);
-    while let Some(s) = current {
-        if let Some(found) = walk_dotted(s.nearest(), key)? {
-            return Ok(found);
-        }
-        current = s.parent();
-    }
-    Ok(Value::Str(String::new()))
-}
-
-/// Walks *key*'s dotted segments against *scope* by reference, cloning
-/// only the final matched value (`step` already clones only the child it
-/// finds at each segment) rather than cloning the whole scope up front.
 fn walk_dotted(scope: &Value, key: &str) -> Result<Option<Value>, String> {
     let mut parts = key.split('.');
     // `str::split` on a non-empty pattern always yields at least one item.
@@ -269,7 +210,18 @@ fn wrapped_index(len: usize, n: i64) -> Option<usize> {
 /// reaches that subscript at all (`int(child)` itself raises `ValueError`,
 /// which the outer per-scope `try` does catch), so it's just "not found"
 /// here too, same as a dict/list miss.
-fn step(current: &Value, part: &str) -> Result<Option<Value>, String> {
+///
+/// `pub`, not `pub(crate)`: a store-backed [`ScopeRoot`] (issue #463)
+/// resolves a dotted path's live-store-tracked prefix itself (a
+/// segment at a time, against its own live tree, never materializing
+/// an unrelated sibling), but the moment that walk reaches a plain
+/// leaf `Value` -- a tool's own JSON output, a loop-item overlay, a
+/// scalar -- continuing the *same* key's remaining segments has to
+/// reproduce this exact per-segment contract (the dict/list/str/bytes
+/// rules, the scalar-plus-int-parseable-segment error), so this
+/// function is this crate's own public seam for that handoff rather
+/// than a second copy of it in `electricity-vm`.
+pub fn step(current: &Value, part: &str) -> Result<Option<Value>, String> {
     match current {
         Value::Dict(d) => Ok(d.get(&Value::Str(part.to_string())).cloned()),
         Value::List(items) => {
@@ -299,6 +251,119 @@ fn step(current: &Value, part: &str) -> Result<Option<Value>, String> {
                 ))
             } else {
                 Ok(None)
+            }
+        }
+    }
+}
+
+/// What a Mustache scope's own *root* position (the base of the scope
+/// chain -- [`Scope::Root`], below) resolves a dotted key against,
+/// decoupled from whatever that root's own data actually lives in.
+/// [`Value`]'s own impl is the only one this crate needs: every render
+/// here, and every existing caller/test, keeps working exactly as
+/// before. A second impl, resolving each segment against a live,
+/// mutable store instead of an already-materialized `Value` (issue
+/// #463), lives in `electricity-vm`, which alone knows what that store
+/// looks like; this trait is this crate's own seam for it, kept in one
+/// place rather than forking `get_key`/`walk_dotted`/[`render_nodes`]
+/// into two near-identical copies.
+pub trait ScopeRoot {
+    /// Resolves *key* (a dotted path, exactly as a template tag/section
+    /// name spells it) the same way [`walk_dotted`] resolves it against
+    /// an already-materialized `Value` -- `Ok(None)` for "no such key"
+    /// (the caller falls through to an enclosing scope, or to `""`), an
+    /// `Err` only for the one case [`step`] itself can raise (a scalar
+    /// scope probed with an int-parseable segment).
+    fn lookup(&self, key: &str) -> Result<Option<Value>, String>;
+
+    /// This root, in full, as the value `"."` resolves to when it is
+    /// the nearest scope -- [`Value`]'s own impl is a plain clone;
+    /// a live, store-backed root instead has to materialize whatever
+    /// its own current state is (a whole-state render, `{{.}}` against
+    /// the untouched root, is one of the few cases such a root *can't*
+    /// avoid paying the full cost of -- see that impl's own doc
+    /// comment).
+    fn whole(&self) -> Value;
+}
+
+impl ScopeRoot for Value {
+    fn lookup(&self, key: &str) -> Result<Option<Value>, String> {
+        walk_dotted(self, key)
+    }
+
+    fn whole(&self) -> Value {
+        self.clone()
+    }
+}
+
+/// A Mustache scope stack, nearest scope first, as a parent-linked chain
+/// rather than a `Vec`: pushing a new scope
+/// (`{{#section}}`/`{{^section}}`, [`render_with_pushed_scope`]) borrows
+/// the enclosing chain instead of cloning it, so rendering a section
+/// never copies the outer scopes -- including the whole root context --
+/// on every push. Only the chain's own base, [`Scope::Root`], is generic
+/// over *how* the root resolves a key ([`ScopeRoot`]); every *pushed*
+/// scope (a section's own bound value, always already resolved by the
+/// time it is pushed -- see [`render_nodes`]'s own `Section` arm) stays a
+/// plain [`Value`] regardless.
+pub(crate) enum Scope<'a, R: ScopeRoot> {
+    Root(&'a R),
+    Pushed(Value, &'a Scope<'a, R>),
+}
+
+impl<'a, R: ScopeRoot> Scope<'a, R> {
+    pub(crate) fn root(value: &'a R) -> Self {
+        Scope::Root(value)
+    }
+
+    /// This scope, as a whole `Value` -- `"."`'s own resolution, never
+    /// falling back further (same scope only, whichever one it is).
+    fn nearest_whole(&self) -> Value {
+        match self {
+            Scope::Root(root) => root.whole(),
+            Scope::Pushed(value, _) => value.clone(),
+        }
+    }
+
+    fn parent(&self) -> Option<&Scope<'a, R>> {
+        match self {
+            Scope::Root(_) => None,
+            Scope::Pushed(_, parent) => Some(parent),
+        }
+    }
+}
+
+/// `_get_key`: resolve a (possibly dotted) name against the scope stack,
+/// nearest scope first. `"."` always means "the nearest scope, as a
+/// whole" and never falls back further. Any other key tries a full
+/// dotted walk against each scope in turn, keeping the *first* scope
+/// where every segment resolves (even if the resolved value is itself
+/// falsy) rather than the first scope with a *truthy* value -- chevron
+/// never "sees past" a present-but-falsy key to an outer scope's same
+/// name. A key absent from every scope resolves to `""`, exactly like
+/// chevron's own fallback, so this function never needs a separate
+/// not-found signal: every call site already treats `""` as "missing or
+/// falsy", which is exactly what chevron's `_get_key` itself returns.
+/// Every *pushed* scope keeps walking by reference ([`walk_dotted`]),
+/// cloning only the final matched value; the chain's own base defers to
+/// whatever [`ScopeRoot::lookup`] its own `R` implements.
+pub(crate) fn get_key<R: ScopeRoot>(key: &str, scope: &Scope<R>) -> Result<Value, String> {
+    if key == "." {
+        return Ok(scope.nearest_whole());
+    }
+    let mut current = scope;
+    loop {
+        match current {
+            Scope::Pushed(value, parent) => {
+                if let Some(found) = walk_dotted(value, key)? {
+                    return Ok(found);
+                }
+                current = parent;
+            }
+            Scope::Root(root) => {
+                return Ok(root
+                    .lookup(key)?
+                    .unwrap_or_else(|| Value::Str(String::new())));
             }
         }
     }
@@ -352,16 +417,16 @@ fn html_escape(s: &str) -> String {
 /// triggers for `{{{x}}}`/`{{&x}}`, which read the resolved value
 /// directly (confirmed: `renderer.py`'s `'no escape'` branch has no such
 /// check).
-fn render_variable_escaped(
+fn render_variable_escaped<R: ScopeRoot>(
     key: &str,
-    scope: &Scope,
+    scope: &Scope<R>,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
     let mut value = get_key(key, scope)?;
     if key == "." && matches!(value, Value::Bool(true)) {
         value = scope
             .parent()
-            .map(|parent| parent.nearest().clone())
+            .map(|parent| parent.nearest_whole())
             .ok_or_else(|| "list index out of range".to_string())?;
     }
     let text = stringify_for_variable(&value, ctx)?;
@@ -371,7 +436,11 @@ fn render_variable_escaped(
 /// `{{{x}}}`/`{{&x}}`: the resolved value, unescaped, with no special
 /// case for `{{{.}}}`/`{{&.}}` resolving to `True` (see
 /// [`render_variable_escaped`]).
-fn render_variable_raw(key: &str, scope: &Scope, ctx: &dyn SpliceCtx) -> Result<String, String> {
+fn render_variable_raw<R: ScopeRoot>(
+    key: &str,
+    scope: &Scope<R>,
+    ctx: &dyn SpliceCtx,
+) -> Result<String, String> {
     let value = get_key(key, scope)?;
     stringify_for_variable(&value, ctx)
 }
@@ -387,9 +456,9 @@ fn render_variable_raw(key: &str, scope: &Scope, ctx: &dyn SpliceCtx) -> Result<
 /// nothing. An inverted section flips this: body renders once (scope
 /// pushed as the literal `True`) iff the key resolves falsy, nothing
 /// otherwise.
-pub(crate) fn render_nodes(
+pub(crate) fn render_nodes<R: ScopeRoot>(
     nodes: &[Node],
-    scope: &Scope,
+    scope: &Scope<R>,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
     let mut out = String::new();
@@ -432,10 +501,10 @@ pub(crate) fn render_nodes(
     Ok(out)
 }
 
-fn render_with_pushed_scope<'a>(
+fn render_with_pushed_scope<'a, R: ScopeRoot>(
     body: &[Node],
     new_scope: Value,
-    scope: &'a Scope<'a>,
+    scope: &'a Scope<'a, R>,
     ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
     let pushed = Scope::Pushed(new_scope, scope);
