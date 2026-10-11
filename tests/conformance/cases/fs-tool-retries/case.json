@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #460 test plan ('a retried failure')",
+  "description": "fs, like every non-HTTP-family tool, is retryable on any failure (#421): reading a permanently missing file exhausts retries (max_attempts: 2, backoff_ms: 0), on_error: continue lets the run finish, and meta.retries_used is set to 1.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

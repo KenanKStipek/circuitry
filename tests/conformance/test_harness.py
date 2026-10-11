@@ -76,6 +76,45 @@ def test_load_case_defaults_sort_warnings_to_false(tmp_path: Path) -> None:
     assert metadata["sort_warnings"] is False
 
 
+def test_load_case_rejects_an_exact_credential_env_key(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "env": {"OPENAI_API_KEY": "sk-leaked"}}
+    )
+    with pytest.raises(ValueError, match="look like a credential"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_circuitry_env_key(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "env": {"CIRCUITRY_MODEL": "x"}}
+    )
+    with pytest.raises(ValueError, match="look like a credential"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_accepts_a_synthetic_name_merely_containing_api_key(
+    tmp_path: Path,
+) -> None:
+    # tools-adapters-plugins.md §7 case 12's own pattern: a name that
+    # merely *contains* "API_KEY" (to exercise `env_vars`' own secret-
+    # masking logic) is not itself one of `_sandboxed_env`'s exact
+    # `CREDENTIAL_ENV_VARS` names, and stays allowed.
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "env": {"D1_CASE12_MY_API_KEY_SUFFIX": "masked-value"}},
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["env"] == {"D1_CASE12_MY_API_KEY_SUFFIX": "masked-value"}
+
+
+def test_load_case_accepts_an_ordinary_env_key(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "env": {"D1_BAD_VAR": "plain"}}
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["env"] == {"D1_BAD_VAR": "plain"}
+
+
 def test_warning_lines_keeps_only_prefixed_lines_in_order() -> None:
     stderr = (
         "WARNING: first\n"

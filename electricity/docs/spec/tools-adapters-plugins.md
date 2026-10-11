@@ -289,6 +289,34 @@ missing path (`value=False`, not an error); deleting a directory requires `recur
 `sorted(p.name for p in path.iterdir())`; `stat` returns `{size, mtime: int(st_mtime),
 mode, is_dir, is_file}`.
 
+**electricity's own `encoding` split** (issue #460's lane D1 fix pass, "R2"): electricity's `fs`/
+`hash` only implement three codecs (`utf-8`/`ascii`/`latin-1` and their aliases, `fs.rs::Codec`).
+A name outside that set is classified two ways, both generated from CPython's own
+`encodings.aliases.aliases`/the `encodings` package's module list
+(`generate_codec_names.py` → `fs.rs::classify_encoding`): a name CPython's own `codecs.lookup`
+would *also* reject gets `cof run`'s own `LookupError: unknown encoding: x`, with `cof run`'s own
+filesystem effects (mkdir/open/truncate happen before the raise, same as finding 6 below); a name
+CPython accepts but electricity doesn't implement (`utf-16`, `cp1252`, `shift_jis`, …) is refused
+up front, before anything touches the filesystem, with the preview marker — `cof run` would
+actually succeed on that name, so this is a documented capability gap, not a text mismatch.
+
+**`Path.exists`/`is_file`/`is_dir` parity is pinned to CPython 3.11/3.12**, the generator's and
+the main deployment's own version: `fs.rs::py_exists`/`py_is_dir`/`py_is_file` re-raise any
+`OSError` except `ENOENT`/`ENOTDIR`/`EBADF`/`ELOOP` (CPython 3.11/3.12's own `_ignore_error`);
+CPython 3.13 swallows every `OSError` from those three calls instead — a documented, version-
+pinned narrowing, not something this preview tracks per-interpreter-version.
+
+**`mkdir -p` names the directory that actually failed**, not the write's own leaf path
+(`fs.rs::mkdir_parents`, porting `pathlib.Path.mkdir(parents=True, exist_ok=True)`'s own
+try/recurse-on-`ENOENT`/`exist_ok`-swallow algorithm exactly) — e.g. writing through an existing
+*file* `<root>/file.txt/sub/x.txt` names `<root>/file.txt/sub` (`ENOTDIR`), never the leaf.
+
+**A failed write reproduces `cof run`'s own filesystem effects**: codec resolution/encoding is
+checked *before* `mkdir`/`open` only for the preview-marker case above (nothing to undo, since
+nothing ran yet); every other failure (an unknown codec, or a real `UnicodeEncodeError`) happens
+*after* `mkdir`/open, so a failed `write` still truncates/creates the file first, exactly like
+CPython's own `open(path, "w", encoding=…)` does before `fh.write(content)` can raise.
+
 ### 2.4 `awk` / `imagemagick`
 
 Both are `GenericSubprocessTool` instances (`_subprocess.py:225-281`), differing only in
@@ -364,8 +392,23 @@ too) for a non-JSON body. Shared by `http`, `web_fetch`, `webhook`, `linear`.
 `"%Y-%m-%dT%H:%M:%S%z"`), `timezone` (IANA name via stdlib `zoneinfo.ZoneInfo`, default UTC;
 unknown name raises `ValueError`), `epoch` (bool — `value` becomes `int(now.timestamp())`
 instead of the formatted string). `raw = {"iso": now.isoformat(), "epoch": int(...), "timezone":
-str(tz)}`. electricity needs an IANA tz database (the `tz`/`chrono-tz` crate) to match
-`timezone` parity, not just a UTC-offset model.
+str(tz)}`.
+
+electricity's `clock.rs` resolves a named zone through the `jiff` crate (`jiff::tz::TimeZone::
+get`), not `chrono-tz` (a zone compiled into a crate, accepting a different name set than the
+host's own zoneinfo database) or the earlier `tzfile` 0.1.3 (its own docs: it never evaluates a
+TZif file's trailing POSIX-TZ rule string — the "footer" — so a "slim" tzdata build, whose
+explicit transition table ends years ago and relies on that footer for everything past it, would
+have pinned a zone's offset at its last explicit transition forever; issue #460's own lane D1 fix
+pass, finding 5). `jiff` evaluates the footer and searches `TZDIR`/the usual zoneinfo search path
+the way `zoneinfo.TZPATH` does, matching `cof run`'s own zone lookup closely enough that every
+name this preview needs to resolve, it does.
+
+The injected "now" for a test (or the corpus replay) goes through `clock.rs::execute_at(params,
+now)`, a plain function taking the instant as a parameter — not a thread-local or any other
+mutable global — so `ClockPlugin` stays the unit struct `registry.rs`'s builder constructs, and
+`execute_at`'s own result never depends on anything a concurrent caller on another thread could
+change underneath it.
 
 ### 2.8 `hash`
 
@@ -374,6 +417,12 @@ sha3_256, sha3_512, blake2b, blake2s` (`_SUPPORTED_ALGORITHMS`, `:21-24`), defau
 `input` (str) hashed via `encoding` (default `utf-8`) unless `from_path` (bool) is true, in
 which case `input` is a file path read in 64KiB chunks. `output_format`: `hex` (default) or
 `base64` (standard, not urlsafe, b64).
+
+`from_path`'s own 64KiB-chunk streaming is load-bearing for electricity too: `hash.rs::
+digest_file` updates its hasher incrementally through the same chunk size, never
+`std::fs::read`-ing a whole file into memory first (issue #460's own lane D1 fix pass, finding
+2). The in-memory branch's own `encoding` param goes through the same §2.3 `fs`/`hash` codec
+split (preview marker vs. `unknown encoding: x`) as `fs`'s own `encoding`.
 
 ### 2.9 `env_vars`
 
