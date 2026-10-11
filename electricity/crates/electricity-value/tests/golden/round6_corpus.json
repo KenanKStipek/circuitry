@@ -109,6 +109,46 @@
       "expected": "ffffffffffffefff"
     },
     {
+      "x": "000000000000803f",
+      "expected": "51fa42c879ff7f3f"
+    },
+    {
+      "x": "00000000000080bf",
+      "expected": "51fa42c879ff7fbf"
+    },
+    {
+      "x": "000000000000983f",
+      "expected": "6c41ef8d2100983f"
+    },
+    {
+      "x": "00000000000098bf",
+      "expected": "6c41ef8d210098bf"
+    },
+    {
+      "x": "000000000020f03f",
+      "expected": "fa42c879ff1ff03f"
+    },
+    {
+      "x": "000000000020f0bf",
+      "expected": "fa42c879ff1ff0bf"
+    },
+    {
+      "x": "0000000080c05e40",
+      "expected": "0c21e7fd7fc05e40"
+    },
+    {
+      "x": "0000000080c05ec0",
+      "expected": "0c21e7fd7fc05ec0"
+    },
+    {
+      "x": "00000000ff87c340",
+      "expected": "be310400ff87c340"
+    },
+    {
+      "x": "00000000ff87c3c0",
+      "expected": "be310400ff87c3c0"
+    },
+    {
       "x": "2c4a5198b80b21be",
       "expected": "0000000000000080"
     },

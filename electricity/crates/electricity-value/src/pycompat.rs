@@ -279,6 +279,22 @@ mod tests {
     }
 
     #[test]
+    fn round6_rounds_odd_multiples_of_one_over_128_half_to_even() {
+        // Review finding 7 on PR #454: a 6-digit tie only happens at an
+        // odd multiple of 1/128 -- `generate_round6_corpus.py`'s own
+        // random draws essentially never hit one, so the half-even
+        // claim went untested without cases picked specifically to land
+        // on one.
+        assert_eq!(round6(0.0078125), 0.007812);
+        assert_eq!(round6(-0.0078125), -0.007812);
+        assert_eq!(round6(0.0234375), 0.023438);
+        assert_eq!(round6(-0.0234375), -0.023438);
+        assert_eq!(round6(1.0078125), 1.007812);
+        assert_eq!(round6(123.0078125), 123.007812);
+        assert_eq!(round6(9999.9921875), 9999.992188);
+    }
+
+    #[test]
     fn round6_passes_non_finite_values_through_unchanged() {
         assert!(round6(f64::NAN).is_nan());
         assert_eq!(round6(f64::INFINITY), f64::INFINITY);

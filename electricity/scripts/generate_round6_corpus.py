@@ -62,6 +62,21 @@ _EDGE_CASES = [
     -5e-324,
     1.7976931348623157e308,  # near f64::MAX
     -1.7976931348623157e308,
+    # Exact 6-digit ties (review finding 7 on PR #454): a tie at the 6th
+    # decimal digit only happens at an odd multiple of 1/128 (the only
+    # binary fractions whose decimal expansion ends in exactly
+    # "...xxxxx5" at the 7th digit) -- random floats essentially never
+    # land on one, so without these the half-even claim went untested.
+    0.0078125,  # 1/128
+    -0.0078125,
+    0.0234375,  # 3/128
+    -0.0234375,
+    1.0078125,  # 1 + 1/128
+    -1.0078125,
+    123.0078125,  # a larger-magnitude odd multiple of 1/128
+    -123.0078125,
+    9999.9921875,  # 9999 + 127/128
+    -9999.9921875,
 ]
 
 
