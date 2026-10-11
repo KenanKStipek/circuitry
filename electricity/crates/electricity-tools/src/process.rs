@@ -9,7 +9,6 @@
 
 use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
 
 /// `run_tracked`'s own keyword arguments, minus `cmd`/`capture_output`/
@@ -94,13 +93,17 @@ pub async fn run_tracked(
 /// the Python reference -- Windows gets no process-group isolation).
 pub fn kill_process_group(_pid: u32) {}
 
-/// `plugins/_subprocess.py::resolve_binary` -- signature only; lane C
-/// fills the body (PATH lookup, a configured absolute/relative
-/// override, the exact `binary not found: ...` message).
-pub fn resolve_binary(_binary: &str, _search_path: Option<&Path>) -> Result<String, ProcError> {
-    Err(ProcError::Other(
-        "electricity_tools::process::resolve_binary is not implemented yet (lane C)".to_string(),
-    ))
+/// `plugins/_subprocess.py::resolve_binary` -- the first of *candidates*
+/// found on `PATH` (or an absolute path that exists), else `None`;
+/// never an error -- Python's own version takes a list because a
+/// plugin like `imagemagick` ships under several names (`magick`/
+/// `convert`), tried in order (review P2-6 on PR #454's second
+/// review: the gate's own first signature took one binary and
+/// returned `Result`, matching neither shape). Signature only; lane C
+/// fills the body (the `PATH` lookup itself, and the absolute-path
+/// fast case).
+pub fn resolve_binary(_candidates: &[&str]) -> Option<String> {
+    None
 }
 
 #[cfg(test)]

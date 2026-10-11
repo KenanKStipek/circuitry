@@ -39,11 +39,16 @@ impl ToolPlugin for FfmpegPlugin {
     }
 }
 
-/// `plugins/factory.py::_build_ffmpeg` -- signature only; lane C fills
-/// the body.
-pub fn make_plugin(_cfg: &Value) -> Box<dyn ToolPlugin> {
-    Box::new(FfmpegPlugin {
+/// `plugins/factory.py::_build_ffmpeg` -- fallible, like every other
+/// `make_plugin`/`_build_*` in this crate (review P2-6 on PR #454's
+/// second review: this stub used to be infallible, but Python's own
+/// `plugin_env_override` raises on a malformed `runtime.plugins.
+/// ffmpeg.env`, so a real body here needs `?`, not a function lane C
+/// would have to widen the return type of first). Signature only;
+/// lane C fills the body.
+pub fn make_plugin(_cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
+    Ok(Box::new(FfmpegPlugin {
         binary: None,
         env: None,
-    })
+    }))
 }

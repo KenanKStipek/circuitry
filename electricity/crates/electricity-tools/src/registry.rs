@@ -76,24 +76,17 @@ fn builders() -> HashMap<&'static str, Builder> {
     );
     map.insert(
         "awk",
-        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
-            Ok(crate::awk::make_plugin(cfg))
-        },
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::awk::make_plugin(cfg) },
     );
     map.insert(
         "imagemagick",
         |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
-            Ok(crate::imagemagick::make_plugin(cfg))
+            crate::imagemagick::make_plugin(cfg)
         },
     );
     map.insert(
         "ffmpeg",
-        |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
-            Ok(Box::new(crate::ffmpeg::FfmpegPlugin {
-                binary: None,
-                env: None,
-            }))
-        },
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::ffmpeg::make_plugin(cfg) },
     );
     map.insert(
         "fs",
