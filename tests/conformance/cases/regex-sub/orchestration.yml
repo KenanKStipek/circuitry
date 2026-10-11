@@ -1,0 +1,50 @@
+name: regex-sub
+effects:
+  - type: tool
+    name: sub_named_group
+    provider: regex
+    params:
+      pattern: "(?P<word>\\w+)"
+      input: "hi"
+      mode: sub
+      replacement: "\\g<word>!"
+  - type: tool
+    name: sub_whole_match
+    provider: regex
+    params:
+      pattern: "\\w+"
+      input: "hi"
+      mode: sub
+      replacement: "[\\g<0>]"
+  - type: tool
+    name: sub_count_one
+    provider: regex
+    params:
+      pattern: "a"
+      input: "aaaa"
+      mode: sub
+      replacement: "X"
+      count: 1
+  - type: tool
+    name: sub_empty_match_iteration
+    provider: regex
+    params:
+      pattern: "x*"
+      input: "abxd"
+      mode: sub
+      replacement: "-"
+  - type: tool
+    name: dollar_before_trailing_newline
+    provider: regex
+    params:
+      pattern: "a$"
+      input: "a\n"
+      mode: search
+  - type: tool
+    name: dollar_multiline_before_every_newline
+    provider: regex
+    params:
+      pattern: "a$"
+      input: "a\nb"
+      mode: search
+      flags: [MULTILINE]

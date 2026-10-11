@@ -1,0 +1,22 @@
+name: regex-translation-fixes
+effects:
+  - type: tool
+    name: class_range
+    provider: regex
+    params: {pattern: "[a-z]+", input: "AbCmNz", mode: findall}
+  - type: tool
+    name: class_range_negated
+    provider: regex
+    params: {pattern: "[^0-9]+", input: "a1b2c", mode: findall}
+  - type: tool
+    name: class_negated_word_shortcut
+    provider: regex
+    params: {pattern: "[\\W]+", input: "a b_c", mode: findall}
+  - type: tool
+    name: ignorecase_ascii_folds_plain_letters
+    provider: regex
+    params: {pattern: "abc", input: "ABC", mode: search, flags: [IGNORECASE, ASCII]}
+  - type: tool
+    name: must_advance_alternation
+    provider: regex
+    params: {pattern: "^|\\w+", input: "two words", mode: findall}

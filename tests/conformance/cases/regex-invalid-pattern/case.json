@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #479's own test plan: an invalid pattern, error_compare: location, location_pattern on the 'regex: invalid pattern: ' prefix",
+  "description": "An unterminated group fails to compile on both engines with the 'regex: invalid pattern: ' prefix -- CPython's own re.error text after it is never going to match fancy-regex's, so only the prefix (both failing at the same place) is compared, never byte for byte.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "regex: invalid pattern: "
+}

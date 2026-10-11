@@ -18,6 +18,11 @@ test-tools = []
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
 async-trait = "0.1"
+# `regex` (plugins/regex.py, #448 decision 7): a Python-`re`-syntax
+# translation layer over `fancy-regex`, the engine already pinned in
+# the workspace lockfile (a transitive dependency of `jsonschema`, via
+# `electricity-schema`) -- DESIGN.md §7.3.
+fancy-regex = "0.14"
 # Non-optional as of lane C (#459): `process.rs`'s own `run_tracked`
 # needs tokio's process/io-util/time/rt features unconditionally, not
 # only behind `test-tools`.
