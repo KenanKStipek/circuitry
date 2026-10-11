@@ -12,6 +12,7 @@ pub mod condition_model;
 pub mod conditional;
 pub mod disabled;
 pub mod dynamic;
+pub(crate) mod live_scope;
 pub mod loop_;
 pub mod prompt;
 pub mod reflector;
@@ -356,9 +357,15 @@ pub(crate) fn execute_op<'a>(
         match &op.kind {
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
                 LeafKind::Tool(tool_op) => {
-                    let ctx = live_ctx(ctx_chain, store);
+                    // Issue #463: no longer a `live_ctx` snapshot taken
+                    // eagerly here -- `execute_tool`'s own render/
+                    // `expect:` call sites resolve `live_scope::
+                    // LiveRoot` lazily, the same way every other leaf
+                    // kind below already receives `ctx_chain`
+                    // unresolved.
+                    let live_root = live_scope::LiveRoot::new(ctx_chain, store);
                     tool::execute_tool(
-                        op, tool_op, store, parent, &ctx, frame, run_ctx, observer, token,
+                        op, tool_op, store, parent, &live_root, frame, run_ctx, observer, token,
                     )
                     .await
                 }

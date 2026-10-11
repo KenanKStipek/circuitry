@@ -23,11 +23,36 @@
 
 use electricity_bytecode::{Escape, ParamNode};
 use electricity_json::{Separators, WriteMode};
-use electricity_template::{JsonAwareCtx, PlainCtx};
+use electricity_template::{JsonAwareCtx, PlainCtx, ScopeRoot};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 use std::fmt;
+
+/// What [`render_params`]/[`render_params_json`] render a tool's
+/// `params:`/`params_json:` against: [`ScopeRoot`]'s own Mustache
+/// lookup for a [`ParamNode::Template`] leaf (through
+/// [`crate::compose::render_with_composition`]), plus [`resolve_from`]
+/// for a [`ParamNode::From`] leaf's own `{from: ...}` walk -- a plain
+/// nested-dict/list path lookup with none of Mustache's scope-chain
+/// fallback or int/str/bytes-index rules, so it can't be expressed
+/// through [`ScopeRoot::lookup`] alone (see [`resolve_from`]'s own doc
+/// comment). [`Value`]'s own impl is exactly today's behaviour,
+/// unchanged; a live, store-backed impl (issue #463) lives in
+/// `exec::live_scope`, which alone knows what that store looks like.
+pub trait ParamsCtx: ScopeRoot {
+    /// `core/use.py::_resolve_reference`'s own walk, by *this* context
+    /// rather than an already-materialized `Value` -- see this trait's
+    /// own doc comment for why it's a separate method from
+    /// [`ScopeRoot::lookup`].
+    fn resolve_from(&self, path: &str) -> Option<Value>;
+}
+
+impl ParamsCtx for Value {
+    fn resolve_from(&self, path: &str) -> Option<Value> {
+        resolve_reference(self, path)
+    }
+}
 
 /// `core/tool.py::_render_params`'s own failure: a `{from: ...}` leaf
 /// with no `default:` that didn't resolve, or a Mustache leaf that
@@ -74,10 +99,10 @@ impl std::error::Error for RenderParamsError {}
 /// never stringified here, only once (if ever) the rendered params
 /// reach a JSON boundary (`electricity_json::stringify_key`, the `json`
 /// tool's own output rule).
-pub fn render_params(
+pub fn render_params<R: ParamsCtx>(
     effect_name: &str,
     params: &IndexMap<Value, ParamNode>,
-    ctx: &Value,
+    ctx: &R,
     declared_prompts: &IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
 ) -> Result<Dict, RenderParamsError> {
@@ -97,10 +122,10 @@ pub fn render_params(
     Ok(rendered)
 }
 
-fn render_node(
+fn render_node<R: ParamsCtx>(
     effect_name: &str,
     node: &ParamNode,
-    ctx: &Value,
+    ctx: &R,
     path: &str,
     declared_prompts: &IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
@@ -121,7 +146,7 @@ fn render_node(
         ParamNode::From {
             path: reference_path,
             default,
-        } => match resolve_reference(ctx, reference_path) {
+        } => match ctx.resolve_from(reference_path) {
             // `core/tool.py::_render_params`'s own `_render_value` checks
             // `if resolved is None:`, not `if ref is missing:` -- a path
             // that resolves *to* `None` counts as unresolved exactly like
@@ -258,9 +283,9 @@ fn json_aware_splice(value: &Value) -> Result<String, String> {
 /// the rendered text as JSON -- `core/tool.py::_render_params_json`. The
 /// result must be a JSON object; anything else is
 /// [`RenderParamsJsonError::NotObject`].
-pub fn render_params_json(
+pub fn render_params_json<R: ParamsCtx>(
     template: &str,
-    ctx: &Value,
+    ctx: &R,
     declared_prompts: &IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
 ) -> Result<Dict, RenderParamsJsonError> {

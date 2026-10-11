@@ -1,23 +1,22 @@
-//! Lane H (#461), #442's own "Interpreter cost" item, follow-up #463:
-//! a regression guard for `exec::live_ctx`'s per-render context copy,
-//! run through a chain-flow `each` loop (the case that multiplies it
-//! most: every render inside pass *N* re-copies every earlier pass's
-//! own `iter_<K>` subtree, `K < N`, in full).
-//!
-//! This is **not** the asymptotic fix #463 tracks -- see `exec::
-//! live_ctx`'s own doc comment and this PR's own body for why that
-//! needs a change to `electricity-value::Value` outside this lane's
-//! footprint. This test only pins today's *measured* behaviour on this
-//! machine, generously, so a future accidental regression (an
-//! inadvertent cubic blow-up, or a big constant-factor regression) is
-//! still caught even though the quadratic shape itself is not yet
-//! fixed here.
+//! Lane H (#461), #442's own "Interpreter cost" item, #463: a
+//! regression guard for the context a render/condition-eval builds
+//! inside a loop -- originally pinned against `exec::live_ctx`'s own
+//! per-render whole-subtree copy (chain-flow `each`, the case that
+//! multiplied it most: every render inside pass *N* re-copied every
+//! earlier pass's own `iter_<K>` subtree, `K < N`, in full), now also
+//! covering the `while`-loop shape #463's own acceptance bound names
+//! directly (`exec::live_scope`'s own module doc comment has the fix:
+//! a tool render / `if`/`while` condition resolves `ctx`/`state` from
+//! the live store, a dotted segment at a time, instead of snapshotting
+//! the whole thing first). Both loop shapes now grow close to linearly;
+//! the ratio ceilings below stay well above that to tolerate machine
+//! noise, not because either shape is still quadratic.
 
 mod support;
 
 use electricity_bytecode::{
-    EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
-    Region, RetryPolicy, TemplateText, ToolOp,
+    Condition, EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op,
+    ParamNode, Region, RetryPolicy, TemplateText, ToolOp,
 };
 use electricity_value::Value;
 use electricity_vm::{CancellationToken, Limiter, NullObserver, Store};
@@ -136,20 +135,21 @@ async fn run_each_chain_of(
 /// this workflow's existing `--release` steps for `electricity-yaml`/
 /// `electricity-cel`).
 ///
-/// Measured on the development machine (`cargo test --release ... --
-/// --ignored`, one core's worth of real work, no other load): 250
-/// passes ≈ 0.67s, 1000 passes (4x the passes) ≈ 12.2s (≈18x the
-/// time) -- the quadratic shape #463 tracks (today's `live_ctx`
-/// re-copies the whole accumulated state on every render), not yet
-/// fixed by this lane (see `exec::live_ctx`'s own doc comment and this
-/// PR's own body for why #463's own asymptotic fix, not this guard,
-/// is the right place for that). Only the growth *ratio* is asserted,
-/// not a wall-clock ceiling (a fixed-seconds ceiling is exactly what
-/// flakes on a loaded or slower CI runner): 40x gives headroom over
-/// today's measured ≈18x (tolerating the quadratic shape itself plus
-/// noise) while still catching a future accidental cubic-or-worse
-/// blow-up (4x the passes would cost ≈64x the time at a cubic growth
-/// rate).
+/// Measured on the development machine, release, before this lane's
+/// own fix (`cargo test --release ... -- --ignored`, one core's worth
+/// of real work, no other load): 250 passes ≈ 0.67s, 1000 passes (4x
+/// the passes) ≈ 12.2s (≈18x the time) -- the quadratic shape #463
+/// tracked (`live_ctx`'s own `Store::snapshot` re-copying the whole
+/// accumulated state on every render). After this lane's own fix
+/// (`exec::live_scope`): 250 passes ≈ 9ms, 1000 passes ≈ 63ms, ≈7x --
+/// close to the 4x a truly linear cost would give, the rest being
+/// this test's own fixed per-pass bookkeeping (two tool leaves, retry/
+/// observer/meta writes) rather than anything #463 was ever about.
+/// Only the growth *ratio* is asserted, not a wall-clock ceiling (a
+/// fixed-seconds ceiling is exactly what flakes on a loaded or slower
+/// CI runner): 15x gives several times today's own measured ≈7x
+/// headroom for machine noise while still catching a regression back
+/// toward the old quadratic shape (≈18x) or worse.
 #[tokio::test]
 #[ignore]
 async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
@@ -161,9 +161,9 @@ async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() 
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
-            ratio < 40.0,
+            ratio < 15.0,
             "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
-             expected well under a 40x blow-up (today's own quadratic shape measures ≈18x)"
+             expected well under a 15x blow-up (this lane's own fix measures ≈7x)"
         );
     }
 }
@@ -172,12 +172,11 @@ async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() 
 /// stores merged once at the end, so the per-render re-copy cost comes
 /// from the *other* ancestors in the chain, not from sibling passes --
 /// kept as its own test since #461's own test plan calls for both
-/// shapes explicitly. Measured: 250 passes ≈ 24ms, 1000 passes ≈
-/// 146ms -- far cheaper than chain flow (no accumulated sibling-pass
-/// re-copy; each pass's own isolated store starts empty and is merged
-/// once, at the end), so this bound is tight by comparison and mostly
-/// guards against a regression that makes tree flow pay chain flow's
-/// own cost.
+/// shapes explicitly. Measured, after this lane's own fix: 250 passes
+/// ≈ 6ms, 1000 passes ≈ 41ms, ≈7x -- already cheap before this lane
+/// (no accumulated sibling-pass re-copy; each pass's own isolated
+/// store starts empty and is merged once, at the end), essentially
+/// unchanged by it.
 #[tokio::test]
 #[ignore]
 async fn tree_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
@@ -189,9 +188,101 @@ async fn tree_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
-            ratio < 40.0,
+            ratio < 15.0,
             "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
-             expected well under a 40x blow-up (today's own measured ≈6x)"
+             expected well under a 15x blow-up (this lane's own fix measures ≈7x)"
+        );
+    }
+}
+
+fn named_while_loop(name: &str, max_iterations: u32) -> Op {
+    let loop_id = LoopId(0);
+    let own_path = EffectPath::root().push_name(name);
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_item(body_prefix.push_name("a"), "a")];
+    Op {
+        path: own_path.clone(),
+        name: Some(name.to_string()),
+        kind: NodeKind::Control(Region::Loop {
+            name: Some(name.to_string()),
+            spec: LoopSpec::While(Condition::Cel {
+                expr: "state.iter.index < 999999".to_string(),
+                strict: false,
+            }),
+            body: Box::new(Region::Block {
+                ops: body,
+                overlay: true,
+            }),
+            flow: LoopFlow::Chain,
+            max_concurrency: None,
+            max_iterations: Some(max_iterations),
+            min_iterations: 0,
+            collect: None,
+        }),
+        on_error: OnError::Fail,
+        labels: None,
+        enabled: true,
+    }
+}
+
+async fn run_while_of(n: u32) -> std::time::Duration {
+    let store = Store::new();
+    let loop_op = named_while_loop("shots", n);
+    let root = support::chain_dynamic(EffectPath::root(), "prime", OnError::Fail, vec![loop_op]);
+
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+
+    let t0 = Instant::now();
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &NullObserver,
+        &token,
+    )
+    .await
+    .unwrap();
+    t0.elapsed()
+}
+
+/// Issue #463's own acceptance test: a `while` loop, one `json` tool
+/// per pass (the issue's own reproduction) -- a `max_iterations` cap
+/// (never the condition itself, kept always-true up to 999999) stops
+/// it at exactly *n* passes, so every pass also re-evaluates the
+/// `while` condition itself (`exec::loop_::run_while`'s own
+/// `cond_chain`), the other per-pass hot path `exec::live_scope::
+/// build_cel_state` fixes alongside the tool leaf's own render.
+/// `#[ignore]`d for the same reason as the `each` guards above; run
+/// explicitly with `cargo test --release -p electricity-vm --test
+/// loop_perf -- --ignored`.
+///
+/// Before this lane's own fix, this shape was the same quadratic cost
+/// as the `each` case (the issue's own body, and its design-study
+/// comment's own `while`-loop reproduction, measured ≈18-24x for 4x
+/// the passes). Measured on the development machine, release, after
+/// this lane's own fix: 250 passes ≈ 13ms, 1000 passes ≈ 52ms, ≈4x --
+/// at the truly-linear bound itself. 8x is this issue's own
+/// acceptance ceiling (its body: "growth from 250 to 1000 passes stays
+/// within about 4x"; 8x keeps headroom over that for machine noise
+/// while still catching a regression back toward the old ≈20x shape).
+#[tokio::test]
+#[ignore]
+async fn while_loop_of_a_thousand_passes_stays_within_the_issues_own_ceiling() {
+    let small = run_while_of(250).await;
+    let large = run_while_of(1000).await;
+
+    eprintln!("while: 250 passes = {small:?}, 1000 passes = {large:?}");
+
+    if small.as_millis() > 0 {
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        assert!(
+            ratio < 8.0,
+            "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
+             expected under #463's own 8x ceiling for a truly linear cost"
         );
     }
 }

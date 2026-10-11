@@ -61,7 +61,8 @@
 //!   crate's own `RunContext` doesn't carry yet.
 
 use crate::params::{
-    RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params, render_params_json,
+    ParamsCtx, RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params,
+    render_params_json,
 };
 #[cfg(test)]
 use crate::store::Slot;
@@ -464,10 +465,10 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
 /// block, up to and including `rendered = {**top_level, **params}`) can
 /// fail with, already flattened to its own `Display` text -- the only
 /// thing a caller here ever needs it for.
-fn render_tool_call(
+fn render_tool_call<R: ParamsCtx>(
     name: &str,
     tool: &ToolOp,
-    ctx: &Value,
+    ctx: &R,
     declared_prompts: &indexmap::IndexMap<String, String>,
     effect_names: &std::collections::BTreeSet<String>,
 ) -> Result<Dict, String> {
@@ -514,12 +515,12 @@ fn render_tool_call(
 /// comment for the full behavioural mapping and this milestone's
 /// deliberately out-of-scope pieces.
 #[allow(clippy::too_many_arguments)]
-pub async fn execute_tool(
+pub async fn execute_tool<R: ParamsCtx>(
     op: &Op,
     tool: &ToolOp,
     store: &crate::Store,
     parent: &crate::NodeRef,
-    ctx: &Value,
+    ctx: &R,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
@@ -850,11 +851,22 @@ pub async fn execute_tool(
                                                         Value::from("expr"),
                                                         Value::from(expr.as_str()),
                                                     );
+                                                    // Deliberately *not* narrowed through
+                                                    // `exec::live_scope::build_cel_state`: unlike
+                                                    // `evaluate_condition`, `evaluate_expect`
+                                                    // converts its whole `state` with no
+                                                    // internal `project` of its own, so an unread
+                                                    // big int elsewhere in `state` already makes
+                                                    // it raise today (its own doc comment) --
+                                                    // narrowing here would silently drop that and
+                                                    // change behaviour, which issue #463 is
+                                                    // explicitly not about.
+                                                    let state = ctx.whole();
                                                     match electricity_cel::evaluate_expect(
                                                         expr,
                                                         &value_for_expect,
                                                         &meta_snapshot,
-                                                        ctx,
+                                                        &state,
                                                     ) {
                                                         Ok(passed) => {
                                                             expect_meta.insert(
@@ -912,10 +924,11 @@ pub async fn execute_tool(
                                                 // starts), but a real call site instead of a panic
                                                 // if that ever changed without the matching wiring.
                                                 ExpectCondition::Model { template } => {
+                                                    let state = ctx.whole();
                                                     match super::condition_model::evaluate_model_expect(
                                                         template,
                                                         &value_for_expect,
-                                                        ctx,
+                                                        &state,
                                                         &effect_path,
                                                         frame,
                                                         run_ctx,

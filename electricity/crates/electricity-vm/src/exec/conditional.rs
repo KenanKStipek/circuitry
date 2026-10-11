@@ -199,10 +199,16 @@ async fn decide_and_run<'a>(
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
 ) -> Result<(), VmError> {
-    let ctx = super::live_ctx(ctx_chain, store);
     let result = match cond {
         Condition::Cel { expr, strict } => {
-            match electricity_cel::evaluate_condition(expr, &ctx, *strict) {
+            // Issue #463: `state` is only the subtrees *expr* actually
+            // reads, walked live (`live_scope::build_cel_state`), not a
+            // whole-tree `live_ctx` snapshot -- `evaluate_condition`
+            // already narrows internally by the same path list, so this
+            // is the same result, just without paying to materialize
+            // everything else in `ctx_chain` first.
+            let state = super::live_scope::build_cel_state(ctx_chain, store, expr);
+            match electricity_cel::evaluate_condition(expr, &state, *strict) {
                 Ok(b) => b,
                 Err(e) => {
                     let text = e.to_string();
@@ -255,6 +261,7 @@ async fn decide_and_run<'a>(
         // G2's own body to design, same as the CEL branch's -- this
         // call site only has to exist, not finish that design.
         Condition::Model { template } => {
+            let ctx = super::live_ctx(ctx_chain, store);
             match super::condition_model::evaluate_model_condition(
                 template, &ctx, &op.path, frame, run_ctx, token,
             )

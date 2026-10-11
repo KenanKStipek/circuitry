@@ -1082,20 +1082,45 @@ noticing the token, regardless of chain or tree) cannot pick between correctly w
 chain/tree distinction into this warning, which it does not do today. None of these changes state,
 stdout, or `--events`/`--live-state`.
 
-**#442's "Interpreter cost" item is only partly closed, tracked onward as #463:** lane H (#461)
-removed the one constant-factor waste that stayed strictly inside `exec::live_ctx` (a double clone
-in its own merge loop), with a regression guard (`electricity-vm/tests/loop_perf.rs`) pinning that a
-future change doesn't make it dramatically worse. The underlying O(state size) cost `live_ctx` pays
-on every single render — most visibly, a named loop's own accumulated `iter_<N>` children,
-re-copied in full on every later pass's render — is **not** fixed: `electricity_value::Value`'s
-`Dict`/`List` hold plain, non-shared children (`#[derive(Clone)]` is a full deep clone), so an
-unchanged sibling subtree still has to be fully re-cloned into every fresh `Value` this function
-builds; there is no way to hand back a cached, unchanged subtree by reference instead. A real fix
-needs a change outside `electricity-vm/src/exec/` — to `electricity-value::Value` itself, read by
-every crate in this workspace — which is #463's own scope, not this lane's: either Rc-shared
-`Dict`/`List` children, or a render-time projection restricted to the paths a template/CEL
-expression actually reads (CEL already projects what it evaluates; Mustache template rendering
-would need the same, accounting for its own outer-scope lookup rules).
+**#442's "Interpreter cost" item, #463:** lane H (#461) removed the one constant-factor waste that
+stayed strictly inside `exec::live_ctx` (a double clone in its own merge loop); lane A (#477) removed
+the same class of waste from `electricity-template`'s own render path (a whole-scope clone on every
+tag lookup and section push). Both left the underlying architectural cost in place: `exec::live_ctx`
+still called `Store::snapshot`, an O(the live state reachable from the given node) walk, once per
+tool render and once per `if`/`while` condition — most visibly, a named loop's own accumulated
+`iter_<N>` children, re-walked in full on every later pass's render, regardless of whether that
+render ever read any of them.
+
+The fix (this lane, #463): a tool's own render, a `{from: ...}` params walk, and an `if`/`while`
+condition's own `state` no longer go through `live_ctx`/`Store::snapshot` at all. `exec::live_scope`
+adds `Store::peek` (an O(1), single-child read with no promotion and no descent) and a small
+`LiveStep` walk built on it, resolving a dotted path's own first segment the same way `live_ctx`'s
+merge already does (scanning the chain from its last entry backward, stopping at the first one whose
+own top level actually has that segment) and then descending through further live `Slot::Node`
+children for as long as the path stays inside the store's own tracked tree — falling back to
+`electricity_template::step`'s (or a `{from:}` walk's own) per-segment rule only once a plain
+`Slot::Value` leaf is reached. `electricity-template` gained a `ScopeRoot` trait for exactly this:
+`Value`'s own impl is every existing caller and test, byte for byte unchanged; `exec::live_scope::
+LiveRoot` is the live, store-backed one. A CEL `if`/`while` condition collects its own `state.`
+paths first (`electricity_cel::condition_paths`, new) and builds `state` through a store-backed
+projector (`exec::live_scope::project_live`, the same narrowing `evaluate_condition`'s own `project`
+already does internally, just performed before the snapshot rather than after it) — an expression
+that reads `state` as a whole value falls back to `live_ctx`'s full snapshot, correctly, not fast.
+`evaluate_expect`'s own `state` argument is deliberately **not** narrowed this way: unlike
+`evaluate_condition`, it converts the whole `state` it's handed with no internal `project` of its
+own, so an unrelated big int anywhere in `state` already makes it raise today, on both engines
+(`core/cel_eval.py::evaluate_cel_expect` too) — narrowing it would silently fix that divergence,
+which this lane is not about.
+
+Measured (`electricity-vm/tests/loop_perf.rs`'s own `#[ignore]`d guards, release, one core): a
+`while` loop of one `json` tool per pass went from ≈21x for 4x the passes (the same quadratic shape
+as the issue's own numbers) to ≈4x — the truly-linear bound itself; chain-flow `each` (two tool
+leaves per pass) went from ≈18x to ≈7x. `Store::snapshot`/`live_ctx` stay exactly as they were for
+every caller that genuinely needs a full materialized value: a tree dispatch's own one-time
+`ctx_override` snapshot (DESIGN.md §5.5 — paid once per dispatch, not per branch, already cheap), a
+Model-mode condition/`expect:` (unreachable until lane G2), and `--out`/`--live-state`'s own
+`Store::saved`. `electricity_value::Value` itself is untouched — the design-1 alternative this issue's
+body named (Rc-shared `Dict`/`List` children) stays unneeded for this.
 
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 
