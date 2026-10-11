@@ -152,6 +152,34 @@ async fn a_request_is_sent_with_no_default_headers_added() {
 }
 
 #[tokio::test]
+async fn a_head_response_with_content_length_is_not_an_incomplete_read() {
+    // A real regression: a `HEAD` response echoes the `Content-Length`
+    // a `GET` to the same path would send, but never actually sends a
+    // body on the wire (RFC 9110 §9.3.2) -- `hyper`'s own decoder
+    // already knows this and reports a complete, zero-length body;
+    // this must not be misread as a short body against that header.
+    let addr =
+        spawn_raw_server("HTTP/1.1 200 OK\r\nContent-Length: 32\r\nConnection: close\r\n\r\n");
+    let client = http_client::build_client().unwrap();
+    let request = RawRequest {
+        method: "HEAD".to_string(),
+        target: "/".to_string(),
+        headers: vec![("Host".to_string(), "test".to_string())],
+        body: None,
+    };
+    let response = http_client::send(
+        &client,
+        &target(addr),
+        &request,
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, Vec::<u8>::new());
+}
+
+#[tokio::test]
 async fn a_short_body_against_content_length_is_incomplete_read() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

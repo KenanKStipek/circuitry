@@ -510,8 +510,15 @@ pub async fn send(
             }
         }
     }
+    // A response to `HEAD` never carries a body on the wire, even when
+    // its own `Content-Length` echoes what a `GET` to the same path
+    // would have sent (RFC 9110 §9.3.2) -- `hyper`'s own decoder
+    // already knows this (it tracks the request method internally and
+    // treats the body as already complete, zero-length, regardless of
+    // the header), so the frame loop above correctly read nothing; this
+    // check would otherwise misreport that as a short body.
     if let Some(expected) = content_length {
-        if body_bytes.len() < expected {
+        if request.method != "HEAD" && body_bytes.len() < expected {
             return Err(SendError::IncompleteRead {
                 read: body_bytes.len(),
                 expected: expected - body_bytes.len(),
