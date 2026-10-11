@@ -5,8 +5,11 @@ stderr" item of #442): the `on_error: skip`/`continue` and `finally:`
 degradation warnings `core/dynamic.py` logs, `core/conditional.py`'s own
 `on_error: continue` warning, the CEL "unresolved path" warning
 `core/cel_eval.py` logs for a non-strict `if`, `cli/config.py`'s own
-"Unknown environment" warning, and the mid-run `--live-state`/`--events`
-write-failure warnings `cli/live_state.py`/`cli/events.py` log.
+"Unknown environment" warning, `core/tool.py::ToolRuntime.
+_resolve_timeout_seconds`'s own "Invalid runtime.tools.timeout_seconds"
+warning for a `runtime.tools.timeout_seconds` value `int()` rejects,
+and the mid-run `--live-state`/`--events` write-failure warnings
+`cli/live_state.py`/`cli/events.py` log.
 
 Every case uses a *relative* `--live-state`/`--events` path and a fixed
 *cwd*, so `cof run`'s own warning text (which embeds that path verbatim)
@@ -161,6 +164,8 @@ CEL_UNRESOLVED_PATH = (
 
 PLAIN_SUCCESS = "effects:\n" + _tool("ok", value="{}", indent=2)
 
+INVALID_TOOL_TIMEOUT_SECONDS = "effects:\n" + _tool("ok", value="{}", indent=2)
+
 
 def _sandboxed_env(home_dir: Path) -> dict[str, str]:
     env = {
@@ -313,6 +318,12 @@ def main() -> int:
                 orchestration=PLAIN_SUCCESS,
                 home_root=root,
                 config={"environment": "staging"},
+            ),
+            build_case(
+                name="invalid_tool_timeout_seconds",
+                orchestration=INVALID_TOOL_TIMEOUT_SECONDS,
+                home_root=root,
+                config={"runtime": {"tools": {"timeout_seconds": "abc"}}},
             ),
             # No `live_state_write_failure` case: `--live-state`'s own
             # *first* write is synchronous and unconditionally fatal

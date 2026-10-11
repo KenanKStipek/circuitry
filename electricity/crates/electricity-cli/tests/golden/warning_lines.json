@@ -65,6 +65,21 @@
     "os_error_prefix": null
   },
   {
+    "name": "invalid_tool_timeout_seconds",
+    "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    "config": {
+      "runtime": {
+        "tools": {
+          "timeout_seconds": "abc"
+        }
+      }
+    },
+    "extra_args": [],
+    "touch_blocker": null,
+    "expected_stderr": "WARNING: Invalid runtime.tools.timeout_seconds='abc'; using 300s\n",
+    "os_error_prefix": null
+  },
+  {
     "name": "events_write_failure",
     "orchestration": "effects:\n  - name: ok\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
     "config": null,
