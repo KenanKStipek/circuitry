@@ -574,8 +574,15 @@ fn stat_dict(path: &Path, display: &str, metadata: &std::fs::Metadata) -> Result
 /// never negative, so `tv_sec` alone floors the true value).
 fn py_mtime(metadata: &std::fs::Metadata) -> i64 {
     use std::os::unix::fs::MetadataExt;
-    let seconds = metadata.mtime();
-    let nanos = metadata.mtime_nsec();
+    truncate_toward_zero(metadata.mtime(), metadata.mtime_nsec())
+}
+
+/// The pure arithmetic `py_mtime` applies -- split out so a test can
+/// check it directly against synthetic `(seconds, nanos)` pairs,
+/// rather than relying on a real filesystem's own sub-second mtime
+/// storage/rounding (which, in a CI sandbox, isn't guaranteed to keep
+/// the exact value this is testing for).
+fn truncate_toward_zero(seconds: i64, nanos: i64) -> i64 {
     if seconds < 0 && nanos != 0 {
         seconds + 1
     } else {
@@ -1391,21 +1398,18 @@ mod tests {
 
     #[test]
     fn py_mtime_truncates_toward_zero_not_floor() {
-        let dir = TempDir::new();
-        let path = dir.0.join("f.txt");
-        std::fs::write(&path, b"x").unwrap();
         // A pre-1970 mtime 10.3s before the epoch: the kernel's own
         // `tv_sec`/`tv_nsec` pair represents it as `tv_sec=-11,
         // tv_nsec=700_000_000` (never a negative `tv_nsec`); CPython's
         // `int(st_mtime)` truncates the *true* float value (-10.3)
         // toward zero, i.e. -10, not -11 -- issue #460's own fix-pass
-        // finding 9.
-        use std::time::{Duration, SystemTime};
-        let mtime = SystemTime::UNIX_EPOCH - Duration::new(10, 300_000_000);
-        let file = std::fs::File::options().write(true).open(&path).unwrap();
-        file.set_times(std::fs::FileTimes::new().set_modified(mtime))
-            .unwrap();
-        let metadata = std::fs::metadata(&path).unwrap();
-        assert_eq!(py_mtime(&metadata), -10);
+        // finding 9. Checked against the pure function directly (not
+        // a real file's own mtime): a CI sandbox's filesystem isn't
+        // guaranteed to keep the exact sub-second value a `set_times`
+        // call requests.
+        assert_eq!(truncate_toward_zero(-11, 700_000_000), -10);
+        assert_eq!(truncate_toward_zero(-10, 0), -10);
+        assert_eq!(truncate_toward_zero(5, 0), 5);
+        assert_eq!(truncate_toward_zero(5, 500_000_000), 5);
     }
 }
