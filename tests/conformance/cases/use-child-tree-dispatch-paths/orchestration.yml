@@ -53,3 +53,15 @@ effects:
   - type: use
     name: nested_tree
     path: nested_tree_child.yml
+
+  - type: use
+    name: unnamed
+    path: unnamed_tree_child.yml
+
+  - type: use
+    name: unnamed_if
+    path: unnamed_if_tree_child.yml
+
+  - type: use
+    name: named_if
+    path: named_if_tree_child.yml

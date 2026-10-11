@@ -114,11 +114,12 @@ def test_namespaced_branch_settled_cb_nests_under_node_path() -> None:
     assert seen == ["prime.sub.fan"]
 
 
-def test_namespaced_dispatch_cb_drops_the_childs_own_root_path() -> None:
+def test_namespaced_dispatch_cb_forwards_the_childs_own_root_path_at_node_path() -> None:
     """`prime` itself (an unnamed tree loop that is the entire child body)
-    is the use node's own path already -- forwarding it would duplicate
-    that node, the same rule `_relative_child_path` applies to
-    `effect_start`/`effect_complete`."""
+    is the use node's own path already, unlike `effect_start`/
+    `effect_complete` the `use` node never dispatches on its own behalf, so
+    this dispatch is the only one that loop gets -- at `node_path`, not
+    dropped."""
     seen: list[tuple[str, int, int]] = []
     wrapped = _namespaced_dispatch_cb(
         lambda path, concurrency, total: seen.append((path, concurrency, total)),
@@ -128,7 +129,17 @@ def test_namespaced_dispatch_cb_drops_the_childs_own_root_path() -> None:
 
     wrapped("prime", 2, 2)
 
-    assert seen == []
+    assert seen == [("prime.sub", 2, 2)]
+
+
+def test_namespaced_branch_settled_cb_forwards_the_childs_own_root_path_at_node_path() -> None:
+    seen: list[str] = []
+    wrapped = _namespaced_branch_settled_cb(seen.append, "prime.sub")
+    assert wrapped is not None
+
+    wrapped("prime")
+
+    assert seen == ["prime.sub"]
 
 
 # ── Integration: dispatch/branch_settled through a real use child ───────────

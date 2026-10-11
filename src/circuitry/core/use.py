@@ -86,6 +86,12 @@ def _namespaced_dispatch_cb(
     dispatch must land at the same absolute path its ``start``/``end``
     events use, composing with tree-branch prefixing (#475) and nested
     ``use`` to any depth the same way.
+
+    Unlike ``effect_start``/``effect_complete``, the child's own root path
+    (an unnamed tree loop that is the entire child body) is not dropped: the
+    ``use`` node itself never dispatches, so this is the only dispatch that
+    loop gets. It lands at ``node_path`` — the node the loop's ``start``/
+    ``end`` events already report as.
     """
     if callback is None:
         return None
@@ -93,6 +99,7 @@ def _namespaced_dispatch_cb(
     def _forward(child_path: str, concurrency: int, total: int) -> None:
         relative = _relative_child_path(child_path)
         if relative is None:
+            callback(node_path, concurrency, total)
             return
         callback(f"{node_path}.{relative}", concurrency, total)
 
@@ -113,6 +120,7 @@ def _namespaced_branch_settled_cb(
     def _forward(child_path: str) -> None:
         relative = _relative_child_path(child_path)
         if relative is None:
+            callback(node_path)
             return
         callback(f"{node_path}.{relative}")
 

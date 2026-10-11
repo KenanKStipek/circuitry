@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import textwrap
 import time
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import circuitry.mcp.runs as runs_module
+from circuitry.cli.runtime_shim import RunRequest
 from circuitry.mcp.runs import RunManager, RunStatus
 
 # Test orchestrations explicitly pin `model: claude-sonnet-4` so they don't
@@ -1006,18 +1010,60 @@ def test_unnamed_tree_loop_nested_inside_a_named_tree_loop_completes(
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status
 
 
-def test_use_child_with_a_named_tree_loop_completes_without_exception(
-    mgr: RunManager, tmp_path: Path
+def _recording_run_orchestration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[str], list[str]]:
+    """Patch `runs.run_orchestration` -- the same `RunRequest` `RunManager
+    .start_run` builds its `_on_concurrent_dispatch`/`_on_branch_settled`
+    closures into -- to also record the path each one actually receives,
+    without changing what either closure does. `RunManager` itself never
+    looks at the path (both closures above only use the counts), so this
+    is the only way to see, from the MCP layer, whether `core/use.py`'s
+    namespacing reached it."""
+    dispatch_paths: list[str] = []
+    settled_paths: list[str] = []
+    real_run = runs_module.run_orchestration
+
+    def _recording_run(request: RunRequest) -> Any:
+        inner_dispatch = request.concurrent_dispatch_observer
+        inner_settled = request.branch_settled_observer
+
+        def _dispatch(path: str, concurrency: int, total: int) -> None:
+            dispatch_paths.append(path)
+            if inner_dispatch is not None:
+                inner_dispatch(path, concurrency, total)
+
+        def _settled(path: str) -> None:
+            settled_paths.append(path)
+            if inner_settled is not None:
+                inner_settled(path)
+
+        patched = replace(
+            request,
+            concurrent_dispatch_observer=_dispatch,
+            branch_settled_observer=_settled,
+        )
+        return real_run(patched)
+
+    monkeypatch.setattr(runs_module, "run_orchestration", _recording_run)
+    return dispatch_paths, settled_paths
+
+
+def test_use_child_named_tree_loop_dispatch_gets_the_namespaced_path_in_mcp(
+    mgr: RunManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#483: a `use` child's own named `flow: tree` loop fires
     `concurrent_dispatch`/`branch_settled` through `core/use.py`'s
     `_namespaced_dispatch_cb`/`_namespaced_branch_settled_cb` wrappers
     rather than the child store's raw, unwrapped callbacks. `RunManager`
     ignores the path value either way (`_on_concurrent_dispatch`/
-    `_on_branch_settled` above only ever use the counts), so this only
-    guards against an exception escaping the wrapper and wedging the run —
-    the path value itself is covered by the `use-child-tree-dispatch-paths`
-    conformance case and `tests/core/test_use_dispatch_namespacing.py`."""
+    `_on_branch_settled` only ever use the counts), so without the
+    recording wrapper this test would pass whether or not the path were
+    namespaced -- it exists to catch an exception escaping the wrapper and
+    wedging the run, and to pin the actual path value at this layer too,
+    not just in `tests/core/test_use_dispatch_namespacing.py` and the
+    `use-child-tree-dispatch-paths` conformance case."""
+    dispatch_paths, settled_paths = _recording_run_orchestration(monkeypatch)
     p = _write_yml(tmp_path, "use_child_tree_loop.yml", """
         model: claude-sonnet-4
         adapter: host_claude
@@ -1044,8 +1090,62 @@ def test_use_child_with_a_named_tree_loop_completes_without_exception(
         orchestration_path=p, initial_state={"items": ["a", "b"]},
     )
 
+    assert dispatch_paths == ["prime.sub.fan"]
+
     assert _wait_until(lambda: len(run.pending_prompts) == 2, timeout=2.0)
     for pid in list(run.pending_prompts):
         mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r-{pid[:4]}")
 
     assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status
+    assert settled_paths == ["prime.sub.fan", "prime.sub.fan"]
+
+
+def test_use_child_unnamed_tree_loop_dispatch_gets_the_use_nodes_own_path_in_mcp(
+    mgr: RunManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#483: an unnamed `flow: tree` loop that is a `use` child's entire
+    body dispatches at the child store's own root -- `_relative_child_path`
+    then returns `None`, so `_namespaced_dispatch_cb`/
+    `_namespaced_branch_settled_cb` must forward it at `node_path` itself
+    (the `use` node's own path) rather than drop it. Before that fix,
+    `RunManager._on_concurrent_dispatch` never heard about this dispatch at
+    all, so `expected_concurrent` never rose above its sequential default
+    of 1 and `start_run` (which blocks on `_wait_for_settle`) returned as
+    soon as the first of the loop's two branches registered a prompt --
+    the #237 race, reintroduced for this one shape."""
+    dispatch_paths, settled_paths = _recording_run_orchestration(monkeypatch)
+    p = _write_yml(tmp_path, "use_child_unnamed_tree_loop.yml", """
+        model: claude-sonnet-4
+        adapter: host_claude
+        effects:
+          - type: use
+            name: sub
+            inline: |
+              effects:
+                - type: loop
+                  flow: tree
+                  max_concurrency: 2
+                  each:
+                    in: input.items
+                    as: item
+                  body:
+                    - type: prompt
+                      name: step
+                      template: "ask"
+            inputs:
+              items: {from: input.items}
+    """)
+    run = mgr.start_run(
+        orchestration_path=p, initial_state={"items": ["a", "b"]},
+    )
+
+    assert dispatch_paths == ["prime.sub"]
+    # `start_run` already waited for settle before returning -- both
+    # branches' prompts must be pending now, not just the first one.
+    assert len(run.pending_prompts) == 2
+
+    for pid in list(run.pending_prompts):
+        mgr.submit_response(run_id=run.run_id, prompt_id=pid, response_text=f"r-{pid[:4]}")
+
+    assert _wait_until(lambda: run.status == RunStatus.COMPLETED), run.status
+    assert settled_paths == ["prime.sub", "prime.sub"]
