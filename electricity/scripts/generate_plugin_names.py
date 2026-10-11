@@ -41,8 +41,7 @@ _HEADER = """\
 def render() -> str:
     names = sorted(PLUGIN_REGISTRY.keys())
     lines = [_HEADER, "pub const PLUGIN_NAMES: &[&str] = &["]
-    for name in names:
-        lines.append(f'    "{name}",')
+    lines.extend(f'    "{name}",' for name in names)
     lines.append("];")
     lines.append("")
     return "\n".join(lines)
