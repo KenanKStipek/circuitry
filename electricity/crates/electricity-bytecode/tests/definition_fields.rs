@@ -315,8 +315,8 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "name",
         "op::Op::name (None for an unnamed/transparent loop), duplicated \
          on region::Region::Loop::name itself (M1 gate seam round 2, \
-         item S8) so a caller holding only the Region can still build \
-         a Frame::iteration(name, index) path",
+         item S8) so a caller holding only the Region still knows \
+         whether each pass needs a Frame::with_pass path at all",
     );
     add("LoopDefinition", "body", "region::Region::Loop::body");
     add("LoopDefinition", "while_def", "region::LoopSpec::While");

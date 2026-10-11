@@ -1,0 +1,32 @@
+name: c7-while-heterogeneous-equality
+effects:
+  - type: loop
+    name: int_eq_bool
+    while:
+      mode: cel
+      expr: "state.iter.count == 0 && 1 == true"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {k: "int_eq_bool"}}
+  - type: loop
+    name: float_eq_int
+    while:
+      mode: cel
+      expr: "state.iter.count == 0 && 1.0 == 1"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {k: "float_eq_int"}}
+  - type: loop
+    name: string_eq_int
+    while:
+      mode: cel
+      expr: "state.iter.count == 0 && 'a' == 1"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {k: "string_eq_int"}}

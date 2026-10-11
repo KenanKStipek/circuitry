@@ -1,0 +1,21 @@
+name: loop-nested-named-inside-unnamed
+effects:
+  - type: tool
+    name: outer_seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: tool
+    name: inner_seed
+    provider: json
+    params: {mode: parse, input: "[10, 20]"}
+  - type: loop
+    each: {in: "prime.outer_seed.value", as: "outer_item"}
+    body:
+      - type: loop
+        name: inner
+        each: {in: "prime.inner_seed.value", as: "x"}
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: {outer: "{{outer_item}}", x: "{{x}}"}}

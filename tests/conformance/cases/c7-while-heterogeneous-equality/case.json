@@ -1,0 +1,6 @@
+{
+  "spec_case": "C7",
+  "description": "while: {mode: cel, expr: \"1 == true\"} / \"1.0 == 1\" / \"'a' == 1\" -- the same heterogeneous-equality comparisons as c7-if-*, this time via a while loop's own condition (electricity/docs/spec/runtime-semantics.md §4.3): the two numeric-family comparisons let the loop run its one gated pass, the non-numeric cross-type comparison never does. This is the 'while' half of C7 that the 'if' cases (c7-if-*) deferred to lane H.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

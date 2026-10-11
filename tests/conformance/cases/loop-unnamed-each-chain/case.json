@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "An unnamed (transparent) each loop, flow: chain: the body writes directly into the enclosing node each pass, overwriting the same keys -- no loop node of its own, no iter_<N> children, only the final pass's own value for `x` survives.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

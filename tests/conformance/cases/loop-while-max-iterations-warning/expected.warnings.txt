@@ -1,0 +1,1 @@
+WARNING: Loop 'counter': stopped after 3 iterations because max_iterations (3) was reached, not because the while-condition became false

@@ -1,0 +1,6 @@
+{
+  "spec_case": "C11",
+  "description": "Same bounds violation as c11-each-bounds-error-fail, this time on_error: continue (electricity/docs/spec/runtime-semantics.md §5.4): the loop never starts a pass, records termination.reason/detail and meta.error from the LoopBoundsError text without raising, and the document's own next effect (marker) still runs -- the warning line this prints is part of expected.warnings.txt.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

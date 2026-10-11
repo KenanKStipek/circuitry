@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A tool with retries: inside a loop body, always failing its own expect: on_error: continue lets both passes run, and each pass's own iter_<N>.step.meta.retries_used is set independently (#421's own per-attempt accounting, never reset or carried over across passes).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

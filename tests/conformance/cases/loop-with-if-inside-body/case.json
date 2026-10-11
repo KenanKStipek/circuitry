@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A named each loop whose body is an if: each pass's own gate.then/else choice sees that pass's own item binding (state.item), written under its own iter_<N>.gate node each time.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
