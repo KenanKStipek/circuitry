@@ -41,10 +41,12 @@
 //!   [`electricity_tools::ToolRegistry`], so every failure is simply
 //!   retryable, exactly like any non-HTTP-family Python plugin already
 //!   is;
-//! - `meta.binary`/`meta.status_code` -- `json`'s own `ToolResult.raw`
-//!   never carries either key, so the write is a no-op every time it
-//!   would run; left unwired rather than wired against keys nothing
-//!   produces yet;
+//! - `meta.status_code` -- `_HTTP_FAMILY_PROVIDERS`-gated in Python, so
+//!   it stays lane E's own write once an HTTP-shaped provider exists;
+//!   `meta.binary` (`core/tool.py:822-823`) is generic across every
+//!   provider instead, so this gate wires it here (M1 gate seam S2):
+//!   `json`'s own `ToolResult.raw` never carries a `binary` key, so the
+//!   write is still a no-op for every M0 case;
 //! - `expect: {mode: model, ...}` -- refused before a run starts
 //!   ([`electricity_bytecode::refusal::first_unsupported`]), so
 //!   [`ToolOp::expect`] is never anything but
@@ -738,6 +740,22 @@ pub async fn execute_tool(
                                                 .map(|code| Value::from(i64::from(code)))
                                                 .unwrap_or(Value::None),
                                         );
+                                        // Generic across every provider (`core/
+                                        // tool.py:822-823`): a `meta.binary` write
+                                        // this gate owns, not lane C/E's own HTTP-
+                                        // family status-code machinery -- `json`
+                                        // never sets `raw.binary`, so this is a
+                                        // no-op for M0's own output; a later
+                                        // provider (`shell`, `http`, ...) whose
+                                        // `raw` carries one needs no change here.
+                                        if let Some(binary) = result
+                                            .raw
+                                            .as_dict()
+                                            .and_then(|d| d.get(&Value::Str("binary".to_string())))
+                                            .cloned()
+                                        {
+                                            set_leaf(store, &meta_node, "binary", binary);
+                                        }
                                         set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
 
                                         if !result.ok {
@@ -2022,6 +2040,141 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.to_string(), "flaky tool reported failure (ok=False)");
+    }
+
+    #[tokio::test]
+    async fn meta_binary_is_set_generically_from_any_providers_own_raw_binary_key() {
+        // S2 (M1 gate seam round 2): `core/tool.py:822-823`'s own
+        // `if "binary" in result.raw: meta["binary"] = result.raw[
+        // "binary"]` is generic across every provider, not lane E's
+        // own HTTP-family write -- `json` never produces one, so this
+        // uses a test-only tool whose `raw` does.
+        struct BinaryTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for BinaryTool {
+            fn name(&self) -> &str {
+                "binary_tool"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                _call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                let mut raw = Dict::new();
+                raw.insert(Value::from("binary"), Value::from("/usr/bin/widget"));
+                Ok(electricity_tools::ToolResult::new(
+                    Value::from("ok"),
+                    Value::Dict(raw),
+                ))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "binary_tool".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(BinaryTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("binary")),
+            Some(&Value::from("/usr/bin/widget"))
+        );
+    }
+
+    #[tokio::test]
+    async fn meta_binary_is_popped_at_the_start_of_the_next_attempt() {
+        // `core/tool.py:662`'s own `meta.pop("binary", None)` at every
+        // attempt start -- a reused node (an unnamed loop's next pass,
+        // or this effect's own next attempt) must not keep a prior
+        // pass's `binary` sitting next to a provider that never sets
+        // one, the same reason `stdout`/`stderr`/`raw` are reset too.
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "json".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        set_leaf(&store, &meta_node, "binary", Value::from("/usr/bin/stale"));
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("binary")), None);
     }
 
     /// A test-only [`electricity_tools::ToolPlugin`] that always raises
