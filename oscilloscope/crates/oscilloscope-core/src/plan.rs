@@ -57,6 +57,34 @@ pub fn compile(
     check_for_run(path, &options)
 }
 
+/// The config [`compile_with_discovery`] actually used, when it used
+/// one at all (review finding 3 on #458): a `use: path:` child must
+/// compile against this exact same config, not the original call's
+/// own (possibly absent) `--config` argument, or a `group:` defined
+/// only in a discovered global/project config -- resolved fine for the
+/// root document -- would still be lost again for every child. Holding
+/// the discovered case's own [`tempfile::NamedTempFile`] here, rather
+/// than just its path, keeps that file from being deleted before a
+/// child document gets its own chance to read it.
+pub enum DiscoveredConfig {
+    /// An explicit `--config`/`CIRCUITRY_CONFIG` path, or one
+    /// `compile_with_discovery` was never asked to discover at all --
+    /// already a real file with its own lifetime.
+    Path(PathBuf),
+    /// A discovered global+project config, materialized into a temp
+    /// file by [`compile_with_discovery`] itself.
+    Discovered(tempfile::NamedTempFile),
+}
+
+impl DiscoveredConfig {
+    pub fn path(&self) -> &Path {
+        match self {
+            DiscoveredConfig::Path(p) => p,
+            DiscoveredConfig::Discovered(f) => f.path(),
+        }
+    }
+}
+
 /// [`compile`], after first discovering the config a bare `cof run
 /// <doc>` (no `--config`) would layer on its own from `home`/`cwd`
 /// (issue #433; `config_discovery::discover_merged_config`) when
@@ -73,6 +101,10 @@ pub fn compile(
 /// finds nothing, or a temp file for its own output can't be made or
 /// written -- this must never be the reason a plan compile fails that
 /// otherwise wouldn't have.
+///
+/// Returns the config actually used alongside the compiled `Program`
+/// (`None` only for the no-config-at-all case) -- see
+/// [`DiscoveredConfig`]'s own doc comment.
 pub fn compile_with_discovery(
     path: &Path,
     config: Option<&Path>,
@@ -81,24 +113,31 @@ pub fn compile_with_discovery(
     cwd: &Path,
     trust_env: Option<&str>,
     circuitry_config_env: Option<&Path>,
-) -> Result<Program, RunCheckError> {
-    if config.is_some() {
-        return compile(path, config, inputs);
+) -> Result<(Program, Option<DiscoveredConfig>), RunCheckError> {
+    if let Some(config) = config {
+        return compile(path, Some(config), inputs)
+            .map(|program| (program, Some(DiscoveredConfig::Path(config.to_path_buf()))));
     }
     if let Some(env_config) = circuitry_config_env {
-        return compile(path, Some(env_config), inputs);
+        return compile(path, Some(env_config), inputs).map(|program| {
+            (
+                program,
+                Some(DiscoveredConfig::Path(env_config.to_path_buf())),
+            )
+        });
     }
     let Some(discovered) = crate::config_discovery::discover_merged_config(home, cwd, trust_env)
     else {
-        return compile(path, None, inputs);
+        return compile(path, None, inputs).map(|program| (program, None));
     };
     let Ok(mut tmp) = tempfile::NamedTempFile::new() else {
-        return compile(path, None, inputs);
+        return compile(path, None, inputs).map(|program| (program, None));
     };
     if std::io::Write::write_all(&mut tmp, discovered.to_string().as_bytes()).is_err() {
-        return compile(path, None, inputs);
+        return compile(path, None, inputs).map(|program| (program, None));
     }
     compile(path, Some(tmp.path()), inputs)
+        .map(|program| (program, Some(DiscoveredConfig::Discovered(tmp))))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1022,7 +1061,7 @@ mod tests {
         )
         .unwrap();
 
-        let program = compile_with_discovery(
+        let (program, discovered) = compile_with_discovery(
             &doc,
             None,
             &indexmap::IndexMap::new(),
@@ -1034,6 +1073,118 @@ mod tests {
         .expect("the discovered global config's own runtime block should still compile");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
+        assert!(
+            matches!(discovered, Some(DiscoveredConfig::Discovered(_))),
+            "a global config discovered from home should be reported back"
+        );
+    }
+
+    #[test]
+    fn compile_with_discovery_actually_uses_the_discovered_config_not_just_compiles_without_it() {
+        // Review finding 4 on #458: every other `compile_with_discovery`
+        // test's document compiles fine with no config at all, so none
+        // of them would catch `compile_with_discovery` silently
+        // ignoring `home`/`cwd`/the trust value. A `group:` whose
+        // `concurrency_groups` exist only in the discovered global
+        // config is the one case `compile(None)` must fail and
+        // `compile_with_discovery` must not.
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/circuitry")).unwrap();
+        std::fs::write(
+            home.path().join(".config/circuitry/config.json"),
+            r#"{"runtime": {"concurrency_groups": {"gpu": 1}}}"#,
+        )
+        .unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: hello\n    type: tool\n    provider: json\n    group: gpu\n    params:\n      mode: stringify\n      input: {}\n",
+        )
+        .unwrap();
+
+        compile(&doc, None, &indexmap::IndexMap::new())
+            .expect_err("an undefined group should fail to compile with no config at all");
+
+        let (_program, discovered) = compile_with_discovery(
+            &doc,
+            None,
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+            None,
+        )
+        .expect("the discovered global config's own concurrency_groups should make this compile");
+        assert!(matches!(discovered, Some(DiscoveredConfig::Discovered(_))));
+    }
+
+    #[test]
+    fn from_program_with_options_passes_the_discovered_config_on_to_a_use_path_child() {
+        // Review finding 3 on #458: a `use: path:` child used to
+        // compile against the root document's own, original
+        // `--config` argument (`None`, in the no-config case) even
+        // after `compile_with_discovery` found a config for the root
+        // itself -- so a child relying on the very same discovered
+        // `concurrency_groups` lost it again, right after the root
+        // just got it.
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/circuitry")).unwrap();
+        std::fs::write(
+            home.path().join(".config/circuitry/config.json"),
+            r#"{"runtime": {"concurrency_groups": {"gpu": 1}}}"#,
+        )
+        .unwrap();
+        let child = cwd.path().join("child.yml");
+        std::fs::write(
+            &child,
+            "effects:\n  - name: inner\n    type: tool\n    provider: json\n    group: gpu\n    params:\n      mode: stringify\n      input: {}\n",
+        )
+        .unwrap();
+        let doc = cwd.path().join("do.yml");
+        std::fs::write(
+            &doc,
+            "effects:\n  - name: child\n    type: use\n    path: child.yml\n",
+        )
+        .unwrap();
+
+        let (program, discovered) = compile_with_discovery(
+            &doc,
+            None,
+            &indexmap::IndexMap::new(),
+            home.path(),
+            cwd.path(),
+            None,
+            None,
+        )
+        .expect("the root document has no group of its own and should compile either way");
+        let effective_config = discovered.as_ref().map(DiscoveredConfig::path);
+
+        let plan_without_discovery =
+            PlanTree::from_program_with_options(&program, None, &indexmap::IndexMap::new());
+        assert!(
+            !plan_without_discovery
+                .all_paths()
+                .iter()
+                .any(|p| p.ends_with("inner")),
+            "without the discovered config the child can't compile, so its leaf must be absent: {:?}",
+            plan_without_discovery.all_paths()
+        );
+
+        let plan_with_discovery = PlanTree::from_program_with_options(
+            &program,
+            effective_config,
+            &indexmap::IndexMap::new(),
+        );
+        assert!(
+            plan_with_discovery
+                .all_paths()
+                .iter()
+                .any(|p| p.ends_with("inner")),
+            "the child should compile using the same discovered config the root did: {:?}",
+            plan_with_discovery.all_paths()
+        );
     }
 
     #[test]
@@ -1047,7 +1198,7 @@ mod tests {
         )
         .unwrap();
 
-        let program = compile_with_discovery(
+        let (program, discovered) = compile_with_discovery(
             &doc,
             None,
             &indexmap::IndexMap::new(),
@@ -1059,6 +1210,10 @@ mod tests {
         .expect("should compile exactly as compile(..., None, ...) already does");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
+        assert!(
+            discovered.is_none(),
+            "nothing was discovered to report back"
+        );
     }
 
     #[test]
@@ -1084,7 +1239,7 @@ mod tests {
         let env_config = cwd.path().join("from-env.json");
         std::fs::write(&env_config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
 
-        let program = compile_with_discovery(
+        let (program, discovered) = compile_with_discovery(
             &doc,
             None,
             &indexmap::IndexMap::new(),
@@ -1096,6 +1251,11 @@ mod tests {
         .expect("CIRCUITRY_CONFIG's own file should still compile");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
+        assert_eq!(
+            discovered.map(|d| d.path().to_path_buf()),
+            Some(env_config),
+            "CIRCUITRY_CONFIG's own path should be reported back, not the discovered global one"
+        );
     }
 
     #[test]
@@ -1121,7 +1281,7 @@ mod tests {
         let explicit_config = cwd.path().join("config.json");
         std::fs::write(&explicit_config, r#"{"runtime": {"max_concurrency": 3}}"#).unwrap();
 
-        let program = compile_with_discovery(
+        let (program, discovered) = compile_with_discovery(
             &doc,
             Some(&explicit_config),
             &indexmap::IndexMap::new(),
@@ -1133,6 +1293,11 @@ mod tests {
         .expect("an explicit config should still compile, discovery or not");
         let plan = PlanTree::from_program(&program);
         assert!(plan.has_plan());
+        assert_eq!(
+            discovered.map(|d| d.path().to_path_buf()),
+            Some(explicit_config),
+            "the explicit config's own path should be reported back untouched"
+        );
     }
 
     fn document_info(dir: &Path) -> electricity_bytecode::DocumentInfo {

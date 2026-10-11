@@ -273,6 +273,45 @@ pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
 /// never appears in a process's own argv, so a `pgrep -f` against it
 /// can never match anything regardless of whether a process actually
 /// survived (#424 review finding F10).
+/// Every `osp-<pid>-<nanos>` entry directly under the real temp
+/// directory right now (`unique_run_dir`'s own default-`--out-dir`
+/// naming) -- a before/after diff around one test's own osp spawn(s)
+/// (comment 1 on #433), rather than a bare "is it empty" check on the
+/// whole temp directory, since other lanes and the owner's own work
+/// share this machine and may have their own `osp-*` directories
+/// there at the same time.
+pub fn snapshot_osp_dirs() -> std::collections::HashSet<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("osp-"))
+        })
+        .collect()
+}
+
+/// Asserts this test's own osp spawn(s) left no *new* `osp-*` run
+/// directory behind in the real temp directory, compared to a
+/// [`snapshot_osp_dirs`] taken before they ran -- every e2e test that
+/// spawns `osp run` passes its own `--out-dir` precisely so this never
+/// finds one; it exists to catch a future test that forgets to.
+pub fn assert_no_new_osp_dirs(before: &std::collections::HashSet<PathBuf>) {
+    let after = snapshot_osp_dirs();
+    let new: Vec<&PathBuf> = after.difference(before).collect();
+    assert!(
+        new.is_empty(),
+        "this test left new osp-* run director{} behind in {:?}: {new:?} \
+         -- every osp run in an e2e test must pass its own --out-dir",
+        if new.len() == 1 { "y" } else { "ies" },
+        std::env::temp_dir()
+    );
+}
+
 pub fn assert_no_leftover_process(needle: &Path) {
     std::thread::sleep(Duration::from_millis(300));
     let ps = Command::new("pgrep")

@@ -15,9 +15,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, e2e_enabled, osp_command,
-    wait_for_step_start, wait_with_timeout, wait_with_timeout_capturing_stdout_and_stderr,
-    write_doc,
+    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, assert_no_new_osp_dirs, e2e_enabled,
+    osp_command, snapshot_osp_dirs, wait_for_step_start, wait_with_timeout,
+    wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
@@ -37,7 +37,10 @@ fn a_simple_run_succeeds_and_prints_the_log() {
 
     // Issue #433's comments: a default `--out-dir` leaves an `osp-*`
     // run directory in the real `$TMPDIR` -- every e2e test must give
-    // osp its own, inside this test's own temp dir.
+    // osp its own, inside this test's own temp dir. Checked below,
+    // not just given one here: comment 1 on #433 asked for an actual
+    // assertion that none appears, not only the fix.
+    let osp_dirs_before = snapshot_osp_dirs();
     let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
@@ -59,6 +62,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    assert_no_new_osp_dirs(&osp_dirs_before);
 }
 
 #[test]
@@ -123,6 +127,7 @@ fn on_error_continue_still_exits_ok() {
     // See the comment in `a_simple_run_succeeds_and_prints_the_log`: a
     // default `--out-dir` leaves an `osp-*` directory in the real
     // `$TMPDIR`.
+    let osp_dirs_before = snapshot_osp_dirs();
     let run_dir = work.path().join("run");
     let child = osp_command(&home)
         .arg(&doc)
@@ -143,6 +148,7 @@ fn on_error_continue_still_exits_ok() {
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+    assert_no_new_osp_dirs(&osp_dirs_before);
 }
 
 #[test]

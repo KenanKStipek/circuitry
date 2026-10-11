@@ -263,20 +263,41 @@ pub fn process_alive(pid: i32) -> bool {
 /// loop drives everything.
 pub struct SignalWatcher {
     signals: signal_hook::iterator::Signals,
+    /// Signals [`SignalWatcher::has_pending`] has already drained from
+    /// `signals` but [`SignalWatcher::pending`] hasn't been handed yet
+    /// (issue #433): a probe loop (`engine::run_probe`) that only wants
+    /// to know *whether* a signal is waiting, not forward it itself,
+    /// must not make the real caller later -- `do_run`'s own
+    /// `pending_signal_exit_code` -- miss it because the probe already
+    /// consumed it from `signals` first.
+    buffered: Vec<ForwardSignal>,
 }
 
 impl SignalWatcher {
     pub fn new() -> io::Result<Self> {
         let signals =
             signal_hook::iterator::Signals::new([libc::SIGINT, libc::SIGTERM, libc::SIGHUP])?;
-        Ok(SignalWatcher { signals })
+        Ok(SignalWatcher {
+            signals,
+            buffered: Vec::new(),
+        })
     }
 
     pub fn pending(&mut self) -> Vec<ForwardSignal> {
-        self.signals
-            .pending()
-            .filter_map(ForwardSignal::from_raw)
-            .collect()
+        let mut result = std::mem::take(&mut self.buffered);
+        result.extend(self.signals.pending().filter_map(ForwardSignal::from_raw));
+        result
+    }
+
+    /// Whether a signal has arrived, without consuming it the way
+    /// [`SignalWatcher::pending`] does (issue #433): a probe loop that
+    /// only needs to know whether to give up early buffers anything it
+    /// finds here instead, so the real signal-handling call this
+    /// watcher is otherwise for still sees it afterwards.
+    pub fn has_pending(&mut self) -> bool {
+        self.buffered
+            .extend(self.signals.pending().filter_map(ForwardSignal::from_raw));
+        !self.buffered.is_empty()
     }
 }
 

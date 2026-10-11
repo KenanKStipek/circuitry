@@ -27,10 +27,12 @@ mod tui;
 use clap::{Parser, ValueEnum};
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
-use oscilloscope_core::engine::{CofEngine, ElectricityEngine, Engine, EngineError, RunSpec};
+use oscilloscope_core::engine::{
+    CofEngine, ElectricityEngine, Engine, EngineCaps, EngineError, RunSpec,
+};
 use oscilloscope_core::model::{ProcessState, RunModel, RunStatus, run_status};
 use oscilloscope_core::observe::{
-    EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, parse_event,
+    EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, now_rfc3339, parse_event,
 };
 use oscilloscope_core::plan::PlanTree;
 use ratatui::Terminal;
@@ -247,10 +249,33 @@ fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
     }
 }
 
-fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
+fn build_engine(
+    choice: EngineChoice,
+    signals: &mut Option<SignalWatcher>,
+) -> Box<dyn Engine + Send + Sync> {
     match choice {
-        EngineChoice::Cof => Box::new(CofEngine::detect("cof")),
-        EngineChoice::Electricity => Box::new(ElectricityEngine::detect("electricity")),
+        EngineChoice::Cof => Box::new(CofEngine::detect("cof", signals.as_mut())),
+        EngineChoice::Electricity => {
+            Box::new(ElectricityEngine::detect("electricity", signals.as_mut()))
+        }
+    }
+}
+
+/// The notice `do_run` prints right after `build_engine`'s own probe,
+/// when it has one (M4/#433) -- pulled out of `do_run` itself (review
+/// finding 6 on #458) so the exact wording for each of `caps`'s own
+/// cases is unit-testable without a real engine binary on `PATH`.
+fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<String> {
+    if caps.timed_out {
+        Some(format!(
+            "osp: {engine_name} --help didn't answer in time; running from state only"
+        ))
+    } else if !caps.events && !caps.missing {
+        Some(format!(
+            "osp: this {engine_name} has no --events: running from state only"
+        ))
+    } else {
+        None
     }
 }
 
@@ -266,7 +291,19 @@ fn build_engine(choice: EngineChoice) -> Box<dyn Engine + Send + Sync> {
 /// `electricity`/`electricity-bytecode` dependency of this binary
 /// crate) — both branches already return exactly the same type
 /// `oscilloscope_core::plan`'s own two functions do, inferred from
-/// this macro's own expansion at each call site.
+/// this macro's own expansion at each call site: `(Program,
+/// Option<DiscoveredConfig>)`, so a caller can hand the *same*
+/// effective config this compile actually used on to
+/// `PlanTree::from_program_with_options` for every `use: path:` child
+/// (review finding 3 on #458) instead of the caller's own original,
+/// possibly-absent `--config` argument.
+///
+/// An empty `CIRCUITRY_CONFIG` (`CIRCUITRY_CONFIG=`) is treated the
+/// same as unset, matching `cli/config.py::resolve_config`'s own
+/// `os.getenv("CIRCUITRY_CONFIG")` truthiness check (review finding 8
+/// on #458) — `PathBuf::from("")` would otherwise name a real,
+/// non-empty path here (`""`, read as the current directory) and skip
+/// discovery silently instead of falling through to it.
 macro_rules! compile_plan {
     ($orchestration:expr, $config:expr, $inputs:expr) => {
         match (std::env::var_os("HOME"), std::env::current_dir()) {
@@ -274,7 +311,9 @@ macro_rules! compile_plan {
                 let trust_env =
                     std::env::var(oscilloscope_core::config_discovery::TRUST_PROJECT_CONFIG_ENV)
                         .ok();
-                let env_config = std::env::var_os("CIRCUITRY_CONFIG").map(PathBuf::from);
+                let env_config = std::env::var_os("CIRCUITRY_CONFIG")
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from);
                 oscilloscope_core::plan::compile_with_discovery(
                     $orchestration,
                     $config,
@@ -285,7 +324,14 @@ macro_rules! compile_plan {
                     env_config.as_deref(),
                 )
             }
-            _ => oscilloscope_core::plan::compile($orchestration, $config, $inputs),
+            _ => {
+                oscilloscope_core::plan::compile($orchestration, $config, $inputs).map(|program| {
+                    let config: Option<&Path> = $config;
+                    let discovered = config
+                        .map(|p| oscilloscope_core::plan::DiscoveredConfig::Path(p.to_path_buf()));
+                    (program, discovered)
+                })
+            }
         }
     };
 }
@@ -387,22 +433,20 @@ fn do_run(args: RunArgs) -> ExitCode {
         run_dir: run_dir.clone(),
     };
 
-    let engine = build_engine(args.engine);
-    // M4: a missing engine binary gets its own, more specific error
-    // once the later spawn fails -- this notice is only useful (and
-    // only true) when the binary was actually found and simply
-    // predates `--events` (cof's own age, or an electricity built
-    // before #431's lane E2).
-    if engine.caps().timed_out {
-        eprintln!(
-            "osp: {} --help didn't answer in time; running from state only",
-            engine.name()
-        );
-    } else if !engine.caps().events && !engine.caps().missing {
-        eprintln!(
-            "osp: this {} has no --events: running from state only",
-            engine.name()
-        );
+    let engine = build_engine(args.engine, &mut signals);
+    // Review finding 2 on #458: a Ctrl-C landing during the probe
+    // `build_engine` just ran is cancelled promptly (`run_probe`'s own
+    // signal check), but is still only *pending*, not yet acted on --
+    // checked here, before the probe's own notice below, so a
+    // cancelled-not-really-timed-out probe never prints a misleading
+    // "didn't answer in time" notice right before exiting anyway. The
+    // run directory doesn't exist yet at this point (created below),
+    // so there's nothing to clean up either way.
+    if let Some(code) = pending_signal_exit_code(&mut signals) {
+        return exit_early(code);
+    }
+    if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
+        eprintln!("{notice}");
     }
 
     let cmd = match engine.command(&spec) {
@@ -426,8 +470,9 @@ fn do_run(args: RunArgs) -> ExitCode {
     // same no-plan fallback as a compile failure.
     let plan = match oscilloscope_core::plan::parse_inputs(&args.set) {
         Ok(inputs) => match compile_plan!(&orchestration, spec.config.as_deref(), &inputs) {
-            Ok(program) => {
-                PlanTree::from_program_with_options(&program, spec.config.as_deref(), &inputs)
+            Ok((program, discovered_config)) => {
+                let effective_config = discovered_config.as_ref().map(|d| d.path());
+                PlanTree::from_program_with_options(&program, effective_config, &inputs)
             }
             Err(err) => {
                 eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
@@ -836,6 +881,7 @@ fn run_tui(
         current_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
+        &now_rfc3339(),
         &[],
     );
     if app.selected_path.is_none() {
@@ -940,6 +986,7 @@ fn run_tui(
                 current_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
+                &now_rfc3339(),
                 &[],
             );
             last_rebuild = Instant::now();
@@ -1342,8 +1389,9 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let plan = match &args.plan {
         Some(doc) => match oscilloscope_core::plan::parse_inputs(&args.set) {
             Ok(inputs) => match compile_plan!(doc, args.config.as_deref(), &inputs) {
-                Ok(program) => {
-                    PlanTree::from_program_with_options(&program, args.config.as_deref(), &inputs)
+                Ok((program, discovered_config)) => {
+                    let effective_config = discovered_config.as_ref().map(|d| d.path());
+                    PlanTree::from_program_with_options(&program, effective_config, &inputs)
                 }
                 Err(err) => {
                     eprintln!(
@@ -1504,6 +1552,7 @@ fn run_tui_watch(
         last_state.as_ref(),
         ProcessState::Running,
         start.elapsed().as_secs_f64(),
+        &now_rfc3339(),
         &[],
     );
     if app.selected_path.is_none() {
@@ -1619,6 +1668,7 @@ fn run_tui_watch(
                 last_state.as_ref(),
                 process,
                 start.elapsed().as_secs_f64(),
+                &now_rfc3339(),
                 &[],
             );
             last_rebuild = Instant::now();
@@ -2157,6 +2207,53 @@ mod tests {
     #[test]
     fn effective_log_mode_is_true_when_explicitly_requested() {
         assert!(effective_log_mode(true));
+    }
+
+    #[test]
+    fn engine_capability_notice_reports_a_timed_out_probe_distinctly_from_no_events() {
+        // Review finding 6 on #458: the timed-out probe's own notice
+        // text was untested.
+        let timed_out = EngineCaps {
+            events: false,
+            live_state: true,
+            missing: false,
+            timed_out: true,
+        };
+        assert_eq!(
+            engine_capability_notice(&timed_out, "cof").as_deref(),
+            Some("osp: cof --help didn't answer in time; running from state only")
+        );
+
+        let no_events = EngineCaps {
+            events: false,
+            live_state: true,
+            missing: false,
+            timed_out: false,
+        };
+        assert_eq!(
+            engine_capability_notice(&no_events, "cof").as_deref(),
+            Some("osp: this cof has no --events: running from state only")
+        );
+
+        let fully_capable = EngineCaps {
+            events: true,
+            live_state: true,
+            missing: false,
+            timed_out: false,
+        };
+        assert_eq!(engine_capability_notice(&fully_capable, "cof"), None);
+
+        let missing = EngineCaps {
+            events: false,
+            live_state: false,
+            missing: true,
+            timed_out: false,
+        };
+        assert_eq!(
+            engine_capability_notice(&missing, "cof"),
+            None,
+            "a missing binary gets its own, more specific error once the spawn fails"
+        );
     }
 
     #[test]

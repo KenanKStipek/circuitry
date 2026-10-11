@@ -142,10 +142,16 @@ fn replay(name: &str) -> String {
 /// `replay`, with a real compiled plan (from the fixture's own
 /// `do.yml`) instead of the no-plan fallback every other golden test
 /// here uses (issue #433's Tests item: "a golden with a compiled
-/// plan") -- exercises the plan-only behaviour `replay` structurally
-/// can't: an untaken `if` branch's own skip reason, and a container
-/// suppressed by the plan before it has ever shown up in state at
-/// all.
+/// plan") -- a real plan can label a leaf's own kind (`tool`/
+/// `prompt`/`use`/`yield` instead of the no-plan fallback's generic
+/// `effect`) and apply the `(on_error: continue)`/`(on_error: skip)`
+/// suffix, neither of which `replay`'s own no-plan fallback can show.
+/// `on_error_continue_with_a_compiled_plan`, this function's one
+/// caller so far, exercises exactly that suffix; an untaken `if`
+/// branch's own skip reason and a container the plan suppresses
+/// before it ever shows up in state are both real `PlanTree`
+/// behaviour (see `plan.rs`'s own unit tests) that no fixture given
+/// to this function happens to exercise yet.
 fn replay_with_plan(name: &str) -> String {
     let fixture = load_fixture(name);
     let doc = fixtures_dir().join(name).join("do.yml");

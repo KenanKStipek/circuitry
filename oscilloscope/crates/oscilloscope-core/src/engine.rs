@@ -10,6 +10,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::supervise::SignalWatcher;
+
 /// How long a `--help` capability probe may run before osp gives up on
 /// it (issue #433): an engine binary whose `--help` hangs -- a corrupt
 /// install, a broken Python startup hook -- must not block osp (or the
@@ -155,7 +157,19 @@ enum ProbeOutcome {
 /// a probe binary that leaves a grandchild holding its stdout/stderr
 /// pipe open must not block osp either (the same concern as
 /// `supervise::SupervisedChild::wait`'s own bounded join).
-fn run_probe(mut cmd: Command, timeout: Duration) -> std::io::Result<ProbeOutcome> {
+///
+/// `signals`, when given, is polled (non-consuming, `has_pending`) on
+/// every 20ms tick of the wait loop alongside the deadline (review
+/// finding 2 on #458): a signal landing mid-probe ends it exactly as
+/// early as a timeout would, rather than leaving a user's Ctrl-C
+/// waiting for up to `timeout` before `do_run`'s own
+/// `pending_signal_exit_code` check -- reached only after this
+/// function returns -- ever gets a chance to act on it.
+fn run_probe(
+    mut cmd: Command,
+    timeout: Duration,
+    mut signals: Option<&mut SignalWatcher>,
+) -> std::io::Result<ProbeOutcome> {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -183,7 +197,10 @@ fn run_probe(mut cmd: Command, timeout: Duration) -> std::io::Result<ProbeOutcom
         if matches!(child.try_wait(), Ok(Some(_))) {
             break;
         }
-        if Instant::now() >= deadline {
+        let signalled = signals
+            .as_deref_mut()
+            .is_some_and(SignalWatcher::has_pending);
+        if signalled || Instant::now() >= deadline {
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
             }
@@ -226,8 +243,23 @@ impl CofEngine {
     /// Detects `--events` support by running `<binary> run --help` once
     /// and looking for the flag's own name in its output — the same
     /// detection serves a `cof` built before #419 lands and any older
-    /// release a user still has on `PATH`.
-    pub fn detect(binary: impl Into<String>) -> Self {
+    /// release a user still has on `PATH`. `signals`, when given, lets
+    /// a Ctrl-C landing mid-probe end it immediately (review finding 2
+    /// on #458) rather than waiting out `PROBE_TIMEOUT`.
+    pub fn detect(binary: impl Into<String>, signals: Option<&mut SignalWatcher>) -> Self {
+        Self::detect_with_timeout(binary, signals, PROBE_TIMEOUT)
+    }
+
+    /// [`CofEngine::detect`], with the probe's own timeout given
+    /// explicitly rather than always `PROBE_TIMEOUT` -- lets a test
+    /// exercise `detect` end to end against a hanging `--help`
+    /// without really waiting out the production 10s bound (review
+    /// finding 6 on #458).
+    fn detect_with_timeout(
+        binary: impl Into<String>,
+        signals: Option<&mut SignalWatcher>,
+        timeout: Duration,
+    ) -> Self {
         use std::os::unix::process::CommandExt;
 
         let binary = binary.into();
@@ -248,7 +280,7 @@ impl CofEngine {
         // silently ran the real engine state-only even on a `cof` that
         // actually has the flag.
         cmd.process_group(0);
-        let outcome = run_probe(cmd, PROBE_TIMEOUT);
+        let outcome = run_probe(cmd, timeout, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
         let (events, timed_out) = match outcome {
             Ok(ProbeOutcome::Completed { stdout, stderr }) => {
@@ -335,8 +367,10 @@ impl ElectricityEngine {
     /// its output — the same probe shape as [`CofEngine::detect`],
     /// including its own process group (so a terminal Ctrl-C landing
     /// mid-probe doesn't kill it directly and get misread as "no
-    /// support").
-    pub fn detect(binary: impl Into<String>) -> Self {
+    /// support"). `signals`, when given, lets a Ctrl-C landing mid-probe
+    /// end it immediately (review finding 2 on #458) rather than
+    /// waiting out `PROBE_TIMEOUT`.
+    pub fn detect(binary: impl Into<String>, signals: Option<&mut SignalWatcher>) -> Self {
         use std::os::unix::process::CommandExt;
 
         let binary = binary.into();
@@ -346,7 +380,7 @@ impl ElectricityEngine {
         // probe only, never the real run.
         cmd.env("NO_COLOR", "1");
         cmd.process_group(0);
-        let outcome = run_probe(cmd, PROBE_TIMEOUT);
+        let outcome = run_probe(cmd, PROBE_TIMEOUT, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
         let (events, live_state, timed_out) = match outcome {
             Ok(ProbeOutcome::Completed { stdout, stderr }) => (
@@ -433,6 +467,7 @@ fn looks_like_a_document(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::supervise::ForwardSignal;
 
     #[test]
     fn looks_swapped_is_false_for_the_documented_order() {
@@ -639,7 +674,7 @@ mod tests {
 
     #[test]
     fn electricity_detect_reports_missing_for_an_absent_binary() {
-        let engine = ElectricityEngine::detect("osp-test-nonexistent-electricity-binary");
+        let engine = ElectricityEngine::detect("osp-test-nonexistent-electricity-binary", None);
         assert!(engine.caps().missing);
         assert!(!engine.caps().events);
         assert!(!engine.caps().live_state);
@@ -655,7 +690,7 @@ mod tests {
         cmd.arg("30");
         cmd.process_group(0);
         let started = Instant::now();
-        let outcome = run_probe(cmd, Duration::from_millis(200)).unwrap();
+        let outcome = run_probe(cmd, Duration::from_millis(200), None).unwrap();
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(matches!(outcome, ProbeOutcome::TimedOut));
     }
@@ -664,7 +699,7 @@ mod tests {
     fn run_probe_captures_output_from_a_binary_that_exits_in_time() {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("echo out; echo err >&2");
-        let outcome = run_probe(cmd, Duration::from_secs(5)).unwrap();
+        let outcome = run_probe(cmd, Duration::from_secs(5), None).unwrap();
         match outcome {
             ProbeOutcome::Completed { stdout, stderr } => {
                 assert_eq!(stdout.trim(), "out");
@@ -676,8 +711,12 @@ mod tests {
 
     #[test]
     fn cof_detect_falls_back_to_state_only_on_a_hanging_help() {
-        // The real `detect()` path end to end, with a short probe
-        // timeout substituted in: a `cof` stand-in whose `run --help`
+        // The real `detect()` path end to end (review finding 6 on
+        // #458: a previous version of this test called `run_probe`
+        // directly instead, never actually exercising `detect` itself
+        // at all), with a short probe timeout substituted in via
+        // `detect_with_timeout` so this doesn't really wait out the
+        // production 10s bound: a `cof` stand-in whose `run --help`
         // hangs still returns promptly, with `timed_out` set and no
         // `--events` support assumed.
         let dir = tempfile::tempdir().unwrap();
@@ -688,13 +727,50 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
         )
         .unwrap();
-        use std::os::unix::process::CommandExt;
         let started = Instant::now();
-        let mut probe_cmd = std::process::Command::new(&fake_cof);
-        probe_cmd.args(["run", "--help"]);
-        probe_cmd.process_group(0);
-        let outcome = run_probe(probe_cmd, Duration::from_millis(200)).unwrap();
+        let engine = CofEngine::detect_with_timeout(
+            fake_cof.to_str().unwrap(),
+            None,
+            Duration::from_millis(200),
+        );
         assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(engine.caps().timed_out);
+        assert!(!engine.caps().events);
+        assert!(!engine.caps().missing);
+    }
+
+    #[test]
+    fn run_probe_is_cancelled_promptly_by_a_pending_signal_instead_of_waiting_out_the_timeout() {
+        // Review finding 2 on #458: a Ctrl-C landing mid-probe must end
+        // it right away, not leave a user waiting out the probe's own
+        // (generous, 10s in production) timeout.
+        let mut signals = SignalWatcher::new().unwrap();
+        unsafe {
+            libc::kill(std::process::id() as i32, libc::SIGINT);
+        }
+        // Give the signal a moment to actually land before the probe
+        // starts, so this can't flake into the deadline branch instead.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !signals.has_pending() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        cmd.process_group(0);
+        let started = Instant::now();
+        let outcome = run_probe(cmd, Duration::from_secs(10), Some(&mut signals)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the probe should have been cancelled almost immediately, took {:?}",
+            started.elapsed()
+        );
         assert!(matches!(outcome, ProbeOutcome::TimedOut));
+
+        // The signal must still be there afterwards for `do_run`'s own
+        // `pending_signal_exit_code` check to see -- the probe only
+        // peeked at it (`has_pending`), it never consumed it.
+        assert_eq!(signals.pending(), vec![ForwardSignal::Int]);
     }
 }
