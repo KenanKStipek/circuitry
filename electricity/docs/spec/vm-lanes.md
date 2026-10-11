@@ -58,15 +58,25 @@ value M0 ran with (every capability flag `false`); each M1 lane flips its own fl
 effect type actually runs, rather than this table's own "final"/"stub" status changing the
 walker's body again.
 
-**Every file in this table already exists** (M1 gate seam round 2, item S9): lane C's own
-process-backed tool files (`subprocess_tool.rs`, `shell.rs`, `awk.rs`, `imagemagick.rs`,
-`ffmpeg.rs`), D1's five plugin files, D2's `regex/` module, E's `http.rs`/`http_client/`, and F1's
-own `electricity-adapters` crate are all created now, each with a not-implemented stub body and
-already registered in its own crate's `pub mod` list -- so a later lane's PR only ever fills a
-body inside the file this table already names, never adds a `mod` line to a list another lane
+**Every native-tool/adapter file in this table already exists** (M1 gate seam round 2, item S9,
+extended by review P2-5 on PR #454's second review): lane C's own process-backed tool files
+(`subprocess_tool.rs`, `shell.rs`, `awk.rs`, `imagemagick.rs`, `ffmpeg.rs`), D1's five plugin
+files, D2's `regex/` module, E's `http.rs`/`http_client/`, L2's own `validate_yaml.rs`, and F1's
+own `electricity-adapters` crate -- including F2's own `openai_compat.rs`/`openai.rs`/
+`anthropic.rs`/`curl_text.rs` row -- are all created now, each with a not-implemented stub body
+and already registered in its own crate's `pub mod` list -- so a later lane's PR only ever fills
+a body inside the file this table already names, never adds a `mod` line to a list another lane
 might also be adding to in the same window. If a `mod` list ever does need to change again, the
 gate adds every module it will ever need in one PR, the same way, rather than leaving it for
 whichever lane gets there first.
+
+The five rows below this one marked "Not created yet" (`complexity/`, `path_index.rs`,
+`overrides.rs`, `profile.rs`, `preflight.rs`) are a deliberate exception, not an oversight: each
+is a whole lane's own design surface (K1's scoring algorithm, J1/J2's profile-override shape,
+R's preflight result classification), not a single trait this gate has already fixed the shape
+of the way `ToolPlugin`/`Adapter` are -- inventing a Rust signature for one now, without that
+lane's own differential corpus to check it against, risks committing to a wrong "final" shape the
+owning lane then has to revise, which is worse than that lane writing its own file from scratch.
 
 | Crate | File | Function/type | Lane | Status after lane A |
 |---|---|---|---|---|
