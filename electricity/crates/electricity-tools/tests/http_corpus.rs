@@ -380,16 +380,58 @@ async fn request_header_cases_keep_every_user_header_capitalize_collapsed() {
             )
             .await
             .expect("expected a successful send");
-        let request_text = String::from_utf8_lossy(&rx.recv().unwrap()).to_lowercase();
-        for pair in case["header_items"].as_array().unwrap() {
-            let name = pair[0].as_str().unwrap().to_lowercase();
-            let value = pair[1].as_str().unwrap().to_lowercase();
-            let line = format!("{name}: {value}");
-            assert!(
-                request_text.contains(&line),
-                "expected header line {line:?} in request:\n{request_text}"
+        let request_bytes = rx.recv().unwrap();
+        let request_text = String::from_utf8_lossy(&request_bytes).to_string();
+        let sent_lines: Vec<(String, String)> = request_text
+            .split("\r\n")
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| line.split_once(':'))
+            .map(|(k, v)| (k.to_lowercase(), v.trim().to_lowercase()))
+            .collect();
+        let expected: Vec<(String, String)> = case["header_items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pair| {
+                (
+                    pair[0].as_str().unwrap().to_lowercase(),
+                    pair[1].as_str().unwrap().to_lowercase(),
+                )
+            })
+            .collect();
+        // Every *name* `header_items` names (capitalize-collapsed) is
+        // the complete, deduplicated final state for that name -- not
+        // just a line to find somewhere in the request. Comparing the
+        // *whole* set of lines under those names, not a `contains`
+        // check on each expected line individually, catches the case
+        // `contains` alone would pass: a lingering *second* line under
+        // the same name with the user's own, now-overwritten value
+        // still on the wire alongside the correct one (issue #485
+        // review finding 6's own "weak assertions" -- `contains` can't
+        // tell "exactly this one line" apart from "this line, plus
+        // another the collapse should have erased").
+        let expected_names: std::collections::BTreeSet<&str> =
+            expected.iter().map(|(k, _)| k.as_str()).collect();
+        let actual_for_names: Vec<&(String, String)> = sent_lines
+            .iter()
+            .filter(|(k, _)| expected_names.contains(k.as_str()))
+            .collect();
+        for (name, value) in &expected {
+            let matches = actual_for_names
+                .iter()
+                .filter(|(k, v)| k == name && v == value)
+                .count();
+            assert_eq!(
+                matches, 1,
+                "expected exactly one {name}: {value} line, found {matches} in request:\n{request_text}"
             );
         }
+        assert_eq!(
+            actual_for_names.len(),
+            expected.len(),
+            "expected exactly {expected:?} under these names, found {actual_for_names:?} in request:\n{request_text}"
+        );
     }
 }
 
