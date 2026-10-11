@@ -1,0 +1,7 @@
+{
+  "spec_case": "DESIGN.md §7.3 (M1-D2's own documented divergence: Turkish dotless/dotted I under IGNORECASE)",
+  "description": "CPython folds i/I/ı(U+0131)/İ(U+0130) together under IGNORECASE (confirmed directly against _sre.unicode_tolower plus re._casefix._EXTRA_CASES); fancy-regex's own Unicode case folding keeps the Turkish dotless 'ı' apart from plain ASCII 'I' -- both engines succeed, electricity just doesn't match here. Pinned rather than left silently different.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "known_divergence": {"location": "prime.turkish_i.value", "electricity_value": null}
+}

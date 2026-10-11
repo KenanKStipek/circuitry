@@ -1,0 +1,6 @@
+name: regex-ignorecase-turkish-i-divergence
+effects:
+  - type: tool
+    name: turkish_i
+    provider: regex
+    params: {pattern: "ı", input: "I", mode: search, flags: [IGNORECASE]}

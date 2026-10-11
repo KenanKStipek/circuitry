@@ -1490,6 +1490,32 @@ and §16): a document pattern using a true Python-`re`-only construct that `fanc
 rejects has no electricity-native path to full parity short of an embedded PCRE/Oniguruma
 binding, which v1 does not add.
 
+**M1-D2's own translation layer (issue #479), landed.** `electricity-tools::regex::translate`
+turns Python `re` syntax into `fancy-regex` syntax; most constructs pass through unchanged,
+since `fancy-regex` already parses named groups, atomic groups, possessive quantifiers,
+lookaround, backreferences and conditionals natively the same way Python does. Four documented
+divergences remain, each pinned by a corpus/conformance case rather than left silently
+different:
+
+- **`\N{NAME}`** (a Unicode character-name escape) has no database to resolve it against and
+  fails with the `regex: invalid pattern: ` prefix, the same as any other construct this layer
+  can't translate (decision 7 above).
+- **Lookbehind fixed-width.** Python requires every alternation branch of a lookbehind to match
+  the same, finite length; `fancy-regex` is looser. The translator computes a conservative
+  min/max matched-length bound for a lookbehind's own body and rejects anything it can't prove
+  is exactly fixed — stricter than CPython's own, more precise analysis in a case this bound
+  widens through a nested group boundary, never looser.
+- **The backtrack limit.** `fancy-regex` stops at its own backtrack limit with its own error
+  (`regex: backtrack limit exceeded`, a retryable `RuntimeError`, like any other tool failure);
+  CPython's `re` has no such limit and would run until the effect itself is killed — the `regex`
+  plugin ignores `timeout_seconds` in both engines (#448's "Settled questions").
+- **IGNORECASE and Turkish dotless/dotted I.** `fancy-regex`'s own Unicode case folding is used
+  directly (no per-character expansion table) and confirmed, codepoint by codepoint, against
+  CPython 3.11's own folding (`_sre.unicode_tolower` plus `re._casefix._EXTRA_CASES`) to match
+  everywhere except one group: CPython folds `i`/`I`/`ı`/`İ` (U+0049, U+0069, U+0130, U+0131)
+  together under `IGNORECASE`; `fancy-regex` keeps the Turkish dotless/dotted pair apart from
+  plain ASCII `i`/`I`.
+
 ---
 
 ## 8. Native tools, the plugin protocol, and security rules
