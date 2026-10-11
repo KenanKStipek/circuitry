@@ -1,0 +1,1201 @@
+{
+  "compose_cases": [
+    {
+      "ctx": {
+        "name": "world"
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hi world",
+      "template": "hi {{name}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "tone": "unused",
+        "voice": "be {{tone}}"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "be ",
+      "template": "{{> voice}}"
+    },
+    {
+      "ctx": {
+        "prime": {},
+        "tone": "brief"
+      },
+      "declared": {
+        "inner": "deep {{tone}}",
+        "outer": "[{{> inner}}]"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "[deep brief]",
+      "template": "{{> outer}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "be brief\n"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "be briefafter",
+      "template": "{{> voice}}after"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "be brief\r\n"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "be briefafter",
+      "template": "{{> voice}}after"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "be brief\n\n"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "be brief\nafter",
+      "template": "{{> voice}}after"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "v"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "vv",
+      "template": "{{> voice}}{{> voice}}"
+    },
+    {
+      "ctx": {
+        "items": [
+          "a",
+          "b"
+        ],
+        "prime": {}
+      },
+      "declared": {
+        "line": "<{{.}}>"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "<a><b>",
+      "template": "{{#items}}{{> line}}{{/items}}"
+    },
+    {
+      "ctx": {
+        "a": true,
+        "prime": {}
+      },
+      "declared": {
+        "block": "{{#a}}\nyes\n{{/a}}\ndone"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "yes\ndone",
+      "template": "{{> block}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "before{{! a comment }}after"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "beforeafter",
+      "template": "{{> voice}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "voice": "{{=<% %>=}}oops"
+      },
+      "err": "prompts.voice: a declared prompt may not use '{{=...=}}' (set-delimiter) — it would change the delimiters of the template that includes it.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> voice}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "a": "{{> b}}",
+        "b": "{{> a}}"
+      },
+      "err": "prompts.b: cycle among declared prompts at 'a'.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> a}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "a": "{{> a}}"
+      },
+      "err": "prompts.a: cycle among declared prompts at 'a'.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> a}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hello"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "said: hello",
+      "template": "said: {{> reply}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": null
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "[]",
+      "template": "[{{> reply}}]"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [
+        "later"
+      ],
+      "label": "template",
+      "ok": "[]",
+      "template": "[{{> later}}]"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": "template: '{{> nope}}' does not name a declared prompt or effect.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> nope}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "pipeline": {
+            "outline": {
+              "meta": {},
+              "value": "plan"
+            }
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "plan",
+      "template": "{{> pipeline.outline}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "items": {
+            "meta": {},
+            "value": [
+              1,
+              "a",
+              null,
+              true
+            ]
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "[1, 'a', None, True]",
+      "template": "{{> items}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "info": {
+            "meta": {},
+            "value": {
+              "a": 1,
+              "b": [
+                2,
+                3
+              ]
+            }
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "{'a': 1, 'b': [2, 3]}",
+      "template": "{{> info}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "n": {
+            "meta": {},
+            "value": 42
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "42",
+      "template": "{{> n}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "f": {
+            "meta": {},
+            "value": 1.5
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "1.5",
+      "template": "{{> f}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "b": {
+            "meta": {},
+            "value": false
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "False",
+      "template": "{{> b}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "items": {
+            "meta": {},
+            "value": []
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "[[]]",
+      "template": "[{{> items}}]"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "items": {
+            "meta": {},
+            "value": {}
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "[{}]",
+      "template": "[{{> items}}]"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": "template: '{{> }}' is not a valid name.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> }}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hi"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hi",
+      "template": "{{>  reply  }}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": "template: '{{> 1bad}}' is not a valid name.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> 1bad}}"
+    },
+    {
+      "ctx": {
+        ">x": "literal"
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "literal",
+      "template": "{{{>x}}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": "template: malformed Mustache template: partials are not supported: {{> a}b}}",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{>a}b}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [
+        "later"
+      ],
+      "label": "template",
+      "ok": "[{{{__circuitry_partial_0__}}}]",
+      "template": "{{=<% %>=}}[{{> later}}]"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hi"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hiseen",
+      "template": "{{> reply}}{{#prime}}seen{{/prime}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hi"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hi-hi",
+      "template": "{{> reply}}-{{> reply}}"
+    },
+    {
+      "ctx": {
+        "__circuitry_partial_0__": "shadowed-out",
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hidden"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hidden:hidden",
+      "template": "{{> reply}}:{{__circuitry_partial_0__}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "reply": {
+            "meta": {},
+            "value": "hi"
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "hi[hi]",
+      "template": "{{> reply}}{{#.}}[{{__circuitry_partial_0__}}]{{/.}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "x": {
+            "meta": {},
+            "value": "X"
+          },
+          "y": {
+            "meta": {},
+            "value": "Y"
+          }
+        }
+      },
+      "declared": {
+        "a": "<{{> x}}>",
+        "b": "<{{> y}}>"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "<X><Y>",
+      "template": "{{> a}}{{> b}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "x": {
+            "meta": {},
+            "value": "X"
+          },
+          "y": {
+            "meta": {},
+            "value": "Y"
+          }
+        }
+      },
+      "declared": {
+        "a": "<{{> x}}>",
+        "b": "<{{> y}}>"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "<Y> <X>",
+      "template": "{{> b}} {{> a}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "outer": "{{> 1bad}}"
+      },
+      "err": "prompts.outer: '{{> 1bad}}' is not a valid name.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> outer}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "inner": "{{=<% %>=}}oops",
+        "outer": "{{> inner}}"
+      },
+      "err": "prompts.inner: a declared prompt may not use '{{=...=}}' (set-delimiter) — it would change the delimiters of the template that includes it.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> outer}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "p0": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "p1": "{{> p0}}{{> p0}}",
+        "p10": "{{> p9}}{{> p9}}",
+        "p11": "{{> p10}}{{> p10}}",
+        "p12": "{{> p11}}{{> p11}}",
+        "p13": "{{> p12}}{{> p12}}",
+        "p14": "{{> p13}}{{> p13}}",
+        "p15": "{{> p14}}{{> p14}}",
+        "p16": "{{> p15}}{{> p15}}",
+        "p17": "{{> p16}}{{> p16}}",
+        "p18": "{{> p17}}{{> p17}}",
+        "p19": "{{> p18}}{{> p18}}",
+        "p2": "{{> p1}}{{> p1}}",
+        "p20": "{{> p19}}{{> p19}}",
+        "p21": "{{> p20}}{{> p20}}",
+        "p22": "{{> p21}}{{> p21}}",
+        "p23": "{{> p22}}{{> p22}}",
+        "p24": "{{> p23}}{{> p23}}",
+        "p3": "{{> p2}}{{> p2}}",
+        "p4": "{{> p3}}{{> p3}}",
+        "p5": "{{> p4}}{{> p4}}",
+        "p6": "{{> p5}}{{> p5}}",
+        "p7": "{{> p6}}{{> p6}}",
+        "p8": "{{> p7}}{{> p7}}",
+        "p9": "{{> p8}}{{> p8}}"
+      },
+      "err": "prompts.p1: '{{> name}}' expansion produced over 8388608 characters — likely runaway nested declared-prompt growth.",
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": null,
+      "template": "{{> p24}}"
+    },
+    {
+      "ctx": {
+        "prime": {}
+      },
+      "declared": {
+        "a": "{{> b}}",
+        "b": "{{> c}}",
+        "c": "leaf"
+      },
+      "err": null,
+      "escape": true,
+      "json_aware": false,
+      "known_effect_names": [],
+      "label": "template",
+      "ok": "leaf",
+      "template": "{{> a}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "symbols": {
+            "meta": {},
+            "value": [
+              "AAPL",
+              "MSFT"
+            ]
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": true,
+      "known_effect_names": [],
+      "label": "params_json",
+      "ok": "[\"AAPL\", \"MSFT\"]",
+      "template": "{{> symbols}}"
+    },
+    {
+      "ctx": {
+        "prime": {
+          "items": {
+            "meta": {},
+            "value": []
+          }
+        }
+      },
+      "declared": {},
+      "err": null,
+      "escape": true,
+      "json_aware": true,
+      "known_effect_names": [],
+      "label": "params_json",
+      "ok": "[[]]",
+      "template": "[{{> items}}]"
+    }
+  ],
+  "escape_cases": [
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "&lt;b&gt;&amp;'&quot;",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "<b>&'\"",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "<b>&'\"",
+      "template": "{{{x}}}"
+    },
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "<b>&'\"",
+      "template": "{{{x}}}"
+    },
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "<b>&'\"",
+      "template": "{{&x}}"
+    },
+    {
+      "ctx": {
+        "x": "<b>&'\""
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "<b>&'\"",
+      "template": "{{&x}}"
+    },
+    {
+      "ctx": {
+        "x": 0
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "0",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "x": 0
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "0",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "x": false
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "False",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "x": false
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "False",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "l": [
+          1,
+          "a"
+        ]
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "[1, 'a']",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "l": [
+          1,
+          "a"
+        ]
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "[1, 'a']",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "l": []
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "l": []
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "",
+      "template": "{{l}}"
+    },
+    {
+      "ctx": {
+        "d": {
+          "a": 1
+        }
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "{'a': 1}",
+      "template": "{{d}}"
+    },
+    {
+      "ctx": {
+        "d": {
+          "a": 1
+        }
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "{'a': 1}",
+      "template": "{{d}}"
+    },
+    {
+      "ctx": {
+        "a": true,
+        "marker": "OUTER"
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "{'a': True, 'marker': 'OUTER'}",
+      "template": "{{#a}}{{.}}{{/a}}"
+    },
+    {
+      "ctx": {
+        "a": true,
+        "marker": "OUTER"
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "{'a': True, 'marker': 'OUTER'}",
+      "template": "{{#a}}{{.}}{{/a}}"
+    },
+    {
+      "ctx": {
+        "a": false
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "empty",
+      "template": "{{^a}}empty{{/a}}"
+    },
+    {
+      "ctx": {
+        "a": false
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "empty",
+      "template": "{{^a}}empty{{/a}}"
+    },
+    {
+      "ctx": true,
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "True",
+      "template": "{{{.}}}"
+    },
+    {
+      "ctx": true,
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "True",
+      "template": "{{{.}}}"
+    },
+    {
+      "ctx": true,
+      "err": "template: could not render: list index out of range",
+      "escape": true,
+      "label": "template",
+      "ok": null,
+      "template": "{{.}}"
+    },
+    {
+      "ctx": true,
+      "err": "template: could not render: list index out of range",
+      "escape": false,
+      "label": "template",
+      "ok": null,
+      "template": "{{.}}"
+    },
+    {
+      "ctx": {
+        "items": [
+          1,
+          "<x>",
+          false
+        ]
+      },
+      "err": null,
+      "escape": true,
+      "label": "template",
+      "ok": "<1><&lt;x&gt;>",
+      "template": "{{#items}}<{{.}}>{{/items}}"
+    },
+    {
+      "ctx": {
+        "items": [
+          1,
+          "<x>",
+          false
+        ]
+      },
+      "err": null,
+      "escape": false,
+      "label": "template",
+      "ok": "<1><<x>>",
+      "template": "{{#items}}<{{.}}>{{/items}}"
+    }
+  ],
+  "yield_cases": [
+    {
+      "declared": {},
+      "extra_ctx": {
+        "input": {
+          "topic": "circuitry"
+        }
+      },
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "brief",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": null
+        },
+        "value": "Topic: circuitry"
+      },
+      "on_error": "fail",
+      "pre_value": null,
+      "raised": null,
+      "template": "Topic: {{input.topic}}"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {
+        "input": {
+          "n": 5
+        }
+      },
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "broken",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": "yield 'broken' template: could not render: 'int' object is not subscriptable"
+        },
+        "value": null
+      },
+      "on_error": "fail",
+      "pre_value": null,
+      "raised": {
+        "class": "TemplateError",
+        "message": "yield 'broken' template: could not render: 'int' object is not subscriptable"
+      },
+      "template": "{{input.n.0}}"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {
+        "input": {
+          "n": 5
+        }
+      },
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "broken",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": "yield 'broken' template: could not render: 'int' object is not subscriptable"
+        },
+        "value": null
+      },
+      "on_error": "skip",
+      "pre_value": null,
+      "raised": null,
+      "template": "{{input.n.0}}"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {
+        "input": {
+          "n": 5
+        }
+      },
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "broken",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": "yield 'broken' template: could not render: 'int' object is not subscriptable"
+        },
+        "value": null
+      },
+      "on_error": "continue",
+      "pre_value": null,
+      "raised": null,
+      "template": "{{input.n.0}}"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {
+        "input": "real"
+      },
+      "inputs": {
+        "input": "shadowed",
+        "t": "{{input.x}}"
+      },
+      "known_effect_names": [],
+      "name": "say",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": null
+        },
+        "value": "{{input.x}} / shadowed"
+      },
+      "on_error": "fail",
+      "pre_value": null,
+      "raised": null,
+      "template": "{{t}} / {{input}}"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {},
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "self",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": null
+        },
+        "value": "[]"
+      },
+      "on_error": "fail",
+      "pre_value": null,
+      "raised": null,
+      "template": "[{{> self}}]"
+    },
+    {
+      "declared": {},
+      "extra_ctx": {},
+      "inputs": null,
+      "known_effect_names": [],
+      "name": "self",
+      "node": {
+        "meta": {
+          "completed_at": "<ts>",
+          "created_at": "<ts>",
+          "dry_run": false,
+          "error": null
+        },
+        "value": "[previous]"
+      },
+      "on_error": "fail",
+      "pre_value": "previous",
+      "raised": null,
+      "template": "[{{> self}}]"
+    }
+  ]
+}

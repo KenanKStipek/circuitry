@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/yield_effect.py::YieldRuntime.execute, issue #487",
+  "description": "A yield effect's own raw `inputs:` are never rendered (ParamNode::Literal), so `t: \"{{input.x}}\"` splices into the template literally rather than resolving `input.x`'s own value; an `inputs` key named `input` shadows the real top-level `input` for this render only.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "x=real"]
+}
