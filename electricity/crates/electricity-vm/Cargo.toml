@@ -54,6 +54,16 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # own on_error/finally degradation warnings (issue #442) -- a no-op
 # unless a binary later installs a logger, same as electricity-cel's.
 log = "0.4"
+# `exec::use_`'s own inline-child identity/digest (M1 lane I, issue
+# #469): `core/use.py::_load_child_orch`'s own
+# `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()` -- the same
+# crate `electricity-compiler::digest` already hashes a file-based
+# child's own bytes with.
+sha2 = "0.10"
+# `exec::use_`'s own inline-child YAML parse (`load_yaml(cleaned)`,
+# `core/use.py::_load_child_orch`) -- the same parser
+# `electricity-compiler::load` uses for a file-based child.
+electricity-yaml = { path = "../electricity-yaml" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

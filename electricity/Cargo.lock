@@ -470,12 +470,14 @@ dependencies = [
  "electricity-template",
  "electricity-tools",
  "electricity-value",
+ "electricity-yaml",
  "futures",
  "indexmap",
  "log",
  "rand",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
