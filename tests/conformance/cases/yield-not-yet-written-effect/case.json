@@ -1,0 +1,6 @@
+{
+  "spec_case": "core/prompt_compose.py::_resolve_effect_text, issue #406/#487",
+  "description": "`{{> untaken}}` names a real effect in the document (an unnamed if's untaken then-branch) that simply never wrote a value -- it renders empty, the same as a bare miss, never an error.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

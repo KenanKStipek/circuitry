@@ -57,6 +57,14 @@ impl std::error::Error for StoreError {}
 /// The run's mutable state tree, rooted at `prime`.
 pub struct Store {
     pub root: NodeRef,
+    /// Counts every [`Store::snapshot`] call -- test-only, so a test can
+    /// prove a presence check (`{{> name}}` composition's own
+    /// `ScopeRoot::contains`, issue #487/#492 review finding 1) never
+    /// materializes a whole subtree just to answer a yes/no question,
+    /// rather than asserting on the resulting text alone (which a
+    /// correct-but-costly path would also get right).
+    #[cfg(test)]
+    snapshot_calls: std::cell::Cell<usize>,
 }
 
 impl Default for Store {
@@ -67,7 +75,18 @@ impl Default for Store {
 
 impl Store {
     pub fn new() -> Self {
-        Store { root: new_node() }
+        Store {
+            root: new_node(),
+            #[cfg(test)]
+            snapshot_calls: std::cell::Cell::new(0),
+        }
+    }
+
+    /// This store's own [`Store::snapshot`] call count so far -- see the
+    /// field's own doc comment.
+    #[cfg(test)]
+    pub(crate) fn snapshot_call_count(&self) -> usize {
+        self.snapshot_calls.get()
     }
 
     /// Gets *parent*'s existing dict-valued child named *key*, or creates
@@ -245,6 +264,8 @@ impl Store {
     /// ever call `compact_last_aliases` -- [`Store::saved`], below -- on
     /// a value about to be serialized, never on a live ctx).
     pub fn snapshot(&self, node: &NodeRef) -> Value {
+        #[cfg(test)]
+        self.snapshot_calls.set(self.snapshot_calls.get() + 1);
         let map = node.borrow();
         let mut result = IndexMap::with_capacity(map.len());
         for (key, slot) in map.iter() {

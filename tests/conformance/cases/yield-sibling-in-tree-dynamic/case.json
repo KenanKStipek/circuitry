@@ -1,0 +1,6 @@
+{
+  "spec_case": "core/prompt_compose.py::_resolve_effect_text, issue #406/#487 review finding 3",
+  "description": "`{{> fan.first}}` from `second`, a tree-dispatched sibling branch inside the same named dynamic (a bare `{{> first}}` would not resolve from here -- a named if/dynamic nests its children, only the dotted form reaches them) -- captures whatever `cof run` does rather than predicting a dispatch order.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,16 @@
+name: yield-sibling-in-named-loop
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    name: shots
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: yield
+        name: first
+        template: "v{{item}}"
+      - type: yield
+        name: second
+        template: "[{{> first}}]"

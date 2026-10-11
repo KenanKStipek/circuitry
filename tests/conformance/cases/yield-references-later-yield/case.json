@@ -1,0 +1,6 @@
+{
+  "spec_case": "core/prompt_compose.py::_resolve_effect_text, issue #406/#487 review finding 3",
+  "description": "`{{> later}}` names a real effect later in the same chain -- it hasn't run yet when `before` renders, so it resolves empty, the same as a bare miss, never an error.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

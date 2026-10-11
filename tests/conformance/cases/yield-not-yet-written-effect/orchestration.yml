@@ -1,0 +1,16 @@
+name: yield-not-yet-written-effect
+effects:
+  - type: if
+    if: {mode: cel, expr: "false"}
+    then:
+      - type: yield
+        name: untaken
+        template: "nope"
+    else:
+      - type: tool
+        name: filler
+        provider: json
+        params: {mode: stringify, input: {ok: true}}
+  - type: yield
+    name: after
+    template: "[{{> untaken}}]"

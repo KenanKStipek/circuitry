@@ -1,6 +1,7 @@
 {
   "spec_case": "C28",
   "description": "type: yield renders a template and stores the text with no model call (electricity/docs/spec/runtime-semantics.md §3.6, §5.9).",
+  "engines": ["python", "electricity"],
   "expect": "success",
   "cli_args": ["-e", "topic=circuitry"]
 }

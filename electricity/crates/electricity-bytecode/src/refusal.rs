@@ -3,13 +3,17 @@
 //! front, before any state is written, with the preview marker
 //! (issue #431's "Refused before the run starts" list) instead of
 //! discovering mid-run that nothing implements a `prompt`/`loop`/`use`/
-//! `reflector`/`yield` effect, a model-mode condition or `expect`, a
-//! `tool` effect naming an unsupported `provider:`, or an unexpanded
-//! `{{> name}}` partial reference (the run-time half of #406, out of
-//! scope through M1-P), or a document naming a top-level `adapter:` at
-//! all, since `cof run` runs preflight against it whenever a config is
-//! given and M0-H ports none of that check yet -- replaced once lane R
-//! of #448 (M1's run wiring v2) ports preflight (#451).
+//! `reflector` effect, a model-mode condition or `expect`, a `tool`
+//! effect naming an unsupported `provider:`, or a document naming a
+//! top-level `adapter:` at all, since `cof run` runs preflight against
+//! it whenever a config is given and M0-H ports none of that check yet
+//! -- replaced once lane R of #448 (M1's run wiring v2) ports preflight
+//! (#451). `yield` and a document's own `prompts:` map are both
+//! supported as of lane P (#448, #487); an unexpanded `{{> name}}`
+//! partial reference is no longer a case this walker ever checks for
+//! at all (`RefusalReason::PartialReference` is gone, per that lane's
+//! own ruling: the run-time half of #406 removes the check from the
+//! walker entirely rather than ever gating it behind a flag).
 //!
 //! **Capability-driven (issue #449's gate lane, item 9).** [`Supported`]
 //! is one flag per capability, plus the tool-provider allow-list, so
@@ -28,9 +32,7 @@
 //! capability here, even though it stands in for a safety check this
 //! walker runs instead of real preflight rather than a VM capability a
 //! later M1 lane implements -- flipped only once lane R of #448 ports
-//! preflight for real. [`RefusalReason::PartialReference`] is the one
-//! exception, with no flag of its own: M1-P's own landing removes that
-//! check from the walker entirely rather than ever gating it.
+//! preflight for real.
 //!
 //! Walks the whole compiled tree in document order and stops at the
 //! first node [`RefusalReason`] names -- not a list of every offending
@@ -38,13 +40,10 @@
 //! per run, same as every other check-failure surface in this
 //! workspace).
 
-use crate::effects::UseSource;
 use crate::op::{LeafKind, NodeKind, Op};
-use crate::param::ParamNode;
 use crate::path::EffectPath;
 use crate::program::Program;
 use crate::region::{Condition, ExpectCondition, LoopSpec, Region};
-use crate::template::TemplateText;
 
 /// Lane C's own native providers (#448) -- process-backed, so they
 /// share one capability flag ([`Supported::tools_process`]) rather
@@ -97,14 +96,6 @@ pub enum RefusalReason {
     /// reports it in the refusal message shows the same spelling the
     /// lookup itself judged.
     UnsupportedToolProvider(String),
-    /// An unexpanded `{{> name}}` partial reference in a field the VM
-    /// would otherwise render (a supported tool's `prompt`/`params`/
-    /// `params_json`, or a supported `use`'s own `inputs` -- M1 gate
-    /// seam round 2, item S7) -- the run-time half of #406 never ran
-    /// to splice it in. Unconditional (not one of [`Supported`]'s own
-    /// flags): M1-P's own landing removes this check from the walker
-    /// entirely, rather than ever gating it behind a flag of its own.
-    PartialReference,
     /// The document's own top-level `adapter:` is a non-blank string,
     /// and [`Supported::preflight`] is `false` -- `cli/allowlist.py::
     /// walk_orchestration_refs`'s own `include_document_adapter` branch
@@ -262,16 +253,16 @@ impl<'a> Supported<'a> {
             loop_: true,
             // lane I (#448, #469)
             use_: true,
-            // lane P (#448)
-            yield_: false,
+            // lane P (#448, #487)
+            yield_: true,
             // lane L1 (#448)
             reflector: false,
             // lane G2 (#448)
             model_condition: false,
             // lane G2 (#448)
             model_expect: false,
-            // lane P (#448)
-            declared_prompts: false,
+            // lane P (#448, #487)
+            declared_prompts: true,
             // lane R (#448)
             preflight: false,
             // lane C (#448)
@@ -383,29 +374,6 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             {
                 return refusal(path, RefusalReason::ModelExpect);
             }
-            // S7 (M1 gate seam round 2): the `{{> name}}` check below
-            // only ever looked at a tool's own `prompt`/`params`/
-            // `params_json` -- a `use`'s own `inputs` renders the same
-            // way (`crate::params`) and never got the same check, so
-            // it was wrongly accepted. Unconditional, same as the
-            // tool check -- not gated by one of `Supported`'s own
-            // flags, until M1-P's own landing removes this check from
-            // the walker entirely.
-            if use_op.inputs.as_ref().is_some_and(param_node_has_partial) {
-                return refusal(path, RefusalReason::PartialReference);
-            }
-            // Review finding 2 on PR #454: `UseSource::Inline`'s own
-            // template text is rendered with composition at run time
-            // too (`core/use.py:557`), and a `{{> step}}` fragment in
-            // it can name an effect's own output with no `prompts:`
-            // block involved at all -- the same check as `inputs`
-            // above, unconditional until M1-P's own landing removes
-            // this walker check entirely.
-            if let UseSource::Inline(text) = &use_op.source {
-                if has_partial(text) {
-                    return refusal(path, RefusalReason::PartialReference);
-                }
-            }
             None
         }
         LeafKind::Reflector(reflector) => {
@@ -440,12 +408,6 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                     path,
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
                 );
-            }
-            if tool.prompt.as_ref().is_some_and(has_partial)
-                || tool.params_json.as_ref().is_some_and(has_partial)
-                || param_node_has_partial(&tool.params)
-            {
-                return refusal(path, RefusalReason::PartialReference);
             }
             None
         }
@@ -497,25 +459,13 @@ fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) ->
     }
 }
 
-fn has_partial(text: &TemplateText) -> bool {
-    text.source.contains("{{>")
-}
-
-fn param_node_has_partial(node: &ParamNode) -> bool {
-    match node {
-        ParamNode::Template(text) => has_partial(text),
-        ParamNode::Map(entries) => entries.values().any(param_node_has_partial),
-        ParamNode::List(items) => items.iter().any(param_node_has_partial),
-        ParamNode::Literal(_) | ParamNode::From { .. } => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::effects::{PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp};
     use crate::op::OnError;
-    use crate::template::Escape;
+    use crate::param::ParamNode;
+    use crate::template::{Escape, TemplateText};
     use indexmap::IndexMap;
     use std::collections::BTreeSet;
 
@@ -546,11 +496,17 @@ mod tests {
         // directly rather than against `m0.use_` (always `false`),
         // the one field this lane's own PR flips.
         assert!(current.use_);
-        assert_eq!(current.yield_, m0.yield_);
+        // lane P (#448, #487): `yield_`/`declared_prompts` are `true`
+        // now -- asserted directly rather than against `m0.yield_`/
+        // `m0.declared_prompts` (always `false`), the two fields this
+        // lane's own PR flips. No other field changes.
+        assert!(current.yield_);
+        assert!(!m0.yield_);
         assert_eq!(current.reflector, m0.reflector);
         assert_eq!(current.model_condition, m0.model_condition);
         assert_eq!(current.model_expect, m0.model_expect);
-        assert_eq!(current.declared_prompts, m0.declared_prompts);
+        assert!(current.declared_prompts);
+        assert!(!m0.declared_prompts);
         assert_eq!(current.preflight, m0.preflight);
         assert!(current.tools_process);
         assert!(current.tools_stdlib);
@@ -1450,7 +1406,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unexpanded_partial_in_tool_params_is_refused() {
+    fn an_unexpanded_partial_in_tool_params_now_runs_rather_than_being_refused() {
+        // M1-P (#487): `RefusalReason::PartialReference` is gone -- a
+        // `{{> name}}` tag in a tool's own `params`/`params_json`/
+        // `prompt`, or a `use`'s own `inputs`/`inline`, is no longer a
+        // case this walker refuses at all; it runs, through
+        // `electricity_vm::compose::render_with_composition`.
         let mut params = IndexMap::new();
         params.insert(
             electricity_value::Value::Str("cmd".to_string()),
@@ -1461,67 +1422,7 @@ mod tests {
             LeafKind::Tool(tool_op(ParamNode::Map(params))),
         );
         let program = program_with_root(root_block(vec![tool]));
-        let refusal = first_unsupported(&program, false, &m0()).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::PartialReference);
-    }
-
-    #[test]
-    fn an_unexpanded_partial_in_use_inputs_is_refused_even_once_use_is_supported() {
-        // S7 (M1 gate seam round 2): `UseOp::inputs` renders the same
-        // way a tool's own `params`/`params_json` does, so an
-        // unexpanded `{{> name}}` inside it must be refused the same
-        // way -- this walker used to only ever check a tool's fields.
-        let mut inputs = IndexMap::new();
-        inputs.insert(
-            electricity_value::Value::Str("greeting".to_string()),
-            ParamNode::Template(TemplateText::new("{{> greeting}}", true, Escape::Html)),
-        );
-        let use_path = EffectPath::root().push_name("sub");
-        let use_op = leaf_op(
-            use_path.clone(),
-            LeafKind::Use(crate::effects::UseOp {
-                source: crate::effects::UseSource::Path("child.yml".to_string()),
-                inputs: Some(ParamNode::Map(inputs)),
-                outputs: None,
-                validate: true,
-                retries: RetryPolicy::default(),
-                expect: None,
-                description: None,
-            }),
-        );
-        let program = program_with_root(root_block(vec![use_op]));
-        let supported = Supported { use_: true, ..m0() };
-        let refusal = first_unsupported(&program, false, &supported).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::PartialReference);
-        assert_eq!(refusal.path, use_path);
-    }
-
-    #[test]
-    fn an_unexpanded_partial_in_inline_use_source_is_refused_even_once_use_is_supported() {
-        // Review finding 2 on PR #454: `UseSource::Inline`'s own
-        // template text is spliced through composition at run time
-        // too (`core/use.py:557`), with no `prompts:` block needed for
-        // a `{{> step}}` fragment inside it to name an effect's own
-        // output -- the walker's own `{{>` check used to look only at
-        // `UseOp::inputs`, never the inline source text itself.
-        let use_path = EffectPath::root().push_name("sub");
-        let use_op = leaf_op(
-            use_path.clone(),
-            LeafKind::Use(crate::effects::UseOp {
-                source: UseSource::Inline(TemplateText::new("{{> step}}", true, Escape::Html)),
-                inputs: None,
-                outputs: None,
-                validate: true,
-                retries: RetryPolicy::default(),
-                expect: None,
-                description: None,
-            }),
-        );
-        let program = program_with_root(root_block(vec![use_op]));
-        let supported = Supported { use_: true, ..m0() };
-        let refusal = first_unsupported(&program, false, &supported).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::PartialReference);
-        assert_eq!(refusal.path, use_path);
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 
     #[test]

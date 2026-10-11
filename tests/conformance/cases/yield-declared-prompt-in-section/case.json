@@ -1,0 +1,6 @@
+{
+  "spec_case": "core/prompt_compose.py::render_with_composition, issue #406/#487",
+  "description": "A declared prompt's own text is spliced in textually, before chevron ever sees the surrounding Mustache section -- its own `{{.}}` tag sees each list item the enclosing section pushes, not one shared top-level context.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -36,8 +36,8 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
                     [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
 
-electricity is a preview: it runs tool/dynamic/if/finally/loop/use documents
-only (prompt/reflector/yield, persistence and runtime plugins are refused
+electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield documents
+only (prompt/reflector, persistence and runtime plugins are refused
 with a preview marker; use `cof run` for those).
 
 Options:

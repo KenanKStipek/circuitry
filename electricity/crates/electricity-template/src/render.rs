@@ -284,6 +284,27 @@ pub trait ScopeRoot {
     /// avoid paying the full cost of -- see that impl's own doc
     /// comment).
     fn whole(&self) -> Value;
+
+    /// Whether *key* (a dotted path, same shape [`ScopeRoot::lookup`]
+    /// takes) resolves to anything at all -- `{{> name}}` composition's
+    /// own effect-reference presence check (`electricity_vm::compose`,
+    /// issue #487): a hit proves the first segment is a real key, even
+    /// when the resolved value is itself falsy/`None`, which
+    /// [`ScopeRoot::lookup`]'s own `Ok(Some(Value::None))` already
+    /// distinguishes from "no such key" (`Ok(None)`) -- this default
+    /// is exactly that distinction, built on [`ScopeRoot::lookup`]
+    /// alone (so [`Value`]'s own impl needs no change). A store-backed
+    /// root (`electricity_vm::exec::live_scope::LiveRoot`) overrides
+    /// this with a presence-only walk instead: the path this probes is
+    /// always `prime.<name>` or `prime.<name>.value`, and `prime.<name>`
+    /// can be a loop with thousands of passes underneath it, so
+    /// resolving all the way to a `Value` (this default's own `lookup`
+    /// call, which [`Value`]'s own impl clones in full) would
+    /// materialize however big that subtree is just to answer a yes/no
+    /// question.
+    fn contains(&self, key: &str) -> bool {
+        matches!(self.lookup(key), Ok(Some(_)))
+    }
 }
 
 impl ScopeRoot for Value {
@@ -417,10 +438,17 @@ fn html_escape(s: &str) -> String {
 /// triggers for `{{{x}}}`/`{{&x}}`, which read the resolved value
 /// directly (confirmed: `renderer.py`'s `'no escape'` branch has no such
 /// check).
+///
+/// *escape* (#397/#406, lane P) toggles only the final HTML-escape step:
+/// `escape: false` makes `{{x}}` insert its value exactly as
+/// `{{{x}}}`/`{{&x}}` already do, with the `"."`-plus-`True` quirk above
+/// still applying regardless -- it belongs to this tag *type*
+/// (`render.py`'s own `'variable'` branch), not to escaping itself.
 fn render_variable_escaped<R: ScopeRoot>(
     key: &str,
     scope: &Scope<R>,
     ctx: &dyn SpliceCtx,
+    escape: bool,
 ) -> Result<String, String> {
     let mut value = get_key(key, scope)?;
     if key == "." && matches!(value, Value::Bool(true)) {
@@ -430,7 +458,11 @@ fn render_variable_escaped<R: ScopeRoot>(
             .ok_or_else(|| "list index out of range".to_string())?;
     }
     let text = stringify_for_variable(&value, ctx)?;
-    Ok(html_escape(&text))
+    if escape {
+        Ok(html_escape(&text))
+    } else {
+        Ok(text)
+    }
 }
 
 /// `{{{x}}}`/`{{&x}}`: the resolved value, unescaped, with no special
@@ -460,12 +492,15 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
     nodes: &[Node],
     scope: &Scope<R>,
     ctx: &dyn SpliceCtx,
+    escape: bool,
 ) -> Result<String, String> {
     let mut out = String::new();
     for node in nodes {
         match node {
             Node::Literal(s) => out.push_str(s),
-            Node::Variable(key) => out.push_str(&render_variable_escaped(key, scope, ctx)?),
+            Node::Variable(key) => {
+                out.push_str(&render_variable_escaped(key, scope, ctx, escape)?);
+            }
             Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scope, ctx)?),
             Node::Section(key, body) => {
                 let mut value = get_key(key, scope)?;
@@ -478,11 +513,13 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
                 if let Value::List(items) = &mut value {
                     for element in std::mem::take(items) {
                         if truthy(&element) {
-                            out.push_str(&render_with_pushed_scope(body, element, scope, ctx)?);
+                            out.push_str(&render_with_pushed_scope(
+                                body, element, scope, ctx, escape,
+                            )?);
                         }
                     }
                 } else if truthy(&value) {
-                    out.push_str(&render_with_pushed_scope(body, value, scope, ctx)?);
+                    out.push_str(&render_with_pushed_scope(body, value, scope, ctx, escape)?);
                 }
             }
             Node::Inverted(key, body) => {
@@ -493,6 +530,7 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
                         Value::Bool(true),
                         scope,
                         ctx,
+                        escape,
                     )?);
                 }
             }
@@ -506,7 +544,8 @@ fn render_with_pushed_scope<'a, R: ScopeRoot>(
     new_scope: Value,
     scope: &'a Scope<'a, R>,
     ctx: &dyn SpliceCtx,
+    escape: bool,
 ) -> Result<String, String> {
     let pushed = Scope::Pushed(new_scope, scope);
-    render_nodes(body, &pushed, ctx)
+    render_nodes(body, &pushed, ctx, escape)
 }
