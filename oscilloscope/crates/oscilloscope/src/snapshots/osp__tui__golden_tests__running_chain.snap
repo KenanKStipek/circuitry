@@ -1,5 +1,6 @@
 ---
 source: crates/oscilloscope/src/tui.rs
+assertion_line: 540
 expression: text
 ---
 "┌────────────────────────────────────────────────────────────────────┐"
@@ -7,7 +8,7 @@ expression: text
 "└────────────────────────────────────────────────────────────────────┘"
 "┌ plan ──────────────────────────────────┐┌ details ─────────────────┐"
 "│◐ prime                                 ││path   prime.a            │"
-"│◐ a  shell                              ││type   tool               │"
+"│◐ a  5.0s  shell                        ││type   tool               │"
 "│· b                                     ││plan   tool "a"           │"
 "│· fan                                   ││provider shell            │"
 "│                                        ││                          │"

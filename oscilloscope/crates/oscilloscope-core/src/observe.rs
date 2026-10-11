@@ -280,6 +280,19 @@ pub fn duration_seconds(start: &str, end: &str) -> Option<f64> {
     Some(micros as f64 / 1_000_000.0)
 }
 
+/// The real wall clock's own current time, in the same RFC3339 shape
+/// as every `created_at`/`completed_at` an engine writes -- the one
+/// place `render::build`'s caller (osp-cli, which has no direct
+/// `chrono` dependency of its own) reads the real clock, so a running
+/// row's own live duration (review finding 5 on #458's comment 3) can
+/// still be computed with the same `duration_seconds` a *finished*
+/// row's already is, rather than a second, `Instant`-based notion of
+/// elapsed time that would need its own epoch reconciled with the
+/// engine's.
+pub fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

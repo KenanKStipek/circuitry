@@ -121,6 +121,11 @@ pub struct Row {
     pub label: String,
     pub kind: RowKind,
     pub status: RowStatus,
+    /// Elapsed since `created_at`, up to `completed_at` once it has
+    /// one -- or, for a row still running (review finding 5 on
+    /// #458's comment 3), up to `build`'s own `now` instead, so a
+    /// running row's duration keeps ticking rather than showing
+    /// nothing at all until it finishes.
     pub duration_s: Option<f64>,
     pub loop_progress: Option<LoopProgress>,
     /// The provider or model, in a dim colour (§6.3) — a tool's own
@@ -202,6 +207,7 @@ pub fn build(
     state: Option<&Value>,
     process: ProcessState,
     elapsed_s: f64,
+    now: &str,
     log: &[LogLine],
 ) -> RenderState {
     let empty = Value::Null;
@@ -220,7 +226,7 @@ pub fn build(
         &flat,
         &statuses,
     );
-    let rows = build_rows(plan, &flat, &statuses);
+    let rows = build_rows(plan, &flat, &statuses, now);
 
     RenderState {
         header,
@@ -272,8 +278,13 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
             }
         }
     }
-    if let Some(args) = meta.pointer("/params_rendered/command") {
-        meta_summary.push(("command".to_string(), display_value(args)));
+    if let Some(command) = meta.pointer("/params_rendered/command") {
+        meta_summary.push(("command".to_string(), display_value(command)));
+    }
+    // Review finding 4 on #458's comment 3: the details pane showed
+    // `command` but never its own `args`, right next to it.
+    if let Some(args) = meta.pointer("/params_rendered/args") {
+        meta_summary.push(("args".to_string(), display_value(args)));
     }
     if let Some(stderr) = meta.get("stderr").and_then(Value::as_str) {
         // Finding 12: `.rev()` picks the *last* 5 lines, but without
@@ -352,7 +363,7 @@ fn build_header(
             .iter()
             .collect::<std::collections::BTreeSet<_>>()
         {
-            let (passes, leaf_lower_bound) = leaf_pass_count(leaf, flat);
+            let (passes, leaf_lower_bound) = leaf_pass_count(leaf, plan, flat);
             total = total.saturating_add(passes);
             lower_bound |= leaf_lower_bound;
         }
@@ -450,7 +461,20 @@ fn build_header(
 /// false)` for a leaf outside any loop. The second element is `true`
 /// when any crossed loop's own total isn't known yet, in which case
 /// the first is a lower bound (a single pass), not the true count.
-fn leaf_pass_count(leaf_path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, bool) {
+/// `leaf_path`'s own pass multiplier, and whether it's a lower bound
+/// rather than the true count (review finding 6 on #458's comment 3:
+/// "a leaf under an unnamed loop still counts as a lower bound"). A
+/// *named* loop's own `iter_*` placeholder segment multiplies by its
+/// `progress_total` once known (or sets the bound, before it is); an
+/// *unnamed* loop never gets an `iter_*` segment of its own at all
+/// (its body's path is reused verbatim across passes, DESIGN.md
+/// §2.3), so without this, a leaf under one was silently counted as
+/// exactly one pass forever, with no `+` to say otherwise.
+fn leaf_pass_count(
+    leaf_path: &str,
+    plan: &PlanTree,
+    flat: &BTreeMap<String, NodeMeta>,
+) -> (u64, bool) {
     let mut multiplier: u64 = 1;
     let mut lower_bound = false;
     let mut container = String::new();
@@ -466,6 +490,22 @@ fn leaf_pass_count(leaf_path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, 
             container.push('.');
         }
         container.push_str(segment);
+        // An unnamed loop's own entry sits at the *same* path as
+        // whatever scope it's nested in (`is_transparent`'s own doc
+        // comment: "contributes no path segment of its own") -- that
+        // scope's own container entry (a named loop, an `if`, the
+        // document root's own chain) is pushed into the trie first,
+        // so the unnamed loop's own entry is never necessarily
+        // `entries.first()` at that path; every entry there needs
+        // checking, not just the first.
+        if let Some(m) = plan.match_path(&container) {
+            if m.entries
+                .iter()
+                .any(|e| matches!(e.kind, PlanEntryKind::Loop { named: false, .. }))
+            {
+                lower_bound = true;
+            }
+        }
     }
     (multiplier, lower_bound)
 }
@@ -568,6 +608,7 @@ fn build_rows(
     plan: &PlanTree,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
+    now: &str,
 ) -> Vec<Row> {
     let mut all_paths: BTreeMap<String, ()> = BTreeMap::new();
     for path in statuses.keys().chain(flat.keys()) {
@@ -597,6 +638,7 @@ fn build_rows(
         &plan_order,
         plan,
         &default_status,
+        now,
         &mut rows,
     );
     rows
@@ -612,6 +654,7 @@ fn walk_rows(
     plan_order: &BTreeMap<String, usize>,
     plan: &PlanTree,
     default_status: &RowStatus,
+    now: &str,
     out: &mut Vec<Row>,
 ) {
     let node = flat.get(path);
@@ -623,6 +666,7 @@ fn walk_rows(
         .unwrap_or_else(|| default_status.clone());
     let duration_s = node.and_then(|n| match (&n.created_at, &n.completed_at) {
         (Some(start), Some(end)) => duration_seconds(start, end),
+        (Some(start), None) => duration_seconds(start, now),
         _ => None,
     });
     let loop_progress = node.and_then(|n| {
@@ -663,6 +707,7 @@ fn walk_rows(
             plan_order,
             plan,
             default_status,
+            now,
             out,
         );
     }
@@ -731,6 +776,7 @@ mod tests {
             None,
             ProcessState::Running,
             0.0,
+            "2026-01-01T00:00:00Z",
             &[],
         );
         assert_eq!(state.header.status, RunStatus::Running);
@@ -761,6 +807,7 @@ mod tests {
             Some(&state_json),
             ProcessState::Running,
             1.5,
+            "2026-01-01T00:00:01.5Z",
             &[],
         );
         let step1 = rendered
@@ -771,6 +818,11 @@ mod tests {
         assert_eq!(step1.status.kind, crate::model::StatusKind::Running);
         assert_eq!(step1.dim.as_deref(), Some("shell"));
         assert_eq!(rendered.header.elapsed_s, 1.5);
+        // Review finding 5 on #458's comment 3: a running row (no
+        // `completed_at` yet) still gets a live duration, computed
+        // against `build`'s own `now` rather than showing nothing
+        // until it finishes.
+        assert_eq!(step1.duration_s, Some(1.5));
     }
 
     #[test]
@@ -794,6 +846,7 @@ mod tests {
             Some(&state_json),
             ProcessState::Running,
             3.0,
+            "2026-01-01T00:00:03Z",
             &[],
         );
         let order: Vec<&str> = rendered
@@ -877,6 +930,83 @@ mod tests {
         }
     }
 
+    /// An unnamed loop's own leaf (review finding 6 on #458's comment
+    /// 3): its body reuses the document root's own path (DESIGN.md
+    /// §1.3, `is_transparent`), so unlike
+    /// `named_loop_with_one_leaf_program`'s `fan.iter_*.nap`, this has
+    /// no `iter_*` placeholder segment of its own at all -- just
+    /// `prime.u_nap`.
+    fn unnamed_loop_with_one_leaf_program() -> electricity_bytecode::Program {
+        use electricity_bytecode::{
+            EffectPath, LeafKind, LoopFlow, NodeKind, OnError, Op, ParamNode, Program, Region,
+            ToolOp,
+        };
+
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone();
+        let body_path = loop_path.clone().push_name("u_nap");
+        Program {
+            root: Op {
+                path: root_path,
+                name: Some("prime".to_string()),
+                kind: NodeKind::Control(Region::Block {
+                    ops: vec![Op {
+                        path: loop_path,
+                        name: None,
+                        kind: NodeKind::Control(Region::Loop {
+                            spec: electricity_bytecode::LoopSpec::Each {
+                                in_path: "prime.items".to_string(),
+                                as_name: "item".to_string(),
+                                truncate: false,
+                            },
+                            body: Box::new(Region::Block {
+                                ops: vec![Op {
+                                    path: body_path,
+                                    name: Some("u_nap".to_string()),
+                                    kind: NodeKind::Leaf(Box::new(LeafKind::Tool(ToolOp {
+                                        provider: "shell".to_string(),
+                                        params: ParamNode::Literal(electricity_value::Value::None),
+                                        params_json: None,
+                                        prompt: None,
+                                        model: None,
+                                        timeout_ms: None,
+                                        retries: Default::default(),
+                                        expect: None,
+                                        description: None,
+                                        group: None,
+                                    }))),
+                                    on_error: OnError::Fail,
+                                    labels: None,
+                                    enabled: true,
+                                }],
+                                overlay: true,
+                            }),
+                            flow: LoopFlow::Chain,
+                            max_concurrency: None,
+                            max_iterations: None,
+                            min_iterations: 0,
+                            collect: None,
+                        }),
+                        on_error: OnError::Fail,
+                        labels: None,
+                        enabled: true,
+                    }],
+                    overlay: false,
+                }),
+                on_error: OnError::Fail,
+                labels: None,
+                enabled: true,
+            },
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        }
+    }
+
     #[test]
     fn effects_planned_multiplies_a_loop_bodys_leaf_by_its_known_total() {
         // Review finding 6: `fan`'s own single leaf template
@@ -899,6 +1029,7 @@ mod tests {
             Some(&state),
             ProcessState::Running,
             2.0,
+            "t2",
             &[],
         );
         assert_eq!(rendered.header.effects_planned, Some(4));
@@ -918,10 +1049,42 @@ mod tests {
             None,
             ProcessState::Running,
             0.0,
+            "t0",
             &[],
         );
         assert_eq!(rendered.header.effects_planned, Some(1));
         assert!(rendered.header.effects_planned_is_lower_bound);
+    }
+
+    #[test]
+    fn effects_planned_is_a_lower_bound_under_an_unnamed_loop_even_once_a_pass_is_done() {
+        // Review finding 6 on #458's comment 3: an unnamed loop never
+        // gets a known `progress.total` of its own path the way a
+        // *named* one's `iter_*` placeholder does -- `u_nap` must stay
+        // a lower bound (`1+`) no matter how many passes have already
+        // completed at that same, reused path, not settle to a bare
+        // `1` once the first one does.
+        let plan = PlanTree::from_program(&unnamed_loop_with_one_leaf_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "u_nap": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.header.effects_planned, Some(1));
+        assert!(
+            rendered.header.effects_planned_is_lower_bound,
+            "a leaf under an unnamed loop is never an exact count"
+        );
     }
 
     #[test]
