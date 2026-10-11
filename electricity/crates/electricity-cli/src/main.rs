@@ -72,7 +72,6 @@ struct RunArgs {
     pretty: bool,
     live_state: Option<String>,
     events: Option<String>,
-    /// Parsed (and its own value consumed) but never acted on in this
     /// `--profile <path>` (issue #495, lane R): an explicit path
     /// only, passed through to `RunRequest::profile_path`.
     profile: Option<String>,

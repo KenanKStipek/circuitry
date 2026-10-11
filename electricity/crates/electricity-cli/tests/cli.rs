@@ -754,3 +754,54 @@ fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
     assert_eq!(payload["state_out"], serde_json::Value::Null);
     assert!(!payload["error"].as_str().unwrap().is_empty());
 }
+
+/// A profile's own `out:` (DESIGN §6.11), with no `--out` flag at all,
+/// is where `cof run` actually writes the state (`main.rs:710`'s
+/// `effective_out_path` falls back to `RunResult::out_path`) -- and
+/// `runtime.effective_settings.out` in that written file must name the
+/// same path, not `null` (PR #497 review finding 1): Python's own
+/// `effective_settings` always records whichever of `--out`/profile/
+/// default actually applies (`cli/runtime_shim.py:708`), never only a
+/// literal `--out` flag.
+#[test]
+fn a_profiles_out_is_both_written_to_and_recorded_with_no_out_flag() {
+    let (mut cmd, home) = command("profile-out-no-flag");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let profile_out = home.path.join("profile-out.json");
+    let profile = home.path.join("p.yml");
+    fs::write(
+        &profile,
+        format!("out: {}\n", profile_out.to_str().unwrap()),
+    )
+    .unwrap();
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: serde_json::Value = serde_json::from_str(&stdout).expect("JSON on stdout");
+    assert_eq!(
+        payload["state_out"].as_str().unwrap(),
+        profile_out.to_str().unwrap()
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&profile_out).unwrap()).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["out"]
+            .as_str()
+            .unwrap(),
+        profile_out.to_str().unwrap()
+    );
+    assert_eq!(
+        state["runtime"]["effective_settings"]["sources"]["out"],
+        "profile"
+    );
+}

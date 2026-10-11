@@ -1205,8 +1205,9 @@ pub async fn run_orchestration_with_config(
     effective_settings_dict.insert(
         Value::Str("out".to_string()),
         req.out_path
-            .as_ref()
-            .map(|p| Value::Str(out::python_path_str(p)))
+            .clone()
+            .or_else(|| effective.out.clone())
+            .map(|p| Value::Str(out::python_path_str(&p)))
             .unwrap_or(Value::None),
     );
     effective_settings_dict.insert(

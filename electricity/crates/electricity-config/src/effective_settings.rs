@@ -1,12 +1,16 @@
 //! `cli/effective_settings.py::resolve_effective_settings`, narrowed to
 //! the tiers electricity's own CLI has: there is no `--model`/
 //! `--adapter`/`--plugins`/`--scoring`/`--routing`/`--decompose` flag,
-//! no profile, and no `--resume` (`out` has no electricity-side
-//! equivalent either: `--out` is a run-level CLI flag, not part of the
-//! config/document merge at all) -- so the `cli`/`profile`/`resume`
-//! precedence tiers `resolve_effective_settings` has are simply never
-//! populated here, and every call is as if every one of its optional
-//! parameters were left at its default.
+//! and no `--resume` (`out` has no electricity-side config/document-
+//! merge tier of its own either: `--out` is a run-level CLI flag, not
+//! part of that merge at all) -- so the `cli`/`resume` precedence
+//! tiers `resolve_effective_settings` has are simply never populated
+//! here. `profile` (issue #495, lane R) *is* populated, through
+//! [`effective_settings_with_profile`]'s own `profile` parameter --
+//! the one tier this module ranks above `orchestration`/`config` for
+//! `model`/`adapter`, and above `default` for `out`; electricity's own
+//! `--out` CLI flag still ranks above all of it, applied by the
+//! `electricity` crate's own run wiring after this returns.
 //!
 //! The one precedence tier that *is* always populated: `trust_document`
 //! is always `true`. Every document electricity runs is named by path
@@ -43,12 +47,13 @@ use std::path::PathBuf;
 pub struct EffectiveSettings {
     pub model: Option<String>,
     pub adapter: Option<String>,
-    /// Always `None`: `--out` has no config/document-merge precedence
-    /// tier of its own in Circuitry either (see this module's own doc
-    /// comment) -- kept as a field, not dropped, since issue #431's
-    /// lane D (run wiring) still needs somewhere to read a resolved
-    /// `out` from once it has its own `--out` CLI flag to rank above
-    /// it.
+    /// `None` unless a loaded `--profile`'s own `out:` resolves it
+    /// (issue #495, lane R) -- `--out` has no config/document-merge
+    /// precedence tier of its own in Circuitry either (see this
+    /// module's own doc comment), so this is `profile`'s own tier
+    /// alone; electricity's own `--out` CLI flag still ranks above it,
+    /// applied by the `electricity` crate's own run wiring after this
+    /// returns.
     pub out: Option<PathBuf>,
     pub plugins: Vec<Value>,
     pub runtime: Option<Value>,

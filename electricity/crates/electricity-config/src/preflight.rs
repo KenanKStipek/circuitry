@@ -209,11 +209,7 @@ pub fn skippable_effect_names(
         .into_iter()
         .flatten()
         .filter(|u| u.on_error != "fail")
-        .map(|u| {
-            u.effect_name
-                .clone()
-                .unwrap_or_else(|| "<unnamed>".to_string())
-        })
+        .map(|u| effect_name_or_unnamed(u.effect_name.as_deref()))
         .collect()
 }
 
@@ -224,12 +220,19 @@ pub fn hard_effect_names(name: &str, usages: &HashMap<String, Vec<AdapterUsage>>
         .into_iter()
         .flatten()
         .filter(|u| u.on_error == "fail")
-        .map(|u| {
-            u.effect_name
-                .clone()
-                .unwrap_or_else(|| "<unnamed>".to_string())
-        })
+        .map(|u| effect_name_or_unnamed(u.effect_name.as_deref()))
         .collect()
+}
+
+/// `u.effect_name or "<unnamed>"` (`allowlist.py:255`, `:265`): Python's
+/// `or` falls through on an empty string too, not only `None` -- the
+/// schema's `NamePattern` blocks an effect from actually naming itself
+/// `""` today, so this only matters if that ever changes.
+fn effect_name_or_unnamed(effect_name: Option<&str>) -> String {
+    match effect_name {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "<unnamed>".to_string(),
+    }
 }
 
 /// `runtime_shim.py::classify_preflight_results`: splits raw preflight
@@ -266,7 +269,7 @@ pub fn classify_preflight_results(
                     "adapter '{adapter_name}' unavailable; required by effects {}",
                     format_list(&required_by)
                 );
-                if let Some(msg) = &result.message {
+                if let Some(msg) = non_empty_message(&result.message) {
                     message.push_str(&format!(" ({msg})"));
                 }
                 hard.push((
@@ -287,7 +290,7 @@ pub fn classify_preflight_results(
             "adapter '{adapter_name}' unavailable; effects {} will skip",
             format_list(&effects)
         );
-        if let Some(msg) = &result.message {
+        if let Some(msg) = non_empty_message(&result.message) {
             message.push_str(&format!(" ({msg})"));
         }
         soft.push((
@@ -312,8 +315,8 @@ pub fn format_preflight_errors(results: &[(String, CheckResult)]) -> Vec<String>
             if !r.missing.is_empty() {
                 parts.push(format!("missing {}", format_list(&r.missing)));
             }
-            if let Some(message) = &r.message {
-                parts.push(message.clone());
+            if let Some(message) = non_empty_message(&r.message) {
+                parts.push(message.to_string());
             }
             parts.join(" \u{2014} ")
         })
@@ -325,9 +328,8 @@ pub fn format_preflight_warnings(results: &[(String, CheckResult)]) -> Vec<Strin
     results
         .iter()
         .map(|(label, r)| {
-            let mut message = r
-                .message
-                .clone()
+            let mut message = non_empty_message(&r.message)
+                .map(str::to_string)
                 .unwrap_or_else(|| format!("{label}: not ready"));
             if !r.missing.is_empty() {
                 message.push_str(&format!(" (missing {})", format_list(&r.missing)));
@@ -335,6 +337,14 @@ pub fn format_preflight_warnings(results: &[(String, CheckResult)]) -> Vec<Strin
             message
         })
         .collect()
+}
+
+/// `r.message` (truthy, `runtime_shim.py`'s own `if r.message:`/`r.message
+/// or ...`): Python never treats an empty string as present. No real
+/// check constructs `CheckResult { message: Some(String::new()), .. }`
+/// today; this only matters if one ever does.
+fn non_empty_message(message: &Option<String>) -> Option<&str> {
+    message.as_deref().filter(|m| !m.is_empty())
 }
 
 /// `walk_orchestration_refs`, re-exported under this module so lane
@@ -497,7 +507,7 @@ mod tests {
         assert!(hard.is_empty());
         assert_eq!(
             soft[0].1.message.as_deref(),
-            Some("adapter 'scripted' unavailable; effects [''] will skip (down)")
+            Some("adapter 'scripted' unavailable; effects ['<unnamed>'] will skip (down)")
         );
     }
 
@@ -584,5 +594,35 @@ mod tests {
             },
         )]);
         assert_eq!(warnings, vec!["adapter:scripted: not ready".to_string()]);
+    }
+
+    /// Python's `r.message or f"{label}: not ready"` treats an empty
+    /// string the same as `None` -- so does this, even though no real
+    /// check constructs `Some(String::new())` today.
+    #[test]
+    fn format_preflight_warnings_treats_an_empty_message_as_absent() {
+        let warnings = format_preflight_warnings(&[(
+            "adapter:scripted".to_string(),
+            CheckResult {
+                ok: false,
+                missing: vec![],
+                message: Some(String::new()),
+            },
+        )]);
+        assert_eq!(warnings, vec!["adapter:scripted: not ready".to_string()]);
+    }
+
+    /// Python's `if r.message:` is also falsy on an empty string.
+    #[test]
+    fn format_preflight_errors_treats_an_empty_message_as_absent() {
+        let errors = format_preflight_errors(&[(
+            "adapter:scripted".to_string(),
+            CheckResult {
+                ok: false,
+                missing: vec![],
+                message: Some(String::new()),
+            },
+        )]);
+        assert_eq!(errors, vec!["adapter:scripted: not ready".to_string()]);
     }
 }
