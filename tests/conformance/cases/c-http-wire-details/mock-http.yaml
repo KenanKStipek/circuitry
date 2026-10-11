@@ -1,0 +1,60 @@
+- request:
+    method: GET
+    path: /search
+  response:
+    status: 200
+    reason: OK
+    body: "search ok"
+- request:
+    method: POST
+    path: /json-body
+  response:
+    status: 200
+    reason: OK
+    body: "json ok"
+- request:
+    method: POST
+    path: /raw-body
+  response:
+    status: 200
+    reason: OK
+    body: "raw ok"
+- request:
+    method: GET
+    path: /cookies
+  response:
+    status: 200
+    reason: OK
+    headers:
+      - [Set-Cookie, "a=1"]
+      - [X-Other, mid]
+      - [Set-Cookie, "a=2"]
+    body: "cookies ok"
+- request:
+    method: GET
+    path: /binary
+  response:
+    status: 200
+    reason: OK
+    body_base64: "//4AAQ=="
+- request:
+    method: HEAD
+    path: /head-me
+  response:
+    status: 200
+    reason: OK
+    body: "head body never sent on the wire"
+- request:
+    method: GET
+    path: /not-json
+  response:
+    status: 200
+    reason: OK
+    body: "not actually json"
+- request:
+    method: GET
+    path: /not-json
+  response:
+    status: 200
+    reason: OK
+    body: "not actually json"

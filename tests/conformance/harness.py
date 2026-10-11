@@ -63,6 +63,33 @@ CREDENTIAL_ENV_VARS = (
     "NPM_TOKEN",
 )
 
+#: Every `http`/`https`/`ftp`/`all`-proxy variable, both cases (`getproxies_
+#: environment`'s own convention, lowercase and uppercase alike) plus
+#: `REQUEST_METHOD` (the CGI guard that only ever *removes* the plain
+#: `http` entry, so it can't hide a real proxy on its own, but is dropped
+#: here anyway for the same reason every other ambient variable is).
+#: `_sandboxed_env` drops every one of these the caller's shell might
+#: export, then sets `no_proxy=*` explicitly (issue #485, lane E's own
+#: network-isolation rule): a developer's real proxy settings must never
+#: change an `http`-tool conformance case's own loopback request, on
+#: either engine, and a bare `no_proxy=*` also makes CPython's own
+#: `getproxies_environment()` return a non-empty dict, which suppresses
+#: its macOS system-proxy fallback (`getproxies()` only ever falls back to
+#: `getproxies_macosx_sysconf()` when the environment lookup is empty).
+PROXY_ENV_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "ftp_proxy",
+    "all_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "FTP_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "REQUEST_METHOD",
+)
+
 DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -292,9 +319,17 @@ def _sandboxed_env(
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in CREDENTIAL_ENV_VARS and not k.startswith("CIRCUITRY_")
+        if k not in CREDENTIAL_ENV_VARS
+        and k not in PROXY_ENV_VARS
+        and not k.startswith("CIRCUITRY_")
     }
     env["HOME"] = str(home_dir)
+    # Bypass every proxy explicitly, rather than merely clearing the
+    # variables above -- a case subprocess's own loopback request to the
+    # mock HTTP server must never depend on, or be routed through, a
+    # proxy the caller's shell happened to export (issue #485, lane E's
+    # own network-isolation rule).
+    env["no_proxy"] = "*"
     fakes_dir = case_dir / "fakes"
     if fakes_dir.is_dir():
         env["PATH"] = f"{fakes_dir}{os.pathsep}{env.get('PATH', '')}"

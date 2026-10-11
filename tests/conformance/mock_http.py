@@ -17,15 +17,18 @@ so a malformed fixture fails the same way a malformed orchestration
 document would. Every request actually received is recorded (method,
 path, query, headers apart from `User-Agent`, and body) so a conformance
 case can commit the recording as `expected.http_requests.json` and both
-engines' runs can be diffed against it (today, only the Python engine
-runs this far — electricity still refuses every document that reaches
-an HTTP-family tool/adapter through the preview marker, per the M0-H
-refusal walker).
+engines' runs can be diffed against it -- lane E (issue #485) wires the
+`http` tool's own electricity client through the same server, so both
+engines now run every `http`-tool case this file scripts, apart from
+the `mcp`/model-adapter transports still refused behind the preview
+marker.
 """
 
 from __future__ import annotations
 
+import base64
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,7 +44,25 @@ from circuitry.core.yaml_load import load_yaml
 #: deterministic.
 _REQUEST_KEYS = frozenset({"method", "path"})
 _RESPONSE_REQUIRED_KEYS = frozenset({"status"})
-_RESPONSE_ALLOWED_KEYS = frozenset({"status", "reason", "headers", "body"})
+#: Additive (lane E, issue #485): `body_base64` (a non-UTF-8 body),
+#: `delay_ms` (a response-timing case) and `close_without_response`
+#: (a server that closes before ever answering) sit alongside the
+#: original four -- every existing fixture using only those four still
+#: validates and regenerates unchanged. `close_without_response` cases
+#: carry no `status` at all (there's no status line to send); see
+#: `_load_fixture`'s own branch below for that one exception to
+#: `_RESPONSE_REQUIRED_KEYS`.
+_RESPONSE_ALLOWED_KEYS = frozenset(
+    {
+        "status",
+        "reason",
+        "headers",
+        "body",
+        "body_base64",
+        "delay_ms",
+        "close_without_response",
+    }
+)
 
 
 class MockHttpFixtureError(ValueError):
@@ -52,10 +73,19 @@ class MockHttpFixtureError(ValueError):
 class _Matcher:
     method: str
     path: str
-    status: int
+    #: `None` for `close_without_response` -- there is no status line to
+    #: send at all in that case.
+    status: int | None
     reason: str
-    headers: dict[str, str]
-    body: str
+    #: Ordered `(name, value)` pairs, as given -- a dict fixture's own
+    #: `.items()` order, or a list-of-pairs fixture's own order,
+    #: duplicates kept (a list fixture is the only form that *can*
+    #: express one: a dict's own keys are already unique). Sent on the
+    #: wire in this exact order via repeated `send_header` calls.
+    headers: list[tuple[str, str]]
+    body: bytes
+    delay_ms: int
+    close_without_response: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,28 +126,68 @@ def _load_fixture(path: Path) -> list[_Matcher]:
                 f"{sorted(_REQUEST_KEYS)}"
             )
         resp = entry["response"]
-        if (
-            not isinstance(resp, dict)
-            or not set(resp) >= _RESPONSE_REQUIRED_KEYS
-            or set(resp) - _RESPONSE_ALLOWED_KEYS
-        ):
+        if not isinstance(resp, dict) or set(resp) - _RESPONSE_ALLOWED_KEYS:
+            raise MockHttpFixtureError(
+                f"{path}: entry {i}'s 'response' must be a mapping with only "
+                f"keys from {sorted(_RESPONSE_ALLOWED_KEYS)}"
+            )
+        close_without_response = bool(resp.get("close_without_response", False))
+        if not close_without_response and not set(resp) >= _RESPONSE_REQUIRED_KEYS:
             raise MockHttpFixtureError(
                 f"{path}: entry {i}'s 'response' must be a mapping with 'status' "
                 f"and only keys from {sorted(_RESPONSE_ALLOWED_KEYS)}"
             )
-        headers = resp.get("headers") or {}
-        if not isinstance(headers, dict):
+        if "body" in resp and "body_base64" in resp:
             raise MockHttpFixtureError(
-                f"{path}: entry {i}'s 'response.headers' must be a mapping"
+                f"{path}: entry {i}'s 'response' must not set both 'body' and "
+                "'body_base64'"
+            )
+        headers_raw = resp.get("headers") or {}
+        headers_pairs: list[tuple[str, str]]
+        if isinstance(headers_raw, dict):
+            headers_pairs = [(str(k), str(v)) for k, v in headers_raw.items()]
+        elif isinstance(headers_raw, list):
+            headers_pairs = []
+            for j, pair in enumerate(headers_raw):
+                if (
+                    not isinstance(pair, list)
+                    or len(pair) != 2
+                    or any(isinstance(p, (list, dict)) for p in pair)
+                ):
+                    raise MockHttpFixtureError(
+                        f"{path}: entry {i}'s 'response.headers[{j}]' must be a "
+                        "[name, value] pair"
+                    )
+                headers_pairs.append((str(pair[0]), str(pair[1])))
+        else:
+            raise MockHttpFixtureError(
+                f"{path}: entry {i}'s 'response.headers' must be a mapping or a "
+                "list of [name, value] pairs"
+            )
+        if "body_base64" in resp:
+            try:
+                body_bytes = base64.b64decode(str(resp["body_base64"]), validate=True)
+            except (ValueError, TypeError) as exc:
+                raise MockHttpFixtureError(
+                    f"{path}: entry {i}'s 'response.body_base64' is not valid base64"
+                ) from exc
+        else:
+            body_bytes = str(resp.get("body", "")).encode("utf-8")
+        delay_ms = int(resp.get("delay_ms", 0))
+        if delay_ms < 0:
+            raise MockHttpFixtureError(
+                f"{path}: entry {i}'s 'response.delay_ms' must not be negative"
             )
         matchers.append(
             _Matcher(
                 method=str(req["method"]).upper(),
                 path=str(req["path"]),
-                status=int(resp["status"]),
+                status=int(resp["status"]) if not close_without_response else None,
                 reason=str(resp.get("reason", "")),
-                headers={str(k): str(v) for k, v in headers.items()},
-                body=str(resp.get("body", "")),
+                headers=headers_pairs,
+                body=body_bytes,
+                delay_ms=delay_ms,
+                close_without_response=close_without_response,
             )
         )
     return matchers
@@ -187,7 +257,7 @@ def _make_handler(server: MockHttpServer) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def _handle(self) -> None:
+        def _handle(self, *, write_body: bool = True) -> None:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length).decode("utf-8") if length else ""
             split = urlsplit(self.path)
@@ -210,15 +280,30 @@ def _make_handler(server: MockHttpServer) -> type[BaseHTTPRequestHandler]:
                 self.send_response_only(599, "mock server: unmatched request")
                 self.send_header("Content-Length", str(len(body_bytes)))
                 self.end_headers()
-                self.wfile.write(body_bytes)
+                if write_body:
+                    self.wfile.write(body_bytes)
                 return
-            body_bytes = matcher.body.encode("utf-8")
+            if matcher.delay_ms:
+                time.sleep(matcher.delay_ms / 1000)
+            if matcher.close_without_response:
+                # No status line, no headers, nothing -- `close_connection`
+                # tells `BaseHTTPRequestHandler` not to try reading another
+                # request off this same socket; closing the connection
+                # itself is what actually makes the client observe an
+                # unanswered close rather than hanging until its own
+                # timeout (a `delay_ms` above already ran, so a "slow then
+                # drop" case is expressible too).
+                self.close_connection = True
+                self.connection.close()
+                return
+            assert matcher.status is not None
             self.send_response_only(matcher.status, matcher.reason)
-            for k, v in matcher.headers.items():
+            for k, v in matcher.headers:
                 self.send_header(k, v)
-            self.send_header("Content-Length", str(len(body_bytes)))
+            self.send_header("Content-Length", str(len(matcher.body)))
             self.end_headers()
-            self.wfile.write(body_bytes)
+            if write_body:
+                self.wfile.write(matcher.body)
 
         def do_GET(self) -> None:
             self._handle()
@@ -234,6 +319,14 @@ def _make_handler(server: MockHttpServer) -> type[BaseHTTPRequestHandler]:
 
         def do_PATCH(self) -> None:
             self._handle()
+
+        def do_HEAD(self) -> None:
+            # HTTP semantics: every header a `GET` to the same path would
+            # send (including `Content-Length`), but never the body
+            # itself -- `_handle`'s own `write_body=False` keeps the rest
+            # of the matching/recording/header-writing logic identical
+            # rather than a second copy of it.
+            self._handle(write_body=False)
 
         def log_message(self, format: str, *args: Any) -> None:
             pass  # silence BaseHTTPRequestHandler's default stderr logging

@@ -1,0 +1,16 @@
+name: c-http-read-timeout-retried
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: result
+    provider: http
+    timeout_ms: 500
+    retries:
+      max_attempts: 2
+      backoff_ms: 1
+    params:
+      url: "{{input.base_url}}/slow"

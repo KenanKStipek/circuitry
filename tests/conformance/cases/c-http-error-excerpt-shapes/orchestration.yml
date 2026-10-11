@@ -1,0 +1,37 @@
+name: c-http-error-excerpt-shapes
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: nested
+    provider: http
+    params:
+      url: "{{input.base_url}}/nested"
+      fail_on_error: false
+  - type: tool
+    name: flat
+    provider: http
+    params:
+      url: "{{input.base_url}}/flat"
+      fail_on_error: false
+  - type: tool
+    name: message
+    provider: http
+    params:
+      url: "{{input.base_url}}/message"
+      fail_on_error: false
+  - type: tool
+    name: unrecognized
+    provider: http
+    params:
+      url: "{{input.base_url}}/unrecognized"
+      fail_on_error: false
+  - type: tool
+    name: not_json
+    provider: http
+    params:
+      url: "{{input.base_url}}/not-json"
+      fail_on_error: false

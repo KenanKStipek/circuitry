@@ -5,8 +5,11 @@ case or subprocess, the lowest-level proof the server itself behaves as
 
 from __future__ import annotations
 
+import base64
+import http.client
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -152,6 +155,30 @@ def test_a_request_with_no_matchers_left_gets_a_diagnostic_response(tmp_path: Pa
         json.dumps(
             [{"request": {"method": "GET", "path": "/x"}, "response": {"status": 200, "huh": 1}}]
         ),
+        json.dumps(
+            [
+                {
+                    "request": {"method": "GET", "path": "/x"},
+                    "response": {"status": 200, "body": "a", "body_base64": "Yg=="},
+                }
+            ]
+        ),
+        json.dumps(
+            [
+                {
+                    "request": {"method": "GET", "path": "/x"},
+                    "response": {"status": 200, "headers": [["a", "b", "c"]]},
+                }
+            ]
+        ),
+        json.dumps(
+            [
+                {
+                    "request": {"method": "GET", "path": "/x"},
+                    "response": {"status": 200, "delay_ms": -1},
+                }
+            ]
+        ),
     ],
     ids=[
         "not-a-list",
@@ -159,9 +186,101 @@ def test_a_request_with_no_matchers_left_gets_a_diagnostic_response(tmp_path: Pa
         "response-headers-not-a-mapping",
         "request-missing-path",
         "response-unknown-key",
+        "body-and-body-base64-both-set",
+        "headers-pair-not-length-two",
+        "negative-delay-ms",
     ],
 )
 def test_rejects_malformed_fixtures(tmp_path: Path, text: str) -> None:
     fixture = _write_fixture(tmp_path, text)
     with pytest.raises(MockHttpFixtureError):
         MockHttpServer(fixture)
+
+
+def test_headers_as_a_list_of_pairs_expresses_a_duplicate_name(tmp_path: Path) -> None:
+    fixture = _write_fixture(
+        tmp_path,
+        """
+        - request: {method: GET, path: /cookies}
+          response:
+            status: 200
+            headers:
+              - [Set-Cookie, "a=1"]
+              - [X-Other, mid]
+              - [Set-Cookie, "a=2"]
+            body: ""
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        conn.request("GET", "/cookies")
+        resp = conn.getresponse()
+        resp.read()
+        names = [name for name, _ in resp.getheaders()]
+        assert names.count("Set-Cookie") == 2
+        conn.close()
+
+
+def test_body_base64_sends_non_utf8_bytes_verbatim(tmp_path: Path) -> None:
+    raw = bytes([0xFF, 0xFE, 0x00, 0x01])
+    fixture = _write_fixture(
+        tmp_path,
+        f"""
+        - request: {{method: GET, path: /bin}}
+          response:
+            status: 200
+            body_base64: "{base64.b64encode(raw).decode('ascii')}"
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{server.port}/bin", timeout=5)
+        assert resp.read() == raw
+
+
+def test_a_head_request_gets_headers_but_no_body(tmp_path: Path) -> None:
+    fixture = _write_fixture(
+        tmp_path,
+        """
+        - request: {method: HEAD, path: /x}
+          response: {status: 200, body: "hello"}
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        conn.request("HEAD", "/x")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        assert resp.getheader("Content-Length") == "5"
+        assert resp.read() == b""
+        conn.close()
+    assert server.requests[0].method == "HEAD"
+
+
+def test_delay_ms_waits_before_responding(tmp_path: Path) -> None:
+    fixture = _write_fixture(
+        tmp_path,
+        """
+        - request: {method: GET, path: /slow}
+          response: {status: 200, body: "ok", delay_ms: 150}
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        started = time.monotonic()
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{server.port}/slow", timeout=5)
+        elapsed = time.monotonic() - started
+        assert resp.read() == b"ok"
+        assert elapsed >= 0.15
+
+
+def test_close_without_response_closes_with_nothing_sent(tmp_path: Path) -> None:
+    fixture = _write_fixture(
+        tmp_path,
+        """
+        - request: {method: GET, path: /drop}
+          response: {close_without_response: true}
+        """,
+    )
+    with MockHttpServer(fixture) as server:
+        with pytest.raises((urllib.error.HTTPError, http.client.BadStatusLine, ConnectionError)):
+            urllib.request.urlopen(f"http://127.0.0.1:{server.port}/drop", timeout=5)
+    assert server.requests[0].path == "/drop"
