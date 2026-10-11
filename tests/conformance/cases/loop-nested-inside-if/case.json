@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A named each loop inside an if's then branch: the loop's own node sits under the if's own node (prime.gate.shots), with the same iter_<N>/last/meta shape as a top-level loop.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

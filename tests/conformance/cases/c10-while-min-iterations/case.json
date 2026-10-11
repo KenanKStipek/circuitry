@@ -1,0 +1,6 @@
+{
+  "spec_case": "C10",
+  "description": "while: {mode: cel} loop with min_iterations: 2, condition reading has(state.prime.step) -- a path only the body itself writes (electricity/docs/spec/runtime-semantics.md Q4). The condition is never evaluated on the two forced passes (no absent-path warning on stderr), only once iteration_count reaches min_iterations; by then the body has already written the path, so `has()` sees it on the very first real check.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

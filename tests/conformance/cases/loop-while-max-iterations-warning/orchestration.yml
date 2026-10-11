@@ -1,0 +1,11 @@
+name: loop-while-max-iterations-warning
+effects:
+  - type: loop
+    name: counter
+    max_iterations: 3
+    while: {mode: cel, expr: "true"}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {index: "{{iter.index}}"}}

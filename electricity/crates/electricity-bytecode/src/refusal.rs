@@ -259,7 +259,7 @@ impl<'a> Supported<'a> {
             // lane G (#448)
             prompt: false,
             // lane H (#448)
-            loop_: false,
+            loop_: true,
             // lane I (#448)
             use_: false,
             // lane P (#448)
@@ -531,13 +531,17 @@ mod tests {
         // Review P2-b on PR #454: `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
         // (pinned forever to the exact M0 value by the golden tests
-        // below) -- now that lanes C (#459) and D1 (#460) have landed,
-        // `current` and `m0` diverge on `tools_process`/`tools_stdlib`;
-        // every other field must still agree field for field.
+        // below) -- now that lanes C (#459), D1 (#460) and H (#448,
+        // #461) have landed, `current` and `m0` diverge on
+        // `tools_process`/`tools_stdlib`/`loop_`; every other field
+        // must still agree field for field. `current.loop_` asserts
+        // `true` directly instead of comparing against `m0.loop_`,
+        // which stays pinned to `false` forever.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
         assert_eq!(current.prompt, m0.prompt);
-        assert_eq!(current.loop_, m0.loop_);
+        assert!(current.loop_);
+        assert!(!m0.loop_);
         assert_eq!(current.use_, m0.use_);
         assert_eq!(current.yield_, m0.yield_);
         assert_eq!(current.reflector, m0.reflector);

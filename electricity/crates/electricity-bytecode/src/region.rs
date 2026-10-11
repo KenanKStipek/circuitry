@@ -117,12 +117,15 @@ pub enum Region {
         /// (transparent) loop -- the same value the compiler also
         /// gives the enclosing `Op::name`, carried here too so a
         /// caller holding only this `Region` (not the enclosing `Op`)
-        /// can still build a `Frame::iteration(name, index)` path
-        /// without having to recover the name by parsing a body path's
-        /// own segments (M1 gate seam round 2, item S8) -- lane H's
+        /// still knows whether each pass needs a `Frame::with_pass`
+        /// path at all (M1 gate seam round 2, item S8) -- lane H's
         /// own seam, since `groups.rs::collect_region_groups` and the
         /// refusal walker's own `walk_region` both already recurse
-        /// into `body` with no `Op` in hand.
+        /// into `body` with no `Op` in hand. `Region::Loop` carries no
+        /// `LoopId` of its own; a named loop's own `Frame::with_pass`
+        /// reads it from the first body op's own path, right after
+        /// this loop's own path segments (the compiler's
+        /// `loop_path = own_path.push_pass(loop_id)`).
         name: Option<String>,
         spec: LoopSpec,
         body: Box<Region>,

@@ -308,6 +308,71 @@ def test_assert_events_equal_allows_tree_sibling_interleaving() -> None:
     assert_events_equal(actual, expected)
 
 
+def test_assert_events_equal_allows_unnamed_tree_loop_pass_interleaving() -> None:
+    """A path shared by several concurrent tree passes of an unnamed loop
+    (`Frame::with_pass` only disambiguates a *named* loop's own passes, so
+    an unnamed loop's own tree passes all compile to the same body path)
+    is compared as a sorted multiset, not an ordered list -- free to
+    interleave with itself on either engine, the same way a tree dynamic's
+    distinct sibling paths already are (lane H, #466 review finding 4)"""
+
+    def stream(order: list[int]) -> str:
+        events = [
+            _RUN_START,
+            _event("start", path="prime.shots"),
+            _event("dispatch", path="prime.shots", branches=2, concurrency=2),
+        ]
+        for i in order:
+            events.append(_event("start", path="prime.shots.step", id=i))
+            events.append(_event("end", path="prime.shots.step", id=i))
+        events.append(_event("end", path="prime.shots"))
+        events.append(_RUN_END)
+        return _events_text(events)
+
+    expected = stream([1, 2])
+    actual = stream([2, 1])
+    assert_events_equal(actual, expected)
+
+
+def test_assert_events_equal_detects_a_multi_start_path_ending_before_it_starts() -> None:
+    """Even on a multi-start path (compared as a multiset across engines),
+    one engine's own stream pairing an `end` to an `id` that never started
+    first is still a real bug -- `_check_instance_pairing` catches it
+    within a single stream, before the cross-engine multiset comparison
+    even runs. The plain parent/child start-before-start, end-before-end
+    check (`_split_and_check_order`) never notices this one: it tracks
+    only each path's *first* start and *last* end, not per-instance
+    pairing."""
+    bad = _events_text(
+        [
+            _RUN_START,
+            _event("start", path="prime.shots"),
+            _event("dispatch", path="prime.shots", branches=2, concurrency=2),
+            _event("end", path="prime.shots.step", id=1),
+            _event("start", path="prime.shots.step", id=1),
+            _event("start", path="prime.shots.step", id=2),
+            _event("end", path="prime.shots.step", id=2),
+            _event("end", path="prime.shots"),
+            _RUN_END,
+        ]
+    )
+    good = _events_text(
+        [
+            _RUN_START,
+            _event("start", path="prime.shots"),
+            _event("dispatch", path="prime.shots", branches=2, concurrency=2),
+            _event("start", path="prime.shots.step", id=1),
+            _event("end", path="prime.shots.step", id=1),
+            _event("start", path="prime.shots.step", id=2),
+            _event("end", path="prime.shots.step", id=2),
+            _event("end", path="prime.shots"),
+            _RUN_END,
+        ]
+    )
+    with pytest.raises(AssertionError):
+        assert_events_equal(bad, good)
+
+
 def test_assert_events_equal_rejects_non_compact_separators() -> None:
     """The wire-format check (runtime-semantics §8.7) fails on a stream
     whose lines are valid JSON but weren't written with `cof`'s own

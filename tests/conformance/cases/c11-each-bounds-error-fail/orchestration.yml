@@ -1,0 +1,16 @@
+name: c11-each-bounds-error-fail
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: loop
+    name: shots
+    max_iterations: 1
+    on_error: fail
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {item: "{{item}}"}}

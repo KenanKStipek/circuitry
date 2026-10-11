@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "A while loop whose condition is always true hits max_iterations: 3 before the condition ever goes false -- termination reason max_iterations_reached, and the run emits the 'stopped after N iterations because max_iterations (M) was reached, not because the while-condition became false' warning line.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

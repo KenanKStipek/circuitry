@@ -1,0 +1,6 @@
+{
+  "spec_case": "#461 test plan",
+  "description": "Named each loop, flow: tree, on_error: break: one branch's own gate fails; every branch still runs to completion (tree flow dispatches every pass up front, unlike chain), merged in index order, before termination folds the failure in as reason error -- the orchestration itself still succeeds and runs the step after the loop.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
