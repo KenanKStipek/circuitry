@@ -359,6 +359,57 @@ fn sigterm_forwards_and_osp_exits_143() {
 }
 
 #[test]
+fn sighup_forwards_and_osp_exits_129() {
+    // Issue #433's Tests item: an end-to-end SIGHUP test against cof
+    // -- `e2e_electricity.rs` already has one of its own, this crate
+    // never had one against the default engine.
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let pid = child.id() as i32;
+
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    unsafe {
+        libc::kill(pid, libc::SIGHUP);
+    }
+
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert_eq!(status.code(), Some(129), "stdout:\n{stdout}");
+    assert!(stdout.contains("cancelling"), "stdout:\n{stdout}");
+    assert!(stdout.contains("exit 129"), "stdout:\n{stdout}");
+    assert_eq!(stdout.matches("✗ prime ").count(), 1, "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+
+    assert_no_leftover_process(work.path());
+}
+
+#[test]
 fn watch_mirrors_a_run_osp_did_not_start() {
     if !e2e_enabled() {
         eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
