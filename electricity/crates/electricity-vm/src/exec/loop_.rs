@@ -1016,22 +1016,13 @@ async fn run_each_tree<'a>(
         Some(mc) => std::cmp::max(1, std::cmp::min(mc, total)),
         None => total,
     };
-    let effect_path = frame.effect_path(&op.path);
-    // `core/store/store.py::Store.fire_concurrent_dispatch`/`effect_path`
-    // take *name* as `str`, but `LoopRuntime.execute`'s own tree-each
-    // branch passes `self.defn.name` -- `None` for an unnamed loop --
-    // straight through; `effect_path`'s own f-string (`f"{prefix}.{name}"`)
-    // stringifies that `None` literally. An unnamed loop's own `op.path`
-    // already equals its enclosing container's path (transparent, no
-    // `Name` segment of its own), so reproducing cof's own dispatch path
-    // exactly means appending that literal `".None"` ourselves here --
-    // only for this one event; every per-pass body path stays the shared
-    // enclosing path the loop's own transparency already gives it.
-    let dispatch_path = if is_named {
-        effect_path.clone()
-    } else {
-        effect_path.push_name("None")
-    };
+    // `core/store/store.py::Store.fire_concurrent_dispatch` (#470): an
+    // unnamed loop has no name of its own to append, so its `dispatch`
+    // belongs to the enclosing container the passes actually run in --
+    // `op.path` already is that path (transparent, no `Name` segment of
+    // its own), same as a named loop's own child path is already correct
+    // as `effect_path` stands. No `is_named` branch needed here at all.
+    let dispatch_path = frame.effect_path(&op.path);
     observer.dispatch(
         &dispatch_path,
         total as usize,
