@@ -102,21 +102,18 @@ use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 /// never reaches the tree-building or rendering stage at all.
 ///
 /// Deliberately **not** [`electricity_value::MAX_DEPTH`] (512), and far
-/// smaller: this crate's own rendering walk
-/// (`render::render_with_pushed_scope`) clones the *entire* current scope
-/// stack on every section it descends into, so render time grows with
-/// the *cube* of section depth, not linearly -- measured directly
-/// (`tests/nesting_limit.rs`'s module docs): rendering 300 levels of
-/// nested sections against matching data took 8 seconds on the machine
-/// this was measured on; 400 took 18. 512 would be a full minute or
-/// more for a single template render, a real denial-of-service on its
-/// own regardless of whether it could also overflow the stack (which,
-/// measured separately, it does too, somewhere between 350 and 400
-/// levels on a 2 MiB debug-build stack). 64 keeps a render at the limit
-/// well under a second (measured at ~125ms) and nowhere near either
-/// boundary, with no need for the `[profile.dev.package.*]`
-/// opt-level overrides `electricity-yaml`/`electricity-cel` need for
-/// their own, much larger limits.
+/// smaller. The rendering walk recurses once per section level, and a
+/// lookup inside a section still clones the child subtree it resolves at
+/// each level, so render time grows faster than linearly with section
+/// depth, and the recursion overflows a 2 MiB debug-build stack
+/// somewhere between 350 and 400 levels. (Before #477 the walk also
+/// cloned the whole scope stack on every section push, which made render
+/// time cubic in depth: 300 levels took 8 seconds and 400 took 18, as
+/// measured in `tests/nesting_limit.rs`'s module docs.) 64 keeps a
+/// render at the limit fast and nowhere near the stack boundary, with no
+/// need for the `[profile.dev.package.*]` opt-level overrides
+/// `electricity-yaml`/`electricity-cel` need for their own, much larger
+/// limits.
 pub const MAX_SECTION_DEPTH: usize = 64;
 
 /// Why a template could not be rendered. Mirrors `core/templates.py`'s
