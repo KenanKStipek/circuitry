@@ -259,6 +259,7 @@ mod python_type_name_tests {
             "ConditionalDefinition"
         );
         let loop_region = Region::Loop {
+            name: None,
             spec: LoopSpec::Each {
                 in_path: "input.items".to_string(),
                 as_name: "item".to_string(),

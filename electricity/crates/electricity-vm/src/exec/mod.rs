@@ -335,6 +335,10 @@ pub(crate) fn execute_op<'a>(
                     .await
                 }
                 Region::Loop {
+                    // Not read here: `op.name` below is the same
+                    // value (`compile_loop`'s own `validated_name`),
+                    // and `execute_loop` already receives `op`.
+                    name: _,
                     spec,
                     body,
                     flow,

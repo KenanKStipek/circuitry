@@ -74,6 +74,7 @@
                     "max_concurrency": null,
                     "max_iterations": null,
                     "min_iterations": 0,
+                    "name": null,
                     "spec": {
                       "Each": {
                         "as_name": "item",

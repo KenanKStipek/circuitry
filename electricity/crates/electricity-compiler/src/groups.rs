@@ -272,6 +272,7 @@ mod tests {
             path: EffectPath::root().push_name("loop1"),
             name: Some("loop1".to_string()),
             kind: NodeKind::Control(Region::Loop {
+                name: Some("loop1".to_string()),
                 spec: electricity_bytecode::LoopSpec::Each {
                     in_path: "input.items".to_string(),
                     as_name: "item".to_string(),

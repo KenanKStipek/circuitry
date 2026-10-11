@@ -1087,6 +1087,7 @@ mod tests {
             path: EffectPath::root().push_name("each"),
             name: Some("each".to_string()),
             kind: NodeKind::Control(Region::Loop {
+                name: Some("each".to_string()),
                 spec: crate::region::LoopSpec::Each {
                     in_path: "input.items".to_string(),
                     as_name: "item".to_string(),
@@ -1118,6 +1119,7 @@ mod tests {
             path: EffectPath::root().push_name("each"),
             name: Some("each".to_string()),
             kind: NodeKind::Control(Region::Loop {
+                name: Some("each".to_string()),
                 spec: crate::region::LoopSpec::Each {
                     in_path: "input.items".to_string(),
                     as_name: "item".to_string(),
@@ -1236,6 +1238,7 @@ mod tests {
             path: EffectPath::root().push_name("poll"),
             name: Some("poll".to_string()),
             kind: NodeKind::Control(Region::Loop {
+                name: Some("poll".to_string()),
                 spec: LoopSpec::While(Condition::Model {
                     template: TemplateText::new("done?", false, Escape::None),
                 }),
@@ -1269,6 +1272,7 @@ mod tests {
             path: EffectPath::root().push_name("poll"),
             name: Some("poll".to_string()),
             kind: NodeKind::Control(Region::Loop {
+                name: Some("poll".to_string()),
                 spec: LoopSpec::While(Condition::Model {
                     template: TemplateText::new("done?", false, Escape::None),
                 }),

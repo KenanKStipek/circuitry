@@ -269,6 +269,7 @@ fn project_conditional_region(op: &Op, region: &Region) -> Json {
 
 fn project_loop_region(op: &Op, region: &Region) -> Json {
     let Region::Loop {
+        name: _,
         spec,
         body,
         flow,
