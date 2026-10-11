@@ -12,6 +12,7 @@ use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use support::{
     CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic,
     dynamic_with_finally, json_registry, refused_use_leaf, run_ctx, tool_leaf, tree_dynamic,
+    tree_dynamic_with_finally,
 };
 
 fn root_path() -> EffectPath {
@@ -974,6 +975,78 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
     assert!(
         error_text.contains("use child __test_only_refused__"),
         "meta.error must carry the same preview-marker text VmError::Refused displays as: {error_text}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finally_still_runs() {
+    // Orchestrator finding O1 on PR #462: a refused branch used to be
+    // foldable into `combine_tree_errors`'s own `VmError::Message`
+    // summary once a *second* branch also failed, and `on_error:
+    // continue` then absorbed that `Message` -- a capability refusal
+    // silently swallowed mid-tree. `execute_tree` now tracks a Refused
+    // branch separately from `tree_errors` and returns it unfolded,
+    // regardless of how many ordinary failures also happened.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let x = tree_dynamic_with_finally(
+        root_path().push_name("x"),
+        "x",
+        OnError::Continue,
+        None,
+        false,
+        vec![
+            refused_use_leaf(
+                root_path().push_name("x").push_name("refused_branch"),
+                "refused_branch",
+                OnError::Fail,
+            ),
+            tool_leaf(
+                root_path().push_name("x").push_name("ordinary_branch"),
+                "ordinary_branch",
+            ),
+        ],
+        vec![tool_leaf(
+            root_path().push_name("x").push_name("cleanup"),
+            "cleanup",
+        )],
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![x]);
+
+    let result = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    let err = result.expect_err(
+        "a refused tree branch must never be absorbed by on_error: continue, even alongside an ordinary failure",
+    );
+    let VmError::Refused {
+        child_label,
+        refusal,
+    } = err
+    else {
+        panic!("expected VmError::Refused, got {err:?}");
+    };
+    assert_eq!(child_label, "__test_only_refused__");
+    assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Loop);
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let x_node = as_dict(get(prime, "x").unwrap());
+    assert!(
+        get(x_node, "cleanup").is_some(),
+        "finally: must still run after a refused tree branch"
     );
 }
 

@@ -276,6 +276,48 @@ impl VmError {
             _ => None,
         }
     }
+
+    /// `Cancelled` or `Refused` -- THE check container code (`on_error`,
+    /// retries, chain/tree wrapping) uses to decide that an error must
+    /// not be absorbed, retried, or folded into a summary: both bypass
+    /// `on_error` and retries entirely and propagate unwrapped, and a
+    /// fatal branch of a tree stops that tree from dispatching any more
+    /// of its own queued branches, whatever `stop_on_error` says --
+    /// exactly like Python's own `BaseException` (`RunCancelledBySignal`)
+    /// does for cancellation, a capability refusal discovered mid-run is
+    /// no more a degradable failure than a cancellation is. Every site
+    /// that used to spell out `matches!(e, VmError::Cancelled |
+    /// VmError::Refused { .. })` by hand calls this instead, so a future
+    /// third fatal variant only needs to be added here.
+    ///
+    /// **Fatal for control, not for recording** (orchestrator ruling R1
+    /// on PR #462): `is_fatal` alone governs *control* -- absorption,
+    /// retries, tree dispatch. *Recording* -- whether a container writes
+    /// `value`/`meta.error`/`completed_at` for its own node, and reports
+    /// an error to `effect_complete`'s own `end` event -- is a second,
+    /// independent axis `is_fatal` does not decide:
+    /// - [`VmError::Refused`] is recorded exactly like an ordinary
+    ///   failure (`value`, `meta.error` with the refusal text and no
+    ///   name prefix, `completed_at`, the `end` event's own error) on
+    ///   every container on the path to it (a named `if`, a `dynamic`
+    ///   chain or tree) -- only its *control* treatment is fatal.
+    /// - [`VmError::Cancelled`] keeps its own long-standing, Python-
+    ///   parity recording behaviour unchanged by this rule: a `dynamic`
+    ///   already recorded it before `VmError::Refused` existed (`core/
+    ///   dynamic.py`'s own unconditional write before its exception
+    ///   branches), and a named `if` still does not (`core/
+    ///   conditional.py`'s own outer `except Exception`, never
+    ///   `BaseException`, around the whole branch loop -- a
+    ///   cancellation propagates raw, with no `value`/`meta.error`
+    ///   write at all).
+    ///
+    /// `finally:` always runs regardless, for both variants (`dynamic`'s
+    /// own unconditional dispatch, never gated on `is_fatal` at all).
+    /// Lane H's loop containers and lane I's `use` copy this rule
+    /// exactly, rather than re-deriving it per effect type.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, VmError::Cancelled | VmError::Refused { .. })
+    }
 }
 
 impl From<electricity_tools::ToolError> for VmError {

@@ -251,8 +251,7 @@ pub(crate) fn execute_dynamic<'a>(
         observer.effect_complete(&effect_path, instance, reported_error.as_deref());
 
         if let Some(be) = body_exc {
-            let is_cancellation = matches!(be, VmError::Cancelled | VmError::Refused { .. });
-            if is_cancellation || matches!(op.on_error, OnError::Fail) {
+            if be.is_fatal() || matches!(op.on_error, OnError::Fail) {
                 return Err(be);
             }
             // `core/dynamic.py::DynamicRuntime.execute`'s own
@@ -267,8 +266,7 @@ pub(crate) fn execute_dynamic<'a>(
             return Ok(());
         }
         if let Some(fe) = finally_exc {
-            let is_cancellation = matches!(fe, VmError::Cancelled | VmError::Refused { .. });
-            if is_cancellation || matches!(op.on_error, OnError::Fail) {
+            if fe.is_fatal() || matches!(op.on_error, OnError::Fail) {
                 return Err(fe);
             }
             // `core/dynamic.py::DynamicRuntime.execute`'s own
@@ -466,7 +464,7 @@ fn execute_tree<'a>(
         // Scoped so `launch`/`in_flight`/`pending` -- which all borrow
         // *branches*/*tree_chain* -- are fully dropped before *branches*
         // is moved into `store.merge` below.
-        let (tree_errors, interrupted) = {
+        let (tree_errors, refused, interrupted) = {
             let mut pending: VecDeque<usize> = (0..n).collect();
             let mut in_flight = FuturesUnordered::new();
             let mut tree_errors: Vec<VmError> = Vec::new();
@@ -509,11 +507,38 @@ fn execute_tree<'a>(
                 }
             }
 
+            // Orchestrator finding O1 on PR #462: a `VmError::Refused`
+            // branch (lane I's own mid-run child refusal, M1 lane I
+            // prerequisites, issue #448, item U3) used to fall into the
+            // generic `Err(e)` arm below like any ordinary failure --
+            // folded into `tree_errors`, then foldable again into one
+            // `VmError::Message` summary by `combine_tree_errors` once a
+            // *second* branch also failed, which `on_error: continue`
+            // then absorbed below (`VmError::is_fatal`'s own doc
+            // comment: a capability refusal must never be absorbed, the
+            // same as a cancellation) -- or, once `stopped` was already
+            // set by an earlier ordinary failure under `stop_on_error`,
+            // dropped by the `if !stopped` guard entirely. *refused* is
+            // tracked separately from `tree_errors` for exactly that
+            // reason: a Refused branch always sets `stopped` (stopping
+            // new dispatch, regardless of *stop_on_error*'s own value --
+            // a refusal is no more a degradable failure than a
+            // cancellation is), is recorded even if `stopped` was
+            // already set, and is returned unfolded below, never handed
+            // to `combine_tree_errors`.
+            let mut refused: Option<VmError> = None;
+
             while let Some((idx, result)) = in_flight.next().await {
                 match result {
                     Ok(()) => {}
                     Err(VmError::Cancelled) => {
                         interrupted = true;
+                    }
+                    Err(e) if e.is_fatal() => {
+                        if refused.is_none() {
+                            refused = Some(e);
+                        }
+                        stopped = true;
                     }
                     Err(e) => {
                         // `core/dynamic.py::DynamicRuntime._await_tree_
@@ -543,18 +568,25 @@ fn execute_tree<'a>(
                 }
             }
 
-            (tree_errors, interrupted)
+            (tree_errors, refused, interrupted)
         };
 
         if interrupted {
             return Err(VmError::Cancelled);
         }
 
+        // A refused branch still merges like any other `stop_on_error`
+        // failure -- every in-flight branch has already drained above,
+        // so there is nothing left to lose by keeping whatever every
+        // branch (refused or not) already wrote.
         store.merge(dyn_node, branches).map_err(store_err)?;
         // `core/dynamic.py`'s own tree-flow merge loop ends with one
         // more `store.on_write(...)`, after every branch has landed.
         observer.write();
 
+        if let Some(refused) = refused {
+            return Err(refused);
+        }
         if !tree_errors.is_empty() {
             return Err(combine_tree_errors(tree_errors));
         }

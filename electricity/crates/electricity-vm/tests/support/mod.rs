@@ -175,6 +175,36 @@ pub fn tree_dynamic(
     }
 }
 
+/// A tree-flow `dynamic` with a `finally:` block.
+pub fn tree_dynamic_with_finally(
+    path: EffectPath,
+    name: &str,
+    on_error: OnError,
+    max_concurrency: Option<u32>,
+    stop_on_error: bool,
+    branches: Vec<Op>,
+    finally_ops: Vec<Op>,
+) -> Op {
+    Op {
+        path,
+        name: Some(name.to_string()),
+        kind: NodeKind::Control(Region::TryFinally {
+            body: Box::new(Region::Parallel {
+                branches,
+                max_concurrency,
+                stop_on_error,
+            }),
+            finally: Box::new(Region::Block {
+                ops: finally_ops,
+                overlay: false,
+            }),
+        }),
+        on_error,
+        labels: None,
+        enabled: true,
+    }
+}
+
 /// A chain-flow `dynamic` with a `finally:` block.
 pub fn dynamic_with_finally(
     path: EffectPath,

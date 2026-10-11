@@ -6,21 +6,30 @@
 //! this lane to shape, documented in `electricity/docs/spec/
 //! vm-lanes.md`.
 //!
-//! **The shape picked.** [`check_allowlist`] walks *only* the document's
-//! own top-level `adapter:`/tool-`provider:`/prompt-`provider:` text --
-//! not `use:` children (`cli/allowlist.py::check_allowlist`'s own
-//! `iter_use_children` loop). `use` is unsupported content in M0-H
-//! (issue #431's Scope section) and is refused outright once the
-//! structural/compile checks run; a `use` child's own adapter/tool
-//! references are therefore never reachable through *any* M0-H run, so
-//! walking them here would check text no run can ever act on. The one
-//! observable narrowing from Circuitry's own ordering: a document whose
-//! *only* violation is inside a `use` child's provider (the parent
-//! document's own text is otherwise clean) is rejected by the later
-//! "is a preview and cannot run orchestrations yet" refusal instead of
-//! this allowlist's own denial message -- still refused, with a
-//! different, less specific reason. [`walk_orchestration_refs`] still
-//! ports every other branch of Circuitry's own walk (`prompt`/`tool`/
+//! **The shape picked (M0-H).** [`check_allowlist`] walks *only* the
+//! document's own top-level `adapter:`/tool-`provider:`/prompt-
+//! `provider:` text -- not `use:` children (`cli/allowlist.py::
+//! check_allowlist`'s own `iter_use_children` loop). `use` was
+//! unsupported content in M0-H (issue #431's Scope section) and was
+//! refused outright once the structural/compile checks ran; a `use`
+//! child's own adapter/tool references were therefore never reachable
+//! through *any* M0-H run, so walking them here checked text no run
+//! could ever act on. [`check_allowlist`] itself is unchanged by M1 lane
+//! I prerequisites (issue #448, item U4(b)): it still walks only the
+//! top-level document, since this crate (`electricity-config`) cannot
+//! depend back on `electricity-compiler`, which is where the walk that
+//! finds `use` children now lives (`electricity_compiler::use_children::
+//! iter_use_children`/`allowlist_denials`, that crate's own row in
+//! `electricity/docs/spec/vm-lanes.md`). `electricity`'s own run wiring
+//! calls *that* composed function in place of this module's own
+//! [`check_allowlist`] now, so a document whose `use` child violates the
+//! allowlist is rejected by this allowlist's own denial message after
+//! all, not only by the later refusal. [`orchestration_denials`] (below)
+//! is the per-document half both [`check_allowlist`] and that composed
+//! walk call, with different `skip_templated`/`include_document_adapter`
+//! arguments for the top-level document versus a `use` child.
+//! [`walk_orchestration_refs`] still ports every other branch of
+//! Circuitry's own walk (`prompt`/`tool`/
 //! `dynamic`/`if`/`conditional`/`loop`/`reflector`), even where M0-H's
 //! own VM never executes one (`loop`/`reflector`/`prompt` effects are
 //! themselves refused) -- this function only reads document *text*, so

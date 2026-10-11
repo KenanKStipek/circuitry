@@ -730,8 +730,20 @@ pub async fn run_orchestration_with_config(
 
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
-    // same position `runtime_shim.run` checks it in.
-    let allow_errors = electricity_config::check_allowlist(&loaded.document, &cfg);
+    // same position `runtime_shim.run` checks it in. Lane I
+    // prerequisites (issue #448, item U4(b)): `electricity_compiler::
+    // use_children::allowlist_denials` walks every literal `use` child
+    // reachable from the document too (path and inline alike),
+    // `cli/allowlist.py::check_allowlist`'s own shape -- a document
+    // whose own text is clean but whose `use` child names a denied
+    // adapter/tool is rejected here, by this allowlist's own denial
+    // text, rather than only later by the capability refusal below.
+    let allow_errors = electricity_compiler::use_children::allowlist_denials(
+        &loaded.document,
+        Some(&req.orchestration_path),
+        cfg.enabled_adapters.as_deref(),
+        cfg.enabled_tools.as_deref(),
+    );
     if !allow_errors.is_empty() {
         fail!(format!(
             "Allowlist enforcement failed: {}",
@@ -1017,6 +1029,29 @@ pub async fn run_orchestration_with_config(
             ok: false,
             state: None,
             error: Some(format_refusal(&refusal)),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Lane I prerequisites (issue #448, item U4(a)): the same walker,
+    // now also run against every literal `use` path child statically
+    // reachable from the document -- a path-`use` child is itself
+    // compiled and checked at run time (lane I), so this is a static
+    // *prediction* of that check, not a replacement for it; inert
+    // under M0 (`use` is refused first, above, before this is ever
+    // reached). No state is written for this refusal either, same as
+    // the top-level one just above.
+    if let Some(refusal) = electricity_compiler::use_children::first_refused_child(
+        &loaded.document,
+        Some(&req.orchestration_path),
+        complexity.enabled(),
+        &supported,
+    ) {
+        return RunResult {
+            ok: false,
+            state: None,
+            error: Some(refusal),
             warnings,
             signal: None,
         };
