@@ -143,6 +143,17 @@ pub struct RunContext<'a> {
     /// than derived from it -- see electricity/docs/spec/vm-lanes.md's
     /// M1 table, §4 finding 3. Lane K1.
     pub display_depth: u32,
+    /// This run's own capability set -- `electricity` (lib)'s run wiring
+    /// builds it once, from `electricity_bytecode::refusal::Supported::
+    /// current(...)` with the `test-tools` cargo feature's own extras,
+    /// the same value already passed to `first_unsupported` for the
+    /// top-level document. Lane I's own runtime check (M1 table:
+    /// "first_unsupported + allowlist on each loaded child program")
+    /// reads it off here rather than rebuilding it, so a freshly
+    /// compiled `use` child is refused against the exact same
+    /// capability set the parent document was checked against before
+    /// the run started.
+    pub supported: electricity_bytecode::Supported<'a>,
 }
 
 /// Any error [`execute_root`] (or one of its own sub-executors) can
@@ -197,6 +208,32 @@ pub enum VmError {
     /// variant only ever signals *that* cancellation happened here, not with
     /// what signal.
     Cancelled,
+    /// A `use` child, compiled at run time (so lane A's own static
+    /// walker could never see it ahead of time), is itself unsupported
+    /// once `electricity_bytecode::first_unsupported` runs against its
+    /// freshly-compiled `Program` -- M1 lane I's own mid-run refusal
+    /// (new: Python has no such case, since it never refuses content at
+    /// all). *refusal* is what that walker found; *child_label* names
+    /// the child document the same way a `use` effect's own `meta`
+    /// already would (`core/use.py`'s *label* -- the resolved path, or
+    /// `"inline"`). Bypasses `on_error`/retries entirely and is never
+    /// wrapped with an effect-path prefix through a chain/tree container,
+    /// exactly like [`VmError::Cancelled`] -- a capability refusal is no
+    /// more a degradable failure than a cancellation is. Unlike
+    /// `Cancelled`, this carries its own full text (`Display`, via
+    /// [`electricity_bytecode::format_refused_child`]), since there is no
+    /// run-level signal to format it from afterward -- the caller that
+    /// first finds it (`exec::use_::execute_use`, lane I) writes that
+    /// same text to the refused `use` effect's own `meta.error` before
+    /// returning it, and `electricity` (lib)'s own run wiring reports it
+    /// as the run's ordinary failure text (exit 1, `--out`/`--events`/
+    /// `--live-state` written as for any other failed run -- it is not
+    /// `VmError::Cancelled`, so run wiring's own cancellation-only special
+    /// case never applies to it).
+    Refused {
+        refusal: electricity_bytecode::Refusal,
+        child_label: String,
+    },
     /// Lane B's own execution loop isn't implemented yet (a `loop`/
     /// `mode: model` `if` -- refused before the run starts by lane A's
     /// `first_unsupported` in a real document, but the interpreter still
@@ -239,6 +276,48 @@ impl VmError {
             _ => None,
         }
     }
+
+    /// `Cancelled` or `Refused` -- THE check container code (`on_error`,
+    /// retries, chain/tree wrapping) uses to decide that an error must
+    /// not be absorbed, retried, or folded into a summary: both bypass
+    /// `on_error` and retries entirely and propagate unwrapped, and a
+    /// fatal branch of a tree stops that tree from dispatching any more
+    /// of its own queued branches, whatever `stop_on_error` says --
+    /// exactly like Python's own `BaseException` (`RunCancelledBySignal`)
+    /// does for cancellation, a capability refusal discovered mid-run is
+    /// no more a degradable failure than a cancellation is. Every site
+    /// that used to spell out `matches!(e, VmError::Cancelled |
+    /// VmError::Refused { .. })` by hand calls this instead, so a future
+    /// third fatal variant only needs to be added here.
+    ///
+    /// **Fatal for control, not for recording** (orchestrator ruling R1
+    /// on PR #462): `is_fatal` alone governs *control* -- absorption,
+    /// retries, tree dispatch. *Recording* -- whether a container writes
+    /// `value`/`meta.error`/`completed_at` for its own node, and reports
+    /// an error to `effect_complete`'s own `end` event -- is a second,
+    /// independent axis `is_fatal` does not decide:
+    /// - [`VmError::Refused`] is recorded exactly like an ordinary
+    ///   failure (`value`, `meta.error` with the refusal text and no
+    ///   name prefix, `completed_at`, the `end` event's own error) on
+    ///   every container on the path to it (a named `if`, a `dynamic`
+    ///   chain or tree) -- only its *control* treatment is fatal.
+    /// - [`VmError::Cancelled`] keeps its own long-standing, Python-
+    ///   parity recording behaviour unchanged by this rule: a `dynamic`
+    ///   already recorded it before `VmError::Refused` existed (`core/
+    ///   dynamic.py`'s own unconditional write before its exception
+    ///   branches), and a named `if` still does not (`core/
+    ///   conditional.py`'s own outer `except Exception`, never
+    ///   `BaseException`, around the whole branch loop -- a
+    ///   cancellation propagates raw, with no `value`/`meta.error`
+    ///   write at all).
+    ///
+    /// `finally:` always runs regardless, for both variants (`dynamic`'s
+    /// own unconditional dispatch, never gated on `is_fatal` at all).
+    /// Lane H's loop containers and lane I's `use` copy this rule
+    /// exactly, rather than re-deriving it per effect type.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, VmError::Cancelled | VmError::Refused { .. })
+    }
 }
 
 impl From<electricity_tools::ToolError> for VmError {
@@ -257,6 +336,14 @@ impl fmt::Display for VmError {
         match self {
             VmError::Raised { message, .. } => write!(f, "{message}"),
             VmError::Cancelled => write!(f, "cancelled"),
+            VmError::Refused {
+                refusal,
+                child_label,
+            } => write!(
+                f,
+                "{}",
+                electricity_bytecode::format_refused_child(child_label, refusal)
+            ),
             VmError::NotImplemented(message) => write!(f, "{message}"),
             VmError::Message(message) => write!(f, "{message}"),
         }
@@ -386,6 +473,7 @@ mod tests {
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
             display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
         };
         execute_root(
             &program,

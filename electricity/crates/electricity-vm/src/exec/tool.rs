@@ -1179,6 +1179,7 @@ mod tests {
             declared_prompts,
             effect_names,
             display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
         }
     }
 

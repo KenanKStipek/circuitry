@@ -4,6 +4,7 @@
 //! scope for M0-H) both hang off of.
 
 use electricity_bytecode::EffectPath;
+use electricity_value::Value;
 
 /// An opaque per-call identifier [`RunObserver::effect_start`] hands
 /// back and [`RunObserver::effect_complete`] takes (issue #449's gate
@@ -61,6 +62,33 @@ pub trait RunObserver {
     /// CLI's own stderr writer that turns a call here into a printed
     /// line is #442's own PR, built on top of this seam once it lands.
     fn warning(&self, _message: &str) {}
+
+    /// An isolated child run's own write (`use`, lane I; decomposition,
+    /// lane L2) -- `core/use.py::_child_on_write`/`_grafted_snapshot`'s
+    /// own seam: on every child write, the run's own live-state reader
+    /// republishes the whole-run snapshot with *snapshot* (the child's
+    /// own current, `prime`-rooted state -- never the parent's)
+    /// mirrored under *node_path* (the `use`/decomposition effect's own
+    /// absolute path in the parent document, `Frame::effect_path`'s own
+    /// output), composing to any depth because *snapshot* always
+    /// arrives as this call's own argument rather than being read back
+    /// off any store -- a nested child's own graft call lands at its
+    /// own, deeper *node_path* independently of this one.
+    ///
+    /// Default no-op, like every other hook here; only the run wiring's
+    /// own live-state mirror (`electricity` (lib), `src/live_state.rs`)
+    /// implements it for real. [`RunObserver::clear_graft`] removes a
+    /// path this call grafted once the child's own real output merges
+    /// into the parent for good -- a later snapshot no longer needs
+    /// (or should show) the overlay at all.
+    fn graft_child_write(&self, _node_path: &EffectPath, _snapshot: &Value) {}
+
+    /// *node_path* no longer needs [`RunObserver::graft_child_write`]'s
+    /// own overlay -- the child it named has finished (merged for real,
+    /// or failed) and a later snapshot reads its own now-final state
+    /// directly. A no-op for a path that was never grafted (or already
+    /// cleared), same as every other hook's own tolerant default here.
+    fn clear_graft(&self, _node_path: &EffectPath) {}
 }
 
 /// A [`RunObserver`] that does nothing -- every lane A test (and any
@@ -84,5 +112,7 @@ mod tests {
         observer.dispatch(&path, 3, 2);
         observer.write();
         observer.warning("a run-time warning with no effect of its own");
+        observer.graft_child_write(&path, &Value::None);
+        observer.clear_graft(&path);
     }
 }
