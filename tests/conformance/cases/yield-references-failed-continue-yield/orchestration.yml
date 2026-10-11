@@ -1,0 +1,9 @@
+name: yield-references-failed-continue-yield
+effects:
+  - type: yield
+    name: broken
+    template: "{{input.n.0}}"
+    on_error: continue
+  - type: yield
+    name: after
+    template: "[{{> broken}}]"

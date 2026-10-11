@@ -1,0 +1,8 @@
+{
+  "spec_case": "core/yield_effect.py::YieldRuntime.execute, issue #487",
+  "description": "`{{input.n.0}}` with `n` an int fails to render; under the default on_error: fail the run itself fails with that exact message (electricity's own PyExc::TemplateError, Python's TemplateError).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact",
+  "cli_args": ["-e", "n=5"]
+}

@@ -1,0 +1,11 @@
+name: yield-declared-prompt-in-section
+prompts:
+  line: "<{{.}}>"
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: yield
+    name: lines
+    template: "{{#prime.seed.value}}{{> line}}{{/prime.seed.value}}"
