@@ -2268,6 +2268,7 @@ mod tests {
             py_class,
             message,
             cause,
+            ..
         } = err
         else {
             panic!("expected a VmError::Raised, got a different VmError variant");

@@ -163,12 +163,28 @@ pub enum VmError {
     /// [`electricity_tools::ToolError`]'s *py_class*/*cause* away at
     /// [`crate::exec::tool::run_tool`], which #442's tree text and lane
     /// E's own HTTP-family retry rule both need). [`crate::exec::
-    /// wrap_effect_error`] keeps *py_class*/*cause* unchanged through a
-    /// chain/tree wrap, only ever rewriting *message*.
+    /// wrap_effect_error`] keeps *cause* unchanged through a chain/tree
+    /// wrap but, review P2-1 on PR #454's second review, rewrites
+    /// *py_class* to `RuntimeError` on every wrap (`core/dynamic.py`'s
+    /// own `raise RuntimeError(...) from e`: the wrapping exception is
+    /// always a `RuntimeError`, never *e*'s own class) and sets
+    /// *cause_class* to the wrapped error's own previous *py_class* --
+    /// never further than one level in, so a doubly-wrapped error's own
+    /// *cause_class* is `RuntimeError` (the inner wrap's class), not the
+    /// original leaf failure's class three levels down. [`VmError::
+    /// displayed_class`] is `err.__cause__ or err`'s own one-level-only
+    /// unwrap (`dynamic.py:56-57`), the class #442's own `[i] {type}`
+    /// text prints.
     Raised {
         py_class: electricity_tools::PyExc,
         message: String,
         cause: electricity_tools::ErrorCause,
+        /// `None` for a never-wrapped leaf failure (so
+        /// [`VmError::displayed_class`] falls back to *py_class*
+        /// itself, matching Python's own `err.__cause__ or err` when
+        /// `__cause__` is `None`); `Some(previous py_class)` once a
+        /// chain/tree container has wrapped it at least once.
+        cause_class: Option<electricity_tools::PyExc>,
     },
     /// This run's own [`CancellationToken`] was requested while an effect
     /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
@@ -205,6 +221,22 @@ impl VmError {
             py_class: electricity_tools::PyExc::RuntimeError,
             message: message.into(),
             cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        }
+    }
+
+    /// `err.__cause__ or err`'s own class, one level only
+    /// (`dynamic.py:56-57`) -- `None` for every [`VmError`] variant but
+    /// [`VmError::Raised`], which has no Python exception class of its
+    /// own to report.
+    pub fn displayed_class(&self) -> Option<electricity_tools::PyExc> {
+        match self {
+            VmError::Raised {
+                py_class,
+                cause_class,
+                ..
+            } => Some(cause_class.unwrap_or(*py_class)),
+            _ => None,
         }
     }
 }
@@ -215,6 +247,7 @@ impl From<electricity_tools::ToolError> for VmError {
             py_class: err.py_class,
             message: err.message,
             cause: err.cause,
+            cause_class: None,
         }
     }
 }

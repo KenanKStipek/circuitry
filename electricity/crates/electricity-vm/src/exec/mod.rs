@@ -224,19 +224,29 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
         VmError::Cancelled => err,
-        // A typed tool failure keeps its own `py_class`/`cause` through
-        // the wrap -- only `message` grows the label prefix (review
-        // finding 1 on PR #454: #442's own tree text needs the
-        // *original* exception class to survive a chain/tree wrap, not
-        // just the already-prefixed text `VmError::Message` reduces to).
+        // A typed tool failure keeps its own `cause` through the wrap --
+        // `message` grows the label prefix, and `py_class` becomes
+        // `RuntimeError` (review finding 1 on PR #454: #442's own tree
+        // text needs the error to survive a chain/tree wrap as a typed
+        // `Raised`, not collapse to a bare `VmError::Message`; review
+        // P2-1 on the second review: `core/dynamic.py`'s own `raise
+        // RuntimeError(...) from e` means the *wrapping* exception is
+        // always a `RuntimeError`, never `e`'s own class -- `cause_class`
+        // remembers *e*'s own `py_class` for `VmError::displayed_class`'s
+        // one-level unwrap, discarding `e`'s own `cause_class` rather
+        // than propagating it further, so a doubly-wrapped error's own
+        // displayed class is `RuntimeError` (the inner wrap), never the
+        // original leaf failure's class two levels down).
         VmError::Raised {
             py_class,
             message,
             cause,
+            ..
         } => VmError::Raised {
-            py_class,
+            py_class: electricity_tools::PyExc::RuntimeError,
             message: format!("{label}: {message}"),
             cause,
+            cause_class: Some(py_class),
         },
         other => VmError::Message(format!("{label}: {other}")),
     }
@@ -378,30 +388,70 @@ mod wrap_effect_error_tests {
     use electricity_tools::{ErrorCause, PyExc};
 
     #[test]
-    fn a_raised_failures_class_and_cause_survive_the_chain_wrap() {
-        // Review finding 1 on PR #454: a chain/tree wrap must only ever
-        // grow `VmError::Raised`'s own `message` -- a nested `dynamic`'s
-        // own error-collection point (`execute_chain`/`execute_tree`,
-        // both of which call this function) is exactly where #442's
-        // tree text would otherwise lose the real exception class,
-        // flattened into a bare `VmError::Message`.
+    fn a_raised_failures_cause_survives_the_chain_wrap_but_its_class_becomes_runtime_error() {
+        // Review finding 1 on PR #454: a chain/tree wrap must keep
+        // `VmError::Raised` a `Raised`, not collapse to a bare
+        // `VmError::Message` -- a nested `dynamic`'s own error-collection
+        // point (`execute_chain`/`execute_tree`, both of which call this
+        // function) is exactly where #442's tree text would otherwise
+        // lose the real exception class entirely. Review P2-1 on the
+        // second review: `core/dynamic.py`'s own `raise RuntimeError(...)
+        // from e` means the *wrapping* exception's own class is always
+        // `RuntimeError`, never `e`'s class -- that survives one level
+        // in as `cause_class` instead, for `VmError::displayed_class`.
         let raised = VmError::Raised {
             py_class: PyExc::ValueError,
             message: "no reply".to_string(),
             cause: ErrorCause::NoReply,
+            cause_class: None,
         };
         let wrapped = wrap_effect_error("outer.fetch", raised);
         let VmError::Raised {
             py_class,
             message,
             cause,
+            cause_class,
         } = wrapped
         else {
             panic!("expected a VmError::Raised to stay Raised through the wrap");
         };
-        assert_eq!(py_class, PyExc::ValueError);
+        assert_eq!(py_class, PyExc::RuntimeError);
         assert_eq!(cause, ErrorCause::NoReply);
         assert_eq!(message, "outer.fetch: no reply");
+        assert_eq!(cause_class, Some(PyExc::ValueError));
+    }
+
+    #[test]
+    fn displayed_class_is_the_tools_own_class_before_any_wrap() {
+        // Review P2-1 on the second review's own first probe: a direct
+        // tool failure, never wrapped, displays its own real class --
+        // Python's `err.__cause__ or err` with `__cause__` still `None`.
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+            cause_class: None,
+        };
+        assert_eq!(raised.displayed_class(), Some(PyExc::ValueError));
+    }
+
+    #[test]
+    fn displayed_class_is_runtime_error_for_a_doubly_wrapped_chain_failure() {
+        // Review P2-1 on the second review's own second probe: a nested
+        // chain failure (two container wraps deep) displays
+        // `RuntimeError` -- the *inner* wrap's own class, one level in
+        // from the outer wrap, never the original leaf failure's class
+        // two levels down (`err.__cause__ or err` peels exactly one
+        // level, same as `dynamic.py:56-57`).
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+            cause_class: None,
+        };
+        let wrapped_once = wrap_effect_error("inner.fetch", raised);
+        let wrapped_twice = wrap_effect_error("outer.inner", wrapped_once);
+        assert_eq!(wrapped_twice.displayed_class(), Some(PyExc::RuntimeError));
     }
 
     #[test]
