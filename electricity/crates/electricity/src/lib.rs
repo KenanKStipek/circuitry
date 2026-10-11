@@ -240,6 +240,10 @@ fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::DocumentAdapter(adapter) => format!(
             "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
         ),
+        RefusalReason::ComplexityEnabled => {
+            "a run whose effective config enables complexity scoring, routing or decomposition"
+                .to_string()
+        }
     }
 }
 
@@ -1015,12 +1019,22 @@ pub async fn run_orchestration_with_config(
         Err(err) => fail!(err.to_string()),
     };
 
+    // Resolved before the refusal walker below needs it (review P2-10
+    // on PR #454's second review: whether this run's own effective
+    // config enables complexity scoring/routing/decomposition isn't a
+    // property of *program* itself, so the walker takes it as an
+    // argument rather than re-deriving it) -- the same value `run_ctx.
+    // complexity` below reuses, resolved only once.
+    let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
+        .unwrap_or_default();
+
     // Lane A's own refusal walker (issue #408's gate lane), wired in
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
     if let Some(refusal) = first_unsupported(
         &program,
+        complexity.enabled(),
         &electricity_bytecode::Supported::current(extra_supported_providers()),
     ) {
         return RunResult {
@@ -1077,8 +1091,6 @@ pub async fn run_orchestration_with_config(
     // `build_registry()`'s own crate, never touches this file to wire
     // a real registry into the run for the first time.
     let adapters = electricity_adapters::build_registry();
-    let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
-        .unwrap_or_default();
     let orchestration_dir: &Path = program
         .document
         .as_ref()

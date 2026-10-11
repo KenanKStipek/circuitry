@@ -40,6 +40,7 @@ fn a_shell_tool_at_the_root_is_refused_with_its_exact_effect_path() {
     );
     let refusal = electricity_bytecode::first_unsupported(
         &program,
+        false,
         &electricity_bytecode::Supported::m0(&["json"]),
     )
     .unwrap();
@@ -66,6 +67,7 @@ fn a_shell_tool_nested_inside_a_tree_branch_is_refused_with_its_concrete_path() 
     );
     let refusal = electricity_bytecode::first_unsupported(
         &program,
+        false,
         &electricity_bytecode::Supported::m0(&["json"]),
     )
     .unwrap();
@@ -89,6 +91,7 @@ fn a_shell_tool_inside_root_finally_is_refused_with_its_concrete_path() {
     );
     let refusal = electricity_bytecode::first_unsupported(
         &program,
+        false,
         &electricity_bytecode::Supported::m0(&["json"]),
     )
     .unwrap();
@@ -114,6 +117,7 @@ fn a_provider_written_with_whitespace_and_mixed_case_is_still_accepted() {
     assert_eq!(
         electricity_bytecode::first_unsupported(
             &program,
+            false,
             &electricity_bytecode::Supported::m0(&["json"])
         ),
         None
@@ -132,6 +136,7 @@ fn a_test_tools_provider_is_refused_unless_the_caller_lists_it() {
     );
     let refusal = electricity_bytecode::first_unsupported(
         &program,
+        false,
         &electricity_bytecode::Supported::m0(&["json"]),
     )
     .unwrap();
@@ -142,6 +147,7 @@ fn a_test_tools_provider_is_refused_unless_the_caller_lists_it() {
     assert_eq!(
         electricity_bytecode::first_unsupported(
             &program,
+            false,
             &electricity_bytecode::Supported::m0(&["json", "sleep"])
         ),
         None
