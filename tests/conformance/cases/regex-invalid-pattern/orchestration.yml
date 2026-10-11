@@ -1,0 +1,6 @@
+name: regex-invalid-pattern
+effects:
+  - type: tool
+    name: unterminated_group
+    provider: regex
+    params: {pattern: "(", input: "a"}

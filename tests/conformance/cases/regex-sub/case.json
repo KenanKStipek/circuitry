@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #479's own 'sub' test plan: \\g<name>, \\g<0>, count: 1, and the empty-match case x* -> -a-b--d-",
+  "description": "re.sub semantics: a named-group replacement template, a \\g<0> whole-match template, count: 1 stopping after the first replacement, and Python's own 3.7+ empty-match iteration rule (an empty match right after a non-empty one is still reported). Also pins $ without MULTILINE matching just before a final trailing newline.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

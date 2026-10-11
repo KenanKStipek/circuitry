@@ -1,0 +1,6 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §7 case 8 (lookbehind + backreference), plus issue #479's own match/search/findall result-shape list",
+  "description": "A pattern using a lookbehind and one using a backreference against the same input, both succeeding on electricity (no divergence marker) -- the exact construct §7 case 8 names to force the fancy-regex-vs-regex-crate decision. Alongside it: match (anchored at position 0, not a full match), search and findall with zero/one/two groups, a non-participating group in each shape (None for match/search, '' for findall), VERBOSE with a space inside a character class, and the lowercase flag name spelling.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

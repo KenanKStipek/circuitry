@@ -1,0 +1,22 @@
+{"v":1,"seq":0,"ts":"2026-10-11T15:37:52.389Z","ev":"run_start","run_id":"d7519a56-025a-45b3-b9ee-b0f57bd24834","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":13842}
+{"v":1,"seq":1,"ts":"2026-10-11T15:37:52.393Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T15:37:52.393Z","ev":"start","id":1,"path":"prime.missing_pattern"}
+{"v":1,"seq":3,"ts":"2026-10-11T15:37:52.393Z","ev":"end","id":1,"path":"prime.missing_pattern","ok":false,"ms":0,"error":"RegexPlugin requires params['pattern']."}
+{"v":1,"seq":4,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":2,"path":"prime.empty_pattern"}
+{"v":1,"seq":5,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":2,"path":"prime.empty_pattern","ok":false,"ms":0,"error":"RegexPlugin requires params['pattern']."}
+{"v":1,"seq":6,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":3,"path":"prime.non_string_input"}
+{"v":1,"seq":7,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":3,"path":"prime.non_string_input","ok":false,"ms":0,"error":"RegexPlugin requires params['input'] as a string."}
+{"v":1,"seq":8,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":4,"path":"prime.unknown_mode"}
+{"v":1,"seq":9,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":4,"path":"prime.unknown_mode","ok":false,"ms":0,"error":"regex: unknown mode 'bogus'; expected match|search|findall|sub."}
+{"v":1,"seq":10,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":5,"path":"prime.flags_not_a_list"}
+{"v":1,"seq":11,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":5,"path":"prime.flags_not_a_list","ok":false,"ms":0,"error":"regex: params['flags'] must be a list of flag names."}
+{"v":1,"seq":12,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":6,"path":"prime.unknown_flag"}
+{"v":1,"seq":13,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":6,"path":"prime.unknown_flag","ok":false,"ms":0,"error":"regex: unknown flag 'BOGUS'"}
+{"v":1,"seq":14,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":7,"path":"prime.missing_replacement"}
+{"v":1,"seq":15,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":7,"path":"prime.missing_replacement","ok":false,"ms":0,"error":"regex: params['replacement'] required when mode='sub'."}
+{"v":1,"seq":16,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":8,"path":"prime.bad_replacement_escape"}
+{"v":1,"seq":17,"ts":"2026-10-11T15:37:52.394Z","ev":"end","id":8,"path":"prime.bad_replacement_escape","ok":false,"ms":0,"error":"bad escape \\q at position 0"}
+{"v":1,"seq":18,"ts":"2026-10-11T15:37:52.394Z","ev":"start","id":9,"path":"prime.retried_failure"}
+{"v":1,"seq":19,"ts":"2026-10-11T15:37:52.796Z","ev":"end","id":9,"path":"prime.retried_failure","ok":false,"ms":402,"error":"regex: invalid pattern: missing ), unterminated subpattern at position 0"}
+{"v":1,"seq":20,"ts":"2026-10-11T15:37:52.796Z","ev":"end","id":0,"path":"prime","ok":true,"ms":403}
+{"v":1,"seq":21,"ts":"2026-10-11T15:37:52.796Z","ev":"run_end","ok":true}
