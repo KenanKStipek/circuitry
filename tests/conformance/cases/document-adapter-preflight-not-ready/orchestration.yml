@@ -1,0 +1,7 @@
+name: document-adapter-preflight-not-ready
+adapter: openai
+effects:
+  - name: parse
+    type: tool
+    provider: json
+    params: {mode: parse, input: '{"a": 1}'}

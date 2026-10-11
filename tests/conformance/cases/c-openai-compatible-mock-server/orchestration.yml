@@ -1,0 +1,7 @@
+name: c-openai-compatible-mock-server
+adapter: lmstudio
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

@@ -1,0 +1,11 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "hello from the mock model"},
+      "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}

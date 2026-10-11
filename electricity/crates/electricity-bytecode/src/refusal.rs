@@ -9,7 +9,10 @@
 //! ruling on PR #432's review, issue #431 lists the rest of this
 //! walker's refusals explicitly but is silent on this one), or an
 //! unexpanded `{{> name}}` partial reference (the run-time half of
-//! #406, out of scope for M0-H).
+//! #406, out of scope for M0-H), or a document naming a top-level
+//! `adapter:` at all, since `cof run` runs preflight against it
+//! whenever a config is given and M0-H ports none of that check yet --
+//! replaced once lane R of #448 (M1's run wiring v2) ports preflight.
 //!
 //! Walks the whole compiled tree in document order and stops at the
 //! first node [`RefusalReason`] names -- not a list of every offending
@@ -59,6 +62,23 @@ pub enum RefusalReason {
     /// `params_json`) -- the run-time half of #406 never ran to splice
     /// it in.
     PartialReference,
+    /// The document's own top-level `adapter:` is a non-blank string --
+    /// `cli/allowlist.py::walk_orchestration_refs`'s own
+    /// `include_document_adapter` branch folds it into the set
+    /// `preflight()` checks liveness for, and `cof run` runs preflight
+    /// whenever a config is given (`cli/runtime_shim.py`, `req.config
+    /// is not None`); M0-H ports none of that yet (lane R of #448, M1's
+    /// run wiring v2, is where preflight lands), so a document naming
+    /// one is refused here instead of silently running without the
+    /// check Python would have failed it on. The adapter name is
+    /// carried already `.strip()`'d, the same text
+    /// `walk_orchestration_refs` itself adds to that set
+    /// ([`is_python_strip_whitespace`], this crate's own helper of the
+    /// same name as `electricity-compiler::pipeline`'s -- but, unlike
+    /// that one, an exact match for Python's `str.strip()`, not an
+    /// ASCII-only approximation: `electricity-bytecode` has no
+    /// dependency on that crate to share either one directly).
+    DocumentAdapter(String),
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -89,7 +109,31 @@ pub fn first_unsupported(program: &Program, extra_allowed_providers: &[&str]) ->
             reason: RefusalReason::DeclaredPrompts,
         });
     }
+    if let Some(adapter) = &program.adapter {
+        let stripped = adapter.trim_matches(is_python_strip_whitespace);
+        if !stripped.is_empty() {
+            return Some(Refusal {
+                path: EffectPath::root(),
+                reason: RefusalReason::DocumentAdapter(stripped.to_string()),
+            });
+        }
+    }
     walk_op(&program.root, extra_allowed_providers)
+}
+
+/// Every character Python's `str.strip()` treats as whitespace with no
+/// argument -- `str.isspace()`'s exact set: Rust's `char::is_whitespace()`
+/// (Unicode `White_Space`) plus `\x1c`-`\x1f`, the four C0 "information
+/// separator" control characters Python's `str.isspace()` counts as
+/// whitespace but the Unicode `White_Space` property does not. No
+/// divergence here (unlike `electricity-compiler::pipeline::
+/// is_python_strip_whitespace`'s own ASCII-only approximation, out of
+/// scope to widen there) -- `electricity-bytecode` has no dependency on
+/// that crate to share this helper with it directly, so this is its own
+/// copy, under the same name, but the exact set rather than that one's
+/// approximation.
+fn is_python_strip_whitespace(ch: char) -> bool {
+    ch.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&ch)
 }
 
 fn walk_op(op: &Op, extra_allowed_providers: &[&str]) -> Option<Refusal> {
@@ -366,6 +410,77 @@ mod tests {
             .insert("greeting".to_string(), "hi".to_string());
         let refusal = first_unsupported(&program, &[]).unwrap();
         assert_eq!(refusal.reason, RefusalReason::DeclaredPrompts);
+    }
+
+    #[test]
+    fn a_document_level_adapter_refuses_even_with_an_otherwise_supported_tree() {
+        let tool_path = EffectPath::root().push_name("parse");
+        let tool = leaf_op(
+            tool_path,
+            LeafKind::Tool(tool_op(ParamNode::Map(IndexMap::new()))),
+        );
+        let mut program = program_with_root(root_block(vec![tool]));
+        program.adapter = Some("openai".to_string());
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
+        assert_eq!(refusal.path, EffectPath::root());
+    }
+
+    #[test]
+    fn a_document_level_adapter_is_stripped_the_same_way_cof_run_strips_it() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("  openai \t".to_string());
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
+    }
+
+    #[test]
+    fn a_document_level_adapter_that_is_blank_after_stripping_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("   ".to_string());
+        assert_eq!(first_unsupported(&program, &[]), None);
+    }
+
+    /// U+2003 (EM SPACE) is Unicode `White_Space`, so `char::is_whitespace()`
+    /// alone already strips it the same way Python's `str.isspace()` does --
+    /// unlike the \x1c-\x1f case below, this one needs no special-casing at
+    /// all, only confirms `is_whitespace()` isn't itself ASCII-only.
+    #[test]
+    fn a_document_level_adapter_of_only_an_em_space_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\u{2003}".to_string());
+        assert_eq!(first_unsupported(&program, &[]), None);
+    }
+
+    /// \x1c (FILE SEPARATOR) is a C0 control character Python's
+    /// `str.isspace()` counts as whitespace but Rust's `char::is_whitespace()`
+    /// does not -- the one gap [`is_python_strip_whitespace`]'s own
+    /// `\x1c`-`\x1f` range closes explicitly.
+    #[test]
+    fn a_document_level_adapter_of_only_a_file_separator_control_is_not_refused() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\x1c".to_string());
+        assert_eq!(first_unsupported(&program, &[]), None);
+    }
+
+    /// U+00A0 (NO-BREAK SPACE) and U+2003 (EM SPACE) bracket "openai" --
+    /// both outside ASCII, confirming the stripped name survives with
+    /// neither left in it, not just that the whole string isn't blank.
+    #[test]
+    fn a_document_level_adapter_strips_unicode_whitespace_around_the_name() {
+        let mut program = program_with_root(root_block(vec![]));
+        program.adapter = Some("\u{a0}openai\u{2003}".to_string());
+        let refusal = first_unsupported(&program, &[]).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::DocumentAdapter("openai".to_string())
+        );
     }
 
     #[test]

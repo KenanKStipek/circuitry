@@ -1497,6 +1497,12 @@ blocks a run; printed to **stderr** (`cli/app.py` `_print_run_warnings`) —
 deliberately, so `--json`/`--tail`/a piped stdout stay machine-readable and
 `--quiet` does not silence a warning that might matter.
 
+electricity does not run preflight at all yet (lane R of #448, M1's run
+wiring v2, ports it) — rather than silently skip a check `cof run` would
+have failed a document on, it refuses outright, with the preview marker,
+any document naming a top-level `adapter:` (electricity/DESIGN.md §13,
+`electricity-bytecode::refusal::RefusalReason::DocumentAdapter`).
+
 ### 8.3 `--out` serialization
 
 `core/saved_state.py:118` `dumps_saved_state(state, pretty=False)`:

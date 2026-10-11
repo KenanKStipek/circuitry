@@ -8,13 +8,16 @@ import pytest
 
 from .normalize import (
     NormalizationError,
+    apply_known_divergence,
     assert_errors_equal,
     assert_events_equal,
     assert_out_serialization,
     assert_states_equal,
     assert_values_equal,
     normalize,
+    normalize_for_comparison,
     redact_leaked_paths,
+    redact_runtime_strings,
 )
 
 
@@ -319,3 +322,55 @@ def test_assert_events_equal_rejects_non_compact_separators() -> None:
     spaced = "\n".join(json.dumps(event) for event in events) + "\n"
     with pytest.raises(AssertionError):
         assert_events_equal(spaced, compact)
+
+
+def test_redact_runtime_strings_replaces_every_occurrence_regardless_of_key() -> None:
+    value = {
+        "raw": {"binary": "/case/fakes/fake"},
+        "meta": {"binary": "/case/fakes/fake", "cwd": "/case"},
+        "list": ["/case/x", "unrelated"],
+    }
+    redacted = redact_runtime_strings(
+        value, [("/case/fakes", "<FAKES_DIR>"), ("/case", "<CASE_DIR>")]
+    )
+    assert redacted == {
+        "raw": {"binary": "<FAKES_DIR>/fake"},
+        "meta": {"binary": "<FAKES_DIR>/fake", "cwd": "<CASE_DIR>"},
+        "list": ["<CASE_DIR>/x", "unrelated"],
+    }
+
+
+def test_redact_runtime_strings_works_on_a_bare_string() -> None:
+    assert redact_runtime_strings("/case/fakes/fake timed out", [("/case", "<CASE_DIR>")]) == (
+        "<CASE_DIR>/fakes/fake timed out"
+    )
+
+
+def test_normalize_for_comparison_composes_redaction_and_normalize() -> None:
+    value = {"created_at": "2026-10-07T20:24:55.787572+00:00", "path": "/case/x"}
+    assert normalize_for_comparison(value, [("/case", "<CASE_DIR>")]) == {
+        "created_at": "<TIMESTAMP>",
+        "path": "<CASE_DIR>/x",
+    }
+
+
+def test_apply_known_divergence_replaces_a_dict_leaf() -> None:
+    state = {"prime": {"pattern": {"value": "python-value"}}}
+    result = apply_known_divergence(
+        state, location="prime.pattern.value", value="electricity-value"
+    )
+    assert result == {"prime": {"pattern": {"value": "electricity-value"}}}
+    # The original is untouched -- a deep copy, not a mutation.
+    assert state == {"prime": {"pattern": {"value": "python-value"}}}
+
+
+def test_apply_known_divergence_replaces_a_list_element() -> None:
+    state = {"prime": {"items": ["a", "b", "c"]}}
+    result = apply_known_divergence(state, location="prime.items.1", value="B")
+    assert result == {"prime": {"items": ["a", "B", "c"]}}
+
+
+def test_apply_known_divergence_rejects_a_missing_location() -> None:
+    state = {"prime": {"value": 1}}
+    with pytest.raises(KeyError):
+        apply_known_divergence(state, location="prime.nope", value=1)

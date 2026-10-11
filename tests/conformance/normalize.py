@@ -27,12 +27,23 @@ The two absolute-path fields get a named, stable placeholder (`<out>`,
 (`normalize()`) and — via the same table, `redact_leaked_paths()` — before
 a case's `expected.json` is ever written to disk, so no contributor's own
 checkout path or OS temp directory is committed.
+
+A third category, `redact_runtime_strings`, is matched by neither key name
+nor exact location: a literal substring (a case directory's own absolute
+path, its `fakes/` subdirectory, a mock HTTP server's ephemeral port)
+replaced wherever it appears inside any string leaf, because — unlike the
+first two categories — it can land at a genuinely unpredictable key (a
+subprocess timeout message naming the binary it resolved, a configured
+`base_url` `effective_settings.runtime` echoes back). Applied the same way,
+at both comparison time and before a case's expected state is written.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -180,6 +191,105 @@ def redact_leaked_paths(value: Any, *, field_path: str | None = None) -> Any:
     if isinstance(value, list):
         return [redact_leaked_paths(v, field_path=field_path) for v in value]
     return value
+
+
+def redact_runtime_strings(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
+    """Recursively replace, in every string leaf regardless of key name or
+    nesting location, each ``(literal, placeholder)`` pair in
+    *replacements*, applied in order -- unlike `normalize()`'s key-name/
+    exact-location rules, this catches a value Circuitry's own code embeds
+    somewhere unpredictable: a case directory's absolute path inside a
+    subprocess timeout message naming the resolved binary it ran
+    (`plugins._subprocess.run_binary`'s own text), or inside a tool
+    result's own ``raw.binary`` field; an ephemeral mock-HTTP-server port
+    inside a configured ``base_url`` `effective_settings.runtime` echoes
+    back, or inside a recorded request's own ``Host`` header. Also usable
+    directly on a bare string (a failure case's own error text), not just
+    a state tree. Order matters when one replacement's literal is a prefix
+    of another's -- a case directory is always a prefix of its own
+    ``fakes/`` subdirectory, so replace the more specific (longer) one
+    first; callers build *replacements* in that order."""
+    if isinstance(value, dict):
+        return {k: redact_runtime_strings(v, replacements) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_runtime_strings(v, replacements) for v in value]
+    if isinstance(value, str):
+        for literal, placeholder in replacements:
+            value = value.replace(literal, placeholder)
+        return value
+    return value
+
+
+def apply_known_divergence(state: Any, *, location: str, value: Any) -> Any:
+    """A deep copy of *state* with the value at dotted *location* replaced
+    by *value* -- a `case.json` `known_divergence`'s own documented,
+    pinned electricity value, applied to the Python-engine-captured
+    `expected.json` before it's compared against electricity's own run
+    (both engines succeed; only this one value is allowed to differ).
+    A segment that parses as a non-negative integer indexes a list;
+    otherwise it's a dict key. Raises if *location* doesn't resolve to an
+    existing leaf -- a divergence with nowhere left to land is a stale
+    fixture, not something to silently skip."""
+    root = copy.deepcopy(state)
+    node: Any = root
+    segments = location.split(".")
+    for segment in segments[:-1]:
+        node = node[int(segment)] if isinstance(node, list) else node[segment]
+    last = segments[-1]
+    if isinstance(node, list):
+        node[int(last)] = value
+    else:
+        if last not in node:
+            raise KeyError(f"known_divergence location {location!r} does not exist in state")
+        node[last] = value
+    return root
+
+
+def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
+    """`redact_runtime_strings` then `normalize()` -- the one call every
+    comparison (and the generator, before writing) makes from here on, so
+    a case-directory/fakes-directory/mock-port leak and a volatile-field
+    substitution are never applied out of order or only partially."""
+    return normalize(redact_runtime_strings(value, replacements))
+
+
+def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
+    """A recorded HTTP request's own ``headers`` -- either a mapping (a
+    freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list
+    of ``[name, value]`` pairs (a committed `expected.http_requests.json`,
+    already in this function's own canonical shape) -- as a list of
+    ``[lowercased name, value]`` pairs sorted by that same key. The header
+    rule both the Python and electricity conformance runners compare under
+    (``tests/conformance/README.md``'s "Mock HTTP server" section): header
+    *names* are compared case-insensitively, the whole *set* is compared
+    order-insensitively (two clients are free to send the same headers in a
+    different order), but a *value* is still compared exactly. Sorting by
+    ``(lowercased name, value)`` turns both of those into a single ordered
+    structure plain list/dict equality already checks correctly, without a
+    bespoke set-comparison here. ``User-Agent`` never reaches this function
+    at all -- ``mock_http.MockHttpServer`` excludes it at record time,
+    before either engine's own request even reaches a fixture."""
+    pairs = headers.items() if isinstance(headers, dict) else headers
+    return sorted([str(k).lower(), str(v)] for k, v in pairs)
+
+
+def canonicalize_http_requests(
+    requests: list[dict[str, Any]], *, sort_requests: bool
+) -> list[dict[str, Any]]:
+    """Every recorded HTTP request's own ``headers`` canonicalized
+    (`canonicalize_http_headers`), then, only when *sort_requests* is set
+    (``case.json``'s ``sort_http_requests`` -- a tree-flow case, whose
+    concurrent branches may dispatch their own HTTP calls in a different
+    wall-clock order on either engine), the whole list re-ordered by its own
+    JSON representation into one fixed, engine-independent order. A case
+    with no concurrent dispatch leaves *sort_requests* `False` and keeps
+    arrival order, which is itself part of what's being checked there (a
+    request issued out of the document's own order is a real divergence,
+    not noise to normalize away)."""
+    canonical = [{**r, "headers": canonicalize_http_headers(r["headers"])} for r in requests]
+    if sort_requests:
+        canonical.sort(key=lambda r: json.dumps(r, sort_keys=True))
+    return canonical
 
 
 def assert_states_equal(actual: Any, expected: Any, *, path: str = "$") -> None:

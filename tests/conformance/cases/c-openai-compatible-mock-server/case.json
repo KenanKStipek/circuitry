@@ -1,0 +1,9 @@
+{
+  "spec_case": "electricity/DESIGN.md §12 (loopback mock HTTP server, OpenAI-compatible adapter family)",
+  "description": "A `prompt` effect through the `lmstudio` adapter (OpenAI Chat Completions wire format, no credential), `base_url` pointed at the harness's own mock HTTP server via `config.json`'s own placeholder substitution (issue #450 item 3).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "electricity_preview_ok": true,
+  "mock_http_fixture": "mock-http.yaml"
+}
