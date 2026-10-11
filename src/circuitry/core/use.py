@@ -758,6 +758,10 @@ class UseRuntime:
         # still recover any errors a tree-flow sibling recorded before the
         # effect that actually raised — see `_collect_child_errors`.
         child_store: Store | None = None
+        # Bound before the retry loop so the outer `except` below can read it
+        # even for a failure raised ahead of the loop (capability consent,
+        # loading the child) -- `attempt_index > 0` is then correctly false.
+        attempt_index = 0
 
         # The use effect announces itself the way every other effect does, so
         # the child effects forwarded below have a node to hang under. The
@@ -832,7 +836,11 @@ class UseRuntime:
                 t0 = time.monotonic()
                 child_store = None
                 node["value"] = None
-                meta["created_at"] = _now_iso()
+                # Set once, on this pass's first attempt only -- the start
+                # of a retried use's final attempt is not when it started
+                # (#421).
+                if attempt_index == 0:
+                    meta["created_at"] = _now_iso()
                 meta["completed_at"] = None
                 meta["error"] = None
                 meta["child_errors"] = None
@@ -1098,6 +1106,10 @@ class UseRuntime:
             error_msg = str(e)
             meta["error"] = error_msg
             meta["completed_at"] = _now_iso()
+            # Set on failure too (#421), same as success above -- absent,
+            # not 0, when the first attempt is also the last.
+            if attempt_index > 0:
+                meta["retries_used"] = attempt_index
 
             # Capture validation errors separately for introspection
             if "validation failed" in error_msg.lower():

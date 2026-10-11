@@ -1,6 +1,6 @@
 {
   "spec_case": "orchestration-reference.md 'tool-retries'/'tool-expect'",
-  "description": "A tool whose CEL `expect:` is always false retries up to max_attempts, then fails the run with 'expect failed: <expr>' -- the json tool's own call always succeeds, so this isolates expect-driven retry exhaustion from a provider failure (electricity/docs/spec/runtime-semantics.md §7.3, orchestration-reference.md 'tool-expect').",
+  "description": "A tool whose CEL `expect:` is always false retries up to max_attempts, then fails the run with 'expect failed: <expr>' -- the json tool's own call always succeeds, so this isolates expect-driven retry exhaustion from a provider failure (electricity/docs/spec/runtime-semantics.md §7.3, orchestration-reference.md 'tool-expect'). `meta.retries_used` is now set on this failed outcome too (#421), for both engines.",
   "engines": ["python", "electricity"],
   "expect": "failure",
   "error_compare": "exact"

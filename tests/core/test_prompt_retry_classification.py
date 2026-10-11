@@ -166,6 +166,84 @@ def test_backoff_at_a_large_attempt_index_stays_at_the_cap(
     assert sleeps[-1] == 60.0
 
 
+def test_exhausting_retries_still_records_retries_used() -> None:
+    """#421: retries_used is set on a failed outcome too, not only on
+    success — the same rule a tool's retry loop follows."""
+    root = compile_orchestration(orch=_retries_orch(max_attempts=3), root_name="prime")
+    adapter = ScriptedRetryAdapter(
+        failures=[
+            RetryInfo(retryable=True, status=503),
+            RetryInfo(retryable=True, status=503),
+            RetryInfo(retryable=True, status=503),
+        ]
+    )
+    store = Store({})
+
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert adapter.calls == 3
+    assert store.get("prime.task.meta.retries_used") == 2
+    assert store.get("prime.task.meta.error") is not None
+
+
+def test_effect_complete_observer_sees_retries_used_on_exhausted_retry() -> None:
+    """#421 P2-6: retries_used is already on the node by the time
+    effect_complete fires, even on the exhausted-retries failure path —
+    pins the ordering `fire_effect_complete` relies on."""
+    root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
+    adapter = ScriptedRetryAdapter(
+        failures=[
+            RetryInfo(retryable=True, status=503),
+            RetryInfo(retryable=True, status=503),
+        ]
+    )
+    captured: dict = {}
+
+    def _observer(path: str, node: dict) -> None:
+        if path == "prime.task":
+            captured.update(node)
+
+    store = Store({}, effect_complete=_observer)
+
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    assert captured["meta"]["retries_used"] == 1
+
+
+def test_created_at_is_the_first_attempts_start_on_success_and_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#421: created_at names the start of the pass's first attempt, not
+    whichever attempt finally decided the outcome — same rule as `tool`."""
+    from circuitry.core import prompt as prompt_mod
+
+    success_timestamps = iter(["S0", "S1"])
+    monkeypatch.setattr(prompt_mod, "_now_iso", lambda: next(success_timestamps))
+    root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
+    adapter = ScriptedRetryAdapter(failures=[RetryInfo(retryable=True, status=429)])
+    store = Store({})
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+    assert store.get("prime.task.meta.created_at") == "S0"
+    assert store.get("prime.task.meta.completed_at") == "S1"
+
+    failure_timestamps = iter(["F0", "F1"])
+    monkeypatch.setattr(prompt_mod, "_now_iso", lambda: next(failure_timestamps))
+    root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
+    adapter = ScriptedRetryAdapter(
+        failures=[
+            RetryInfo(retryable=True, status=503),
+            RetryInfo(retryable=True, status=503),
+        ]
+    )
+    store = Store({})
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+    assert store.get("prime.task.meta.created_at") == "F0"
+    assert store.get("prime.task.meta.completed_at") == "F1"
+
+
 def test_an_unclassified_error_is_not_retried() -> None:
     """An adapter that doesn't classify its own failure (a bare
     ``RuntimeError``) is treated as not retryable \u2014 the conservative

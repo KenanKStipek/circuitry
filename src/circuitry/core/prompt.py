@@ -346,6 +346,12 @@ class PromptRuntime:
                   fallback_attempts, fallback_recovered, retries_used?,
                   complexity?, assets?, finish_reason?, warnings?, cost_usd?}
 
+    ``meta.created_at`` is the start of this pass's first attempt, not reset
+    on a retry. ``meta.retries_used`` is set on both a successful and a
+    failed outcome, to the index of the attempt that decided the outcome;
+    it's absent, not 0, when the first attempt is also the last (#421) —
+    same rule as a tool effect (core.tool.ToolRuntime).
+
     ``assets`` (one ``{kind, ref, size?, sha256?, media_type?}`` per image
     sent — never the bytes), ``finish_reason`` (when the provider reports
     one), ``cost_usd`` (the winning attempt's cost, when its adapter reports
@@ -603,6 +609,11 @@ class PromptRuntime:
         attempts_meta: list[dict[str, Any]] = []
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        # Holds the retry loop's own index once it starts, so the except
+        # block below can report retries_used even when the raise came from
+        # inside the loop (0 if the failure happened before the loop ever
+        # ran, e.g. decomposition or building the attempt chain).
+        _attempt = 0
         try:
             # Decomposition sits right at the dispatch seam: it either replaces
             # the model call entirely (the merged child result lands at this
@@ -839,6 +850,13 @@ class PromptRuntime:
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
             meta["completed_at"] = _now_iso()
+            # Same rule as the success path (#421): retries_used is set on
+            # failure too, so a reader can time an effect's duration
+            # consistently regardless of outcome — absent, not 0, for a
+            # first-attempt failure, matching the success path's "only when
+            # above 0".
+            if _attempt > 0:
+                meta["retries_used"] = _attempt
             if self.defn.on_error in ("skip", "continue"):
                 # A reused node (an unnamed loop's prior pass, a resume)
                 # must not let that pass's value survive next to this
