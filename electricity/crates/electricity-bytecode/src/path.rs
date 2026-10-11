@@ -81,7 +81,10 @@ impl EffectPath {
     /// `concretize` so it can compose a `use`/decomposition child's own
     /// nesting prefix onto the result by segment, not by string
     /// surgery.
-    pub fn resolve_passes(&self, pass_indices: &HashMap<LoopId, u32>) -> Result<EffectPath, LoopId> {
+    pub fn resolve_passes(
+        &self,
+        pass_indices: &HashMap<LoopId, u32>,
+    ) -> Result<EffectPath, LoopId> {
         let mut segments = Vec::with_capacity(self.0.len());
         for segment in &self.0 {
             match segment {

@@ -145,10 +145,22 @@ pub enum VmError {
     /// build_plugin`'s own exact unknown-plugin text (issue #449's gate
     /// lane item 2), or a registered plugin's own
     /// [`electricity_tools::ToolError`], or any other tool-effect failure
-    /// (a render error, an allowlist denial, a failed `expect:`), as
-    /// text -- what [`crate::exec::tool::execute_tool`] returns for
-    /// `on_error: fail` once retries are exhausted.
-    Tool(String),
+    /// (a render error, an allowlist denial, a failed `expect:`) widened
+    /// to the same shape with [`electricity_tools::ToolError::message`]'s
+    /// own `RuntimeError`/[`electricity_tools::ErrorCause::None`]
+    /// default -- what [`crate::exec::tool::execute_tool`] returns for
+    /// `on_error: fail` once retries are exhausted (review finding 1 on
+    /// PR #454: the previous `Tool(String)` shape threw its own
+    /// [`electricity_tools::ToolError`]'s *py_class*/*cause* away at
+    /// [`crate::exec::tool::run_tool`], which #442's tree text and lane
+    /// E's own HTTP-family retry rule both need). [`crate::exec::
+    /// wrap_effect_error`] keeps *py_class*/*cause* unchanged through a
+    /// chain/tree wrap, only ever rewriting *message*.
+    Raised {
+        py_class: electricity_tools::PyExc,
+        message: String,
+        cause: electricity_tools::ErrorCause,
+    },
     /// This run's own [`CancellationToken`] was requested while an effect
     /// was blocked waiting (a concurrency slot, a retry backoff) -- bypasses
     /// `on_error` entirely and fires no observer `effect_complete`, mirroring
@@ -173,10 +185,35 @@ pub enum VmError {
     Message(String),
 }
 
+impl VmError {
+    /// A plain message, defaulting to `RuntimeError`/
+    /// [`electricity_tools::ErrorCause::None`] -- every failure this
+    /// crate builds from its own text (a render error, an allowlist
+    /// denial, a failed `expect:`) rather than from an actual
+    /// [`electricity_tools::ToolError`] it already has both fields for.
+    pub fn tool(message: impl Into<String>) -> VmError {
+        VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: message.into(),
+            cause: electricity_tools::ErrorCause::None,
+        }
+    }
+}
+
+impl From<electricity_tools::ToolError> for VmError {
+    fn from(err: electricity_tools::ToolError) -> VmError {
+        VmError::Raised {
+            py_class: err.py_class,
+            message: err.message,
+            cause: err.cause,
+        }
+    }
+}
+
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VmError::Tool(message) => write!(f, "{message}"),
+            VmError::Raised { message, .. } => write!(f, "{message}"),
             VmError::Cancelled => write!(f, "cancelled"),
             VmError::NotImplemented(message) => write!(f, "{message}"),
             VmError::Message(message) => write!(f, "{message}"),

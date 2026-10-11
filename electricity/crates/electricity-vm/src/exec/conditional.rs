@@ -81,7 +81,11 @@ pub(crate) fn execute_conditional<'a>(
                 // still returns `Ok`) and for an interrupted branch
                 // (`decide_and_run` returns `Err(Cancelled)`, but
                 // meta.error is never written for a cancellation).
-                observer.effect_complete(&effect_path, instance, node_error(store, &meta).as_deref());
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    node_error(store, &meta).as_deref(),
+                );
                 result
             }
             None => {

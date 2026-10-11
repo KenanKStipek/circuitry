@@ -194,7 +194,10 @@ mod tests {
         let mut p = EffectPath::root().push_name("shots");
         p = p.push_pass(loop_id).push_name("describe");
         let frame = Frame::root().with_pass(loop_id, 2);
-        assert_eq!(frame.effect_path(&p).to_string(), "prime.shots.iter_2.describe");
+        assert_eq!(
+            frame.effect_path(&p).to_string(),
+            "prime.shots.iter_2.describe"
+        );
     }
 
     #[test]
@@ -205,7 +208,10 @@ mod tests {
         // is what tells two concurrently-dispatched passes' identically
         // *shaped* paths apart.
         let loop_id = LoopId(0);
-        let p = EffectPath::root().push_name("lp").push_pass(loop_id).push_name("step");
+        let p = EffectPath::root()
+            .push_name("lp")
+            .push_pass(loop_id)
+            .push_name("step");
         let first = Frame::root().with_pass(loop_id, 0);
         let second = Frame::root().with_pass(loop_id, 1);
         assert_eq!(first.effect_path(&p).to_string(), "prime.lp.iter_0.step");
@@ -220,7 +226,10 @@ mod tests {
         let use_path = EffectPath::root().push_name("outer").push_name("fetch");
         let frame = Frame::root().nested(&use_path);
         let child_root = EffectPath::root();
-        assert_eq!(frame.effect_path(&child_root).to_string(), "prime.outer.fetch");
+        assert_eq!(
+            frame.effect_path(&child_root).to_string(),
+            "prime.outer.fetch"
+        );
         let child_leaf = EffectPath::root().push_name("answer");
         assert_eq!(
             frame.effect_path(&child_leaf).to_string(),

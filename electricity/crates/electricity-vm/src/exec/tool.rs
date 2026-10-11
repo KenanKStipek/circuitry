@@ -3,13 +3,12 @@
 //! runs it. The dispatch seam itself is final (lane B/C never edit this
 //! file to wire a new provider in; they only build the registry they
 //! pass to it); *provider* normalization already matches `plugins/
-//! factory.py::build_plugin`'s own `.strip().lower()` (below), but the
-//! exact "unknown provider" wording still diverges -- this crate's own
-//! [`crate::VmError::ToolNotFound`] text isn't `build_plugin`'s own
-//! `"Unknown plugin: 'x'. Supported plugins: ..."` -- so lane C may
-//! still widen that text with the supported-provider list once it has
-//! the full `electricity_tools::ToolRegistry` populated to word that
-//! list from.
+//! factory.py::build_plugin`'s own `.strip().lower()` (below), and the
+//! "unknown provider" text is already exact -- [`electricity_tools::
+//! build_plugin`]'s own `"Unknown plugin: 'x'. Supported plugins:
+//! ..."`, naming Circuitry's full registry (`electricity_tools::
+//! plugin_names::PLUGIN_NAMES`), not just this crate's own
+//! [`electricity_tools::ToolRegistry`].
 //!
 //! [`execute_tool`] is the lane C's own owning entry point for a `tool`
 //! effect -- a close port of `core/tool.py::ToolRuntime.execute`. It
@@ -90,11 +89,17 @@ use indexmap::IndexMap;
 /// execute` calls Python's own `build_plugin` every attempt -- so a
 /// per-plugin config error on that path fails just the one attempt.
 ///
-/// `Err` is [`VmError::Tool`] -- `build_plugin`'s own exact
-/// unknown-plugin text (naming Circuitry's **full** registry) for a
-/// *provider* neither *registry* nor `build_plugin` knows, or the
-/// resolved plugin's own [`electricity_tools::ToolError`], either way
-/// wrapped the same way.
+/// `Err` is a typed [`electricity_tools::ToolError`] (review finding 1
+/// on PR #454 -- a previous revision wrapped it into a bare
+/// `VmError::Tool(String)` right here, throwing its own *py_class*/
+/// *cause* away before [`execute_tool`] could ever classify a failure
+/// for retry or report its real exception class) -- `build_plugin`'s
+/// own exact unknown-plugin text (naming Circuitry's **full**
+/// registry, [`electricity_tools::PyExc::ValueError`]) for a *provider*
+/// neither *registry* nor `build_plugin` knows, or the resolved
+/// plugin's own raised [`electricity_tools::ToolError`] unchanged.
+/// [`execute_tool`] is the one place this crate ever turns it into a
+/// [`VmError::Raised`].
 pub async fn run_tool(
     registry: &ToolRegistry,
     provider: &str,
@@ -103,7 +108,7 @@ pub async fn run_tool(
     timeout_seconds: u32,
     token: &CancellationToken,
     armed: bool,
-) -> Result<electricity_tools::ToolResult, VmError> {
+) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = provider.trim().to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
     let call = ToolCall {
@@ -113,17 +118,10 @@ pub async fn run_tool(
         armed,
     };
     if let Some(plugin) = registry.get(&normalized) {
-        return plugin
-            .execute(params, &call)
-            .await
-            .map_err(|err| VmError::Tool(err.to_string()));
+        return plugin.execute(params, &call).await;
     }
-    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)
-        .map_err(|err| VmError::Tool(err.to_string()))?;
-    plugin
-        .execute(params, &call)
-        .await
-        .map_err(|err| VmError::Tool(err.to_string()))
+    let plugin = electricity_tools::build_plugin(&normalized, runtime_config)?;
+    plugin.execute(params, &call).await
 }
 
 /// `core/tool.py::DEFAULT_TOOL_TIMEOUT_SECONDS`.
@@ -433,7 +431,7 @@ pub async fn execute_tool(
 
     let effect_node = store
         .ensure_dict(parent, name_key)
-        .map_err(|err| VmError::Tool(err.to_string()))?;
+        .map_err(|err| VmError::tool(err.to_string()))?;
     // `node.setdefault("value", None)` -- a plain presence check, unlike
     // `get_leaf`'s own `None`-on-promoted-dict behaviour, so a `Slot::Node`
     // already there (e.g. a nested-dict value written by an earlier
@@ -446,7 +444,7 @@ pub async fn execute_tool(
     }
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
-        .map_err(|err| VmError::Tool(err.to_string()))?;
+        .map_err(|err| VmError::tool(err.to_string()))?;
 
     let timeout_seconds = resolve_timeout_seconds(tool, run_ctx.runtime_config);
 
@@ -462,7 +460,7 @@ pub async fn execute_tool(
     let base_backoff_ms = tool.retries.backoff_ms;
 
     if let Err(denial) = require_tool(&tool.provider, run_ctx.runtime_config) {
-        return Err(VmError::Tool(denial));
+        return Err(VmError::tool(denial));
     }
 
     let mut next_delay_ms = base_backoff_ms;
@@ -505,11 +503,11 @@ pub async fn execute_tool(
         // diffing the store itself.
         observer.write();
 
-        let mut failure: Option<String> = None;
+        let mut failure: Option<electricity_tools::ToolError> = None;
 
         match render_tool_call(name, tool, ctx) {
             Err(message) => {
-                failure = Some(message);
+                failure = Some(electricity_tools::ToolError::message(message));
             }
             Ok(rendered) => {
                 let rendered_value = Value::Dict(rendered);
@@ -559,7 +557,9 @@ pub async fn execute_tool(
                 match acquired {
                     None => return Err(VmError::Cancelled),
                     Some(Err(limiter_err)) => {
-                        failure = Some(limiter_err.to_string());
+                        failure = Some(electricity_tools::ToolError::message(
+                            limiter_err.to_string(),
+                        ));
                     }
                     Some(Ok(guard)) => {
                         // `run_tool`'s own future is not itself
@@ -570,7 +570,7 @@ pub async fn execute_tool(
                         // every other cancellation point in this
                         // function, is `VmError::Cancelled` and bypasses
                         // `on_error` entirely, never folded into an
-                        // ordinary `VmError::Tool` failure.
+                        // ordinary `VmError::Raised` failure.
                         // Biased, for the same reason as the acquire
                         // `select!` above: a `run_tool` future that is
                         // already finished at the first poll (an
@@ -607,7 +607,7 @@ pub async fn execute_tool(
                             return Err(VmError::Cancelled);
                         };
                         match dispatch {
-                            Err(err) => failure = Some(err.to_string()),
+                            Err(err) => failure = Some(err),
                             Ok(result) => {
                                 let value_for_expect = result.value.clone();
                                 set_leaf(store, &effect_node, "value", result.value);
@@ -644,7 +644,7 @@ pub async fn execute_tool(
                                                 tool.provider
                                             )
                                         });
-                                    failure = Some(message);
+                                    failure = Some(electricity_tools::ToolError::message(message));
                                 } else if let Some(expect) = &tool.expect {
                                     let ExpectCondition::Cel { expr } = expect else {
                                         unreachable!(
@@ -672,7 +672,10 @@ pub async fn execute_tool(
                                                 Value::Dict(expect_meta),
                                             );
                                             if !passed {
-                                                failure = Some(format!("expect failed: {expr}"));
+                                                failure =
+                                                    Some(electricity_tools::ToolError::message(
+                                                        format!("expect failed: {expr}"),
+                                                    ));
                                             }
                                         }
                                         Err(cel_err) => {
@@ -688,7 +691,9 @@ pub async fn execute_tool(
                                                 "expect",
                                                 Value::Dict(expect_meta),
                                             );
-                                            failure = Some(format!("expect failed: {expr}"));
+                                            failure = Some(electricity_tools::ToolError::message(
+                                                format!("expect failed: {expr}"),
+                                            ));
                                         }
                                     }
                                 }
@@ -701,14 +706,23 @@ pub async fn execute_tool(
 
         set_leaf(store, &meta_node, "completed_at", now_iso());
 
-        if let Some(message) = failure {
-            set_leaf(store, &meta_node, "error", Value::Str(message.clone()));
+        if let Some(failure) = failure {
+            set_leaf(
+                store,
+                &meta_node,
+                "error",
+                Value::Str(failure.message.clone()),
+            );
             let is_last_attempt = attempt_index + 1 >= max_attempts;
-            // Every failure in M0-H is retryable: the only provider
-            // `run_tool` can dispatch to is `json`, never one of
-            // `core/tool.py`'s own `_HTTP_FAMILY_PROVIDERS` (this
-            // module's own doc comment).
-            if !is_last_attempt {
+            // `core/tool.py::ToolRuntime._is_retryable_failure` -- every
+            // non-HTTP-family provider (every provider this crate can
+            // build today: `json`, plus `sleep`/`fail` under
+            // `test-tools`) retries on any failure, unchanged from
+            // M0-H; lane E's own HTTP-family tool is what first makes
+            // *retryable* ever come back `false` here.
+            let retryable =
+                crate::retry::is_tool_failure_retryable(&tool.provider, None, Some(&failure.cause));
+            if !is_last_attempt && retryable {
                 next_delay_ms = crate::retry::next_backoff_delay_ms(
                     &crate::retry::RetryInfo::retryable(),
                     attempt_index,
@@ -719,7 +733,7 @@ pub async fn execute_tool(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            observer.effect_complete(&effect_path, instance, Some(&message));
+            observer.effect_complete(&effect_path, instance, Some(&failure.message));
             // The final store write for this effect (whichever
             // `on_error` branch below actually returns) -- same
             // contract as the per-attempt reset's own `observer.
@@ -727,7 +741,7 @@ pub async fn execute_tool(
             // fresh attempt's.
             observer.write();
             if op.on_error == OnError::Fail {
-                return Err(VmError::Tool(message));
+                return Err(failure.into());
             }
             return Ok(());
         }
@@ -766,9 +780,8 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            matches!(err, VmError::Tool(message) if message.starts_with("Unknown plugin: 'bogus'."))
-        );
+        assert!(err.message.starts_with("Unknown plugin: 'bogus'."));
+        assert_eq!(err.py_class, electricity_tools::PyExc::ValueError);
     }
 
     #[tokio::test]
@@ -786,7 +799,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, VmError::Tool(_)));
+        assert_eq!(
+            err.message,
+            "JsonPlugin: parse mode requires params['input'] as a string."
+        );
     }
 
     #[tokio::test]
@@ -804,7 +820,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, VmError::Tool(_)));
+        assert_eq!(
+            err.message,
+            "JsonPlugin: parse mode requires params['input'] as a string."
+        );
     }
 
     fn tool_op(params: IndexMap<Value, ParamNode>) -> ToolOp {
@@ -998,7 +1017,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(err, VmError::Tool("json: unknown mode 'bogus'".to_string()));
+        assert_eq!(err.to_string(), "json: unknown mode 'bogus'");
     }
 
     #[tokio::test]
@@ -1043,12 +1062,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not \
-                 resolve to a value."
-                    .to_string()
-            )
+            err.to_string(),
+            "Tool effect 'fetch' param 'params.n': '{from: input.missing}' did not \
+             resolve to a value."
         );
     }
 
@@ -1097,10 +1113,8 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "tool 'json' not in enabled_tools allowlist (enabled: ['other'])".to_string()
-            )
+            err.to_string(),
+            "tool 'json' not in enabled_tools allowlist (enabled: ['other'])"
         );
         assert_eq!(observer.0.get(), 0);
 
@@ -1203,12 +1217,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "params_json must not set ['allowed_commands']: security-sensitive \
-                 settings are only honoured from a document's literal params block."
-                    .to_string()
-            )
+            err.to_string(),
+            "params_json must not set ['allowed_commands']: security-sensitive \
+             settings are only honoured from a document's literal params block."
         );
     }
 
@@ -1247,12 +1258,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err,
-            VmError::Tool(
-                "params.allowed_commands must be a literal list of strings; a templated \
-                 value is not honoured for this security-sensitive setting."
-                    .to_string()
-            )
+            err.to_string(),
+            "params.allowed_commands must be a literal list of strings; a templated \
+             value is not honoured for this security-sensitive setting."
         );
     }
 
@@ -1744,10 +1752,90 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
-            err,
-            VmError::Tool("flaky tool reported failure (ok=False)".to_string())
-        );
+        assert_eq!(err.to_string(), "flaky tool reported failure (ok=False)");
+    }
+
+    /// A test-only [`electricity_tools::ToolPlugin`] that always raises
+    /// a typed [`electricity_tools::ToolError`] -- review finding 1 on
+    /// PR #454's own probe: "a FailTool returning `ErrorCause::NoReply`/
+    /// `PyExc::ValueError` reaches `execute_tool` with both fields
+    /// intact".
+    struct RaisingTool;
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for RaisingTool {
+        fn name(&self) -> &str {
+            "raising"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            Err(electricity_tools::ToolError {
+                py_class: electricity_tools::PyExc::ValueError,
+                message: "no reply from the server".to_string(),
+                cause: electricity_tools::ErrorCause::NoReply,
+            })
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_raised_tool_errors_class_and_cause_reach_execute_tool_intact() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "raising".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 1,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(RaisingTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let VmError::Raised {
+            py_class,
+            message,
+            cause,
+        } = err
+        else {
+            panic!("expected a VmError::Raised, got a different VmError variant");
+        };
+        assert_eq!(py_class, electricity_tools::PyExc::ValueError);
+        assert_eq!(cause, electricity_tools::ErrorCause::NoReply);
+        assert_eq!(message, "no reply from the server");
     }
 
     #[tokio::test]
@@ -1922,7 +2010,7 @@ mod tests {
     // clears_it`'s own `Waiting` assertions, but this test is the one
     // that actually cancels the token while blocked there and checks
     // the function returns `Err(VmError::Cancelled)`, not an ordinary
-    // `VmError::Tool` failure or a successful completion once the slot
+    // `VmError::Raised` failure or a successful completion once the slot
     // frees up later).
     async fn a_cancelled_token_stops_a_queued_limiter_wait() {
         let mut params = IndexMap::new();

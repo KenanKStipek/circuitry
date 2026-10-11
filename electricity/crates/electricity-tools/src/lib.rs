@@ -24,6 +24,10 @@ pub mod registry;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
 
+/// The one canonical Python-exception-class-name enum every crate that
+/// needs to report one shares -- `electricity_value::pycompat::PyExc`'s
+/// own doc comment; review finding 1 on PR #454: this crate and
+/// `electricity-vm::adapter` each used to keep their own copy.
 pub use electricity_value::pycompat::PyExc;
 pub use registry::build_plugin;
 
@@ -84,11 +88,6 @@ impl ToolResult {
         diagnostics
     }
 }
-
-/// The one canonical Python-exception-class-name enum every crate that
-/// needs to report one shares (`electricity_value::pycompat::PyExc`'s
-/// own doc comment -- review finding 1 on PR #454: this crate and
-/// `electricity-vm::adapter` each used to keep their own copy).
 
 /// What kind of failure a [`ToolError`] carries, for retry
 /// classification (`core/tool.py::ToolRuntime._is_retryable_failure`,

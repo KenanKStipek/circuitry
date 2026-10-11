@@ -18,6 +18,40 @@ pub fn status_is_retryable(status: u16) -> bool {
     status == 429 || status == 408 || (500..=599).contains(&status)
 }
 
+/// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- the only providers whose
+/// own retry decision this crate ever classifies by status/cause
+/// rather than retrying unconditionally.
+fn is_http_family_provider(provider: &str) -> bool {
+    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+}
+
+/// `core/tool.py::ToolRuntime._is_retryable_failure` (review finding 1
+/// on PR #454) -- *provider* already normalized (`.strip().lower()`);
+/// *status_code* is a status an *unraised*, `ok: false` result itself
+/// carried (lane E's own HTTP tool -- no M0/M1-A provider ever
+/// produces one); *cause* is the raised [`electricity_tools::ToolError`]'s
+/// own [`electricity_tools::ErrorCause`], when the failure was raised
+/// rather than returned. A non-HTTP-family provider (every provider
+/// this crate can build today) always retries, exactly as every M0-H
+/// `json` failure already did.
+pub fn is_tool_failure_retryable(
+    provider: &str,
+    status_code: Option<u16>,
+    cause: Option<&electricity_tools::ErrorCause>,
+) -> bool {
+    if !is_http_family_provider(provider) {
+        return true;
+    }
+    if let Some(status) = status_code {
+        return status_is_retryable(status);
+    }
+    match cause {
+        Some(electricity_tools::ErrorCause::Http { status, .. }) => status_is_retryable(*status),
+        Some(electricity_tools::ErrorCause::NoReply) => true,
+        Some(electricity_tools::ErrorCause::None) | None => false,
+    }
+}
+
 /// `adapters/_retry.py::RetryInfo` -- what a failed call tells a retry
 /// loop: whether it's worth trying again, the provider's HTTP status
 /// when known, and the provider's own `Retry-After` header value
@@ -90,6 +124,53 @@ pub fn next_backoff_delay_ms(retry_info: &RetryInfo, attempt_index: u32, base_ms
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_http_family_providers_always_retry() {
+        assert!(is_tool_failure_retryable("json", None, None));
+        assert!(is_tool_failure_retryable(
+            "shell",
+            None,
+            Some(&electricity_tools::ErrorCause::None)
+        ));
+    }
+
+    #[test]
+    fn http_family_classifies_by_status_code_first() {
+        assert!(is_tool_failure_retryable("http", Some(500), None));
+        assert!(!is_tool_failure_retryable("http", Some(404), None));
+    }
+
+    #[test]
+    fn http_family_falls_back_to_the_raised_causes_classification() {
+        assert!(is_tool_failure_retryable(
+            "http",
+            None,
+            Some(&electricity_tools::ErrorCause::NoReply)
+        ));
+        assert!(is_tool_failure_retryable(
+            "webhook",
+            None,
+            Some(&electricity_tools::ErrorCause::Http {
+                status: 503,
+                retry_after: None,
+            })
+        ));
+        assert!(!is_tool_failure_retryable(
+            "webhook",
+            None,
+            Some(&electricity_tools::ErrorCause::Http {
+                status: 400,
+                retry_after: None,
+            })
+        ));
+        assert!(!is_tool_failure_retryable(
+            "linear",
+            None,
+            Some(&electricity_tools::ErrorCause::None)
+        ));
+        assert!(!is_tool_failure_retryable("linear", None, None));
+    }
 
     #[test]
     fn status_is_retryable_matches_pythons_own_set() {

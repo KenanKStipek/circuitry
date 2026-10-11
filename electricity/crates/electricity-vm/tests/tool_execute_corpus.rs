@@ -310,7 +310,14 @@ async fn golden_corpus_execute_tool() {
         .await;
 
         match (result, case.raised, case.error) {
-            (Err(VmError::Tool(got_message)), true, Some(expected_message)) => {
+            (
+                Err(VmError::Raised {
+                    message: got_message,
+                    ..
+                }),
+                true,
+                Some(expected_message),
+            ) => {
                 if got_message != expected_message {
                     failures.push(format!(
                         "case {name}: expected error {expected_message:?}, got {got_message:?}"
@@ -320,7 +327,7 @@ async fn golden_corpus_execute_tool() {
             }
             (Err(err), true, expected) => {
                 failures.push(format!(
-                    "case {name}: expected a VmError::Tool with {expected:?}, got {err:?}"
+                    "case {name}: expected a VmError::Raised with {expected:?}, got {err:?}"
                 ));
                 continue;
             }

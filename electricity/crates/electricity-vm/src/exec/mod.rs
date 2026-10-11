@@ -19,7 +19,9 @@ pub mod tool;
 pub mod use_;
 pub mod yield_;
 
-use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, StoreError, VmError};
+use crate::{
+    CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, StoreError, VmError,
+};
 use electricity_bytecode::{LeafKind, NodeKind, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -222,6 +224,20 @@ pub(crate) fn effect_label(container_name: &str, child: &Op) -> String {
 pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     match err {
         VmError::Cancelled => err,
+        // A typed tool failure keeps its own `py_class`/`cause` through
+        // the wrap -- only `message` grows the label prefix (review
+        // finding 1 on PR #454: #442's own tree text needs the
+        // *original* exception class to survive a chain/tree wrap, not
+        // just the already-prefixed text `VmError::Message` reduces to).
+        VmError::Raised {
+            py_class,
+            message,
+            cause,
+        } => VmError::Raised {
+            py_class,
+            message: format!("{label}: {message}"),
+            cause,
+        },
         other => VmError::Message(format!("{label}: {other}")),
     }
 }
@@ -349,4 +365,50 @@ pub(crate) fn execute_op<'a>(
             },
         }
     })
+}
+
+#[cfg(test)]
+mod wrap_effect_error_tests {
+    use super::wrap_effect_error;
+    use crate::VmError;
+    use electricity_tools::{ErrorCause, PyExc};
+
+    #[test]
+    fn a_raised_failures_class_and_cause_survive_the_chain_wrap() {
+        // Review finding 1 on PR #454: a chain/tree wrap must only ever
+        // grow `VmError::Raised`'s own `message` -- a nested `dynamic`'s
+        // own error-collection point (`execute_chain`/`execute_tree`,
+        // both of which call this function) is exactly where #442's
+        // tree text would otherwise lose the real exception class,
+        // flattened into a bare `VmError::Message`.
+        let raised = VmError::Raised {
+            py_class: PyExc::ValueError,
+            message: "no reply".to_string(),
+            cause: ErrorCause::NoReply,
+        };
+        let wrapped = wrap_effect_error("outer.fetch", raised);
+        let VmError::Raised {
+            py_class,
+            message,
+            cause,
+        } = wrapped
+        else {
+            panic!("expected a VmError::Raised to stay Raised through the wrap");
+        };
+        assert_eq!(py_class, PyExc::ValueError);
+        assert_eq!(cause, ErrorCause::NoReply);
+        assert_eq!(message, "outer.fetch: no reply");
+    }
+
+    #[test]
+    fn a_cancellation_passes_through_the_wrap_unchanged() {
+        let wrapped = wrap_effect_error("outer.fetch", VmError::Cancelled);
+        assert_eq!(wrapped, VmError::Cancelled);
+    }
+
+    #[test]
+    fn a_plain_message_still_collapses_to_message() {
+        let wrapped = wrap_effect_error("outer.fetch", VmError::Message("boom".to_string()));
+        assert_eq!(wrapped, VmError::Message("outer.fetch: boom".to_string()));
+    }
 }

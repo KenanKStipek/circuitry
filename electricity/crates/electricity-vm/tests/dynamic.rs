@@ -60,10 +60,13 @@ async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
     .await
     .unwrap_err();
 
-    let VmError::Message(text) = err else {
-        panic!("expected a wrapped Message error, got {err:?}");
+    // A typed tool failure keeps its own `VmError::Raised` shape through
+    // the chain wrap (review finding 1 on PR #454) -- only `message`
+    // grows the `"prime.b: "` label prefix.
+    let VmError::Raised { message, .. } = err else {
+        panic!("expected a wrapped Raised error, got {err:?}");
     };
-    assert_eq!(text, format!("prime.b: {TOOL_FAIL_TEXT}"));
+    assert_eq!(message, format!("prime.b: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
@@ -334,10 +337,10 @@ async fn finally_runs_after_a_body_failure_and_reports_finally_error_too() {
     .await
     .unwrap_err();
 
-    let VmError::Message(text) = err else {
-        panic!("expected a wrapped Message error, got {err:?}");
+    let VmError::Raised { message, .. } = err else {
+        panic!("expected a wrapped Raised error, got {err:?}");
     };
-    assert_eq!(text, format!("prime.body_tool: {TOOL_FAIL_TEXT}"));
+    assert_eq!(message, format!("prime.body_tool: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
