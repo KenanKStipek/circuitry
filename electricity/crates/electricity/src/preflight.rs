@@ -508,7 +508,10 @@ mod tests {
             .generate("gpt", "hi", &GenerateOptions::default(), &call)
             .await
             .unwrap_err();
-        assert_eq!(err.message, crate::format_config_refusal("adapter 'openai'"));
+        assert_eq!(
+            err.message,
+            crate::format_config_refusal("adapter 'openai'")
+        );
         assert!(err.message.contains(crate::VERSION));
     }
 
