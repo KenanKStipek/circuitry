@@ -134,8 +134,30 @@ fn unique_sleep_secs() -> u64 {
 /// alternation anchors the match to either a following space (the
 /// `sh -c "sleep N & sleep N"` foreground occurrence) or end of the
 /// command line (the backgrounded occurrence, or a bare `sleep N`).
+/// Used for cleanup (`SleepGuard`) and the "must be gone" assertions,
+/// where every process carrying this marker needs to be caught,
+/// including a leftover `sh -c ...` itself.
 fn sleep_pattern(sleep_secs: u64) -> String {
     format!("sleep {sleep_secs}( |$)")
+}
+
+/// A `pgrep -f` pattern that matches *only* a process whose entire
+/// command line is the bare `sleep {sleep_secs}`, used for the
+/// readiness check in [`signal_test`]. `sh -c "sleep N & sleep N"`'s
+/// own process count there depends on the shell: a forking `sh`
+/// (bash, macOS's own `/bin/sh`) keeps itself alive alongside two
+/// forked `sleep N` children, three processes whose command line
+/// contains `sleep N`. dash (`ubuntu-latest`'s `/bin/sh`) execs the
+/// last command of a `-c` string instead of forking for it, so the
+/// `sh` process itself *becomes* the foreground `sleep N` and only
+/// two processes remain. Either way, exactly two processes end up
+/// with a command line that is *exactly* `sleep {sleep_secs}` (the
+/// backgrounded one, forked in both shells; the foreground one,
+/// forked under bash or exec'd-into under dash) -- confirmed directly
+/// against both `/bin/bash` and `/bin/dash` -- so waiting for 2 here
+/// is shell-independent, unlike waiting for 3.
+fn exact_sleep_pattern(sleep_secs: u64) -> String {
+    format!("^sleep {sleep_secs}$")
 }
 
 fn pgrep_count(pattern: &str) -> usize {
@@ -261,11 +283,11 @@ fn signal_test(tag: &str, signum: i32, want_exit: i32) {
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
     wait_until_running(&home);
-    // `sh` itself plus both the foreground and backgrounded `sleep N`
-    // it forks all carry `sleep N` in their own command line (verified
-    // against macOS's own `pgrep`/`pkill`), so 3 is "both the child
-    // and the grandchild are up", not just one of them.
-    wait_for_pgrep_count(&pattern, 3, Duration::from_secs(10));
+    // Two processes whose command line is exactly `sleep {sleep_secs}`
+    // means both the child and the grandchild are up, on either a
+    // forking `sh` (bash, macOS) or an exec-on-last-command `sh`
+    // (dash, ubuntu-latest) -- see `exact_sleep_pattern`.
+    wait_for_pgrep_count(&exact_sleep_pattern(sleep_secs), 2, Duration::from_secs(10));
     child.send(signum);
     let status = child
         .wait_timeout(Duration::from_secs(10))
