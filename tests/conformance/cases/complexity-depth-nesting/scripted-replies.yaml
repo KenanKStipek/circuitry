@@ -1,0 +1,20 @@
+prime.root_prompt:
+  - text: "a-out"
+prime.nested_dyn.dyn_prompt:
+  - text: "b-out"
+prime.branch.if_prompt:
+  - text: "c-out"
+prime.branch.dyn_in_if.dyn_in_if_prompt:
+  - text: "d-out"
+prime.branch.loop_in_if.iter_0.loop_in_if_prompt:
+  - text: "j-out"
+prime.lp.iter_0.loop_prompt:
+  - text: "e-out"
+prime.lp.iter_0.dyn_in_loop.dyn_in_loop_prompt:
+  - text: "f-out"
+prime.with_finally.in_try:
+  - text: "g-out"
+prime.with_finally.in_finally:
+  - text: "h-out"
+prime.tree_root.tree_branch_prompt:
+  - text: "i-out"

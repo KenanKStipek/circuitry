@@ -1,0 +1,4 @@
+prime.child.top_level:
+  - text: "j-out"
+prime.branch.nested_child.inner:
+  - text: "k-out"

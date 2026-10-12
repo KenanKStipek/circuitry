@@ -437,7 +437,6 @@ mod tests {
             orchestration_dir: Path::new("."),
             declared_prompts,
             effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         }
     }

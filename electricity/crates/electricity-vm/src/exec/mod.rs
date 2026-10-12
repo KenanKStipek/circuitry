@@ -453,8 +453,27 @@ pub(crate) fn execute_op<'a>(
                     .await
                 }
                 Region::Block { .. } | Region::Parallel { .. } | Region::TryFinally { .. } => {
+                    // Issue #516 §4(c): every nested `dynamic` reached
+                    // through this generic dispatch (the document root
+                    // dynamic never goes through `execute_op` at all --
+                    // `execute_root`/a `use` child's own root dynamic
+                    // call `dynamic::execute_dynamic` directly) is one
+                    // display level deeper than whatever ambient depth
+                    // *frame* already carries.
+                    let nested_frame = frame.with_display_depth(
+                        crate::complexity::depth::dynamic_nested_dynamic_child(
+                            frame.display_depth(),
+                        ),
+                    );
                     dynamic::execute_dynamic(
-                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                        op,
+                        store,
+                        parent,
+                        ctx_chain,
+                        &nested_frame,
+                        run_ctx,
+                        observer,
+                        token,
                     )
                     .await
                 }

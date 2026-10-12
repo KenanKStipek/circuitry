@@ -617,6 +617,7 @@ dependencies = [
  "electricity-bytecode",
  "electricity-cel",
  "electricity-compiler",
+ "electricity-complexity",
  "electricity-config",
  "electricity-json",
  "electricity-redaction",

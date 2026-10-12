@@ -344,7 +344,7 @@ fn visit_with_inline(
 pub fn first_refused_child(
     document: &Value,
     entry_path: Option<&Path>,
-    complexity_enabled: bool,
+    decomposition_enabled: bool,
     supported: &electricity_bytecode::Supported<'_>,
 ) -> Option<String> {
     for (label, child) in iter_use_path_children(document, entry_path) {
@@ -360,7 +360,7 @@ pub fn first_refused_child(
             continue;
         };
         if let Some(refusal) =
-            electricity_bytecode::first_unsupported(&program, complexity_enabled, supported)
+            electricity_bytecode::first_unsupported(&program, decomposition_enabled, supported)
         {
             return Some(electricity_bytecode::format_refused_child(&label, &refusal));
         }

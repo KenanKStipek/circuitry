@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Sequence
@@ -447,6 +448,18 @@ def assert_states_equal(actual: Any, expected: Any, *, path: str = "$") -> None:
             )
         for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
             assert_states_equal(a, e, path=f"{path}[{i}]")
+        return
+    # `NaN != NaN` under Python's own `==`, but a complexity score's
+    # `signals.*.normalized`/`contribution` can legitimately be NaN on
+    # both engines for the same non-finite input (issue #516 §3 finding
+    # 10) -- two NaNs are the same divergence-free value here, not a
+    # mismatch.
+    if (
+        isinstance(actual, float)
+        and isinstance(expected, float)
+        and math.isnan(actual)
+        and math.isnan(expected)
+    ):
         return
     if actual != expected:
         raise AssertionError(f"{path}: {actual!r} != {expected!r}")

@@ -116,20 +116,21 @@ pub enum RefusalReason {
     /// shared, non-approximating version this now reuses instead of
     /// keeping its own copy).
     DocumentAdapter(String),
-    /// This run's own effective config enables complexity scoring,
-    /// routing or decomposition (`electricity_config::
-    /// ComplexitySettings::enabled`), and [`Supported::complexity`] is
-    /// `false` -- review P2-10 on PR #454's second review: once lane G
-    /// flips `prompt` on and before K2 wires scoring/routing into it,
-    /// a config with complexity enabled would otherwise run every
-    /// prompt unscored instead of refusing up front with the preview
-    /// marker. Not a [`Supported`] flag `first_unsupported` can read
-    /// off *program* alone -- complexity settings come from the
+    /// This run's own effective config enables complexity
+    /// *decomposition* (`electricity_config::DecompositionSettings::
+    /// enabled`), and [`Supported::decomposition`] is `false` -- issue
+    /// #516 (M1-K2)'s own narrowing of what used to be this variant's
+    /// job (review P2-10 on PR #454's second review): K2 wires scoring
+    /// and routing into `prompt` in that same lane, so a config that
+    /// only turns those two on now runs instead of refusing; only
+    /// decomposition (L2's own job) still refuses up front with the
+    /// preview marker. Not a [`Supported`] flag `first_unsupported` can
+    /// read off *program* alone -- complexity settings come from the
     /// config/document `runtime:` merge, not the document's own
     /// compiled tree -- so the caller passes whether this run's own
-    /// effective settings have it on as [`first_unsupported`]'s own
-    /// *complexity_enabled* argument.
-    ComplexityEnabled,
+    /// effective settings have decomposition on as [`first_unsupported`]'s
+    /// own *decomposition_enabled* argument.
+    DecompositionEnabled,
     /// A `prompt` effect's own attempt chain (its run default, or an
     /// explicit `provider:`/fallback token), discovered at dispatch
     /// time rather than by this static walker, named a Circuitry-known
@@ -192,11 +193,21 @@ pub struct Supported<'a> {
     pub tool_http: bool,
     /// Lane L2 (#448): `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]).
     pub tool_validate_yaml: bool,
-    /// Lane K2 (#448): this run's own effective config may enable
-    /// complexity scoring/routing/decomposition
-    /// (`RefusalReason::ComplexityEnabled`) -- review P2-10 on PR
-    /// #454's second review.
+    /// Lane K2 (#448, #516): scoring and routing are wired into
+    /// `prompt` from this lane on -- read nowhere by the walker itself
+    /// (nothing in a compiled [`Program`] says "this effect is
+    /// scored"; that's driven by the run's own effective
+    /// `runtime.complexity`, resolved outside this crate), kept purely
+    /// as documentation of which M1 lane turned scoring/routing on.
+    /// [`Supported::decomposition`] is the flag the walker actually
+    /// reads, via [`RefusalReason::DecompositionEnabled`].
     pub complexity: bool,
+    /// Lane L2 (#448): this run's own effective config may enable
+    /// complexity *decomposition*
+    /// (`RefusalReason::DecompositionEnabled`) -- the narrowed
+    /// successor to what [`Supported::complexity`] used to gate (issue
+    /// #516 §4(b)).
+    pub decomposition: bool,
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
@@ -233,6 +244,7 @@ impl<'a> Supported<'a> {
             tool_http: false,
             tool_validate_yaml: false,
             complexity: false,
+            decomposition: false,
             providers,
         }
     }
@@ -288,8 +300,10 @@ impl<'a> Supported<'a> {
             tool_http: true,
             // lane L2a (#448, #521)
             tool_validate_yaml: true,
-            // lane K2 (#448)
-            complexity: false,
+            // lane K2 (#448, #516)
+            complexity: true,
+            // lane L2b (#448, #522)
+            decomposition: false,
             providers,
         }
     }
@@ -312,21 +326,22 @@ impl<'a> Supported<'a> {
 
 /// Walks *program* in document order, returning the first [`Refusal`],
 /// or `None` once every effect path is one the VM can actually run
-/// under *supported*. *complexity_enabled* is this run's own
-/// effective config's `ComplexitySettings::enabled()` (review P2-10
-/// on PR #454's second review) -- not a property of *program* itself,
-/// so the caller resolves it first and passes it in, the same way it
-/// already resolves everything else `RunContext` carries before this
-/// walker ever runs.
+/// under *supported*. *decomposition_enabled* is this run's own
+/// effective config's `DecompositionSettings::enabled` (issue #516
+/// §4(b)'s own narrowing of what used to be `ComplexitySettings::
+/// enabled()`, review P2-10 on PR #454's second review) -- not a
+/// property of *program* itself, so the caller resolves it first and
+/// passes it in, the same way it already resolves everything else
+/// `RunContext` carries before this walker ever runs.
 pub fn first_unsupported(
     program: &Program,
-    complexity_enabled: bool,
+    decomposition_enabled: bool,
     supported: &Supported<'_>,
 ) -> Option<Refusal> {
-    if complexity_enabled && !supported.complexity {
+    if decomposition_enabled && !supported.decomposition {
         return Some(Refusal {
             path: EffectPath::root(),
-            reason: RefusalReason::ComplexityEnabled,
+            reason: RefusalReason::DecompositionEnabled,
         });
     }
     if !supported.declared_prompts && !program.prompts.is_empty() {
@@ -559,7 +574,14 @@ mod tests {
         // `false`, so this asserts directly rather than against it, the
         // same convention as `tool_http` above.
         assert!(current.tool_validate_yaml);
-        assert_eq!(current.complexity, m0.complexity);
+        // lane K2 (#448, #516): `complexity` is `true` now -- asserted
+        // directly rather than against `m0.complexity` (always
+        // `false`), the one field this lane's own PR flips.
+        // `decomposition` (L2b's own flag, #522) stays unflipped, same
+        // as `m0.decomposition`.
+        assert!(current.complexity);
+        assert!(!m0.complexity);
+        assert_eq!(current.decomposition, m0.decomposition);
     }
 
     fn tool_op(params: ParamNode) -> ToolOp {
@@ -917,32 +939,47 @@ mod tests {
     }
 
     #[test]
-    fn complexity_enabled_refuses_even_an_otherwise_empty_document() {
-        // Review P2-10 on PR #454's second review: once lane G flips
-        // `prompt` on and before K2 wires scoring/routing into it, a
-        // config with complexity enabled must not silently run every
-        // prompt unscored -- *complexity_enabled* is `first_unsupported`'s
-        // own argument, not something read off `program` at all, so
-        // this refuses even a program with no prompt/tool effects in
-        // it whatsoever.
+    fn scoring_only_config_runs_under_current_without_decomposition() {
+        // Issue #516 §4(b): a config that turns on only `scoring`/
+        // `routing` must run -- only decomposition narrows to a
+        // refusal from this lane on. This test passes `false` for
+        // *decomposition_enabled* the same as it would have before
+        // this lane's own narrowing, so it would have passed either
+        // way; the real guard for the narrowing itself is `electricity`
+        // (lib)'s own `run_wiring.rs::
+        // scoring_and_routing_enabled_without_decomposition_runs`,
+        // which resolves a real `runtime.complexity` config with
+        // scoring/routing on and checks the walker doesn't refuse it.
+        let program = program_with_root(root_block(vec![]));
+        assert!(first_unsupported(&program, false, &Supported::current(&["json"])).is_none());
+    }
+
+    #[test]
+    fn decomposition_enabled_refuses_even_an_otherwise_empty_document() {
+        // Issue #516 §4(b): decomposition stays refused through this
+        // narrowed flag even after K2 wires scoring/routing on --
+        // *decomposition_enabled* is `first_unsupported`'s own
+        // argument, not something read off `program` at all, so this
+        // refuses even a program with no prompt/tool effects in it
+        // whatsoever.
         let program = program_with_root(root_block(vec![]));
         let refusal = first_unsupported(&program, true, &m0()).unwrap();
-        assert_eq!(refusal.reason, RefusalReason::ComplexityEnabled);
+        assert_eq!(refusal.reason, RefusalReason::DecompositionEnabled);
         assert_eq!(refusal.path, EffectPath::root());
     }
 
     #[test]
-    fn complexity_enabled_is_accepted_once_its_own_flag_is_set() {
+    fn decomposition_enabled_is_accepted_once_its_own_flag_is_set() {
         let program = program_with_root(root_block(vec![]));
         let supported = Supported {
-            complexity: true,
+            decomposition: true,
             ..m0()
         };
         assert!(first_unsupported(&program, true, &supported).is_none());
     }
 
     #[test]
-    fn complexity_disabled_is_fine_even_under_m0() {
+    fn decomposition_disabled_is_fine_even_under_m0() {
         let program = program_with_root(root_block(vec![]));
         assert!(first_unsupported(&program, false, &m0()).is_none());
     }

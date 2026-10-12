@@ -1363,10 +1363,12 @@ pub async fn run_orchestration_with_config(
 
     // Resolved before the refusal walker below needs it (review P2-10
     // on PR #454's second review: whether this run's own effective
-    // config enables complexity scoring/routing/decomposition isn't a
-    // property of *program* itself, so the walker takes it as an
-    // argument rather than re-deriving it) -- the same value `run_ctx.
-    // complexity` below reuses, resolved only once.
+    // config enables complexity decomposition isn't a property of
+    // *program* itself, so the walker takes it as an argument rather
+    // than re-deriving it -- narrowed to decomposition alone by issue
+    // #516 §4(b), once K2 wired scoring/routing into `prompt`) -- the
+    // same value `run_ctx.complexity` below reuses, resolved only
+    // once.
     let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
         .unwrap_or_default();
 
@@ -1381,7 +1383,8 @@ pub async fn run_orchestration_with_config(
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
+    if let Some(refusal) = first_unsupported(&program, complexity.decomposition.enabled, &supported)
+    {
         return RunResult {
             ok: false,
             out_path: None,
@@ -1403,7 +1406,7 @@ pub async fn run_orchestration_with_config(
     if let Some(refusal) = electricity_compiler::use_children::first_refused_child(
         &loaded.document,
         Some(&req.orchestration_path),
-        complexity.enabled(),
+        complexity.decomposition.enabled,
         &supported,
     ) {
         return RunResult {
@@ -1671,7 +1674,6 @@ pub async fn run_orchestration_with_config(
         orchestration_dir,
         declared_prompts: &program.prompts,
         effect_names: &program.effect_names,
-        display_depth: 0,
         supported,
     };
 

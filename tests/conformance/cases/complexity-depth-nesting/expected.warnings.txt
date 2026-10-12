@@ -1,0 +1,1 @@
+WARNING: Loop 'loop_in_if': stopped after 1 iterations because max_iterations (1) was reached, not because the while-condition became false

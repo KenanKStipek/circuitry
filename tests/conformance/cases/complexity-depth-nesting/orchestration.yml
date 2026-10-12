@@ -1,0 +1,70 @@
+name: complexity-depth-nesting
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: root_prompt
+    template: "a"
+  - type: dynamic
+    name: nested_dyn
+    effects:
+      - type: prompt
+        name: dyn_prompt
+        template: "b"
+  - type: if
+    name: branch
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - type: prompt
+        name: if_prompt
+        template: "c"
+      - type: dynamic
+        name: dyn_in_if
+        effects:
+          - type: prompt
+            name: dyn_in_if_prompt
+            template: "d"
+      - type: loop
+        name: loop_in_if
+        max_iterations: 1
+        while: {mode: cel, expr: "true"}
+        body:
+          - type: prompt
+            name: loop_in_if_prompt
+            template: "j"
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1]"}
+  - type: loop
+    name: lp
+    each: {in: "prime.seed.value", as: "x"}
+    body:
+      - type: prompt
+        name: loop_prompt
+        template: "e"
+      - type: dynamic
+        name: dyn_in_loop
+        effects:
+          - type: prompt
+            name: dyn_in_loop_prompt
+            template: "f"
+  - type: dynamic
+    name: with_finally
+    effects:
+      - type: prompt
+        name: in_try
+        template: "g"
+    finally:
+      - type: prompt
+        name: in_finally
+        template: "h"
+  - type: dynamic
+    name: tree_root
+    flow: tree
+    effects:
+      - type: prompt
+        name: tree_branch_prompt
+        template: "i"
