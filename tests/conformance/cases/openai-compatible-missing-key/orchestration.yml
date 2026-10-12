@@ -1,0 +1,7 @@
+name: openai-compatible-missing-key
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    provider: groq
+    template: "say hello"

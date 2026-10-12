@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #503 (anthropic, system-only messages)",
+  "description": "A system-only 'messages:' conversation, no images: the Messages API rejects an empty 'messages' array, so it goes out as one user turn carrying the system text, with no top-level system key at all.",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {"ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"}
+}

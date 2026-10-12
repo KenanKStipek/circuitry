@@ -1,0 +1,11 @@
+{
+  "default_adapter": "lmstudio",
+  "default_model": "m",
+  "runtime": {
+    "adapters": {
+      "lmstudio": {
+        "base_url": "http://127.0.0.1:1"
+      }
+    }
+  }
+}

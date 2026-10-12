@@ -1,0 +1,8 @@
+name: openai-compatible-secret-masking-mock
+adapter: groq
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    on_error: continue

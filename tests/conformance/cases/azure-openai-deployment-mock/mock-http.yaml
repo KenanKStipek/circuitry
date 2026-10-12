@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /openai/deployments/gpt-deploy/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "hello from azure"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 6, "completion_tokens": 4}}'

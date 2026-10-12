@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #503 (OpenAI-compatible family, secret masking in the failure message)",
+  "description": "base_url carries user:pw@ userinfo and a credential-looking ?api_key=s3cr3t query, and the error body echoes the fake Bearer key back: the failure message masks the query value, the Bearer key, and strips the userinfo entirely, while the recorded request still carries every real (synthetic) value unmasked.",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {"GROQ_API_KEY": "circuitry-test-fake-groq-key"}
+}

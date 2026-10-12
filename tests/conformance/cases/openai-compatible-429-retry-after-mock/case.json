@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #503 (OpenAI-compatible family, 429 with Retry-After, then success)",
+  "description": "A 429 with Retry-After: 0, then a 200: the 429 is retryable, so retries_used is 1 and two requests are recorded.",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

@@ -1,0 +1,17 @@
+{
+  "spec_case": "issue #503 (transport, a config-default adapter whose host refuses the connection)",
+  "description": "A config-default lmstudio pointed at a closed port, retries: {max_attempts: 2, backoff_ms: 1}, on_error: continue: curl exit 7 (connection refused) is retryable, so both attempts run and retries_used is 1; curl's own stderr clause there is matched by pattern (third_party_text), not byte-for-byte.",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "third_party_text": [
+    {
+      "location": "prime.greeting.meta.error",
+      "pattern": "All adapter attempts failed: \\[\\{'adapter': 'lmstudio', 'model': 'm', 'status': 'failed', 'error': \\\"OpenAI-compatible request failed \\(curl exit 7\\) model='m' url=http://127\\.0\\.0\\.1:1/chat/completions: .*?\\\", 'tokens_sent': None, 'tokens_received': None\\}\\]"
+    },
+    {
+      "location": "prime.greeting.meta.fallback_attempts.0.error",
+      "pattern": "OpenAI-compatible request failed \\(curl exit 7\\) model='m' url=http://127\\.0\\.0\\.1:1/chat/completions: .*?"
+    }
+  ]
+}

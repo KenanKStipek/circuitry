@@ -1,0 +1,35 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [
+      [
+        "api_key",
+        "s3cr3t/chat/completions"
+      ]
+    ],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "authorization",
+        "Bearer circuitry-test-fake-groq-key"
+      ],
+      [
+        "content-length",
+        "70"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"say hello\"}]}"
+  }
+]

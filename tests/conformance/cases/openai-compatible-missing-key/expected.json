@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:groq: not ready \u2014 missing ['env:GROQ_API_KEY'] \u2014 adapter 'groq' unavailable; required by effects ['greeting']. Re-run with --skip-preflight to bypass."
+}
