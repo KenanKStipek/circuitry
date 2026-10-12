@@ -1117,10 +1117,16 @@ async fn run_each_chain<'a>(
         } else {
             write_parent.clone()
         };
+        // Issue #516 §4(c): a loop body's own children all run one
+        // display level deeper than the loop itself, same as an `if`
+        // branch's own bump.
         let pass_frame = match loop_id {
             Some(id) => frame.with_pass(id, idx),
             None => frame.clone(),
-        };
+        }
+        .with_display_depth(crate::complexity::depth::branch_or_body_ambient(
+            frame.display_depth(),
+        ));
 
         match execute_body(
             body_ops,
@@ -1295,7 +1301,10 @@ async fn run_each_tree<'a>(
                 let pass_frame = match loop_id {
                     Some(id) => frame.with_pass(id, idx),
                     None => frame.clone(),
-                };
+                }
+                .with_display_depth(
+                    crate::complexity::depth::branch_or_body_ambient(frame.display_depth()),
+                );
                 let result = execute_body(
                     body_ops,
                     store,
@@ -1617,7 +1626,10 @@ async fn run_while<'a>(
         let pass_frame = match loop_id {
             Some(id) => frame.with_pass(id, iteration_count),
             None => frame.clone(),
-        };
+        }
+        .with_display_depth(crate::complexity::depth::branch_or_body_ambient(
+            frame.display_depth(),
+        ));
 
         match execute_body(
             body_ops,

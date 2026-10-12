@@ -148,6 +148,19 @@ def test_assert_values_equal_still_catches_real_differences() -> None:
         assert_values_equal({"x": 1}, {"x": 2})
 
 
+def test_assert_states_equal_treats_two_nans_as_equal() -> None:
+    # Issue #516 §3 finding 10: a complexity score's own
+    # `signals.*.normalized`/`contribution` can legitimately be NaN on
+    # both engines for the same non-finite input -- `float("nan") !=
+    # float("nan")` under plain `==`, so this must not raise.
+    assert_states_equal({"x": float("nan")}, {"x": float("nan")})
+
+
+def test_assert_states_equal_still_catches_a_nan_vs_a_real_number() -> None:
+    with pytest.raises(AssertionError):
+        assert_states_equal({"x": float("nan")}, {"x": 1.0})
+
+
 def test_circuitry_own_errors_compared_byte_for_byte() -> None:
     assert_errors_equal("boom", "boom", byte_for_byte=True)
     with pytest.raises(AssertionError, match="error text differs"):

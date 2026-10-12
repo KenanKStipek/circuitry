@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #516 \u00a74(c): structural_position.raw at every row of the container/child depth table",
+  "description": "A root prompt (depth 0), a prompt inside a nested dynamic (1), an if branch's own prompt (1), a dynamic nested inside that branch (2), a loop nested inside that same branch (its own body's prompt also at 2), a loop body's own prompt (1) and a dynamic nested inside that body (2), a dynamic's try/finally prompts (both at that dynamic's own ambient depth), and a tree-flow branch's own prompt (its dynamic's own ambient depth).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

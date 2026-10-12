@@ -359,13 +359,21 @@ async fn decide_and_run<'a>(
     let mut executed: Vec<Value> = Vec::new();
     let mut failure: Option<VmError> = None;
 
+    // Issue #516 §4(c): an `if` branch's own children all run one
+    // display level deeper than the conditional itself -- the same
+    // ambient bump `core/conditional.py::ConditionalRuntime.execute`
+    // gives every branch effect (`depth=self.depth + 1`, `:313-410`).
+    let branch_frame = frame.with_display_depth(crate::complexity::depth::branch_or_body_ambient(
+        frame.display_depth(),
+    ));
+
     for (index, child_op) in branch_ops.iter().enumerate() {
         match execute_op(
             child_op,
             store,
             branch_parent,
             &step_chain,
-            frame,
+            &branch_frame,
             run_ctx,
             observer,
             token,

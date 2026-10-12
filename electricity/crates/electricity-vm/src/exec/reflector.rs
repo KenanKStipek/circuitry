@@ -225,8 +225,14 @@ async fn run_iteration(
         labels: None,
         enabled: true,
     };
-    let inner_frame = frame.rebased(&op.path, &op.path.push_name("inner"));
-    let inner_run_ctx = with_display_depth(run_ctx, 0);
+    // Issue #516 §4(c): a reflector's own inner `dynamic` always resets
+    // to display depth 0, regardless of the reflector's own ambient
+    // depth -- the one case `core/dynamic.py::_execute_effect` never
+    // threads `self.depth` into (`ReflectorRuntime` is built with no
+    // `depth=` keyword at all, so Python's own default applies).
+    let inner_frame = frame
+        .rebased(&op.path, &op.path.push_name("inner"))
+        .with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
     let empty_chain: CtxChain = Vec::new();
     let inner_result = execute_dynamic(
         &inner_op,
@@ -234,7 +240,7 @@ async fn run_iteration(
         node,
         &empty_chain,
         &inner_frame,
-        &inner_run_ctx,
+        run_ctx,
         observer,
         token,
     )
@@ -361,15 +367,19 @@ async fn run_iteration(
     // Python's own live dict reference.
     let gen_ctx_chain: CtxChain = vec![CtxSource::Live(parent.clone())];
     let live_root = LiveRoot::new(&gen_ctx_chain, store);
-    let gen_run_ctx = with_display_depth(run_ctx, 0);
+    // Same reset as the inner `dynamic` above -- the generated `use`
+    // (`UseRuntime` built with no `depth=` either) runs at display
+    // depth 0, so its own child root `dynamic` ([`Frame::nested`]'s own
+    // `+1`) lands at depth 1, matching issue #516 §4(c)'s last row.
+    let gen_frame = frame.with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
     let use_result = execute_use_with_ctx(
         &use_synth_op,
         &use_op,
         store,
         &gen_node,
         &live_root,
-        frame,
-        &gen_run_ctx,
+        &gen_frame,
+        run_ctx,
         observer,
         token,
     )
@@ -442,37 +452,6 @@ fn append_iteration_record(store: &Store, meta_node: &NodeRef, rec: &IterationRe
     };
     iterations.push(rec.to_value());
     store.set_leaf(meta_node, key("iterations"), Value::List(iterations));
-}
-
-/// *run_ctx*, with [`crate::RunContext::display_depth`] overridden --
-/// every other field copied by reference/`Rc::clone` (the Rust design's
-/// own ruling: "Build the inner and `use` `RunContext`s with
-/// `display_depth: 0`; lane I adds the +1"). `RunContext` carries no
-/// `Clone`/`Copy` derive of its own (it holds an `Rc<dyn Adapter>`), so
-/// this is a field-by-field copy, the same pattern
-/// `exec::use_::run_isolated_inner`'s own child `RunContext` already
-/// uses for a different field.
-fn with_display_depth<'a>(run_ctx: &RunContext<'a>, display_depth: u32) -> RunContext<'a> {
-    RunContext {
-        registry: run_ctx.registry,
-        limiter: run_ctx.limiter,
-        model: run_ctx.model,
-        adapter: run_ctx.adapter,
-        runtime_config: run_ctx.runtime_config,
-        dry_run: run_ctx.dry_run,
-        armed: run_ctx.armed,
-        adapters: run_ctx.adapters,
-        default_adapter: std::rc::Rc::clone(&run_ctx.default_adapter),
-        model_locked: run_ctx.model_locked,
-        adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
-        complexity: run_ctx.complexity,
-        decomposition_depth: run_ctx.decomposition_depth,
-        orchestration_dir: run_ctx.orchestration_dir,
-        declared_prompts: run_ctx.declared_prompts,
-        effect_names: run_ctx.effect_names,
-        display_depth,
-        supported: run_ctx.supported,
-    }
 }
 
 /// `_render_reflector_prime`: the four fixed warning lines, plus

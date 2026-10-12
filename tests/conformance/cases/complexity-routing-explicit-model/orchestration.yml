@@ -1,0 +1,8 @@
+name: complexity-routing-explicit-model
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: pinned
+    template: "hi"
+    model: "explicit-model"
