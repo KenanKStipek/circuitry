@@ -236,14 +236,14 @@ async fn a_bad_e_value_against_a_required_input_is_an_ordinary_failure_with_stat
 async fn an_unsupported_effect_is_refused_with_no_state_written() {
     let dir = temp_dir("refusal");
     let config = write(&dir, "config.json", "{}");
-    // A `validate_yaml` tool provider (lane L2, issue #448) is still
-    // refused -- this lane (G2, issue #513) only flips `model_
-    // condition`/`model_expect`; lane L1 (#506) has since flipped
-    // `reflector` too.
+    // An `mcp` tool provider (an M2 plugin, #448) is still refused --
+    // `validate_yaml` (lane L2a, issue #521) is runnable now, so this
+    // probe was swapped to a provider that stays refused until the M2
+    // plugin bridge.
     let doc = write(
         &dir,
         "doc.yml",
-        "effects:\n  - name: ask\n    type: tool\n    provider: validate_yaml\n    params: {text: 'a: 1'}\n",
+        "effects:\n  - name: ask\n    type: tool\n    provider: mcp\n    params: {text: 'a: 1'}\n",
     );
     let req = request(config, doc);
 
