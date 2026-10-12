@@ -1,0 +1,37 @@
+name: loop-with-two-step-if-inside-body
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: loop
+    name: shots
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: first
+        provider: json
+        params: {mode: parse, input: '{"f": "{{item}}"}'}
+      - type: if
+        name: gate
+        if: {mode: cel, expr: "true"}
+        then:
+          - type: tool
+            name: a
+            provider: json
+            params:
+              mode: stringify
+              input:
+                item: "{{item}}"
+                first: "{{prime.first.value.f}}"
+                prev: "{{prime.shots.prev.first.value.f}}"
+          - type: tool
+            name: b
+            provider: json
+            params:
+              mode: stringify
+              input:
+                item: "{{item}}"
+                first: "{{prime.first.value.f}}"
+                a: "{{prime.a.value}}"
+                prev: "{{prime.shots.prev.first.value.f}}"

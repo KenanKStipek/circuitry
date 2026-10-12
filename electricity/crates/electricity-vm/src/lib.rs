@@ -37,7 +37,10 @@ pub mod store;
 pub use electricity_value::CancellationToken;
 pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
-pub use store::{NodeRef, Slot, Store, StoreError, node_from_entries, node_with_fallback};
+pub use store::{
+    NodeRef, Slot, Store, StoreError, node_from_entries, node_with_fallback,
+    node_with_fallback_hiding,
+};
 
 use electricity_bytecode::Program;
 use electricity_config::ComplexitySettings;
