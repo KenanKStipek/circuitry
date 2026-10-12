@@ -84,6 +84,13 @@ pub(crate) fn execute_conditional<'a>(
                 // still returns `Ok`) and for an interrupted branch
                 // (`decide_and_run` returns `Err(Cancelled)`, but
                 // meta.error is never written for a cancellation).
+                // Issue #513's totals hook: every named `if` counts
+                // (CEL adds 0, since it carries no `tokens_*`), but
+                // only once `meta.completed_at` is actually set --
+                // never for a cancellation, which leaves it `None`.
+                if meta_completed(store, &meta) {
+                    observer.record_totals(&store.snapshot(&meta));
+                }
                 observer.effect_complete(
                     &effect_path,
                     instance,
@@ -100,6 +107,17 @@ pub(crate) fn execute_conditional<'a>(
             }
         }
     })
+}
+
+/// Whether *meta*'s own `completed_at` is a string (set) rather than
+/// `None` -- [`execute_conditional`]'s own totals-hook guard (issue
+/// #513): never true after a cancellation, which returns before
+/// `decide_and_run` ever reaches a `completed_at` write.
+fn meta_completed(store: &Store, meta: &NodeRef) -> bool {
+    match &store.snapshot(meta) {
+        Value::Dict(map) => matches!(map.get(&key("completed_at")), Some(Value::Str(_))),
+        _ => false,
+    }
 }
 
 /// *meta*'s own current `error` value, if it is a string -- what
@@ -202,6 +220,12 @@ async fn decide_and_run<'a>(
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
 ) -> Result<(), VmError> {
+    // Set only by a *successful* `Condition::Model` evaluation below --
+    // its own `answer`/`adapter`/`model`/`tokens_*` write happens after
+    // `condition_result`/`branch` are written (the success key order,
+    // issue #513 Scope §1), unlike the model arm's own failure paths,
+    // which write those fields themselves, before `on_error` runs.
+    let mut model_reply_after: Option<Option<crate::adapter::GenerateResult>> = None;
     let result = match cond {
         Condition::Cel { expr, strict } => {
             // Issue #463: `state` is only the subtrees *expr* actually
@@ -252,26 +276,66 @@ async fn decide_and_run<'a>(
                 }
             }
         }
-        // Review P2-4 on PR #454's second review: wired to
-        // `condition_model::evaluate_model_condition` now, so lane
-        // G2's own PR only ever fills that module's stub bodies,
-        // never this file -- unreachable in any real run today
-        // (`Supported::model_condition` stays `false` until G2 flips
-        // it, and the refusal walker refuses a model-mode `if` before
-        // any run starts), but a real call site instead of a panic if
-        // that ever changed without the matching wiring. `on_error`'s
-        // own skip/continue degradation for a failed model call is
-        // G2's own body to design, same as the CEL branch's -- this
-        // call site only has to exist, not finish that design.
+        // `condition_model::evaluate_model_condition` -- issue #513.
+        // The outer `Err` here is fatal (a cancellation); every other
+        // failure (render, dispatch, parse) comes back inside
+        // `outcome.verdict` instead, for the same `on_error` handling
+        // the CEL arm above already does.
         Condition::Model { template } => {
             let ctx = super::live_ctx(ctx_chain, store);
-            match super::condition_model::evaluate_model_condition(
-                template, &ctx, &op.path, frame, run_ctx, token,
+            let effect_path = frame.effect_path(&op.path);
+            let outcome = super::condition_model::evaluate_model_condition(
+                super::condition_model::ConditionKind::If,
+                template,
+                &ctx,
+                &effect_path,
+                run_ctx,
+                token,
             )
-            .await
-            {
-                Ok(outcome) => outcome.passed,
-                Err(err) => return Err(err),
+            .await?;
+            match outcome.verdict {
+                Ok(passed) => {
+                    model_reply_after = Some(outcome.generated);
+                    passed
+                }
+                Err(text) => {
+                    if let Some((_, meta)) = named {
+                        store.set_leaf(meta, key("error"), Value::Str(text.clone()));
+                        store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
+                        write_model_condition_reply(
+                            store,
+                            meta,
+                            run_ctx,
+                            outcome.generated.as_ref(),
+                        );
+                    }
+                    match op.on_error {
+                        OnError::Fail => return Err(VmError::Message(text)),
+                        OnError::Skip => {
+                            if let Some((node, _)) = named {
+                                let mut v = IndexMap::new();
+                                v.insert(key("result"), Value::None);
+                                v.insert(key("branch"), Value::None);
+                                v.insert(key("effects"), Value::Dict(IndexMap::new()));
+                                store.set_leaf(node, key("value"), Value::Dict(v));
+                            }
+                            return Ok(());
+                        }
+                        OnError::Continue => {
+                            log::warn!(
+                                "Conditional {}: condition failed ({text}); on_error=continue, taking the else branch",
+                                Value::Str(
+                                    op.name.clone().unwrap_or_else(|| "<unnamed>".to_string())
+                                )
+                                .py_repr()
+                            );
+                            false
+                        }
+                        OnError::Break => {
+                            unreachable!("a conditional's own on_error is never `break`")
+                        }
+                    }
+                }
             }
         }
     };
@@ -282,6 +346,11 @@ async fn decide_and_run<'a>(
     if let Some((_, meta)) = named {
         store.set_leaf(meta, key("condition_result"), Value::Bool(result));
         store.set_leaf(meta, key("branch"), Value::Str(branch_label.to_string()));
+    }
+    if let Some(generated) = model_reply_after {
+        if let Some((_, meta)) = named {
+            write_model_condition_reply(store, meta, run_ctx, generated.as_ref());
+        }
     }
 
     let own_names: HashSet<Value> = branch_ops
@@ -380,6 +449,50 @@ async fn decide_and_run<'a>(
         store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
     }
     Ok(())
+}
+
+/// `meta["answer"]` through `meta["tokens_received"]`, in that order
+/// -- the 5 keys a model-mode `if`'s own `_evaluate_model` writes,
+/// whether the call succeeded (then appended after `condition_result`/
+/// `branch`) or failed (then written before them, issue #513 Scope
+/// §1). *generated* is `None` for a dry run, a render failure or an
+/// adapter failure -- `answer`/`tokens_sent`/`tokens_received` are
+/// `null` then; a parse failure still has a reply, so they hold it.
+fn write_model_condition_reply(
+    store: &Store,
+    meta: &NodeRef,
+    run_ctx: &RunContext<'_>,
+    generated: Option<&crate::adapter::GenerateResult>,
+) {
+    store.set_leaf(
+        meta,
+        key("answer"),
+        generated
+            .map(|g| Value::Str(g.text.clone()))
+            .unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("adapter"),
+        Value::Str(run_ctx.default_adapter.name().to_string()),
+    );
+    store.set_leaf(meta, key("model"), Value::Str(run_ctx.model.to_string()));
+    store.set_leaf(
+        meta,
+        key("tokens_sent"),
+        generated
+            .and_then(|g| g.tokens_sent)
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("tokens_received"),
+        generated
+            .and_then(|g| g.tokens_received)
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
 }
 
 fn branch_value(result: bool, branch_label: &str, executed: Vec<Value>) -> Value {

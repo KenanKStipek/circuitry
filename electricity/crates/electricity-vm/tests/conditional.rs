@@ -1122,14 +1122,12 @@ async fn a_tool_params_template_resolves_the_same_sibling_path_as_probe_e() {
 }
 
 #[tokio::test]
-async fn a_model_mode_if_reaches_condition_models_own_stub_not_a_panic() {
-    // Review P2-4 on PR #454's second review: `decide_and_run` used to
-    // return its own inline `VmError::NotImplemented` for `Condition::
-    // Model` without ever calling `condition_model::
-    // evaluate_model_condition` -- lane G2 would have had to add that
-    // call itself. Wired now, so this reaches that function's own
-    // stub error (which also names M1-G2) and -- the actual probe --
-    // never panics getting there.
+async fn a_model_mode_if_reaches_condition_models_real_dispatch() {
+    // `support::run_ctx`'s own default adapter is `NoopAdapter`, so a
+    // model `if`'s own dispatch always fails the same way a real run's
+    // own unconfigured adapter would -- this probes that `Condition::
+    // Model` reaches `condition_model::evaluate_model_condition` for
+    // real (issue #513), never `unreachable!()`/a stub error.
     let root = chain_dynamic(
         root_path(),
         "prime",
@@ -1143,15 +1141,14 @@ async fn a_model_mode_if_reaches_condition_models_own_stub_not_a_panic() {
     );
     let (_, _, result) = run(root).await;
     let err = result.unwrap_err();
-    // Wrapped by the enclosing chain's own `wrap_effect_error` (a
-    // `VmError::NotImplemented` is never a `VmError::Raised`, so it
-    // collapses to a plain `VmError::Message`, same as the disabled-op
-    // probe in `tests/dynamic.rs`) -- the M1-G2 text survives inside it.
+    // Wrapped by the enclosing chain's own `wrap_effect_error`, which
+    // prefixes the failed child's own name -- same convention as every
+    // other effect failure inside a `dynamic` chain.
     let VmError::Message(message) = err else {
         panic!("expected a chain wrap around condition_model's own error, got {err:?}")
     };
-    assert!(
-        message.contains("M1-G2"),
-        "expected condition_model::evaluate_model_condition's own M1-G2 stub error, got: {message}"
+    assert_eq!(
+        message,
+        "prime.gate: _noop adapter: no real adapter is configured for this run"
     );
 }

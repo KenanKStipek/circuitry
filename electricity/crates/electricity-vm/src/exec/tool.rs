@@ -992,63 +992,63 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                         }
                                                     }
                                                 }
-                                                // Review P2-4 on PR #454's second review: wired to
-                                                // `condition_model::evaluate_model_expect` now, so
-                                                // lane G2's own PR only ever fills that module's
-                                                // stub bodies, never this file -- unreachable in any
-                                                // real run today (`Supported::model_expect` stays
-                                                // `false` until G2 flips it, and the refusal walker
-                                                // refuses a model-mode `expect:` before any run
-                                                // starts), but a real call site instead of a panic
-                                                // if that ever changed without the matching wiring.
+                                                // `condition_model::evaluate_model_expect` --
+                                                // issue #513. *timeout_seconds* is this tool's
+                                                // own resolved timeout (`resolve_timeout_seconds`
+                                                // above), never the run adapter budget (that's
+                                                // only for `if`/`while`/a `use` expect). A
+                                                // `Raised` error (a render or adapter failure)
+                                                // is always retried here, same as every other
+                                                // dispatch failure this provider's own retry
+                                                // loop already handles -- only `Fatal` (a
+                                                // cancellation) returns early.
                                                 ExpectCondition::Model { template } => {
+                                                    let meta_snapshot = store.snapshot(&meta_node);
                                                     let state = ctx.whole();
                                                     match super::condition_model::evaluate_model_expect(
                                                         template,
                                                         &value_for_expect,
+                                                        &meta_snapshot,
                                                         &state,
                                                         &effect_path,
-                                                        frame,
+                                                        timeout_seconds,
                                                         run_ctx,
                                                         token,
                                                     )
                                                     .await
                                                     {
                                                         Ok(outcome) => {
-                                                            let mut expect_meta = IndexMap::new();
-                                                            expect_meta.insert(
-                                                                Value::from("mode"),
-                                                                Value::from("model"),
-                                                            );
-                                                            expect_meta.insert(
-                                                                Value::from("template"),
-                                                                Value::from(
-                                                                    template.source.as_str(),
-                                                                ),
-                                                            );
-                                                            expect_meta.insert(
-                                                                Value::from("result"),
-                                                                Value::Bool(outcome.passed),
-                                                            );
+                                                            let summary =
+                                                                super::condition_model::expect_model_summary(
+                                                                    &template.source,
+                                                                );
                                                             set_leaf(
                                                                 store,
                                                                 &meta_node,
                                                                 "expect",
-                                                                Value::Dict(expect_meta),
+                                                                outcome.meta,
                                                             );
                                                             if !outcome.passed {
                                                                 expect_failed = true;
                                                                 failure = Some(
                                                                     electricity_tools::ToolError::message(
-                                                                        format!(
-                                                                            "expect failed: {}",
-                                                                            template.source
-                                                                        ),
+                                                                        format!("expect failed: {summary}"),
                                                                     ),
                                                                 );
                                                             }
                                                         }
-                                                        Err(err) => return Err(err),
+                                                        Err(super::condition_model::ExpectCallError::Fatal(e)) => {
+                                                            return Err(e);
+                                                        }
+                                                        Err(super::condition_model::ExpectCallError::Raised {
+                                                            message,
+                                                            ..
+                                                        }) => {
+                                                            expect_failed = true;
+                                                            failure = Some(
+                                                                electricity_tools::ToolError::message(message),
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1830,16 +1830,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_model_mode_expect_reaches_condition_models_own_stub_not_a_panic() {
-        // Review P2-4 on PR #454's second review: this call site used
-        // to `unreachable!()` for `ExpectCondition::Model` -- wired
-        // now to `condition_model::evaluate_model_expect`, so lane
-        // G2's own PR only ever fills that module's stub bodies. This
-        // path is refused before any real run starts
-        // (`Supported::model_expect` stays `false` until G2 flips it),
-        // reachable only through a direct call like this one -- the
-        // actual probe is that it returns that function's own M1-G2
-        // stub error instead of panicking.
+    async fn a_model_mode_expects_raised_adapter_failure_is_an_ordinary_tool_failure() {
+        // `default_run_ctx`'s own default adapter is `NoopAdapter`, so
+        // the model expect's own call always fails the same way a real
+        // run's own unconfigured adapter would -- this probes that
+        // `ExpectCondition::Model` reaches `condition_model::
+        // evaluate_model_expect` for real (issue #513), never
+        // `unreachable!()`, and that a `Raised` failure becomes an
+        // ordinary tool failure, its own message (not an `expect
+        // failed: ...` summary -- that's only for a false/unparseable
+        // answer, never a raised one), with `meta.expect` left absent
+        // (popped at attempt start, never written again on this path).
         let mut params = IndexMap::new();
         params.insert(Value::from("mode"), template("parse"));
         params.insert(Value::from("input"), template("2"));
@@ -1878,9 +1879,24 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            matches!(err, VmError::NotImplemented(ref msg) if msg.contains("M1-G2")),
-            "expected condition_model::evaluate_model_expect's own M1-G2 stub error, got: {err:?}"
+            matches!(
+                err,
+                VmError::Raised { ref message, .. }
+                    if message == "_noop adapter: no real adapter is configured for this run"
+            ),
+            "expected the noop adapter's own failure, got: {err:?}"
         );
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("expect")), None);
     }
 
     #[tokio::test]

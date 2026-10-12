@@ -1017,46 +1017,36 @@ async fn attempt_once<R: ParamsCtx>(
                     }
                 }
             }
+            // `condition_model::evaluate_model_expect` -- issue
+            // #513. *timeout_seconds* here is the run adapter budget
+            // (`run_ctx.adapter_timeout_seconds`), never a resolved
+            // tool timeout -- a `use` effect has none of its own.
+            // `Raised`'s own *py_class* decides the split `core/
+            // use.py`'s `except (ValueError, RecursionError)` makes:
+            // not retried for that pair (a template render failure's
+            // own `TemplateError` counts as the `ValueError` it
+            // actually is in Python, [`PyExc::TemplateError`]'s own
+            // doc comment), retried for everything else (an adapter
+            // failure, always a `RuntimeError`/[`PyExc::
+            // AdapterCallError`] class here, even a non-retryable
+            // one).
             ExpectCondition::Model { template } => {
                 let effect_path = frame.effect_path(&op.path);
                 let summary = expect_model_summary(&template.source);
                 match crate::exec::condition_model::evaluate_model_expect(
                     template,
                     &value_for_expect,
+                    &meta_snapshot,
                     &state,
                     &effect_path,
-                    frame,
+                    run_ctx.adapter_timeout_seconds,
                     run_ctx,
                     token,
                 )
                 .await
                 {
                     Ok(outcome) => {
-                        let mut expect_meta = IndexMap::new();
-                        expect_meta.insert(Value::from("mode"), Value::from("model"));
-                        expect_meta.insert(Value::from("template"), Value::from(summary.as_str()));
-                        expect_meta.insert(
-                            Value::from("answer"),
-                            Value::from(outcome.generated.text.as_str()),
-                        );
-                        expect_meta.insert(
-                            Value::from("tokens_sent"),
-                            outcome
-                                .generated
-                                .tokens_sent
-                                .map(Value::from)
-                                .unwrap_or(Value::None),
-                        );
-                        expect_meta.insert(
-                            Value::from("tokens_received"),
-                            outcome
-                                .generated
-                                .tokens_received
-                                .map(Value::from)
-                                .unwrap_or(Value::None),
-                        );
-                        expect_meta.insert(Value::from("result"), Value::Bool(outcome.passed));
-                        set_leaf(store, meta_node, "expect", Value::Dict(expect_meta));
+                        set_leaf(store, meta_node, "expect", outcome.meta);
                         if !outcome.passed {
                             return Err(AttemptProblem::Retryable {
                                 message: format!("expect failed: {summary}"),
@@ -1064,10 +1054,21 @@ async fn attempt_once<R: ParamsCtx>(
                             });
                         }
                     }
-                    Err(e) if e.is_fatal() => return Err(AttemptProblem::Fatal(e)),
-                    Err(e) => {
+                    Err(crate::exec::condition_model::ExpectCallError::Fatal(e)) => {
+                        return Err(AttemptProblem::Fatal(e));
+                    }
+                    Err(crate::exec::condition_model::ExpectCallError::Raised {
+                        message,
+                        py_class,
+                    }) => {
+                        if matches!(
+                            py_class,
+                            PyExc::ValueError | PyExc::RecursionError | PyExc::TemplateError
+                        ) {
+                            return Err(AttemptProblem::NotRetried { message, py_class });
+                        }
                         return Err(AttemptProblem::Retryable {
-                            message: e.to_string(),
+                            message,
                             child_record: None,
                         });
                     }
@@ -1269,7 +1270,14 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
 
         set_leaf(store, &meta_node, "error", Value::Str(message.clone()));
         let is_last_attempt = attempt_index + 1 >= max_attempts;
-        let retryable = !matches!(py_class, PyExc::ValueError | PyExc::RecursionError);
+        // `PyExc::TemplateError` joins this check (issue #513): it is
+        // a `ValueError` subclass in Python (that variant's own doc
+        // comment), the class a model-mode `expect:`'s own template
+        // render failure carries.
+        let retryable = !matches!(
+            py_class,
+            PyExc::ValueError | PyExc::RecursionError | PyExc::TemplateError
+        );
         if !is_last_attempt && retryable {
             next_delay_ms = crate::retry::next_backoff_delay_ms(
                 &crate::retry::RetryInfo::retryable(),

@@ -85,7 +85,8 @@ pub enum RefusalReason {
     /// An `if`/`while` condition in `mode: model` -- the compiler's own
     /// default when a condition has no `mode:` at all (M1-G2).
     ModelCondition,
-    /// A tool/prompt/`use` `expect:` in `mode: model` (M1-G2).
+    /// A `tool`/`use` `expect:` in `mode: model` (M1-G2) -- a `prompt`
+    /// effect has no `expect:` of its own at all.
     ModelExpect,
     /// The document declares a top-level `prompts:` map (M1-P).
     DeclaredPrompts,
@@ -269,10 +270,10 @@ impl<'a> Supported<'a> {
             yield_: true,
             // lane L1 (#448)
             reflector: false,
-            // lane G2 (#448)
-            model_condition: false,
-            // lane G2 (#448)
-            model_expect: false,
+            // lane G2 (#448, #513)
+            model_condition: true,
+            // lane G2 (#448, #513)
+            model_expect: true,
             // lane P (#448, #487)
             declared_prompts: true,
             // lane R (#448, #495)
@@ -526,8 +527,14 @@ mod tests {
         assert!(current.yield_);
         assert!(!m0.yield_);
         assert_eq!(current.reflector, m0.reflector);
-        assert_eq!(current.model_condition, m0.model_condition);
-        assert_eq!(current.model_expect, m0.model_expect);
+        // lane G2 (#448, #513): `model_condition`/`model_expect` are
+        // `true` now -- asserted directly rather than against
+        // `m0.model_condition`/`m0.model_expect` (always `false`), the
+        // two fields this lane's own PR flips.
+        assert!(current.model_condition);
+        assert!(!m0.model_condition);
+        assert!(current.model_expect);
+        assert!(!m0.model_expect);
         assert!(current.declared_prompts);
         assert!(!m0.declared_prompts);
         // lane R (#448, #495): `preflight` is `true` now -- asserted
