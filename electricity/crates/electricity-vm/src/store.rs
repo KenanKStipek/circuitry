@@ -32,14 +32,92 @@ pub enum Slot {
     Node(NodeRef),
 }
 
-/// A single mutable state node -- `Rc<RefCell<IndexMap<Value, Slot>>>`.
-/// Shared so that two different paths can reference the identical live
-/// node (`Rc::ptr_eq`), not a deep copy of it.
-pub type NodeRef = Rc<RefCell<IndexMap<Value, Slot>>>;
+/// A node's own top-level map, plus an optional *fallback* node consulted
+/// for any key *entries* doesn't itself carry (issue #484). Every node
+/// [`Store`] itself creates (`ensure_dict`/`new_node`/`parallel_branches`)
+/// has `fallback: None` -- only [`exec::loop_::with_prev_overlay`]
+/// (`crate::exec::loop_`, not re-exported outside this crate) builds one
+/// with `Some`, for the detached `prime.<loop_name>` node a chain-flow
+/// `each`/`while` pass's own ctx overlays on top of the loop's real,
+/// already-tracked node: *entries* carries only this pass's own `prev`
+/// key, so a fresh overlay never re-walks the real node's ever-growing
+/// `iter_<N>` key set, and every other key -- `iter_<N>`, `meta`, an
+/// outer loop's own already-layered `prev` one level up -- still reaches
+/// the real node through *fallback*, one [`Store::peek`] away. [`Node`]
+/// derefs to its own *entries* so every existing `.borrow()`/
+/// `.borrow_mut()` call site that only ever read/wrote a node's own
+/// top-level map keeps compiling unchanged; only [`Store::peek`] and
+/// [`Store::snapshot`] -- the two readers that must resolve a key this
+/// node doesn't carry -- know about *fallback* at all. [`Store::saved`]
+/// never sees one: it only ever recurses into a [`Slot::Node`] reachable
+/// from [`Store::root`](Store), and no overlay node is ever attached to
+/// the real tree. [`Store::ensure_dict`]/[`Store::child`]/[`Store::
+/// alias`]/[`Store::merge`] don't either: every overlay node this crate
+/// builds is read-only ctx, never a *parent* those write-side methods are
+/// called with.
+#[derive(Debug, Clone)]
+pub struct Node {
+    entries: IndexMap<Value, Slot>,
+    fallback: Option<NodeRef>,
+}
 
-/// A fresh, empty node.
+impl Node {
+    /// *self*'s own top-level map, with no [`Node::fallback`] applied --
+    /// the shallow clone every existing ctx-chain-merge helper outside
+    /// this module (`exec::loop_::chain_slots`/`dict_slots`, `exec::
+    /// conditional::chain_slots`/`dict_slots`) already took before this
+    /// type had a *fallback* field at all, and -- per [`Node`]'s own doc
+    /// comment -- still correctly can, since none of them is ever called
+    /// on a node [`exec::loop_::with_prev_overlay`] gave one to.
+    pub fn entries(&self) -> &IndexMap<Value, Slot> {
+        &self.entries
+    }
+}
+
+impl std::ops::Deref for Node {
+    type Target = IndexMap<Value, Slot>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for Node {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+/// A single mutable state node -- `Rc<RefCell<Node>>`. Shared so that two
+/// different paths can reference the identical live node (`Rc::ptr_eq`),
+/// not a deep copy of it.
+pub type NodeRef = Rc<RefCell<Node>>;
+
+/// A fresh, empty node with no fallback.
 pub fn new_node() -> NodeRef {
-    Rc::new(RefCell::new(IndexMap::new()))
+    Rc::new(RefCell::new(Node {
+        entries: IndexMap::new(),
+        fallback: None,
+    }))
+}
+
+/// A fresh node carrying *entries*, with no fallback -- the plain,
+/// detached-overlay shape every ctx-chain builder in `exec::loop_`/
+/// `exec::conditional`/`exec::live_scope` already wraps a freshly merged
+/// map in.
+pub fn node_from_entries(entries: IndexMap<Value, Slot>) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: None,
+    }))
+}
+
+/// A fresh node carrying *entries*, falling back to *fallback* for any
+/// key *entries* doesn't have -- see [`Node`]'s own doc comment.
+pub fn node_with_fallback(entries: IndexMap<Value, Slot>, fallback: NodeRef) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: Some(fallback),
+    }))
 }
 
 /// [`Store`]'s own operations' error.
@@ -113,7 +191,7 @@ impl Store {
             .into_iter()
             .map(|(k, v)| (k, Slot::Value(v)))
             .collect();
-        let child = Rc::new(RefCell::new(converted));
+        let child = node_from_entries(converted);
         // `insert` on an already-present key overwrites the value
         // without moving the key's position (`IndexMap`'s own contract),
         // and inserts at the end for a key that wasn't there yet -- the
@@ -225,7 +303,7 @@ impl Store {
     /// each later merge overwrites whatever an earlier one wrote.
     pub fn merge(&self, parent: &NodeRef, branches: Vec<NodeRef>) -> Result<(), StoreError> {
         for branch in branches {
-            let entries = std::mem::take(&mut *branch.borrow_mut());
+            let entries = std::mem::take(&mut branch.borrow_mut().entries);
             for (key, slot) in entries {
                 parent.borrow_mut().insert(key, slot);
             }
@@ -245,8 +323,19 @@ impl Store {
     /// an `Rc` bump for a [`Slot::Node`], or whatever that one leaf's own
     /// size is for a [`Slot::Value`], never anything *else* under
     /// *parent*.
+    ///
+    /// Falls through to *parent*'s own [`Node::fallback`], if any and if
+    /// *key* isn't one of *parent*'s own entries -- another O(1)
+    /// [`RefCell::borrow`], never a walk of anything *fallback* doesn't
+    /// itself also have to fall through for.
     pub fn peek(&self, parent: &NodeRef, key: &Value) -> Option<Slot> {
-        parent.borrow().get(key).cloned()
+        let node = parent.borrow();
+        if let Some(slot) = node.entries.get(key) {
+            return Some(slot.clone());
+        }
+        let fallback = node.fallback.clone();
+        drop(node);
+        fallback.and_then(|f| self.peek(&f, key))
     }
 
     /// An owned [`Value`] snapshot of *node* -- recursively resolving
@@ -263,12 +352,33 @@ impl Store {
     /// `core/saved_state.py`/`cli/runtime_shim.py`/`mcp/server.py` only
     /// ever call `compact_last_aliases` -- [`Store::saved`], below -- on
     /// a value about to be serialized, never on a live ctx).
+    ///
+    /// A node with a [`Node::fallback`] (the `prime.<loop_name>` overlay
+    /// [`exec::loop_::with_prev_overlay`] builds, issue #484) starts from
+    /// *fallback*'s own full snapshot -- recursively, so a chain of
+    /// overlays still resolves to one flat dict -- then layers *node*'s
+    /// own entries (here, just `prev`) on top, the same "later entry
+    /// wins its whole key, in whichever position it first appears"
+    /// [`IndexMap::insert`] already gives every other merge in this
+    /// crate: *fallback*'s own keys keep their original order, and
+    /// `prev` (never one of them) is appended last -- byte-identical to
+    /// what a full, eager clone-then-insert of *fallback* plus `prev`
+    /// produced before this overlay existed.
     pub fn snapshot(&self, node: &NodeRef) -> Value {
         #[cfg(test)]
         self.snapshot_calls.set(self.snapshot_calls.get() + 1);
         let map = node.borrow();
-        let mut result = IndexMap::with_capacity(map.len());
-        for (key, slot) in map.iter() {
+        let mut result = match &map.fallback {
+            Some(fallback) => {
+                let mut resolved = self.snapshot(fallback);
+                match &mut resolved {
+                    Value::Dict(d) => std::mem::take(d),
+                    _ => IndexMap::new(),
+                }
+            }
+            None => IndexMap::with_capacity(map.entries.len()),
+        };
+        for (key, slot) in map.entries.iter() {
             let value = match slot {
                 Slot::Value(v) => v.clone(),
                 Slot::Node(child) => self.snapshot(child),

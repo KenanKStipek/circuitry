@@ -10,7 +10,10 @@
 
 use super::dynamic::now_iso;
 use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
-use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use crate::{
+    CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
+    node_from_entries,
+};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -481,7 +484,7 @@ fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
 /// [`build_overlay`]'s own `parent = ctx.get("prime")` read.
 fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
     match slot {
-        Some(Slot::Node(node)) => node.borrow().clone(),
+        Some(Slot::Node(node)) => node.borrow().entries().clone(),
         Some(Slot::Value(Value::Dict(map))) => map
             .iter()
             .map(|(k, v)| (k.clone(), Slot::Value(v.clone())))
@@ -529,10 +532,7 @@ fn build_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
     for (k, v) in local {
         prime.insert(k.clone(), v.clone());
     }
-    top.insert(
-        prime_key,
-        Slot::Node(std::rc::Rc::new(std::cell::RefCell::new(prime))),
-    );
+    top.insert(prime_key, Slot::Node(node_from_entries(prime)));
 
-    std::rc::Rc::new(std::cell::RefCell::new(top))
+    node_from_entries(top)
 }
