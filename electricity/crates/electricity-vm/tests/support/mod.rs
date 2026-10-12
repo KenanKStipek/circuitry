@@ -348,6 +348,10 @@ pub enum Event {
     Graft(String, String),
     /// [`RunObserver::clear_graft`].
     ClearGraft(String),
+    /// [`RunObserver::record_totals`] -- the completing effect's own
+    /// `meta` snapshot, rendered through `Debug` for the same reason
+    /// [`Event::Graft`] does.
+    Totals(String),
 }
 
 pub struct RecordingObserver {
@@ -427,6 +431,12 @@ impl RunObserver for RecordingObserver {
         self.events
             .borrow_mut()
             .push(Event::ClearGraft(node_path.to_string()));
+    }
+
+    fn record_totals(&self, meta: &Value) {
+        self.events
+            .borrow_mut()
+            .push(Event::Totals(format!("{meta:?}")));
     }
 
     fn wants_child_snapshots(&self) -> bool {

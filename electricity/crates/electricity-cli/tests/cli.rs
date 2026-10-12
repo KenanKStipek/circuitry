@@ -907,3 +907,70 @@ fn a_failure_before_the_profile_is_ever_loaded_writes_only_the_plain_out_flag() 
     assert!(plain_out.exists());
     assert!(!profile_out.exists());
 }
+
+/// Round-7 fix (issue #498's own orchestrator follow-up): a `$defs`
+/// chain of 10000 single-hop `$ref`s in a `prompt` effect's own
+/// `schema:` used to overflow electricity's real main-thread native
+/// stack -- `thread 'main' has overflowed its stack`, process abort,
+/// no `--out` written at all -- well under `electricity_schema::engine`'s
+/// own hop cap (4096). This is the end-to-end proof the fix covers the
+/// real binary's own main thread, not just a test harness thread with
+/// an explicit stack size.
+#[test]
+fn a_ten_thousand_hop_ref_chain_in_a_prompt_schema_never_overflows_the_main_thread() {
+    let (mut cmd, home) = command("ref-chain-10000");
+    let mut defs = serde_json::Map::new();
+    for i in 0..10000 {
+        defs.insert(
+            format!("L{i}"),
+            serde_json::json!({"$ref": format!("#/$defs/L{}", i + 1)}),
+        );
+    }
+    defs.insert("L10000".to_string(), serde_json::json!({"type": "object"}));
+    let schema = serde_json::json!({"$defs": defs, "$ref": "#/$defs/L0"});
+    let doc = serde_json::json!({
+        "name": "chain",
+        "adapter": "scripted",
+        "model": "m",
+        "effects": [{
+            "type": "prompt",
+            "name": "c0",
+            "prompt_type": "json",
+            "on_error": "continue",
+            "schema": schema,
+            "template": "c0",
+        }],
+    });
+    let doc_path = home.path.join("doc.yml");
+    fs::write(&doc_path, serde_json::to_string(&doc).unwrap()).unwrap();
+    let replies_path = home.path.join("replies.yml");
+    let replies = serde_json::json!({"prime.c0": [{"text": "{}"}]});
+    fs::write(&replies_path, serde_json::to_string(&replies).unwrap()).unwrap();
+    let config = home.config(
+        &serde_json::json!({
+            "runtime": {"adapters": {"scripted": {"replies_file": replies_path.to_str().unwrap()}}},
+        })
+        .to_string(),
+    );
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc_path.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(out.exists());
+    let out_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let meta = &out_value["prime"]["c0"]["meta"];
+    let attempt = &meta["fallback_attempts"][0];
+    assert_eq!(attempt["status"].as_str().unwrap(), "failed");
+    assert_eq!(
+        attempt["error"].as_str().unwrap(),
+        "maximum recursion depth exceeded while calling a Python object"
+    );
+}

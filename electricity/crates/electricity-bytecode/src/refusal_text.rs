@@ -44,6 +44,9 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
             "a run whose effective config enables complexity scoring, routing or decomposition"
                 .to_string()
         }
+        RefusalReason::UnsupportedAdapter(name) => format!(
+            "a prompt effect naming adapter {name:?}, which this build of electricity has no builder for"
+        ),
     }
 }
 

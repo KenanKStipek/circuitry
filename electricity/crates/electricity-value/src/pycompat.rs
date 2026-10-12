@@ -35,6 +35,18 @@ pub enum PyExc {
     /// lane appending its own variant there (lane E, #485) can never
     /// collide with this one on the same or an adjacent line.
     TemplateError,
+    /// `core/answers.py::AnswerParseError` (lane G, issue #498) -- an
+    /// unreadable `boolean`/`number` reply. Inserted directly after
+    /// `TemplateError`, never at the enum's own tail (where lane E
+    /// appended its own variants), so a concurrent lane appending there
+    /// can never collide with this one.
+    AnswerParseError,
+    /// `core/prompt.py::SchemaValidationError` (lane G, issue #498) -- a
+    /// prompt's decoded output failed its declared JSON schema.
+    SchemaValidationError,
+    /// `allowlist_gate.py::AllowlistError` (lane G, issue #498) -- a
+    /// `provider:`/fallback outside the installed adapter allowlist.
+    AllowlistError,
     RuntimeError,
     TypeError,
     KeyError,
@@ -112,6 +124,9 @@ impl PyExc {
         match self {
             PyExc::ValueError => "ValueError",
             PyExc::TemplateError => "TemplateError",
+            PyExc::AnswerParseError => "AnswerParseError",
+            PyExc::SchemaValidationError => "SchemaValidationError",
+            PyExc::AllowlistError => "AllowlistError",
             PyExc::RuntimeError => "RuntimeError",
             PyExc::TypeError => "TypeError",
             PyExc::KeyError => "KeyError",

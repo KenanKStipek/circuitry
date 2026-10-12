@@ -53,10 +53,7 @@
                                   "prompt_type": "Text",
                                   "provider": null,
                                   "provider_fallbacks": [],
-                                  "retries": {
-                                    "backoff_ms": 1000,
-                                    "max_attempts": 1
-                                  },
+                                  "retries": null,
                                   "routing_override": null,
                                   "schema": null,
                                   "timeout_ms": null

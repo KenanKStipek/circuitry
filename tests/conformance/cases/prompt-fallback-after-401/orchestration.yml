@@ -1,0 +1,15 @@
+name: prompt-fallback-after-401
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    provider_fallbacks: ["scripted:m2"]
+  - type: prompt
+    name: ask2
+    template: "hi"
+    on_error: continue
+    retries:
+      max_attempts: 3
+      backoff_ms: 1

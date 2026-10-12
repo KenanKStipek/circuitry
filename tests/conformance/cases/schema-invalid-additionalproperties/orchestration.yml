@@ -1,0 +1,14 @@
+name: schema-invalid-additionalproperties
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        a: {}
+    template: "give json"

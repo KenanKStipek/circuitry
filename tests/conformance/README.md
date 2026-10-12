@@ -47,7 +47,7 @@ cases/<name>/
 | `mock_http_fixture` | filename (relative to the case dir) of a mock-HTTP-server fixture; enables the mock server for this case, see "Mock HTTP server" below |
 | `sort_http_requests` | bool, default `false` -- a tree-flow case whose concurrent branches may dispatch their own HTTP calls in a different wall-clock order on either engine; compares the recorded requests re-ordered by their own canonical JSON form instead of arrival order, see "Mock HTTP server" below |
 | `known_divergence` | a deliberate, temporary engine disagreement — `{"location": "<dotted state path>", "electricity_value": <value>}`; see "Known divergence" below |
-| `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`prompt`/`shell`/`http`/...); see "Running it" below |
+| `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`shell`/`http`/a real model adapter/...); see "Running it" below |
 | `sort_warnings` | a case whose document dispatches a tree `dynamic` — `expected.warnings.txt` is written, and compared, as a sorted set rather than `cof run`'s own real order, since two branches' own warnings can land in either relative order between runs |
 | `env` | a mapping of extra environment variables set for both engines' own subprocess (applied after the credential/`CIRCUITRY_*` filter, so it can set a name the filter would otherwise drop) — for a case that needs a controlled variable neither engine's own process otherwise sees, e.g. `env_vars`'s own `list` mode |
 | `profile` | a path relative to the case directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml` — exactly one of the two suffixes must exist. `cof run` gets `--profile <name>` (discovery finds it under the orchestration directory, the case directory); electricity gets `--profile <case_dir>/<profile>` (the absolute path) |
@@ -409,16 +409,19 @@ comment in `test_electricity_runner.py`).
 `case.json`'s `electricity_preview_ok: true` is the one declared exception
 to "a success case electricity wrongly refuses is a real regression": a
 sample case (#450) whose document uses content the electricity preview
-genuinely doesn't support yet (`prompt`/`shell`/`http`/...) still passes on
-the Python engine, and is deliberately still refused by electricity until
-the lane that implements that capability flips it — at which point the
-flag is simply removed, and the case's own success assertion starts
-applying to electricity too, with no other change. Never use
-`known_divergence` for this: that key means *both* engines succeeded, with
-one documented, stated difference — not applicable when one engine never
-ran the document at all. `c-scripted-prompt`, `c-shell-path-fake`,
-`c-http-mock-server` and `c-openai-compatible-mock-server` are today's four
-`electricity_preview_ok` cases, one per new case kind #450 adds.
+genuinely doesn't support yet (`shell`/`http`/a real model adapter/...)
+still passes on the Python engine, and is deliberately still refused by
+electricity until the lane that implements that capability flips it — at
+which point the flag is simply removed, and the case's own success
+assertion starts applying to electricity too, with no other change. Never
+use `known_divergence` for this: that key means *both* engines succeeded,
+with one documented, stated difference — not applicable when one engine
+never ran the document at all. `c-shell-path-fake`, `c-http-mock-server`
+and `c-openai-compatible-mock-server` are today's `electricity_preview_ok`
+cases (`c-scripted-prompt` ran on both engines as of lane G, issue #498 —
+the `prompt` effect itself, through the `scripted` adapter only;
+`c-openai-compatible-mock-server` still needs a real model adapter, F2's
+work).
 
 ## Adding a case
 

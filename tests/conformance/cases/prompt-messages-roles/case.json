@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): prompt messages roles",
+  "description": "A `messages:` prompt with all four roles: the flattened `meta.prompt_sent`, and the `WARNING:` line for the scripted adapter's own ignored-messages option.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

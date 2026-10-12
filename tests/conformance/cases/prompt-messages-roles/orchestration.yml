@@ -1,0 +1,15 @@
+name: prompt-messages-roles
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: chat
+    messages:
+      - role: system
+        content: "You are helpful."
+      - role: user
+        content: "Hi"
+      - role: assistant
+        content: "Hello!"
+      - role: tool
+        content: "tool output"

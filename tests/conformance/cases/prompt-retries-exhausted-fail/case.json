@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #498 (M1-G, #421): retries_used on a failed node",
+  "description": "Every pass is a `server_error`: `retries_used` is set on the failed node, checked through `expected.out.json`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "C14",
+  "description": "A `json` prompt with `schema:` whose only entry fails decode: the run error is the bare `JSON schema validation failed: model returned None …`, not the `All adapter attempts failed` wrapper.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

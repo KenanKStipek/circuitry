@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #498 ruling 6",
+  "description": "A `type` schema mismatch nested under a property: pins the exact jsonschema `best_match` text, `5 is not of type 'string'` (review of PR #502, orchestrator ruling 2).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -236,10 +236,12 @@ async fn a_bad_e_value_against_a_required_input_is_an_ordinary_failure_with_stat
 async fn an_unsupported_effect_is_refused_with_no_state_written() {
     let dir = temp_dir("refusal");
     let config = write(&dir, "config.json", "{}");
+    // A model-mode `if` (lane G2, issue #448) is still refused -- lane
+    // G (issue #498) only flips `prompt` itself.
     let doc = write(
         &dir,
         "doc.yml",
-        "effects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+        "effects:\n  - name: ask\n    type: if\n    if:\n      mode: model\n      template: \"ok?\"\n    then: []\n",
     );
     let req = request(config, doc);
 

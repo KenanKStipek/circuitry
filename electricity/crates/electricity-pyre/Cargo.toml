@@ -1,0 +1,15 @@
+[package]
+name = "electricity-pyre"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Python-re pattern syntax translation (CPython-3.11-exact), shared by electricity-tools's regex plugin and electricity-schema's JSON Schema pattern/patternProperties/propertyNames keywords"
+
+[dev-dependencies]
+# Only the translator's own self-tests compile a translated pattern to
+# confirm its behaviour; the production `translate()` function itself
+# has no dependency on any regex engine at all, Python-syntax text in,
+# fancy-regex-syntax text out.
+fancy-regex = "0.14"

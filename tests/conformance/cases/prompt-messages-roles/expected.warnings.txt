@@ -1,0 +1,1 @@
+WARNING: prompt 'chat': adapter 'scripted' ignored: messages (roles flattened into one prompt)

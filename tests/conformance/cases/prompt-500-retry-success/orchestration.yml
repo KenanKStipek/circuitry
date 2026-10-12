@@ -1,0 +1,10 @@
+name: prompt-500-retry-success
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    retries:
+      max_attempts: 2
+      backoff_ms: 1

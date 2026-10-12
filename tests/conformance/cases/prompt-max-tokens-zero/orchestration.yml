@@ -1,0 +1,10 @@
+name: prompt-max-tokens-zero
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    on_error: continue
+    params:
+      max_tokens: 0

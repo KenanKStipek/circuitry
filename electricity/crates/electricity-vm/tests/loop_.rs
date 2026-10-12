@@ -1428,7 +1428,7 @@ async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_nod
     let VmError::Refused { child_label, .. } = err else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "inline");
+    assert_eq!(child_label, Some("inline".to_string()));
 
     let pr = prime(&store);
     let shots = as_dict(get(&pr, "shots").unwrap());
@@ -1485,7 +1485,7 @@ async fn a_refused_tree_pass_stops_dispatch_but_still_merges() {
     let VmError::Refused { child_label, .. } = err else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "inline");
+    assert_eq!(child_label, Some("inline".to_string()));
 
     let pr = prime(&store);
     let shots = as_dict(get(&pr, "shots").unwrap());

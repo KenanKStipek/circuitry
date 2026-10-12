@@ -1,0 +1,1 @@
+WARNING: prompt 'ask': adapter 'scripted' ignored: temperature; stop; params (seed)

@@ -175,6 +175,18 @@ fn project_retries(retries: electricity_bytecode::effects::RetryPolicy) -> Json 
     })
 }
 
+/// `PromptOp::retries` is the one genuinely `Option` field of the three
+/// (issue #498, lane G seam) -- `null` when the document omitted
+/// `retries:` or gave an empty mapping, a concrete object otherwise, so
+/// this projects it exactly rather than through [`project_retries`]'s
+/// own "always materializes defaults" behaviour.
+fn project_prompt_retries(retries: Option<electricity_bytecode::effects::RetryPolicy>) -> Json {
+    match retries {
+        Some(retries) => project_retries(retries),
+        None => Json::Null,
+    }
+}
+
 /// Ops in document order, taken from whichever of a `Region`'s shapes
 /// carries a flat op list.
 fn block_ops(region: &Region) -> &[Op] {
@@ -361,7 +373,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "deterministic": prompt.deterministic,
                 "inputs": prompt.inputs.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "assets": if prompt.assets.is_empty() { Json::Null } else { Json::Array(prompt.assets.iter().map(|a| json!({"kind": a.kind, "ref": a.reference})).collect()) },
-                "retries": project_retries(prompt.retries),
+                "retries": project_prompt_retries(prompt.retries),
                 "on_error": on_error_str(op.on_error),
                 "description": prompt.description,
                 "enabled": op.enabled,

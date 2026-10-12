@@ -552,7 +552,7 @@ mod wrap_effect_error_tests {
                 path: electricity_bytecode::EffectPath::root().push_name("step"),
                 reason: electricity_bytecode::RefusalReason::Loop,
             },
-            child_label: "child.yaml".to_string(),
+            child_label: Some("child.yaml".to_string()),
         };
         let wrapped = wrap_effect_error("outer.fetch", refused.clone());
         assert_eq!(wrapped, refused);

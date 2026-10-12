@@ -248,7 +248,17 @@ pub(crate) fn compile_prompt(
         }
     }
 
-    let retries = compile_retries(effect).unwrap_or_default();
+    // `if retries_raw and isinstance(retries_raw, dict)` (`core/compiler.py:
+    // 1582-1589`): a non-empty mapping compiles through `compile_retries`
+    // (which, called with a *present* `retries:` at all, happily returns
+    // `Some(RetryPolicy::default())` for an *empty* one too -- `ToolOp`/
+    // `UseOp` want exactly that `{}` -> defaults behaviour, but a prompt's
+    // own `{}` must stay `None` so `runtime.default_prompt_retries` applies
+    // instead).
+    let retries = match effect.get(&Value::Str("retries".to_string())) {
+        Some(Value::Dict(d)) if !d.is_empty() => compile_retries(effect),
+        _ => None,
+    };
     let on_error = normalize_on_error_default(effect);
     let description = optional_str(effect, "description");
     let group = get_truthy(effect, "group")

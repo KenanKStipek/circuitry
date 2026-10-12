@@ -1,0 +1,11 @@
+name: c14-fallbacks-all-decode-fail
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    schema:
+      type: object
+      required: ["a"]
+    template: "give json"

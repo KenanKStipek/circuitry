@@ -153,7 +153,7 @@ mod tests {
                 deterministic: false,
                 inputs: None,
                 assets: Vec::new(),
-                retries: RetryPolicy::default(),
+                retries: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
             }))),

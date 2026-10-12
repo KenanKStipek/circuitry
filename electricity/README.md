@@ -8,21 +8,22 @@ tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
 **This is a preview.** `electricity <config.json> <orchestration.yml>` runs
-documents built from `tool`, `dynamic`, `if`, `loop`, `use` and `yield`
-effects and `finally:` blocks, with the `json`, `shell`, `awk`,
+documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield` and
+`prompt` effects and `finally:` blocks, with the `json`, `shell`, `awk`,
 `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid` and `clock` tool
 providers, aiming at the same final state, `--live-state` and `--events`
 output as `cof run`. A top-level `prompts:` map and `{{> name}}` composition
 run too, in every field that reaches them (a tool's `prompt`/`params`/
-`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s `template`).
-A document whose own top-level `adapter:`/a prompt's own `provider:` names a
-real provider (`ollama`, `openai`, `anthropic`, the OpenAI-compatible family,
-`replicate`, `watsonx`) now has its preflight check run for real against that
-provider -- `claude_code`, `cyberdiner`, `litellm` and `pi` are the only
-Circuitry-known adapter names with no electricity builder yet. Prompt
-effects themselves (dispatching a real model call), reflectors, the other
-tool providers, persistence, runtime plugins and complexity routing are
-still refused with a preview message pointing at `cof run`. A document and its literal
+`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s `template`, a
+`prompt`'s own `template`/`messages`). A `prompt` effect runs for real
+against a document's own top-level `adapter:`/a prompt's own `provider:`
+(native Ollama, the OpenAI-compatible family, `openai`, `anthropic`,
+`replicate`, `watsonx`, and the `scripted` adapter) with its preflight check
+run for real too -- `claude_code`, `cyberdiner`, `litellm` and `pi` are the
+only Circuitry-known adapter names with no electricity builder yet, and
+still refuse with the preview message. Everything else (reflectors, the
+other tool providers, persistence, runtime plugins, complexity routing) is
+also still refused with a preview message pointing at `cof run`. A document and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
 options, and `--dump-ir` prints the compiled IR as unstable debugging JSON.

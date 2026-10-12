@@ -94,6 +94,9 @@ use jsonschema::primitive_type::PrimitiveType;
 use jsonschema::{Keyword, ValidationError};
 use serde_json::{Map, Number, Value};
 
+mod engine;
+mod python_message;
+
 /// The marker key `electricity-compiler`'s `schema_instance.rs` wraps a
 /// `Date`/`DateTime`/`Bytes`/`NaN`/`Infinity` value's text under,
 /// standing in for a Python value with no `serde_json::Value` shape of
@@ -589,6 +592,451 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
         .collect()
 }
 
+/// A `prompt` effect's own `schema:` check (issue #498, lane G) --
+/// `core/prompt.py::PromptRuntime._validate_schema`'s own
+/// `jsonschema.validate(value, schema)`, whose validator class is
+/// picked from the schema's own `$schema` keyword (defaulting to the
+/// latest draft -- `jsonschema.validate`'s own `validator_for` default),
+/// matched here by [`is_2020_12_or_unset`]'s own exact-URI lookup against
+/// Python's own `_META_SCHEMAS`, never [`jsonschema::validator_for`]'s
+/// prefix-shaped equivalent (PR #502's round-4 fix, finding F3: any
+/// `$schema` value *not* one of the handful Python itself registers
+/// falls back to the latest draft there too, not just an exact 2020-12
+/// match). Unlike [`orchestration_errors`]/[`profile_errors`],
+/// *schema* here is never one of Circuitry's own bundled schemas --
+/// it's a document author's own `schema:` block -- so there is no
+/// fixed validator to cache, and no marker-instance filtering (a
+/// prompt's decoded JSON value is plain `json.loads`-shaped data,
+/// never a `Date`/`DateTime`/`Bytes`/non-string-key marker).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptSchemaCheck {
+    Valid,
+    /// `jsonschema.ValidationError.message` text -- matched exactly
+    /// against Python's own `jsonschema` output for the keyword
+    /// families [`python_message::python_message`] covers (issue #498
+    /// ruling 6, tightened by PR #502's review finding 2/orchestrator
+    /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
+    /// text, not the `jsonschema` crate's `Display` -- PR #502's
+    /// round-6 fix); the remaining gaps are narrower ones named in
+    /// `DESIGN.md` §13. The `"Schema validation failed: "` prefix is
+    /// the caller's, as it is in `core/prompt.py`.
+    Invalid(String),
+    /// The schema itself doesn't compile into a validator at all
+    /// (`jsonschema.SchemaError`, which `_validate_schema`'s own
+    /// `except jsonschema.ValidationError` never catches -- a
+    /// different, non-retryable failure than an ordinary mismatch).
+    SchemaError(String),
+}
+
+/// The dedicated validation thread [`validate_prompt_schema`] runs
+/// [`validate_prompt_schema_impl`] on (round-7 fix) -- sized against a
+/// deliberately pathological case, not a typical one: a single-hop-
+/// per-level `$ref` chain just short of [`engine::MAX_RECURSION_DEPTH`]
+/// (so neither [`engine::evaluate`] nor
+/// [`engine::schema_is_fully_supported`] ever trips their own hop cap --
+/// a schema exactly at the cap recurses far *less*, since the cap itself
+/// cuts the walk off early) measured directly, on this same `opt-level =
+/// 2` build (workspace `Cargo.toml`'s own dev-profile override), to need
+/// a hair under 14 MiB of native stack on every target this has been
+/// measured on (x86_64 and aarch64, debug and release alike). 4x that.
+const VALIDATION_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
+/// [`engine::set_stack_guard`]'s own budget on the dedicated thread --
+/// defense in depth, not the primary safety margin ([`VALIDATION_THREAD_
+/// STACK_BYTES`]'s own 4x headroom already is): some slack held back
+/// from the thread's own full stack size for whatever this function
+/// calls into that isn't covered by the two recursive functions
+/// [`engine::set_stack_guard`]'s budget actually bounds.
+const VALIDATION_THREAD_STACK_GUARD_BYTES: usize = 56 * 1024 * 1024;
+/// [`engine::set_stack_guard`]'s own budget on the rare fallback path, if
+/// [`std::thread::Builder::spawn_scoped`] itself fails (platform thread
+/// creation failure -- out of memory or address space, not anything this
+/// crate's own schema/instance shapes can trigger): deliberately small
+/// and conservative, since the calling thread's own remaining headroom
+/// below *its* native limit is unknown here -- it could be the 2 MiB a
+/// worker thread was given, already partway spent by this call's own
+/// ancestors. A pathological document that would have been fine on the
+/// dedicated thread can still report a clean, non-retryable RecursionError
+/// on this path instead of its real verdict; that trade only happens
+/// when thread creation itself is already failing.
+const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
+
+/// `jsonschema.validate(value, schema)`, draft auto-selected from
+/// *schema*'s own `$schema` (defaulting to the latest draft) exactly
+/// as Python's own `jsonschema.validate` does.
+///
+/// The engine ([`engine::evaluate`]/[`engine::best_match`]) is the
+/// accept/reject authority, not just a text source, whenever
+/// [`is_2020_12_or_unset`] and [`engine::schema_is_fully_supported`]
+/// both hold -- and on that path, the `jsonschema` crate is never
+/// built or consulted *at all* (issue #498's own orchestrator
+/// follow-up, finding F5): the crate's own schema-compile step can
+/// fail on a document the engine understands perfectly well (a `$ref`
+/// an instance never actually reaches, lazily resolved exactly as
+/// Python does -- probe-schema7 c15; a YAML `maximum: .inf` instance
+/// that round-trips through `serde_json::Value` as `null` -- c20), and
+/// its own regex dialect is ECMA-262, not Python's (c2-c4; `DESIGN.md`
+/// §13's own `pattern` section). The crate decides only when that gate
+/// is false (an unsupported keyword -- `engine`'s own module docs name
+/// exactly which ones -- or a pre-2020-12 draft), built from *schema*
+/// as a `serde_json::Value` there, where every one of those gaps is
+/// already an accepted, documented divergence (`DESIGN.md` §13).
+///
+/// Runs [`validate_prompt_schema_impl`] on a dedicated, scoped thread
+/// with its own large stack (round-7 fix, issue #498's own orchestrator
+/// follow-up: a `$ref` chain thousands of hops deep -- well under
+/// [`engine::MAX_RECURSION_DEPTH`] -- overflowed the caller's own
+/// ordinary thread stack, an immediate process abort with no state
+/// written at all, in both debug and release builds, since this crate
+/// builds at `opt-level = 2` in both). `electricity_value::Value` holds
+/// no `Rc`/`RefCell` (confirmed directly against its own definition), so
+/// `&Value` is `Sync` and this call's own `schema`/`instance` borrows
+/// are safe to hand across the scope boundary unchanged; the only thing
+/// crossing back is *schema*'s own return value, a plain `String`-based
+/// enum with nothing that could reach back into the new thread's own
+/// (reset-per-call, thread-local) state. If `spawn_scoped` itself fails
+/// (platform thread creation failure), falls back to running inline on
+/// the caller's own thread, under a conservative stack budget
+/// ([`FALLBACK_STACK_GUARD_BYTES`]) rather than trusting
+/// [`engine::MAX_RECURSION_DEPTH`]'s hop count alone against a stack of
+/// unknown remaining size.
+pub fn validate_prompt_schema(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> PromptSchemaCheck {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .stack_size(VALIDATION_THREAD_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
+                validate_prompt_schema_impl(schema, instance)
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap(),
+            Err(_) => {
+                engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
+                validate_prompt_schema_impl(schema, instance)
+            }
+        }
+    })
+}
+
+fn validate_prompt_schema_impl(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> PromptSchemaCheck {
+    // Clear every thread-local left over from a prior call on this
+    // thread -- none of these are return values, so each must be
+    // reset before this call can trust what it reads back from them.
+    // This always runs on the thread [`validate_prompt_schema`] just set
+    // [`engine::set_stack_guard`]'s own budget on (the dedicated thread,
+    // or the fallback inline path), never a thread some *earlier* call
+    // left state on -- thread-locals are per thread, and this function
+    // itself never changes which thread it runs on.
+    engine::take_recursion_exceeded();
+    engine::take_python_exception();
+    engine::clear_pattern_cache();
+    engine::clear_fully_supported_cache();
+
+    // `jsonschema.validate`'s own `check_schema` step validates
+    // *schema* against its draft's metaschema before anything else
+    // happens at all, regardless of draft and regardless of whether
+    // the schema is otherwise fully supported -- a Python-`re`-invalid
+    // `pattern`/`patternProperties` key anywhere in the document is
+    // always a `SchemaError`, never routed to crate authority (whose
+    // own ECMA-262 regex engine can silently accept syntax Python's
+    // own `re` rejects) and never a wrong accept (issue #498's own
+    // orchestrator follow-up, finding V2).
+    if let Some(message) = engine::find_invalid_pattern(schema) {
+        return PromptSchemaCheck::SchemaError(message);
+    }
+
+    let fully_supported =
+        is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
+    let result = if engine::recursion_exceeded_peek() {
+        // Round-7 fix: the support walk itself already hit its own hop
+        // cap (`engine::MAX_RECURSION_DEPTH`) resolving *schema*'s own
+        // `$ref` graph -- never because of a genuinely unsupported
+        // keyword. Falling through to the crate branch below used to
+        // hand it a schema already known to be this deep, and the
+        // crate's own build step resolves a `$ref` eagerly (unlike this
+        // module's own lazy resolution): on a long enough chain that
+        // recursion cost more native stack than this module's own
+        // (bounded) walk ever had to, reintroducing the same
+        // stack-overflow risk one level down, in code this module can't
+        // put a guard in. Short-circuit straight to the `take_
+        // recursion_exceeded` check below instead; *result* here is
+        // discarded either way once that check fires.
+        PromptSchemaCheck::Valid
+    } else if fully_supported {
+        // Ruling R6 (orchestrator follow-up), tightened by finding F5:
+        // the engine is the accept/reject authority whenever it fully
+        // understands the schema, never the crate -- the crate's own
+        // `serde_json::Value` can't even represent a `NaN`/`Infinity`
+        // instance (or schema value), its regex classes are ECMA/
+        // ASCII-narrower than Python's `re`, and (for non-2020-12
+        // drafts only, which this branch never reaches) it validates
+        // `format` by default where Python never does. The crate's own
+        // *validator* is never built or consulted here at all -- but
+        // `jsonschema.validate`'s own `check_schema` step (a malformed
+        // schema, e.g. `{"type": 5}`, is a real, uncaught
+        // `jsonschema.SchemaError` in Python too, regardless of draft)
+        // still needs *some* stand-in, since `engine` itself never
+        // validates schema *structure*, only instances against one
+        // already assumed well-formed: the crate's own build step,
+        // fed [`schema_json_for_well_formedness_probe`] rather than
+        // [`value_to_json`] (so a schema-literal `Infinity`/`NaN`
+        // doesn't trip the crate's own `{"type": "number"}` meta-schema
+        // check the way `null` would -- probe-schema7 c20), with its two
+        // other known false positives, each ignored by its own `kind`
+        // rather than by text: a `$ref` the crate resolves eagerly where
+        // Python (and this engine) resolve lazily, only once an instance
+        // actually reaches it (probe-schema7 c15, `Referencing`); and
+        // the crate's own build-time meta-schema check that `pattern`'s
+        // own value is a `format: "regex"` it accepts -- its own ECMA-262
+        // regex engine, not Python's `re`, and `should_validate_formats
+        // (false)` only suppresses *instance*-level format checks, never
+        // this meta-schema one -- vetoing a pattern that's genuinely
+        // Python-valid, e.g. `^a\Z` (probe-schema6 c3, `Format`). Safe to
+        // ignore unconditionally on this branch: [`schema_is_fully_
+        // supported`] (via `python_regex_is_valid`) already confirmed
+        // every pattern in *schema* compiles under Python's own `re`
+        // before this branch was ever reached.
+        let probe_json = schema_json_for_well_formedness_probe(schema);
+        let probe_error = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&probe_json)
+            .err();
+        match probe_error {
+            Some(err)
+                if !matches!(
+                    err.kind,
+                    jsonschema::error::ValidationErrorKind::Referencing(_)
+                        | jsonschema::error::ValidationErrorKind::Format { .. }
+                ) =>
+            {
+                PromptSchemaCheck::SchemaError(err.to_string())
+            }
+            _ => {
+                let mut violations = Vec::new();
+                engine::evaluate(schema, instance, schema, &[], &mut violations);
+                match engine::best_match(&violations) {
+                    None => PromptSchemaCheck::Valid,
+                    Some(best) => PromptSchemaCheck::Invalid(engine::render(best)),
+                }
+            }
+        }
+    } else {
+        // The crate decides -- an unsupported keyword, or a pre-2020-12
+        // draft (`DESIGN.md` §13 names both as accepted, narrower gaps
+        // than trusting an engine that doesn't fully understand the
+        // schema at hand not to silently say "valid" instead). The
+        // schema's own well-formedness (`jsonschema.SchemaError`) is
+        // checked here too -- `engine` never validates schema
+        // *structure* itself (e.g. a non-string/array `"type"`), only
+        // instances against one already assumed well-formed, and this
+        // branch is the only one that ever builds the crate's own
+        // validator at all now.
+        let schema_json = value_to_json(schema);
+        let crate_validator = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&schema_json);
+        match crate_validator {
+            Err(err) => PromptSchemaCheck::SchemaError(err.to_string()),
+            Ok(validator) => {
+                // Text comes from the crate's own errors exclusively
+                // here, never a second opinion from `engine::evaluate`
+                // -- the schema has an unsupported keyword
+                // *somewhere*, so the engine's own violation list
+                // (built only from the keywords it does understand)
+                // can disagree with the crate's own `best_match` on
+                // *which* violation is most relevant, or miss the real
+                // one entirely (e.g. `unevaluatedProperties`, which the
+                // engine never implements at all).
+                let instance_json = value_to_json(instance);
+                if validator.is_valid(&instance_json) {
+                    PromptSchemaCheck::Valid
+                } else {
+                    match python_message::best_match(validator.iter_errors(&instance_json)) {
+                        None => PromptSchemaCheck::Valid,
+                        Some(err) => {
+                            // `core/prompt.py::_validate_schema`'s own
+                            // `f"Schema validation failed: {e.message}"`
+                            // always uses `jsonschema`'s raw `.message`
+                            // -- the `repr(instance) -> "value"`
+                            // substitution belongs to a different
+                            // caller entirely (`core.document_check.
+                            // _describe_schema_error`, [`orchestration_
+                            // errors`]/[`profile_errors`]'s own
+                            // compile-time convention), never this one
+                            // (orchestrator follow-up, finding N10).
+                            let message = python_message::python_message(&err, &schema_json)
+                                .unwrap_or_else(|| err.to_string());
+                            PromptSchemaCheck::Invalid(message)
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    // N6 (orchestrator follow-up): a self-referencing `$ref` recurses
+    // forever in both `schema_is_fully_supported` and `evaluate` --
+    // caught by real cycle detection rather than a stack overflow, but
+    // still not a real verdict, so whatever `result` above computed
+    // (likely nonsense, built from a truncated walk) is discarded in
+    // favour of the same shape a real, uncaught Python `RecursionError`
+    // reaches `core/prompt.py` as: a generic, non-retryable failure,
+    // never `schema_invalid`. F11 (orchestrator follow-up): `multipleOf`
+    // against a `NaN`/`Infinity` instance with a `float` divisor is the
+    // same shape, with that exception's own text instead.
+    if engine::take_recursion_exceeded() {
+        return PromptSchemaCheck::SchemaError(
+            "maximum recursion depth exceeded while calling a Python object".to_string(),
+        );
+    }
+    if let Some(message) = engine::take_python_exception() {
+        return PromptSchemaCheck::SchemaError(message);
+    }
+    result
+}
+
+/// The exact `$schema` URIs Python's own `jsonschema.validators._META_SCHEMAS`
+/// registers (checked directly against jsonschema 4.26: every other draft's
+/// own META_SCHEMA, Draft 2020-12's included, uses an `https://` URI; only
+/// these five pre-2020-12 drafts are registered under `http://`, and
+/// 2019-09/2020-12 have no registered `http://` alias at all) --
+/// `validator_for`'s own lookup, not a prefix guess.
+const KNOWN_OLDER_DRAFT_SCHEMAS: [&str; 5] = [
+    "http://json-schema.org/draft-03/schema",
+    "http://json-schema.org/draft-04/schema",
+    "http://json-schema.org/draft-06/schema",
+    "http://json-schema.org/draft-07/schema",
+    "https://json-schema.org/draft/2019-09/schema",
+];
+
+/// Whether *schema*'s own `$schema` should be treated as Draft 2020-12 --
+/// [`validate_prompt_schema`]'s own engine-authority gate never applies to
+/// any other draft (`DESIGN.md` §13: a draft ≤7 schema stays under crate
+/// authority unconditionally, `ignore_ref_siblings` quirk and all).
+///
+/// Mirrors Python's own `jsonschema.validators.validator_for` exactly, not
+/// a `starts_with` guess (issue #498's own orchestrator follow-up, finding
+/// F3): `$schema` absent, *or* present but not an exact match for one of
+/// [`KNOWN_OLDER_DRAFT_SCHEMAS`] (an unversioned/garbage/unrecognized URI,
+/// or `http://`'s own 2020-12 URI -- 2020-12 only ever registers under
+/// `https://`) *all* fall back to the latest draft (2020-12) in Python
+/// too, with a warning but never an error -- `validator_for`'s own
+/// `default is _UNSET` branch. Only an *exact* match for one of the five
+/// recognized older drafts routes to crate authority instead.
+/// `URIDict.normalize`'s own `urlsplit(uri).geturl()` strips a bare
+/// trailing `#` (an empty fragment) but nothing else (confirmed directly)
+/// -- real `$schema` values never carry a query string or a non-empty
+/// fragment, so that's the only normalization this needs.
+fn is_2020_12_or_unset(schema: &electricity_value::Value) -> bool {
+    let Some(declared) = schema
+        .as_dict()
+        .and_then(|d| d.get(&electricity_value::Value::Str("$schema".to_string())))
+    else {
+        return true;
+    };
+    let Some(uri) = declared.as_str() else {
+        return true;
+    };
+    let normalized = uri.strip_suffix('#').unwrap_or(uri);
+    !KNOWN_OLDER_DRAFT_SCHEMAS.contains(&normalized)
+}
+
+/// The inverse of [`value_to_json`] -- every ordinary JSON shape
+/// (`null`/`bool`/number/string/array/object), order-preserving. Public
+/// only for `validate_prompt_schema`'s own corpus-replay test
+/// (`tests/prompt_schema_corpus.rs`), which has no other way to turn a
+/// corpus case's `serde_json`-parsed schema/instance into the
+/// `electricity_value::Value` the function under test now takes --
+/// not meant as a general-purpose JSON bridge for any other caller.
+pub fn value_from_json(json: &serde_json::Value) -> electricity_value::Value {
+    python_message::json_to_value(json)
+}
+
+/// The inverse of `electricity-compiler::schema_instance::to_schema_instance`
+/// -- a prompt's decoded JSON value and its own author-written `schema:`
+/// are both plain `json.loads`-shaped data (never a
+/// `Date`/`DateTime`/`Bytes`/non-string-key marker, per this module's own
+/// top doc comment), so this never needs that function's own marker
+/// handling, only the plain scalar/container cases.
+fn value_to_json(value: &electricity_value::Value) -> Value {
+    value_to_json_inner(value, false)
+}
+
+/// [`validate_prompt_schema`]'s own engine-authority well-formedness
+/// probe (finding F5) needs a schema turned into JSON too -- but unlike
+/// an *instance*'s own `NaN`/`Infinity` (genuinely absent from JSON,
+/// correctly `null`), a *schema literal* using one (`maximum: .inf`) is
+/// never actually serialized at all on this path -- the engine decides
+/// accept/reject directly from the original `Value`, `Infinity` included
+/// -- so turning it into `null` here would only ever trip the crate's
+/// own meta-schema check (`"maximum": {"type": "number"}`) on a schema
+/// Python itself accepts just fine (probe-schema7 c20). A harmless finite
+/// stand-in (`0`) keeps that check meaningful for everything else
+/// (`{"type": 5}`, still genuinely malformed) without that false
+/// positive.
+fn schema_json_for_well_formedness_probe(schema: &electricity_value::Value) -> Value {
+    value_to_json_inner(schema, true)
+}
+
+fn value_to_json_inner(value: &electricity_value::Value, non_finite_as_zero: bool) -> Value {
+    use electricity_value::{IntValue, Value as EValue};
+    match value {
+        EValue::None => Value::Null,
+        EValue::Bool(b) => Value::Bool(*b),
+        EValue::Int(IntValue::Small(n)) => Value::Number((*n).into()),
+        // `electricity-compiler::schema_instance::int_to_json_number`'s own
+        // clamp: the `jsonschema` crate's `minimum`/`maximum`/`type:
+        // integer` keywords call `.expect("Always valid")` on this
+        // `Number`'s own `as_f64()`, which is `None` for a magnitude past
+        // `f64`'s own range -- panicking inside the crate rather than
+        // returning an error. Clamped to the same side of the range the
+        // real value is on (still a real JSON number, so `type: integer`
+        // keeps accepting it, as Python's own unbounded `int` does).
+        EValue::Int(IntValue::Big(n)) => {
+            let digits = n.to_string();
+            match digits.parse::<Number>() {
+                Ok(number) if number.as_f64().is_some() => Value::Number(number),
+                _ => Value::Number(if digits.starts_with('-') {
+                    Number::from(i64::MIN)
+                } else {
+                    Number::from(u64::MAX)
+                }),
+            }
+        }
+        EValue::Float(f) if f.is_finite() => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        EValue::Float(_) if non_finite_as_zero => Value::Number(0.into()),
+        EValue::Float(_) => Value::Null,
+        EValue::Str(s) => Value::String(s.clone()),
+        EValue::Bytes(_) => Value::Null,
+        // Never real here (a decoded JSON reply and a document author's
+        // own `schema:` are both plain `json.loads`-shaped data, per this
+        // module's own top doc comment) -- kept only so this match stays
+        // exhaustive against `Value`'s own full variant set.
+        EValue::Date(_) | EValue::DateTime(_, _) => Value::Null,
+        EValue::List(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| value_to_json_inner(v, non_finite_as_zero))
+                .collect(),
+        ),
+        EValue::Dict(dict) => {
+            let mut map = Map::new();
+            for (k, v) in dict.iter() {
+                let key = k.as_str().map(str::to_string).unwrap_or_else(|| k.py_str());
+                map.insert(key, value_to_json_inner(v, non_finite_as_zero));
+            }
+            Value::Object(map)
+        }
+    }
+}
+
 /// `core.document_check._describe_schema_error`'s `repr(err.instance)` ->
 /// `"value"` substitution: when the failing instance is an object or array
 /// and `message` starts with that instance rendered as JSON (`jsonschema`
@@ -897,6 +1345,225 @@ fn is_json_path_compatible_property(segment: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod prompt_schema_tests {
+    use super::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
+    use serde_json::json;
+
+    fn check(schema: serde_json::Value, instance: serde_json::Value) -> PromptSchemaCheck {
+        validate_prompt_schema(&value_from_json(&schema), &value_from_json(&instance))
+    }
+
+    /// `serde_json::json!`/`value_from_json` can't carry a `NaN`/
+    /// `Infinity` instance at all (`serde_json::Number` has no such
+    /// value) -- tests that need one build the instance directly.
+    fn check_float(schema: serde_json::Value, instance: f64) -> PromptSchemaCheck {
+        validate_prompt_schema(
+            &value_from_json(&schema),
+            &electricity_value::Value::Float(instance),
+        )
+    }
+
+    #[test]
+    fn a_matching_instance_is_valid() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert_eq!(check(schema, json!({"a": 1})), PromptSchemaCheck::Valid);
+    }
+
+    #[test]
+    fn a_missing_required_property_is_invalid() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert_eq!(
+            check(schema, json!({})),
+            PromptSchemaCheck::Invalid("'a' is a required property".to_string())
+        );
+    }
+
+    #[test]
+    fn a_type_mismatch_is_invalid() {
+        let schema = json!({"type": "string"});
+        assert_eq!(
+            check(schema, json!(5)),
+            PromptSchemaCheck::Invalid("5 is not of type 'string'".to_string())
+        );
+    }
+
+    #[test]
+    fn an_enum_mismatch_is_invalid() {
+        let schema = json!({"enum": ["a", "b"]});
+        assert_eq!(
+            check(schema, json!("c")),
+            PromptSchemaCheck::Invalid("'c' is not one of ['a', 'b']".to_string())
+        );
+    }
+
+    #[test]
+    fn additional_properties_false_rejects_an_extra_key() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {}},
+            "additionalProperties": false
+        });
+        assert_eq!(
+            check(schema, json!({"a": 1, "extra": 2})),
+            PromptSchemaCheck::Invalid(
+                "Additional properties are not allowed ('extra' was unexpected)".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn min_items_rejects_a_short_array() {
+        let schema = json!({"type": "array", "minItems": 2});
+        assert_eq!(
+            check(schema, json!([1])),
+            PromptSchemaCheck::Invalid("[1] is too short".to_string())
+        );
+    }
+
+    #[test]
+    fn draft7_schema_is_picked_from_its_own_schema_keyword() {
+        // Draft 7 has no `$recursiveAnchor`/`unevaluatedProperties` --
+        // picking the wrong draft for a schema this old can itself
+        // change which keywords are even recognized. A plain
+        // `required` failure is enough to prove the schema at least
+        // compiled and ran under the declared draft.
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "required": ["a"]
+        });
+        assert_eq!(
+            check(schema, json!({})),
+            PromptSchemaCheck::Invalid("'a' is a required property".to_string())
+        );
+    }
+
+    #[test]
+    fn no_schema_keyword_defaults_to_the_latest_draft() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert!(matches!(
+            check(schema, json!({})),
+            PromptSchemaCheck::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn an_unrecognized_schema_uri_defaults_to_the_latest_draft() {
+        // issue #498's own orchestrator follow-up, finding F3: Python's
+        // own `validator_for` falls back to the latest draft for *any*
+        // `$schema` it doesn't recognize verbatim (an unversioned/old
+        // URI included), with a warning, never an error -- not a
+        // `starts_with("https://.../2020-12/...")` guess. `NaN` only
+        // validates under the engine's own 2020-12 authority (the
+        // crate's `serde_json::Value` can't represent it at all).
+        let schema = json!({"$schema": "http://json-schema.org/schema#", "type": "number"});
+        assert_eq!(check_float(schema, f64::NAN), PromptSchemaCheck::Valid);
+    }
+
+    #[test]
+    fn an_unknown_keyword_is_an_annotation_never_a_reason_to_fall_back() {
+        // issue #498's own orchestrator follow-up, finding F4: Python's
+        // own `Draft202012Validator.VALIDATORS` dict has no `dependencies`
+        // entry at all (a legacy Draft ≤7 keyword) and obviously no
+        // `descripton` (a typo) -- both are silently ignored, never
+        // routing the schema to crate authority (which, for
+        // `dependencies`, would enforce Draft 7 semantics Python itself
+        // never does on 2020-12).
+        let schema = json!({"type": "object", "dependencies": {"a": ["b"]}, "descripton": "typo"});
+        assert_eq!(check(schema, json!({"a": 1})), PromptSchemaCheck::Valid);
+    }
+
+    #[test]
+    fn a_nested_id_changing_the_ref_base_routes_to_crate_authority() {
+        // issue #498's own orchestrator follow-up, finding F10: this
+        // engine's own `resolve_ref` only ever resolves a `"#/..."`
+        // pointer against the *document* root, never a nested `$id`
+        // subtree's own base -- routed to the crate (which does resolve
+        // it correctly) rather than silently picking the wrong `$defs.s`
+        // (the outer `integer`, not the inner `string` `$id: http://e/a`
+        // itself declares).
+        let schema = json!({
+            "properties": {
+                "a": {
+                    "$id": "http://e/a",
+                    "$defs": {"s": {"type": "string"}},
+                    "$ref": "#/$defs/s",
+                }
+            },
+            "$defs": {"s": {"type": "integer"}},
+        });
+        assert_eq!(check(schema, json!({"a": "x"})), PromptSchemaCheck::Valid);
+    }
+
+    #[test]
+    fn multiple_of_a_float_divisor_against_nan_is_a_generic_failure() {
+        // issue #498's own orchestrator follow-up, finding F11: Python's
+        // own `_keywords.multipleOf` calls `int(instance / dB)` for a
+        // `float` divisor -- `int(nan)` is an uncaught `ValueError`, not
+        // an ordinary `ValidationError`, so `core/prompt.py` never adds
+        // its usual "Schema validation failed: " prefix at all.
+        let schema = json!({"multipleOf": 0.5});
+        assert_eq!(
+            check_float(schema, f64::NAN),
+            PromptSchemaCheck::SchemaError("cannot convert float NaN to integer".to_string())
+        );
+    }
+
+    #[test]
+    fn multiple_of_a_float_divisor_against_infinity_is_a_generic_failure() {
+        // The same finding, the `OverflowError`-then-`Fraction` branch:
+        // `int(inf)` raises `OverflowError`, caught only to retry via
+        // `Fraction(inf)`, which raises its own, different, still-
+        // uncaught `OverflowError` constructing a `Fraction` from an
+        // infinite float at all.
+        let schema = json!({"multipleOf": 0.5});
+        assert_eq!(
+            check_float(schema, f64::INFINITY),
+            PromptSchemaCheck::SchemaError("cannot convert Infinity to integer ratio".to_string())
+        );
+    }
+
+    #[test]
+    fn additional_properties_pattern_filter_joins_pattern_properties_keys() {
+        // issue #498's own orchestrator follow-up, finding F7:
+        // `_utils.find_additional_properties` is `"|".join(patternProperties)`,
+        // one *joined* pattern -- an empty `patternProperties` dict (or
+        // one whose only key is the empty string) joins to `""`, which
+        // Python's own `if not patterns or ...` treats as "never matches
+        // anything", not "matches everything" the way an empty pattern
+        // normally would.
+        let schema = json!({"patternProperties": {"": {}}, "additionalProperties": false});
+        assert_eq!(
+            check(schema, json!({"x": 1})),
+            PromptSchemaCheck::Invalid("'x' does not match any of the regexes: ''".to_string())
+        );
+    }
+
+    #[test]
+    fn additional_properties_pattern_filter_applies_a_leading_inline_flag_to_the_whole_join() {
+        // The same finding: a leading `(?i)` on the *first* joined
+        // pattern scopes over the whole alternation, exactly as it would
+        // in a hand-written `"(?i)^x|^y"` -- not just its own branch.
+        let schema = json!({
+            "patternProperties": {"(?i)^x": {}, "^y": {}},
+            "additionalProperties": false,
+        });
+        assert_eq!(check(schema, json!({"Y": 1})), PromptSchemaCheck::Valid);
+    }
+
+    #[test]
+    fn an_invalid_schema_is_a_schema_error_not_an_ordinary_mismatch() {
+        // A `type` keyword with a non-string/array value doesn't
+        // compile as a schema at all.
+        let schema = json!({"type": 5});
+        assert!(matches!(
+            check(schema, json!("anything")),
+            PromptSchemaCheck::SchemaError(_)
+        ));
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,7 @@
 {
   "spec_case": "runtime-semantics.md §8.1 (preflight), issue #495",
-  "description": "A prompt with `provider: scripted` and `on_error: skip`, with the conventional replies file missing: preflight's own soft (skippable) warning, compared through `compare_run_warnings`. electricity doesn't run `prompt` yet (lane G), so this stays Python-only until then.",
+  "description": "A prompt with `provider: scripted` and `on_error: skip`, with the conventional replies file missing: preflight's own soft (skippable) warning, compared through `compare_run_warnings`.",
   "engines": ["python", "electricity"],
   "expect": "success",
-  "electricity_preview_ok": true,
   "compare_run_warnings": true
 }

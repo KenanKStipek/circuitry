@@ -1,0 +1,5 @@
+name: prompt-config-default-adapter
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

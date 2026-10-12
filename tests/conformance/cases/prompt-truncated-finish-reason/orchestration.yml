@@ -1,0 +1,7 @@
+name: prompt-truncated-finish-reason
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
