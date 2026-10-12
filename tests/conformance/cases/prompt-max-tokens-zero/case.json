@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): params.max_tokens validation",
+  "description": "`params.max_tokens: 0` with `on_error: continue`: the exact validation text, `fallback_attempts: []`, no reply consumed (the options error happens before any attempt).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

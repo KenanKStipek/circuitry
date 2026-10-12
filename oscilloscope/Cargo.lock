@@ -751,6 +751,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-pyre"
+version = "0.1.0"
+
+[[package]]
 name = "electricity-redaction"
 version = "0.1.0"
 dependencies = [
@@ -762,7 +766,11 @@ dependencies = [
 name = "electricity-schema"
 version = "0.1.0"
 dependencies = [
+ "electricity-pyre",
+ "electricity-value",
+ "fancy-regex 0.14.0",
  "jsonschema",
+ "num-bigint 0.5.1",
  "serde_json",
 ]
 
@@ -784,6 +792,7 @@ dependencies = [
  "chrono",
  "digest",
  "electricity-json",
+ "electricity-pyre",
  "electricity-redaction",
  "electricity-value",
  "fancy-regex 0.14.0",

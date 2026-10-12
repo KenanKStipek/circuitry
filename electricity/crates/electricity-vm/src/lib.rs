@@ -233,9 +233,27 @@ pub enum VmError {
     /// `--live-state` written as for any other failed run -- it is not
     /// `VmError::Cancelled`, so run wiring's own cancellation-only special
     /// case never applies to it).
+    ///
+    /// *child_label* is `Option<String>` (issue #498's own seam): a
+    /// refusal `exec::use_`'s own static check finds already knows its
+    /// own child's *label* at the point it is raised, so it's `Some`
+    /// immediately; one `exec::prompt::execute_prompt` raises at dispatch
+    /// time (`RefusalReason::UnsupportedAdapter`) has no such label of
+    /// its own to give -- it names a *provider:*/fallback token, not a
+    /// child document -- so it starts `None` and the nearest enclosing
+    /// `exec::use_::execute_use` that observes it bubble through its own
+    /// child's run claims it (`child_label.or_else(|| Some(loaded.label))`),
+    /// the same way a deeper nested child's own already-`Some` label
+    /// passes through every further ancestor unchanged. A `Refused` that
+    /// reaches `electricity` (lib)'s own run wiring still `None` (the
+    /// root document itself dispatched the unbuildable attempt, with no
+    /// enclosing `use` at all -- unreachable once lane R's own up-front
+    /// refusal holds, issue #498 ruling 4) displays the bare refusal text
+    /// ([`electricity_bytecode::format_refusal`]), never the `"use child
+    /// ..."` wrap.
     Refused {
         refusal: electricity_bytecode::Refusal,
-        child_label: String,
+        child_label: Option<String>,
     },
     /// Lane B's own execution loop isn't implemented yet (a `loop`/
     /// `mode: model` `if` -- refused before the run starts by lane A's
@@ -342,11 +360,14 @@ impl fmt::Display for VmError {
             VmError::Refused {
                 refusal,
                 child_label,
-            } => write!(
-                f,
-                "{}",
-                electricity_bytecode::format_refused_child(child_label, refusal)
-            ),
+            } => match child_label {
+                Some(child_label) => write!(
+                    f,
+                    "{}",
+                    electricity_bytecode::format_refused_child(child_label, refusal)
+                ),
+                None => write!(f, "{}", electricity_bytecode::format_refusal(refusal)),
+            },
             VmError::NotImplemented(message) => write!(f, "{message}"),
             VmError::Message(message) => write!(f, "{message}"),
         }

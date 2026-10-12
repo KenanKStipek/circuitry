@@ -1,0 +1,11 @@
+name: schema-invalid-enum
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    schema:
+      enum: [red, green]
+    template: "give json"

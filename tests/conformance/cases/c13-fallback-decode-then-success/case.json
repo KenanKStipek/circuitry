@@ -1,0 +1,7 @@
+{
+  "spec_case": "C13",
+  "description": "A `json` prompt with `schema:` and `provider_fallbacks: [scripted:m2]`: one shared default `scripted` instance (same adapter name), replies `[bad json, good json]` consumed in order -- `fallback_attempts` is `decode_failed` (with `raw_reply`) then `succeeded`, `fallback_recovered: true`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

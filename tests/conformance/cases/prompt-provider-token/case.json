@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): prompt provider token",
+  "description": "`provider: \"scripted:other-model\"` gives `meta.model: other-model` and `model_reason: default` (the per-effect `model:` field itself is still unset).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

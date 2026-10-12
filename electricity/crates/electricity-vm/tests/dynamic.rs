@@ -955,7 +955,7 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
     else {
         panic!("expected VmError::Refused");
     };
-    assert_eq!(child_label, "inline");
+    assert_eq!(child_label, Some("inline".to_string()));
     assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Prompt);
 
     let snapshot = store.snapshot(&store.root);
@@ -1037,7 +1037,7 @@ async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finall
     else {
         panic!("expected VmError::Refused, got {err:?}");
     };
-    assert_eq!(child_label, "inline");
+    assert_eq!(child_label, Some("inline".to_string()));
     assert_eq!(refusal.reason, electricity_bytecode::RefusalReason::Prompt);
 
     let snapshot = store.snapshot(&store.root);

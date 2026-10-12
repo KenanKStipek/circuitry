@@ -129,6 +129,18 @@ pub enum RefusalReason {
     /// effective settings have it on as [`first_unsupported`]'s own
     /// *complexity_enabled* argument.
     ComplexityEnabled,
+    /// A `prompt` effect's own attempt chain (its run default, or an
+    /// explicit `provider:`/fallback token), discovered at dispatch
+    /// time rather than by this static walker, named a Circuitry-known
+    /// adapter (`electricity_vm::adapter_names::ADAPTER_NAMES`) this
+    /// build has no builder for at all (issue #498, ruling 4). Never
+    /// produced by [`first_unsupported`] itself -- `electricity_vm::
+    /// exec::prompt::execute_prompt` constructs this directly, since
+    /// deciding "unbuildable" needs the run's own
+    /// `electricity_vm::adapter::AdapterRegistry`, which this crate has
+    /// no dependency on. Carries the adapter name exactly as written
+    /// (a `provider:` token's own spelling, never lower-cased).
+    UnsupportedAdapter(String),
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -247,8 +259,8 @@ impl<'a> Supported<'a> {
     /// to [`Supported::m0`]'s own value until the first M1 lane lands.
     pub fn current(providers: &'a [&'a str]) -> Self {
         Supported {
-            // lane G (#448)
-            prompt: false,
+            // lane G (#448, #498)
+            prompt: true,
             // lane H (#448)
             loop_: true,
             // lane I (#448, #469)
@@ -496,7 +508,11 @@ mod tests {
         // which stays pinned to `false` forever.
         let current = Supported::current(&["json"]);
         let m0 = Supported::m0(&["json"]);
-        assert_eq!(current.prompt, m0.prompt);
+        // lane G (#448, #498): `prompt` is `true` now -- asserted
+        // directly rather than against `m0.prompt` (always `false`),
+        // the one field this lane's own PR flips.
+        assert!(current.prompt);
+        assert!(!m0.prompt);
         assert!(current.loop_);
         assert!(!m0.loop_);
         // lane I (#448, #469): `use_` is `true` now -- asserted
@@ -1453,7 +1469,7 @@ mod tests {
                 deterministic: false,
                 inputs: None,
                 assets: Vec::new(),
-                retries: RetryPolicy::default(),
+                retries: None,
                 description: None,
                 group: None,
             }),
@@ -1492,7 +1508,7 @@ mod tests {
                 deterministic: false,
                 inputs: None,
                 assets: Vec::new(),
-                retries: RetryPolicy::default(),
+                retries: None,
                 description: None,
                 group: None,
             }),

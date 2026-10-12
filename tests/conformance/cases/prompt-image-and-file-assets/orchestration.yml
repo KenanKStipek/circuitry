@@ -1,0 +1,12 @@
+name: prompt-image-and-file-assets
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: describe
+    template: "what is this?"
+    assets:
+      - kind: image
+        ref: "pixel.png"
+      - kind: file
+        ref: "notes.txt"

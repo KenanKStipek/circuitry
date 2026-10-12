@@ -1,0 +1,12 @@
+name: c13-fallback-decode-then-success
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    schema:
+      type: object
+      required: ["a"]
+    template: "give json"
+    provider_fallbacks: ["scripted:m2"]

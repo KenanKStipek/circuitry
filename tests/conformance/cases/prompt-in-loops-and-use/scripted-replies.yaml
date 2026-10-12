@@ -1,0 +1,19 @@
+prime.L.iter_0.p:
+  - text: "n0"
+    tokens_sent: 1
+    tokens_received: 1
+prime.L.iter_1.p:
+  - text: "n1"
+    tokens_sent: 1
+    tokens_received: 1
+prime.q:
+  - text: "u0"
+    tokens_sent: 1
+    tokens_received: 1
+  - text: "u1"
+    tokens_sent: 1
+    tokens_received: 1
+prime.child.r:
+  - text: "use reply"
+    tokens_sent: 1
+    tokens_received: 1

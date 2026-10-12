@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): fallback recovery and a non-retryable immediate stop",
+  "description": "A default that fails with `unauthorized` (401) then a `provider_fallbacks` entry that answers: `fallback_recovered: true`. A second effect whose only chain entry is a 401, with `retries: {max_attempts: 3}`, is not retried at all (non-retryable) -- `on_error: continue`, `meta.error` is the `All adapter attempts failed: [...]` repr.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

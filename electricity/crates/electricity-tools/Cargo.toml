@@ -17,6 +17,11 @@ test-tools = []
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
+# Python-`re` pattern-syntax translation (#448 lane D2), shared with
+# `electricity-schema` -- moved out of this crate (PR #502's round-4
+# fix, finding F2) so both can depend on it without `electricity-schema`
+# needing every other tool plugin's own dependency tree.
+electricity-pyre = { path = "../electricity-pyre" }
 # `http_error_excerpt`'s own `redact()` call (`plugins/base.py::
 # http_error_excerpt`'s own doc comment: the deny-list, not an
 # unredacted raw body, ever reaches a failure message) -- the same

@@ -1,0 +1,19 @@
+name: prompt-tree-group
+adapter: scripted
+model: m
+runtime:
+  concurrency_groups:
+    g: 1
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: prompt
+        name: a
+        template: "A"
+        group: g
+      - type: prompt
+        name: b
+        template: "B"
+        group: g

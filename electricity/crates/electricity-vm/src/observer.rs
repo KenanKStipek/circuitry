@@ -104,6 +104,21 @@ pub trait RunObserver {
     fn wants_child_snapshots(&self) -> bool {
         false
     }
+
+    /// Hands a completing effect's own `meta` snapshot to the run's
+    /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
+    /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
+    /// `cost_usd` accumulation, driven by the same stream
+    /// [`RunObserver::effect_complete`] already carries (`effects_run`
+    /// stays that hook's own job -- this one is additive, for the two
+    /// fields no M0/M1 effect type before `prompt` ever set).
+    /// `exec::prompt::execute_prompt` calls this immediately before
+    /// `effect_complete`, on every pass (success or failure) that
+    /// reaches a `meta` write at all; G2/L call it the same way for
+    /// their own effect types once they land. Default no-op, like every
+    /// other hook here -- only `electricity` (lib)'s own `Observer`
+    /// implements it for real.
+    fn record_totals(&self, _meta: &Value) {}
 }
 
 /// A [`RunObserver`] that does nothing -- every lane A test (and any
@@ -129,5 +144,6 @@ mod tests {
         observer.warning("a run-time warning with no effect of its own");
         observer.graft_child_write(&path, &Value::None);
         observer.clear_graft(&path);
+        observer.record_totals(&Value::None);
     }
 }

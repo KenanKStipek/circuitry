@@ -1,0 +1,8 @@
+prime.fan.a:
+  - text: "reply a"
+    tokens_sent: 1
+    tokens_received: 1
+prime.fan.b:
+  - text: "reply b"
+    tokens_sent: 1
+    tokens_received: 1

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): on_error skip/continue",
+  "description": "Two prompts whose only chain entry has no configured reply: `on_error: skip` and `on_error: continue` both give `value: null` with `meta.error`, and the run continues.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

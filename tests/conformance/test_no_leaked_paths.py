@@ -50,7 +50,12 @@ def _fixture_ids() -> list[str]:
 
 @pytest.mark.parametrize("path", _fixture_files(), ids=_fixture_ids())
 def test_no_local_filesystem_paths_committed(path: Path) -> None:
-    text = path.read_text(encoding="utf-8")
+    # A binary fixture (e.g. a prompt's own image asset) can embed a
+    # leaked path's own bytes without the file as a whole decoding as
+    # valid UTF-8 (review of PR #502, P2 note g) -- replacing each bad
+    # byte with U+FFFD, rather than skipping the file outright, keeps
+    # every surrounding ASCII path pattern checkable.
+    text = path.read_bytes().decode("utf-8", errors="replace")
     for pattern in _LEAK_PATTERNS:
         match = pattern.search(text)
         if match is not None:

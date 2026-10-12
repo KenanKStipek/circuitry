@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): prompt image and non-image assets",
+  "description": "A committed PNG fixture (relative to the case dir, the cwd) and a `kind: file` asset: `meta.assets` (`sha256`/`size`/`media_type`) and the non-image warning, both with their `WARNING:` lines.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

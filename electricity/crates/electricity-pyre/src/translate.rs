@@ -19,7 +19,7 @@
 //!   before a final trailing `\n`, which `fancy-regex`'s own `$` does
 //!   not);
 //! - `\w`/`\s`/`\d`/`\b`/`\B` (Python's own Unicode membership, from
-//!   [`crate::generated`]'s generated tables, not Rust's different
+//!   [`crate::regex_unicode`]'s generated tables, not Rust's different
 //!   ones);
 //! - VERBOSE whitespace/comment stripping (Python's own tokenizer
 //!   rule: a quantifier brace containing whitespace falls back to
@@ -42,7 +42,7 @@
 //! this translator can't support yet -- it fails with the same
 //! invalid-pattern prefix, a documented divergence (DESIGN.md §7.3).
 
-use crate::generated::regex_unicode;
+use crate::regex_unicode;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 

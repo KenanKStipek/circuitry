@@ -1,0 +1,7 @@
+prime.ask:
+  - error:
+      kind: unauthorized
+  - text: "recovered"
+prime.ask2:
+  - error:
+      kind: unauthorized

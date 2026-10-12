@@ -1,0 +1,19 @@
+name: prompt-types-boolean-number
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: is_ready
+    prompt_type: boolean
+    template: "ready?"
+  - type: prompt
+    name: count
+    prompt_type: number
+    template: "count?"
+  - type: prompt
+    name: flaky
+    prompt_type: boolean
+    template: "flaky?"
+    retries:
+      max_attempts: 2
+      backoff_ms: 1

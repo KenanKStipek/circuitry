@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): prompt_type boolean/number decoding",
+  "description": "A lenient `\"**Yes.**\"` -> `true`/`\"42.\"` -> `42` boolean/number decode, plus a `\"maybe\"` reply retried into a readable `\"no\"`, pinning `meta.answer` and `retries_used`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

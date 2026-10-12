@@ -815,7 +815,7 @@ async fn attempt_once<R: ParamsCtx>(
     ) {
         return Err(AttemptProblem::Fatal(VmError::Refused {
             refusal,
-            child_label: loaded.label.clone(),
+            child_label: Some(loaded.label.clone()),
         }));
     }
 
@@ -886,9 +886,17 @@ async fn attempt_once<R: ParamsCtx>(
             refusal,
             child_label,
         }) => {
+            // A refusal already labeled (a deeper nested `use` child's
+            // own static check, or this same check a level up) keeps
+            // its own label unchanged; one still `None` (`exec::prompt::
+            // execute_prompt`'s own dispatch-time `UnsupportedAdapter`
+            // check, which has no child document of its own to name)
+            // is claimed by *this* level -- the nearest enclosing `use`
+            // that actually ran the effect that raised it (issue #498
+            // ruling 4).
             return Err(AttemptProblem::Fatal(VmError::Refused {
                 refusal,
-                child_label,
+                child_label: child_label.or_else(|| Some(loaded.label.clone())),
             }));
         }
         Err(other) => {
@@ -1401,6 +1409,10 @@ impl RunObserver for ChildObserver<'_> {
 
     fn warning(&self, message: &str) {
         self.parent.warning(message);
+    }
+
+    fn record_totals(&self, meta: &Value) {
+        self.parent.record_totals(meta);
     }
 
     fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {

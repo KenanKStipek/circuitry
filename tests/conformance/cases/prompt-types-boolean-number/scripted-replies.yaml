@@ -1,0 +1,7 @@
+prime.is_ready:
+  - text: "**Yes.**"
+prime.count:
+  - text: "42."
+prime.flaky:
+  - text: "maybe"
+  - text: "no"

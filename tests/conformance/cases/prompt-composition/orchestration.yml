@@ -1,0 +1,12 @@
+name: prompt-composition
+adapter: scripted
+model: m
+prompts:
+  voice: "Respond politely."
+effects:
+  - type: prompt
+    name: earlier
+    template: "the earlier value"
+  - type: prompt
+    name: ask
+    template: "{{> voice}} Context: {{> earlier}}"
