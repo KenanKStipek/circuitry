@@ -192,14 +192,6 @@ pub(crate) enum Kind<'a> {
         item_word: &'static str,
         rest_repr: String,
     },
-    /// A failing `anyOf`/`oneOf` branch this module's own `evaluate` found
-    /// nothing wrong with (an unsupported keyword is the real cause) --
-    /// carries the legacy crate-`Display` single-message text for that
-    /// branch instead of leaving `context` silently missing an entry
-    /// Python's own `_keywords.anyOf`/`oneOf` would always have populated.
-    Fallback {
-        message: String,
-    },
 }
 
 fn is_weak(kind: &Kind<'_>) -> bool {
@@ -1611,11 +1603,19 @@ thread_local! {
     /// composes correctly) -- [`evaluate`]'s own per-keyword check
     /// reads this, never a parameter threaded through every recursive
     /// call, since the ordinary (non-lazy) top-level `evaluate` call
-    /// from [`crate::validate_prompt_schema`] and `anyOf`/`oneOf`'s own
-    /// branch descent (deliberately eager -- Python's own `_keywords.
-    /// anyOf`/`oneOf` call `list(...)` on each branch, never `next()`)
-    /// must never see this flag on just because they happen to run
-    /// while *nested inside* an enclosing `is_valid` call.
+    /// from [`crate::validate_prompt_schema`] must never see this flag
+    /// on just because it happens to run while *nested inside* an
+    /// enclosing `is_valid` call. [`evaluate_branch`]'s own branch
+    /// descent must be eager too (Python's own `_keywords.anyOf`/
+    /// `oneOf` call `list(...)` on each branch, never `next()`), but it
+    /// can run nested inside `is_valid` (a `not`/`if`/`contains`
+    /// wrapping an `anyOf`) with this flag already on, so it clears it
+    /// for its own call via [`suspend_lazy_mode`] rather than relying on
+    /// nesting alone -- a *shared* violations `Vec` across branches
+    /// means one branch's own early failure would otherwise make
+    /// [`evaluate`]'s per-keyword lazy check fire on an *unrelated*
+    /// branch's very first keyword, from a violation that branch never
+    /// itself raised.
     static LAZY_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -1633,6 +1633,16 @@ impl Drop for LazyModeGuard {
 
 fn enter_lazy_mode() -> LazyModeGuard {
     LazyModeGuard(LAZY_MODE.with(|m| m.replace(true)))
+}
+
+/// Clears [`LAZY_MODE`] for the duration of one [`evaluate_branch`]
+/// call (restored to its prior value on return, via [`LazyModeGuard`]),
+/// so each `anyOf`/`oneOf` branch is evaluated to completion into its
+/// own slice of the shared violations `Vec` -- regardless of whether an
+/// enclosing `not`/`if`/`contains` already turned lazy mode on, and
+/// regardless of what an earlier *sibling* branch already pushed.
+fn suspend_lazy_mode() -> LazyModeGuard {
+    LazyModeGuard(LAZY_MODE.with(|m| m.replace(false)))
 }
 
 /// `Validator.is_valid`: *schema* has no violations at all against
@@ -1703,19 +1713,36 @@ fn limit_equals(limit: &Value, n: i64) -> bool {
 /// *result*, not an exception) -- an *already*-non-finite remainder is
 /// simply a violation, matching Python's own `bool(nan) == True`.
 ///
-/// A **`float` divisor**, though, is Python's own `int(instance / dB)`
-/// path, which raises for a non-finite instance rather than ever
-/// yielding an ordinary violation: `int(nan)` is an uncaught `ValueError`
-/// ("cannot convert float NaN to integer"), and `int(inf)` raises
-/// `OverflowError`, caught by `_keywords.multipleOf` only to retry via
-/// `Fraction(instance)` -- which raises its *own*, different, still-
-/// uncaught `OverflowError` ("cannot convert Infinity to integer
-/// ratio") constructing a `Fraction` from an infinite float at all
-/// (confirmed directly against CPython; the message text is sign-
-/// independent, `-Infinity` included). `core/prompt.py`'s own generic
-/// `except Exception` (not `except jsonschema.ValidationError`) turns
-/// either into a non-retryable, generic failure, never `schema_invalid`
-/// -- [`raise_python_exception`] reproduces that outcome exactly (issue
+/// A zero divisor (`int` or `float`, against either an `int` or a
+/// `float` instance) raises `ZeroDivisionError` directly in Python,
+/// *before* any of the above -- `integer modulo by zero` for an `int`
+/// instance against an `int` divisor of `0`, `float modulo` for a
+/// `float` instance against an `int` divisor of `0`, and `float
+/// division by zero` for any instance against a `float` divisor of
+/// `0.0` (confirmed directly against CPython, every combination).
+///
+/// A **`float` divisor**, though, is otherwise Python's own
+/// `int(instance / dB)` path. The division itself never raises (a
+/// `NaN` on either side, or an `Infinity` instance against a finite
+/// divisor, simply gives a `NaN`/`Infinity` *quotient* rather than
+/// raising) -- `int(quotient)` is what can: a `NaN` quotient (either
+/// operand `NaN`, or an `Infinity` instance divided by an `Infinity`
+/// divisor, which is itself `NaN`) is an uncaught `ValueError`
+/// ("cannot convert float NaN to integer"); an *Infinity* quotient
+/// raises `OverflowError`, caught by `_keywords.multipleOf` only to
+/// retry via `Fraction(instance) / Fraction(dB)` -- which itself raises
+/// its *own*, still-uncaught `OverflowError` ("cannot convert Infinity
+/// to integer ratio") if *instance* is the infinite operand (message
+/// text sign-independent, `-Infinity` included), but otherwise
+/// succeeds: an infinite quotient from two genuinely *finite* operands
+/// (`1e308` against `multipleOf: 0.5`, issue #498's own orchestrator
+/// follow-up, finding V5, probe-schema9 c6) is `f64`'s own range
+/// overflowing computing `i / d`, not either operand itself being
+/// non-finite, so [`fraction_multiple_of_failed`] gets a clean run.
+/// `core/prompt.py`'s own generic `except Exception` (not `except
+/// jsonschema.ValidationError`) turns any of the above into a
+/// non-retryable, generic failure, never `schema_invalid` --
+/// [`raise_python_exception`] reproduces that outcome exactly (issue
 /// #498's own orchestrator follow-up, finding F11); the caller must
 /// treat this function's own `false` as "no ordinary violation", not
 /// "valid", whenever that flag ends up set.
@@ -1726,6 +1753,7 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
     if let (Value::Int(n), Value::Int(d)) = (instance, divisor) {
         let d = d.to_bigint();
         if d == num_bigint::BigInt::from(0) {
+            raise_python_exception("integer modulo by zero");
             return false;
         }
         return n.to_bigint() % d != num_bigint::BigInt::from(0);
@@ -1740,28 +1768,39 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
         // A `float` instance against an `int` divisor: Python's `%`
         // follows floor division (the result's own sign matches the
         // *divisor*'s), unlike Rust's `%` (truncated division, the
-        // dividend's own sign) -- `py_fmod` corrects that.
+        // dividend's own sign) -- `py_fmod` corrects that. A zero
+        // divisor raises before `%` ever runs, regardless of the
+        // instance's own `NaN`/`Infinity` status.
+        if d == 0.0 {
+            raise_python_exception("float modulo");
+            return false;
+        }
         let remainder = py_fmod(i, d);
         return remainder != 0.0;
     }
-    if i.is_nan() {
-        raise_python_exception("cannot convert float NaN to integer");
-        return false;
-    }
-    if i.is_infinite() {
-        raise_python_exception("cannot convert Infinity to integer ratio");
+    // A zero `float` divisor raises before the division itself runs,
+    // regardless of the instance's own `NaN`/`Infinity` status.
+    if d == 0.0 {
+        raise_python_exception("float division by zero");
         return false;
     }
     let quotient = i / d;
-    if !quotient.is_finite() {
-        // `int(quotient)` raises `OverflowError` here (a finite `i`/`d`
-        // dividing to something `f64` itself can't hold -- the case
-        // `int()` actually raises for, not `is_infinite()`'s `NaN`/
-        // `Infinity`-*instance* cases above, which never reach this far
-        // at all): caught by `_keywords.multipleOf`'s own `except
-        // OverflowError`, retried exactly via `Fraction`, never a bare
-        // violation (issue #498's own orchestrator follow-up, finding
-        // V5, probe-schema9 c6: `1e308` against `multipleOf: 0.5`).
+    if quotient.is_nan() {
+        raise_python_exception("cannot convert float NaN to integer");
+        return false;
+    }
+    if quotient.is_infinite() {
+        if i.is_infinite() {
+            // `instance` itself is the infinite operand: `Fraction(instance)`
+            // raises this, sign-independent, before `divisor` is ever
+            // considered (confirmed directly against CPython).
+            raise_python_exception("cannot convert Infinity to integer ratio");
+            return false;
+        }
+        // `instance` and `divisor` are both finite here -- the quotient
+        // itself simply overflowed `f64`'s own range computing `i / d`;
+        // `Fraction(instance)`/`Fraction(dB)` succeed on two finite
+        // operands, so [`fraction_multiple_of_failed`] gets a clean run.
         return fraction_multiple_of_failed(i, d);
     }
     quotient.trunc() != quotient
@@ -1773,10 +1812,17 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
 /// all): each finite `f64` has its own exact `(numerator, denominator)`
 /// ratio already; dividing two fractions and reducing the result by
 /// their `BigInt` `gcd` decides whether the quotient is a whole number
-/// without ever computing it as a `f64`.
+/// without ever computing it as a `f64`. [`multiple_of_failed`]'s own
+/// caller only ever reaches this with two already-finite operands, but
+/// a `None` here (impossible today) falls back to "no violation" --
+/// never a panic -- rather than trust that invariant with an `expect`.
 fn fraction_multiple_of_failed(instance: f64, divisor: f64) -> bool {
-    let (in_, id) = float_exact_ratio(instance).expect("instance already confirmed finite");
-    let (dn, dd) = float_exact_ratio(divisor).expect("divisor already confirmed finite");
+    let Some((in_, id)) = float_exact_ratio(instance) else {
+        return false;
+    };
+    let Some((dn, dd)) = float_exact_ratio(divisor) else {
+        return false;
+    };
     let num = in_ * dd;
     let den = id * dn;
     if num == num_bigint::BigInt::from(0) {
@@ -2116,12 +2162,14 @@ const SUPPORTED_LEAF_KEYWORDS: &[&str] = &[
 
 thread_local! {
     /// Memoizes [`schema_is_fully_supported`] by schema-node identity --
-    /// an anyOf/oneOf branch re-checked across many sibling array/object
-    /// elements (`evaluate_branch`'s own call into this, once per
-    /// element) used to re-walk the identical branch subtree from
-    /// scratch every single time (PR #502's round-4 fix, finding F12).
-    /// Cleared at the start of every [`crate::validate_prompt_schema`]
-    /// call ([`clear_pattern_cache`] does this too; the same reason).
+    /// today, called at most once per [`crate::validate_prompt_schema`]
+    /// call (the top-level accept-authority gate; [`evaluate_branch`]/
+    /// [`schema_accepts`] no longer re-run it per branch, PR #502's
+    /// round-6 fix), but a node this pass already resolved gets the
+    /// answer back without a second walk rather than relying on every
+    /// caller to know that invariant holds. Cleared at the start of
+    /// every [`crate::validate_prompt_schema`] call ([`clear_pattern_cache`]
+    /// does this too; the same reason).
     static FULLY_SUPPORTED_CACHE: std::cell::RefCell<std::collections::HashMap<*const Value, bool>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -2142,33 +2190,51 @@ pub(crate) fn clear_fully_supported_cache() {
 /// the follow-up's own probes caught diverging from Python). Memoized
 /// by schema-node identity ([`FULLY_SUPPORTED_CACHE`]).
 ///
-/// A `$ref` target already on *this walk's own path* (tracked by node
-/// identity in `visited`, pushed before descending into it and popped
-/// right after) counts as supported without recursing into it again --
-/// a schema this function would otherwise never finish walking at all
-/// (`$defs: {loop: {$ref: '#/$defs/loop'}}`, or the degenerate `{"$ref":
-/// "#"}`) is exactly the recursive shape a real document's `schema:`
-/// legitimately uses to describe a tree or a linked list -- the walk
-/// here is over the *schema's* own structure, which really is cyclic for
-/// one of these, independently of whatever finite instance it is later
-/// checked against. Judging a cycle like that "unsupported" (PR #502's
-/// round-4 fix, finding F1) used to fail every instance of every
-/// recursive schema, even a depth-1 one, before [`evaluate`] ever ran:
-/// `MAX_RECURSION_DEPTH`-many `$ref` hops through the same handful of
-/// cyclic nodes always eventually tripped the old plain depth budget
-/// and reported Python's own uncaught `RecursionError` text regardless
-/// of the instance at hand. [`evaluate`]'s own [`enter_eval_guard`] is
-/// the real recursion-safety net now (this function never calls
+/// A `$ref` target already seen *anywhere* in this call's own walk
+/// (tracked by node identity in `seen`, inserted before descending into
+/// it and never removed) counts as supported without recursing into it
+/// again -- the overall answer is a single AND over every *distinct*
+/// node the schema can reach, so once one occurrence of a node has
+/// contributed its own share of that AND, a second occurrence (whether
+/// a genuine cycle back to an ancestor still being walked, or simply
+/// another path converging on the same node later) has nothing left to
+/// add: if that node were going to make the overall answer `false`, the
+/// first visit's own `false` would already have short-circuited every
+/// `all`/`&&` between it and the top of this call before a second visit
+/// could ever run (every aggregation point here is exactly that kind of
+/// short-circuiting boolean -- `Dict::iter().all`, `d.values().all`,
+/// plain `&&`), so treating a repeat as supported is never a wrong
+/// answer, only a skipped, already-redundant walk.
+///
+/// This also makes a schema cyclic *only* via `$ref` safe the same way
+/// it always was (`$defs: {loop: {$ref: '#/$defs/loop'}}`, or the
+/// degenerate `{"$ref": "#"}`) -- the recursive shape a real document's
+/// `schema:` legitimately uses to describe a tree or a linked list.
+/// Judging a cycle like that "unsupported" (PR #502's round-4 fix,
+/// finding F1) used to fail every instance of every recursive schema,
+/// even a depth-1 one, before [`evaluate`] ever ran: `MAX_RECURSION_
+/// DEPTH`-many `$ref` hops through the same handful of cyclic nodes
+/// always eventually tripped the old plain depth budget and reported
+/// Python's own uncaught `RecursionError` text regardless of the
+/// instance at hand. Never popping `seen` means it can no longer double
+/// as that depth budget (PR #502's round-6 fix, finding F14: without
+/// this, a schema with many mutually-referencing `$ref` targets re-
+/// walked the identical subtree once per path between them, genuinely
+/// factorial in the number of targets -- ten of them, each referencing
+/// every other, took several seconds), so a separate `depth` parameter
+/// -- incremented only for a newly-seen `$ref` hop, exactly mirroring
+/// how deep `visited` itself used to grow along one path -- takes over
+/// that job. [`evaluate`]'s own [`enter_eval_guard`] is the real
+/// recursion-safety net regardless (this function never calls
 /// `evaluate`, so a non-cyclic, pathologically deep schema can't
-/// overflow the stack through this path either, bounded the same way by
-/// `visited.len()`).
+/// overflow the stack through this path either).
 pub(crate) fn schema_is_fully_supported(schema: &Value, root: &Value) -> bool {
     let ptr: *const Value = schema;
     if let Some(cached) = FULLY_SUPPORTED_CACHE.with(|c| c.borrow().get(&ptr).copied()) {
         return cached;
     }
-    let mut visited = Vec::new();
-    let result = schema_is_fully_supported_inner(schema, root, &mut visited, true);
+    let mut seen = std::collections::HashSet::new();
+    let result = schema_is_fully_supported_inner(schema, root, &mut seen, 0, true);
     FULLY_SUPPORTED_CACHE.with(|c| {
         c.borrow_mut().insert(ptr, result);
     });
@@ -2191,10 +2257,11 @@ fn is_same_document_pointer_syntax(pointer: &str) -> bool {
 fn schema_is_fully_supported_inner(
     schema: &Value,
     root: &Value,
-    visited: &mut Vec<*const Value>,
+    seen: &mut std::collections::HashSet<*const Value>,
+    depth: usize,
     is_root: bool,
 ) -> bool {
-    if visited.len() >= MAX_RECURSION_DEPTH {
+    if depth >= MAX_RECURSION_DEPTH {
         RECURSION_EXCEEDED.with(|e| e.set(true));
         return false;
     }
@@ -2267,14 +2334,10 @@ fn schema_is_fully_supported_inner(
                         None => true,
                         Some(resolved) => {
                             let ptr: *const Value = resolved;
-                            if visited.contains(&ptr) {
+                            if !seen.insert(ptr) {
                                 return true;
                             }
-                            visited.push(ptr);
-                            let result =
-                                schema_is_fully_supported_inner(resolved, root, visited, false);
-                            visited.pop();
-                            result
+                            schema_is_fully_supported_inner(resolved, root, seen, depth + 1, false)
                         }
                     }
                 }),
@@ -2296,31 +2359,31 @@ fn schema_is_fully_supported_inner(
                 "pattern" => v.as_str().is_some_and(python_regex_is_valid),
                 "properties" | "dependentSchemas" => v.as_dict().is_some_and(|d| {
                     d.values()
-                        .all(|sub| schema_is_fully_supported_inner(sub, root, visited, false))
+                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
                 }),
                 "patternProperties" => v.as_dict().is_some_and(|d| {
                     d.iter().all(|(pattern_key, sub)| {
                         pattern_key.as_str().is_some_and(python_regex_is_valid)
-                            && schema_is_fully_supported_inner(sub, root, visited, false)
+                            && schema_is_fully_supported_inner(sub, root, seen, depth, false)
                     })
                 }),
                 "additionalProperties" | "items" | "not" | "propertyNames" | "contains" => {
-                    schema_is_fully_supported_inner(v, root, visited, false)
+                    schema_is_fully_supported_inner(v, root, seen, depth, false)
                 }
                 "if" => {
-                    schema_is_fully_supported_inner(v, root, visited, false)
+                    schema_is_fully_supported_inner(v, root, seen, depth, false)
                         && dict.get(&key("then")).is_none_or(|t| {
-                            schema_is_fully_supported_inner(t, root, visited, false)
+                            schema_is_fully_supported_inner(t, root, seen, depth, false)
                         })
                         && dict.get(&key("else")).is_none_or(|e| {
-                            schema_is_fully_supported_inner(e, root, visited, false)
+                            schema_is_fully_supported_inner(e, root, seen, depth, false)
                         })
                 }
                 "then" | "else" => true, // handled alongside "if" above
                 "prefixItems" | "allOf" | "anyOf" | "oneOf" => v.as_list().is_some_and(|items| {
                     items
                         .iter()
-                        .all(|sub| schema_is_fully_supported_inner(sub, root, visited, false))
+                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
                 }),
                 // Any other key -- a keyword Python's own Draft202012
                 // `VALIDATORS` dict never implements at all (e.g.
@@ -2338,59 +2401,35 @@ fn schema_is_fully_supported_inner(
     }
 }
 
-/// Whether *instance* validates against *branch* at all. Prefers this
+/// Whether *instance* validates against *branch* at all, via this
 /// module's own [`is_valid`] directly on the *unresolved* branch (whose
 /// own `evaluate` already understands `$ref`, siblings included, exactly
-/// as Python's own `_validate_reference` applicator does) whenever
-/// [`schema_is_fully_supported`] judges the branch trustworthy; only
-/// then falls back to the `jsonschema` crate (format checking off,
-/// matching Python never validating `format` without an explicit
-/// checker) -- never the other way around, and never by compiling the
-/// branch as its own standalone document (issue #498's own orchestrator
-/// follow-up, finding N1: a `$ref` nested inside a branch, or a `$ref`
-/// with sibling keywords, used to be judged by a *freshly compiled*,
-/// branch-only validator that either couldn't resolve the ref at all or
-/// silently dropped the siblings).
+/// as Python's own `_validate_reference` applicator does) -- never the
+/// `jsonschema` crate, and never by compiling *branch* as its own
+/// standalone document (issue #498's own orchestrator follow-up,
+/// finding N1: a `$ref` nested inside a branch, or a `$ref` with sibling
+/// keywords, used to be judged by a *freshly compiled*, branch-only
+/// validator that either couldn't resolve the ref at all or silently
+/// dropped the siblings). *branch* needs no [`schema_is_fully_supported`]
+/// check of its own: every caller of [`evaluate`] (the only way this
+/// function, or [`evaluate_branch`], is ever reached) already ran under
+/// [`crate::validate_prompt_schema`]'s own top-level gate on the *same*
+/// *root* -- a single AND over every node that `root` can reach at all,
+/// `anyOf`/`oneOf` branches included -- so a branch *this* function
+/// sees was already confirmed supported before `evaluate` ever started
+/// (PR #502's round-6 fix: re-running the check per branch, on a schema
+/// with many mutually-referencing `$ref` targets, revisited the same
+/// nodes often enough to turn a sub-second check into several seconds).
 fn schema_accepts(branch: &Value, instance: &Value, root: &Value) -> bool {
-    if schema_is_fully_supported(branch, root) {
-        return is_valid(branch, instance, root);
-    }
-    let resolved = resolve_schema_refs(branch, root);
-    let branch_json = crate::value_to_json(&resolved);
-    let instance_json = crate::value_to_json(instance);
-    match jsonschema::options()
-        .should_validate_formats(false)
-        .build(&branch_json)
-    {
-        Ok(validator) => validator.is_valid(&instance_json),
-        Err(_) => false,
-    }
-}
-
-/// `jsonschema`-crate-based validators are each built standalone (`validator_for`
-/// on just *branch*), so a `$ref` inside an `anyOf`/`oneOf` branch pointing
-/// back into the *root* document (never itself part of the standalone
-/// branch) would otherwise fail to resolve -- this inlines one level of
-/// local `$ref`s (`"#/..."` only, matching [`resolve_ref`]'s own scope)
-/// before handing the branch to the crate.
-fn resolve_schema_refs(branch: &Value, root: &Value) -> Value {
-    if let Some(pointer) = branch
-        .as_dict()
-        .and_then(|d| get(d, "$ref"))
-        .and_then(Value::as_str)
-    {
-        if let Some(resolved) = resolve_ref(root, pointer) {
-            return resolved.clone();
-        }
-    }
-    branch.clone()
+    is_valid(branch, instance, root)
 }
 
 /// Evaluates *branch* against *instance* exactly once, returning whether
 /// it's valid and -- unlike [`schema_accepts`] -- appending its own
 /// violations to *context* if it isn't, the same way Python's
 /// `_keywords.anyOf`/`oneOf` populate `all_errors` (`.extend`, never
-/// grouped per branch).
+/// grouped per branch). No [`schema_is_fully_supported`] check of its
+/// own, for the same reason [`schema_accepts`] no longer has one.
 ///
 /// Replaces this module's own former pairing of `schema_accepts` (a
 /// bare bool) immediately followed by a *second*, separate call that
@@ -2401,12 +2440,6 @@ fn resolve_schema_refs(branch: &Value, root: &Value) -> Value {
 /// enough to fail at every level (issue #498's own orchestrator
 /// follow-up, finding F12, probe-schema7 c18/c19 -- `tests/
 /// nested_any_of_depth.rs` pins 30 levels staying well under a second).
-///
-/// When this module's own `evaluate` finds nothing for a branch the
-/// crate has already confirmed is invalid (an unsupported keyword), a
-/// single [`Kind::Fallback`] entry stands in so *context* is never
-/// silently missing an entry Python's own `_keywords.anyOf`/`oneOf`
-/// would always have populated.
 fn evaluate_branch<'a>(
     branch: &'a Value,
     instance: &'a Value,
@@ -2414,38 +2447,10 @@ fn evaluate_branch<'a>(
     path: &[PathSegment],
     context: &mut Vec<Violation<'a>>,
 ) -> bool {
-    if schema_is_fully_supported(branch, root) {
-        let before = context.len();
-        evaluate(branch, instance, root, path, context);
-        return context.len() == before;
-    }
-    let resolved = resolve_schema_refs(branch, root);
-    let branch_json = crate::value_to_json(&resolved);
-    let instance_json = crate::value_to_json(instance);
-    let Ok(validator) = jsonschema::options()
-        .should_validate_formats(false)
-        .build(&branch_json)
-    else {
-        return false;
-    };
-    match validator.validate(&instance_json) {
-        Ok(()) => true,
-        Err(err) => {
-            // Not `crate::substitute_value_prefix` -- that's
-            // `core.document_check`'s own compile-time convention,
-            // never `core/prompt.py`'s own raw `e.message` (finding
-            // N10, same as `validate_prompt_schema`'s own fallback).
-            context.push(Violation {
-                kind: Kind::Fallback {
-                    message: err.to_string(),
-                },
-                path: path.to_vec(),
-                local_schema: branch,
-                local_instance: instance,
-            });
-            false
-        }
-    }
+    let _lazy_guard = suspend_lazy_mode();
+    let before = context.len();
+    evaluate(branch, instance, root, path, context);
+    context.len() == before
 }
 
 /// Renders *violation*'s own message text, exactly matching the Python
@@ -2661,7 +2666,6 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
             item_word,
             rest_repr,
         } => format!("Expected at most {prefix} {item_word} but found {extra} extra: {rest_repr}"),
-        Kind::Fallback { message } => message.clone(),
     }
 }
 
