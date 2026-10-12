@@ -1632,6 +1632,175 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         );
     }
 
+    /// A fixed-error adapter for the model-expect classification tests
+    /// below -- `AdapterError::py_class` is the only thing those tests
+    /// care about.
+    struct FailingAdapter {
+        py_class: electricity_tools::PyExc,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for FailingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            _call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            Err(crate::adapter::AdapterError {
+                message: "boom".to_string(),
+                retry: crate::retry::RetryInfo::not_retryable(),
+                py_class: self.py_class,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Issue #513's settled question 5: `core/use.py`'s own `except
+    /// (ValueError, RecursionError)` split -- a raised model-expect
+    /// failure is retried unless its own Python class is one of that
+    /// pair. An `AdapterCallError` (a `RuntimeError` subclass, what
+    /// electricity's own real adapters raise for a malformed
+    /// response body, e.g. `electricity_adapters::openai_compat`'s
+    /// own `non_json_error`) is retried even though the adapter's own
+    /// `RetryInfo` on that failure is `not_retryable()` -- the
+    /// retry/fail split for an `expect:`'s own raised failure is
+    /// decided by exception class alone, never by `RetryInfo`.
+    #[tokio::test]
+    async fn a_model_expects_adaptercallerror_failure_is_retried_despite_not_retryable() {
+        let problem = model_expect_attempt_problem(electricity_tools::PyExc::AdapterCallError)
+            .await
+            .expect_err("an AdapterCallError-class failure must be an AttemptProblem");
+        assert!(
+            matches!(problem, AttemptProblem::Retryable { .. }),
+            "expected Retryable"
+        );
+    }
+
+    /// The other half of the same split: a `ValueError`-class failure
+    /// (a template render failure's own `TemplateError` counts as one,
+    /// that variant's own doc comment) is never retried.
+    #[tokio::test]
+    async fn a_model_expects_valueerror_failure_is_not_retried() {
+        let problem = model_expect_attempt_problem(electricity_tools::PyExc::ValueError)
+            .await
+            .expect_err("a ValueError-class failure must be an AttemptProblem");
+        assert!(
+            matches!(problem, AttemptProblem::NotRetried { .. }),
+            "expected NotRetried"
+        );
+    }
+
+    /// [`attempt_once`] against an inline child with a model `expect:`,
+    /// whose own default adapter always raises with *py_class* --
+    /// shared by the two tests above.
+    async fn model_expect_attempt_problem(
+        py_class: electricity_tools::PyExc,
+    ) -> Result<(), AttemptProblem> {
+        let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 1,
+                backoff_ms: 0,
+            },
+            expect: Some(ExpectCondition::Model {
+                template: electricity_bytecode::TemplateText::new(
+                    "ok?",
+                    false,
+                    electricity_bytecode::Escape::Html,
+                ),
+            }),
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+
+        let store = Store::new();
+        let effect_node = store
+            .ensure_dict(&store.root, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+
+        let mut registry = electricity_tools::ToolRegistry::new();
+        registry.register(Box::new(electricity_tools::json::JsonTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let orchestration_dir = std::path::Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(FailingAdapter { py_class }),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            false,
+        )
+        .await
+    }
+
     /// A minimal, leaked `RunContext` carrying *declared_prompts*/
     /// *effect_names* -- the two inputs this module's own composition
     /// tests (`{{> name}}` through `use.inline`/`use.inputs`, issue
