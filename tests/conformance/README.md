@@ -382,19 +382,19 @@ only when `cargo` isn't on `PATH` (a contributor machine that genuinely has
 no Rust toolchain; the ordinary `pytest -q -m 'not integration'` gate
 itself *does* have one — CI's `ubuntu-latest` image ships `cargo`, so each
 of `quality.yml`'s pytest jobs builds this crate once). All of M0-H
-(issues #408, #431) is on `main`: electricity runs `tool`/`dynamic`/`if`/
-`finally:` documents end to end, so a case that lists `electricity` in its
-own `engines` and expects success now actually runs and is diffed against
-the same `expected.json`/`expected.events.jsonl` the Python runner uses —
-not skipped. A *failure* case may still legitimately skip for electricity
-if its document uses content M0-H's own preview genuinely doesn't support
-yet (`prompt`/`loop`/`use`/`reflector`/`yield`/...): the binary refuses
-those up front with a message containing `is a preview and cannot run
-orchestrations yet` (`electricity/crates/electricity-cli`), and the runner
-treats that refusal as an expected skip rather than a failure. The same
-refusal on a case that expects *success* is never skipped — it fails the
-test, since a success case electricity wrongly refuses is a real
-regression.
+(issues #408, #431) is on `main`: electricity runs documents end to end
+(`electricity/README.md`'s preview section is the single source of truth
+for what it runs), so a case that lists `electricity` in its own `engines`
+and expects success now actually runs and is diffed against the same
+`expected.json`/`expected.events.jsonl` the Python runner uses — not
+skipped. A *failure* case may still legitimately skip for electricity if
+its document uses content this preview genuinely doesn't support yet: the
+binary refuses those up front with a message containing the preview marker
+(`is a preview and can't run this orchestration`,
+`electricity_bytecode::PREVIEW_MARKER`), and the runner treats that refusal as an expected skip
+rather than a failure. The same refusal on a case that expects *success*
+is never skipped — it fails the test, since a success case electricity
+wrongly refuses is a real regression.
 
 electricity is invoked with the case's own `fakes/` first on `PATH` and no
 credential/`CIRCUITRY_*` env vars, same as the Python runner

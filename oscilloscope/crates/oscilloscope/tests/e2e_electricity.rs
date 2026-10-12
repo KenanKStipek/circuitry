@@ -19,6 +19,7 @@
 
 mod support;
 
+use electricity_bytecode::PREVIEW_MARKER;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -215,10 +216,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
-    assert!(
-        stdout.contains("is a preview and cannot run orchestrations yet"),
-        "stdout:\n{stdout}"
-    );
+    assert!(stdout.contains(PREVIEW_MARKER), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(!run_dir.join("state.json").is_file());
     assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");

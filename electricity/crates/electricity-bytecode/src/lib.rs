@@ -96,6 +96,6 @@ pub use param::ParamNode;
 pub use path::{EffectPath, LoopId, PathSegment};
 pub use program::{DocumentInfo, Program};
 pub use refusal::{Refusal, RefusalReason, Supported, first_unsupported};
-pub use refusal_text::{format_refusal, format_refused_child, refusal_reason_text};
+pub use refusal_text::{PREVIEW_MARKER, format_refusal, format_refused_child, refusal_reason_text};
 pub use region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
 pub use template::{Escape, TemplateText};

@@ -8,7 +8,7 @@
 mod support;
 
 use electricity_bytecode::{
-    EffectPath, Escape, ExpectCondition, OnError, ParamNode, RetryPolicy, UseSource,
+    EffectPath, Escape, ExpectCondition, OnError, PREVIEW_MARKER, ParamNode, RetryPolicy, UseSource,
 };
 use electricity_value::{Dict, Value};
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
@@ -411,10 +411,7 @@ async fn a_refused_path_child_never_runs_its_own_earlier_json_step() {
     let Some(Value::Str(error_text)) = get(meta, "error") else {
         panic!("expected meta.error to carry the refusal text, got {meta:?}");
     };
-    assert!(
-        error_text.contains("is a preview and cannot run orchestrations yet"),
-        "got {error_text:?}"
-    );
+    assert!(error_text.contains(PREVIEW_MARKER), "got {error_text:?}");
 }
 
 /// Orchestrator ruling R3 on PR #472's review (issue #469's own test
