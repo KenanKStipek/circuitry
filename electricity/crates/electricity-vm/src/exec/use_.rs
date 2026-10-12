@@ -1824,7 +1824,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         };
         let frame = Frame::root();
@@ -1940,7 +1939,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         };
         let frame = Frame::root();
@@ -2104,7 +2102,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         };
         let frame = Frame::root();
