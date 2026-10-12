@@ -348,6 +348,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deranged"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+dependencies = [
+ "powerfmt",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -397,8 +406,10 @@ name = "electricity-adapters"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "electricity-bytecode",
  "electricity-json",
+ "electricity-tools",
  "electricity-value",
  "electricity-vm",
  "electricity-yaml",
@@ -466,6 +477,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "electricity-complexity"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "electricity-config",
+ "electricity-json",
+ "electricity-pyre",
+ "electricity-value",
+ "fancy-regex",
 ]
 
 [[package]]
@@ -556,6 +579,7 @@ dependencies = [
  "libc",
  "log",
  "md-5",
+ "rcgen",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
@@ -1249,6 +1273,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-conv"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+
+[[package]]
 name = "num-integer"
 version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1389,6 +1419,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerfmt"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1464,6 +1500,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.17",
+]
+
+[[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
 ]
 
 [[package]]
@@ -1841,6 +1889,25 @@ dependencies = [
  "quote",
  "syn 3.0.6",
 ]
+
+[[package]]
+name = "time"
+version = "0.3.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9e442fc33d7fdb45aa9bfeb312c095964abdf596f7567261062b2a7107aaabd"
+dependencies = [
+ "deranged",
+ "num-conv",
+ "powerfmt",
+ "serde_core",
+ "time-core",
+]
+
+[[package]]
+name = "time-core"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b36ee98fd31ec7426d599183e8fe26932a8dc1fb76ddb6214d05493377d34ca"
 
 [[package]]
 name = "tinystr"
@@ -2221,6 +2288,15 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "yoke"

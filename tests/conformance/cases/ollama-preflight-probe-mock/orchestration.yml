@@ -1,0 +1,7 @@
+name: ollama-preflight-probe-mock
+adapter: ollama
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

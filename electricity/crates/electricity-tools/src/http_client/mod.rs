@@ -153,6 +153,42 @@ pub enum TimeoutModel {
     Total(Duration),
 }
 
+/// Which phase/cause a [`SendError::Connect`] failure stems from --
+/// lane F2's own seam (issue #503's scope table: curl gives DNS
+/// failure, connection refused/unreachable, a connect/handshake
+/// timeout, a TLS handshake failure and a rejected TLS certificate
+/// five different exit codes, so an adapter's own curl-exit mapping
+/// needs to tell them apart; the `http` tool never did, since urllib's
+/// own `URLError` text is all it ever surfaced). Carried *alongside*
+/// [`SendError::Connect`]'s own `Display` text, never derived from it
+/// by parsing (issue #503's own ruling: "don't re-derive the kind by
+/// parsing error text") -- `Display` and the `http` tool's own output
+/// stay byte-for-byte unchanged by this addition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectKind {
+    /// A DNS lookup for the target host failed.
+    Dns,
+    /// The connection was refused, or the host/network was
+    /// unreachable -- curl's own exit 7 covers both.
+    Refused,
+    /// The connect phase (TCP connect, TLS handshake, or a proxy
+    /// `CONNECT` tunnel) didn't finish before the deadline -- distinct
+    /// from [`SendError::Timeout`], which is the *unwrapped* shape a
+    /// status-line/body-read timeout raises instead.
+    Timeout,
+    /// A TLS handshake failed for a reason other than the peer's
+    /// certificate (a protocol/version mismatch, ...).
+    TlsHandshake,
+    /// The peer's TLS certificate was rejected (unknown issuer,
+    /// expired, hostname mismatch, ...) -- curl's own exit 60, the one
+    /// connect-phase failure that is *not* retried.
+    TlsCertificate,
+    /// A failed proxy `CONNECT` tunnel, or any other connect-phase
+    /// failure this crate doesn't classify more precisely -- curl's
+    /// own generic "couldn't connect" exit 7.
+    Other,
+}
+
 /// Everything [`send`] can fail with, already shaped for
 /// [`crate::http::HttpPlugin`]'s own raise-vs-return split (issue
 /// #485's own "Raised failures" section): *Connect* is urllib's own
@@ -164,8 +200,10 @@ pub enum TimeoutModel {
 pub enum SendError {
     /// Formatted as CPython's own `OSError`/`ssl` text would be, by
     /// *location* (ruling 5): `[Errno N] <strerror>` for an OS error,
-    /// the raw TLS error text otherwise.
-    Connect(String),
+    /// the raw TLS error text otherwise. *kind* (issue #503's own
+    /// seam) lets a caller map this to curl's own differently-coded
+    /// exit status without re-parsing `text`.
+    Connect { kind: ConnectKind, text: String },
     /// A timeout waiting for the status line, or while reading the
     /// body -- always the literal text `"timed out"` (`socket.timeout`/
     /// `TimeoutError`'s own `str()`), unwrapped.
@@ -184,7 +222,7 @@ pub enum SendError {
 impl std::fmt::Display for SendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SendError::Connect(text) => write!(f, "{text}"),
+            SendError::Connect { text, .. } => write!(f, "{text}"),
             SendError::Timeout => write!(f, "timed out"),
             SendError::RemoteDisconnected => {
                 write!(f, "Remote end closed connection without response")
@@ -360,8 +398,16 @@ async fn connect(
     // not [`SendError::Timeout`] (issue #485 review finding 2).
     let tcp = tokio::time::timeout(connect_deadline, TcpStream::connect((tcp_host, tcp_port)))
         .await
-        .map_err(|_| SendError::Connect("timed out".to_string()))
-        .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
+        .map_err(|_| SendError::Connect {
+            kind: ConnectKind::Timeout,
+            text: "timed out".to_string(),
+        })
+        .and_then(|r| {
+            r.map_err(|e| SendError::Connect {
+                kind: classify_connect_io_error(&e),
+                text: format_connect_error(&e),
+            })
+        })?;
     tcp.set_nodelay(true).ok();
 
     let tcp = if let Some(proxy) = target
@@ -385,15 +431,63 @@ async fn connect(
         Scheme::Http => Ok(AnyStream::Plain(tcp)),
         Scheme::Https => {
             let connector = TlsConnector::from(client.tls_config.clone());
-            let server_name = ServerName::try_from(target.host.clone()).map_err(|_| {
-                SendError::Connect(format!("invalid TLS server name '{}'", target.host))
-            })?;
+            let server_name =
+                ServerName::try_from(target.host.clone()).map_err(|_| SendError::Connect {
+                    kind: ConnectKind::Other,
+                    text: format!("invalid TLS server name '{}'", target.host),
+                })?;
             let tls = tokio::time::timeout(connect_deadline, connector.connect(server_name, tcp))
                 .await
-                .map_err(|_| SendError::Connect("timed out".to_string()))
-                .and_then(|r| r.map_err(|e| SendError::Connect(e.to_string())))?;
+                .map_err(|_| SendError::Connect {
+                    kind: ConnectKind::Timeout,
+                    text: "timed out".to_string(),
+                })
+                .and_then(|r| {
+                    r.map_err(|e| SendError::Connect {
+                        kind: classify_tls_io_error(&e),
+                        text: e.to_string(),
+                    })
+                })?;
             Ok(AnyStream::Tls(Box::new(tls)))
         }
+    }
+}
+
+/// Tells a DNS lookup failure apart from "connection refused"/"host
+/// unreachable" in a [`TcpStream::connect`] failure -- curl's own exit
+/// 6 versus 7. Rust's std has no dedicated `io::ErrorKind` for a DNS
+/// failure (unlike `ConnectionRefused`): a lookup failure surfaces
+/// with no OS errno attached at all (`std::net::ToSocketAddrs`'s own
+/// resolver wraps `getaddrinfo`'s own non-success code as a plain
+/// `io::Error::new(ErrorKind::Uncategorized/Other, ...)`, never a
+/// `raw_os_error`), which every real connect-phase OS error (refused,
+/// unreachable, a routing failure) always carries -- that absence is
+/// the signal, not a text match on the message.
+fn classify_connect_io_error(err: &std::io::Error) -> ConnectKind {
+    if err.kind() == std::io::ErrorKind::ConnectionRefused {
+        return ConnectKind::Refused;
+    }
+    if err.raw_os_error().is_none() {
+        return ConnectKind::Dns;
+    }
+    ConnectKind::Refused
+}
+
+/// Tells a rejected TLS certificate apart from every other TLS
+/// handshake failure -- curl's own exit 60 (not retried) versus 35
+/// (retried). `tokio_rustls::TlsConnector::connect`'s own failure is
+/// always an `io::Error` wrapping the underlying [`rustls::Error`] as
+/// its inner source (`rustls::Error` implements `std::error::Error`,
+/// so this is a plain downcast, never a text match on `Display`).
+fn classify_tls_io_error(err: &std::io::Error) -> ConnectKind {
+    let is_certificate_error = err
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|tls_err| matches!(tls_err, rustls::Error::InvalidCertificate(_)));
+    if is_certificate_error {
+        ConnectKind::TlsCertificate
+    } else {
+        ConnectKind::TlsHandshake
     }
 }
 
@@ -417,16 +511,32 @@ async fn connect_tunnel(
         format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{auth_line}\r\n");
     tokio::time::timeout(deadline, tcp.write_all(request.as_bytes()))
         .await
-        .map_err(|_| SendError::Connect("timed out".to_string()))
-        .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
+        .map_err(|_| SendError::Connect {
+            kind: ConnectKind::Timeout,
+            text: "timed out".to_string(),
+        })
+        .and_then(|r| {
+            r.map_err(|e| SendError::Connect {
+                kind: classify_connect_io_error(&e),
+                text: format_connect_error(&e),
+            })
+        })?;
 
     let mut buf = Vec::new();
     let mut chunk = [0u8; 512];
     loop {
         let n = tokio::time::timeout(deadline, tcp.read(&mut chunk))
             .await
-            .map_err(|_| SendError::Connect("timed out".to_string()))
-            .and_then(|r| r.map_err(|e| SendError::Connect(format_connect_error(&e))))?;
+            .map_err(|_| SendError::Connect {
+                kind: ConnectKind::Timeout,
+                text: "timed out".to_string(),
+            })
+            .and_then(|r| {
+                r.map_err(|e| SendError::Connect {
+                    kind: classify_connect_io_error(&e),
+                    text: format_connect_error(&e),
+                })
+            })?;
         if n == 0 {
             return Err(SendError::RemoteDisconnected);
         }
@@ -453,9 +563,10 @@ async fn connect_tunnel(
         // by the same `except OSError` in `h.request()` [`connect`]'s
         // own doc comment above already describes) -- retryable, not
         // [`SendError::Other`] (issue #485 review finding 7).
-        return Err(SendError::Connect(format!(
-            "proxy CONNECT to {host}:{port} failed: {status_line}"
-        )));
+        return Err(SendError::Connect {
+            kind: ConnectKind::Other,
+            text: format!("proxy CONNECT to {host}:{port} failed: {status_line}"),
+        });
     }
     Ok(tcp)
 }
@@ -509,8 +620,14 @@ async fn send_inner(
     let handshake = http1::Builder::new().title_case_headers(true).handshake(io);
     let (mut sender, conn) = tokio::time::timeout(connect_deadline, handshake)
         .await
-        .map_err(|_| SendError::Connect("timed out".to_string()))?
-        .map_err(|e| SendError::Connect(e.to_string()))?;
+        .map_err(|_| SendError::Connect {
+            kind: ConnectKind::Timeout,
+            text: "timed out".to_string(),
+        })?
+        .map_err(|e| SendError::Connect {
+            kind: ConnectKind::Other,
+            text: e.to_string(),
+        })?;
     let handle = tokio::spawn(async move {
         let _ = conn.await;
     });

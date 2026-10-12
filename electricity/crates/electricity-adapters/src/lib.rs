@@ -36,14 +36,18 @@
 //! notion of "the process is exiting" of its own.
 
 pub mod anthropic;
+pub(crate) mod config;
 pub mod curl_text;
 pub mod host_claude;
+pub mod ollama;
 pub mod openai;
 pub mod openai_compat;
+pub mod replicate;
 pub mod scripted;
+pub mod transport;
+pub mod watsonx;
 
-use electricity_vm::adapter::{Adapter, AdapterError, AdapterRegistry, GenerateOptions, PyExc};
-use electricity_vm::retry::RetryInfo;
+use electricity_vm::adapter::{AdapterRegistry, GenerateOptions};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -56,22 +60,46 @@ pub fn build_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
     registry.register("scripted", Box::new(scripted::build_scripted));
     registry.register("host_claude", Box::new(host_claude::build_host_claude));
+    // Lane F2 (issue #503): native Ollama first, then the
+    // OpenAI-compatible family, `openai`/`anthropic`, and
+    // `replicate`/`watsonx` last. The unbuildable set after this lane
+    // is exactly `claude_code`, `cyberdiner`, `litellm` and `pi`.
+    registry.register("ollama", Box::new(ollama::build_ollama));
+    registry.register("openai", Box::new(openai::build_openai));
+    registry.register("anthropic", Box::new(anthropic::build_anthropic));
+    registry.register("ai21", Box::new(openai_compat::build_ai21));
+    registry.register("azure-openai", Box::new(openai_compat::build_azure_openai));
+    registry.register(
+        "cloudflare-workers-ai",
+        Box::new(openai_compat::build_cloudflare_workers_ai),
+    );
+    registry.register("cohere", Box::new(openai_compat::build_cohere));
+    registry.register("databricks", Box::new(openai_compat::build_databricks));
+    registry.register("deepseek", Box::new(openai_compat::build_deepseek));
+    registry.register("fireworks", Box::new(openai_compat::build_fireworks));
+    registry.register("gemini", Box::new(openai_compat::build_gemini));
+    registry.register("groq", Box::new(openai_compat::build_groq));
+    registry.register(
+        "huggingface-inference",
+        Box::new(openai_compat::build_huggingface_inference),
+    );
+    registry.register("llamacpp", Box::new(openai_compat::build_llamacpp));
+    registry.register("lmstudio", Box::new(openai_compat::build_lmstudio));
+    registry.register("mistral", Box::new(openai_compat::build_mistral));
+    registry.register("nvidia-nim", Box::new(openai_compat::build_nvidia_nim));
+    registry.register("openrouter", Box::new(openai_compat::build_openrouter));
+    registry.register("perplexity", Box::new(openai_compat::build_perplexity));
+    registry.register(
+        "qwen-dashscope",
+        Box::new(openai_compat::build_qwen_dashscope),
+    );
+    registry.register("tgi", Box::new(openai_compat::build_tgi));
+    registry.register("together", Box::new(openai_compat::build_together));
+    registry.register("vllm", Box::new(openai_compat::build_vllm));
+    registry.register("xai", Box::new(openai_compat::build_xai));
+    registry.register("replicate", Box::new(replicate::build_replicate));
+    registry.register("watsonx", Box::new(watsonx::build_watsonx));
     registry
-}
-
-/// A builder stub shared by every not-yet-implemented adapter in this
-/// crate -- lane F1/F2 replaces each call site with a real builder,
-/// never widening [`electricity_vm::adapter::AdapterBuilder`]'s own
-/// signature.
-pub(crate) fn not_implemented_builder(
-    adapter_name: &str,
-    lane: &str,
-) -> Result<Box<dyn Adapter>, AdapterError> {
-    Err(AdapterError {
-        message: format!("electricity_adapters::{adapter_name}: not implemented yet ({lane})"),
-        retry: RetryInfo::not_retryable(),
-        py_class: PyExc::RuntimeError,
-    })
 }
 
 // ---------------------------------------------------------------------
@@ -293,9 +321,41 @@ mod tests {
     use electricity_value::{Dict, Value};
 
     #[test]
-    fn a_fresh_registry_builds_exactly_scripted_and_host_claude() {
+    fn a_fresh_registry_builds_exactly_the_adapters_lanes_f1_and_f2_add() {
         let registry = build_registry();
-        assert_eq!(registry.supported_names(), vec!["host_claude", "scripted"]);
+        assert_eq!(
+            registry.supported_names(),
+            vec![
+                "ai21",
+                "anthropic",
+                "azure-openai",
+                "cloudflare-workers-ai",
+                "cohere",
+                "databricks",
+                "deepseek",
+                "fireworks",
+                "gemini",
+                "groq",
+                "host_claude",
+                "huggingface-inference",
+                "llamacpp",
+                "lmstudio",
+                "mistral",
+                "nvidia-nim",
+                "ollama",
+                "openai",
+                "openrouter",
+                "perplexity",
+                "qwen-dashscope",
+                "replicate",
+                "scripted",
+                "tgi",
+                "together",
+                "vllm",
+                "watsonx",
+                "xai",
+            ]
+        );
     }
 
     #[test]
@@ -307,16 +367,17 @@ mod tests {
 
     #[test]
     fn build_registry_still_gives_the_unknown_adapter_text_for_an_unbuilt_name() {
-        // `ollama` is in Circuitry's own full registry (so it is named
-        // in the message's own "Supported adapters" list), but this
-        // crate has no builder for it yet (lane F2) -- `build_registry`
-        // mustn't register it early.
+        // `litellm` is in Circuitry's own full registry (so it is
+        // named in the message's own "Supported adapters" list), but
+        // this crate has no builder for it (a Python-SDK-only adapter,
+        // out of scope for lane F2 per issue #503) -- `build_registry`
+        // mustn't register it.
         let registry = build_registry();
-        let err = match registry.build("ollama", &Value::None) {
+        let err = match registry.build("litellm", &Value::None) {
             Err(err) => err,
             Ok(_) => panic!("expected an unknown-adapter error"),
         };
-        assert!(err.message.starts_with("Unknown adapter: 'ollama'."));
+        assert!(err.message.starts_with("Unknown adapter: 'litellm'."));
     }
 
     #[test]

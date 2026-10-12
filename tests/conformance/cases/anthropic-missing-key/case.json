@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #503 (anthropic, preflight failure, no ANTHROPIC_API_KEY)",
+  "description": "Document names 'adapter: anthropic' with no ANTHROPIC_API_KEY in the sandboxed environment: preflight's check() reports the missing key and the whole run is refused.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

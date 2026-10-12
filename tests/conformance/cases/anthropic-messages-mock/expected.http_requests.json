@@ -1,0 +1,34 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/messages",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "anthropic-version",
+        "2023-06-01"
+      ],
+      [
+        "content-length",
+        "326"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ],
+      [
+        "x-api-key",
+        "circuitry-test-fake-anthropic-key"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"max_tokens\": 50, \"messages\": [{\"role\": \"user\", \"content\": \"describe\"}, {\"role\": \"user\", \"content\": [{\"type\": \"image\", \"source\": {\"type\": \"base64\", \"media_type\": \"image/png\", \"data\": \"iVBORw0KGgoAAAAAAAAAAA==\"}}, {\"type\": \"text\", \"text\": \"tool: tool-output\"}]}], \"system\": \"be terse\", \"stop_sequences\": [\"END\"]}"
+  }
+]

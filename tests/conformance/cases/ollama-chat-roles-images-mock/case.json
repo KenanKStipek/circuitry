@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #503 (native Ollama, /api/chat roles and images)",
+  "description": "Two prompts against the config-default ollama adapter: the first sends system/user/assistant/tool turns (roles verbatim) plus one local image attached to the last user turn; the second is a system-only conversation with an image, which appends an empty user turn to carry it.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

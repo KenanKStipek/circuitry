@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #503 (native Ollama, a non-JSON 200 success body)",
+  "description": "A 200 text/html body: 'curl returned non-JSON response: <html>...', not retried (not an AdapterCallError at all).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

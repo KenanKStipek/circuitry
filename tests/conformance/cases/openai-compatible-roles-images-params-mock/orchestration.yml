@@ -1,0 +1,18 @@
+name: openai-compatible-roles-images-params-mock
+adapter: lmstudio
+model: m
+effects:
+  - type: prompt
+    name: chat
+    deterministic: true
+    messages:
+      - role: system
+        content: "be terse"
+      - role: user
+        content: "describe"
+      - role: tool
+        content: "tool-output"
+    assets:
+      - kind: image
+        ref: "assets/tiny.png"
+    params: {temperature: 0.3, max_tokens: 50, stop: ["END"], model: "collide"}

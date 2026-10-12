@@ -1,0 +1,7 @@
+name: cloudflare-missing-account-preflight
+adapter: cloudflare-workers-ai
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

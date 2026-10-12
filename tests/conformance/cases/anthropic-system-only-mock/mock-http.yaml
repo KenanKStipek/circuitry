@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/messages
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"content": [{"type": "text", "text": "hello from anthropic"}], "usage": {"input_tokens": 4, "output_tokens": 3}, "stop_reason": "end_turn"}'

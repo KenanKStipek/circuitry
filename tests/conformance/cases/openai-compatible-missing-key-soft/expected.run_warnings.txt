@@ -1,0 +1,1 @@
+Warning: adapter 'groq' unavailable; effects ['greeting'] will skip (missing ['env:GROQ_API_KEY'])

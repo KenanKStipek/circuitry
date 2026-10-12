@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "hello from lmstudio"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 11, "completion_tokens": 4}}'

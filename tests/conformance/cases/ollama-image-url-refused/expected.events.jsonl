@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-12T09:26:26.132Z","ev":"run_start","run_id":"a0a90390-3fa1-44b3-99c7-40ddcccedb05","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":85312}
+{"v":1,"seq":1,"ts":"2026-10-12T09:26:26.140Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T09:26:26.140Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-12T09:26:26.140Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'test-model', 'status': 'failed', 'error': 'ollama cannot fetch an image URL (https://example.com/pic.png); download it and give the asset a local path.', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-12T09:26:26.140Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":5,"ts":"2026-10-12T09:26:26.140Z","ev":"run_end","ok":true}

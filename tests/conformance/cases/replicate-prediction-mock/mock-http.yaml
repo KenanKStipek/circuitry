@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /models/meta/meta-llama-3-70b-instruct/predictions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"status": "succeeded", "output": ["hello", " ", "from", " ", "replicate"]}'

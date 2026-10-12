@@ -193,11 +193,16 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
     // 1), but the refusal itself is the case that writes *nothing* at
     // all under the run directory -- electricity never even reaches
     // the `fail!` macro that saves state for the invalid-document
-    // case, since the refusal check runs earlier still.
+    // case, since the refusal check runs earlier still. `litellm` (a
+    // Python-SDK-only adapter, out of scope for lane F2, issue #503)
+    // stays the unbuildable example here -- the config's own default
+    // adapter, `ollama`, became a real, buildable adapter in that same
+    // lane, so a bare `prompt` with no `provider:` no longer hits this
+    // refusal at all.
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+        "effects:\n  - name: ask\n    type: prompt\n    provider: litellm\n    template: \"hi\"\n",
     );
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 

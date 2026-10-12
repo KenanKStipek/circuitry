@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #503 (native Ollama, a 5xx is retried)",
+  "description": "A 500 response, then a 200: exit 22 with a 5xx status is retryable, so retries_used: 1 and two requests are recorded.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

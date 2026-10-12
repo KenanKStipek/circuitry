@@ -1,0 +1,19 @@
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"response": "too slow"}'
+    delay_ms: 1500
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"response": "hello after retry"}'
