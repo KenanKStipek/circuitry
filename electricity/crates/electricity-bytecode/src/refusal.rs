@@ -267,8 +267,8 @@ impl<'a> Supported<'a> {
             use_: true,
             // lane P (#448, #487)
             yield_: true,
-            // lane L1 (#448)
-            reflector: false,
+            // lane L1 (#448, #506)
+            reflector: true,
             // lane G2 (#448)
             model_condition: false,
             // lane G2 (#448)
@@ -525,7 +525,10 @@ mod tests {
         // lane's own PR flips. No other field changes.
         assert!(current.yield_);
         assert!(!m0.yield_);
-        assert_eq!(current.reflector, m0.reflector);
+        // lane L1 (#448, #506): `reflector` is `true` now -- asserted
+        // directly rather than against `m0.reflector` (always
+        // `false`), the one field this lane's own PR flips.
+        assert!(current.reflector);
         assert_eq!(current.model_condition, m0.model_condition);
         assert_eq!(current.model_expect, m0.model_expect);
         assert!(current.declared_prompts);

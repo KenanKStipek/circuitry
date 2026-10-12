@@ -147,17 +147,23 @@ fn validation_failed_text(label: &str, errors: &[String]) -> String {
     text
 }
 
-/// `core/use.py::_clean_yaml_fences`.
+/// `core/use.py::_clean_yaml_fences` -- `text.splitlines()`/`line.strip()`,
+/// never Rust's own `str::lines()`/`str::trim()` (issue #506's own
+/// "Hazards" section: model output -- the one place this function
+/// ever runs against untrusted text, a reflector's generated plan
+/// included -- can carry `\x0c`, a lone `\r`, or a Unicode line/
+/// paragraph separator, which Python's `splitlines()` treats as a line
+/// boundary and Rust's `lines()` does not).
 pub fn clean_yaml_fences(text: &str) -> String {
-    let mut lines: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        let stripped = line.trim();
+    let mut lines: Vec<String> = Vec::new();
+    for line in electricity_value::pycompat::py_splitlines(text) {
+        let stripped = electricity_value::pycompat::py_strip(&line);
         if stripped.starts_with("```") || stripped == "---" {
             continue;
         }
         lines.push(line);
     }
-    lines.join("\n").trim().to_string()
+    electricity_value::pycompat::py_strip(&lines.join("\n")).to_string()
 }
 
 /// `core/use.py::_validate_inline_yaml` -- `Ok(())` once *cleaned* (as
@@ -1934,6 +1940,22 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     fn clean_yaml_fences_keeps_original_indentation() {
         let text = "effects:\n  - type: tool\n```\n";
         assert_eq!(clean_yaml_fences(text), "effects:\n  - type: tool");
+    }
+
+    #[test]
+    fn clean_yaml_fences_splits_on_every_python_splitlines_separator() {
+        // Issue #506's own "Hazards" section: `str::lines()` only
+        // splits on `\n`/`\r\n` -- model output reaches this function
+        // first, so it has to split on every boundary Python's
+        // `str.splitlines()` does, not just those two.
+        assert_eq!(clean_yaml_fences("a\x0cb"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\rb"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\u{2028}b"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\u{85}b"), "a\nb");
+        assert_eq!(
+            clean_yaml_fences("```\x0ceffects: []\x0c---\x0c```"),
+            "effects: []"
+        );
     }
 
     #[test]

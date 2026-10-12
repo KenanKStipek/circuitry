@@ -76,6 +76,18 @@ pub struct Frame {
     /// rendered, fence-cleaned YAML text, UTF-8 encoded, lowercase
     /// (Python's own `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]`).
     use_call_stack: Rc<Vec<String>>,
+    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
+    /// L1), set by [`Frame::rebased`] -- `None` for every frame outside
+    /// a reflector's inner dynamic. `(from, to)`, both already resolved
+    /// against this frame's own [`Frame::pass_indices`] at the point
+    /// [`Frame::rebased`] was called (never re-resolved per lookup): a
+    /// path [`Frame::effect_path`] is asked to resolve that starts with
+    /// *from* gets that prefix replaced by *to* instead, right after
+    /// its own placeholders resolve and before this frame's own
+    /// [`Frame::prefix`] composes on top -- see [`Frame::rebased`]'s
+    /// own doc comment for why this composes correctly with both
+    /// [`Frame::nested`] and [`Frame::with_pass`].
+    rebase: Option<Rc<(EffectPath, EffectPath)>>,
 }
 
 impl Frame {
@@ -86,6 +98,7 @@ impl Frame {
             prefix: Rc::new(EffectPath(Vec::new())),
             pass_indices: Rc::new(HashMap::new()),
             use_call_stack: Rc::new(Vec::new()),
+            rebase: None,
         }
     }
 
@@ -124,12 +137,73 @@ impl Frame {
                 );
                 path.clone()
             });
+        let resolved = self.apply_rebase(resolved);
         if self.prefix.0.is_empty() {
             return resolved;
         }
         let mut segments = self.prefix.0.clone();
         segments.extend(resolved.without_child_root().0);
         EffectPath(segments)
+    }
+
+    /// [`Frame::rebase`]'s own prefix swap, applied to an already
+    /// pass-resolved *path* -- a no-op (returns *path* unchanged) for
+    /// every frame outside a reflector's inner dynamic, or for a path
+    /// that doesn't start with the rebase's own *from*.
+    fn apply_rebase(&self, path: EffectPath) -> EffectPath {
+        let Some(rebase) = &self.rebase else {
+            return path;
+        };
+        let (from, to) = rebase.as_ref();
+        if path.0.len() >= from.0.len() && path.0[..from.0.len()] == from.0[..] {
+            let mut segments = to.0.clone();
+            segments.extend_from_slice(&path.0[from.0.len()..]);
+            EffectPath(segments)
+        } else {
+            path
+        }
+    }
+
+    /// A reflector's own inner-dynamic path rewrite (issue #506's lane
+    /// L1): every path this frame is ever asked to resolve that starts
+    /// with *from* -- both *from* and *to* given in the same,
+    /// not-yet-prefixed coordinate space [`Frame::effect_path`]'s own
+    /// *resolved* local reaches right after pass-placeholder
+    /// resolution, before this frame's own [`Frame::prefix`] composes
+    /// on top -- gets that prefix replaced by *to* instead. *from*/
+    /// *to* are resolved against this frame's own [`Frame::pass_indices`]
+    /// immediately, not deferred to each later [`Frame::effect_path`]
+    /// call, so a reflector compiled inside a named loop body (whose
+    /// own path, and so every inner child's, still carries a
+    /// [`electricity_bytecode::PathSegment::Pass`] placeholder at this
+    /// point) rebases correctly: the caller passes the placeholder-
+    /// bearing `from`/`to` straight through (no need to resolve them
+    /// itself first), and this method resolves both exactly once,
+    /// against the loop pass [`Frame::with_pass`] already set on
+    /// *self* before the reflector ever ran.
+    ///
+    /// Composes with both other builders because it never touches
+    /// [`Frame::prefix`]/[`Frame::pass_indices`] at all, only adding
+    /// its own [`Frame::rebase`] field on top of whatever this frame
+    /// already carries: [`Frame::nested`] (a reflector inside a `use`
+    /// child) still prefixes the *rebased* result afterward, in
+    /// [`Frame::effect_path`]'s own order; [`Frame::with_pass`] (a
+    /// reflector inside a named loop) has already resolved the loop's
+    /// own placeholder into *this* frame's [`Frame::pass_indices`]
+    /// before this call ever reads it.
+    pub fn rebased(&self, from: &EffectPath, to: &EffectPath) -> Frame {
+        let from_resolved = from
+            .resolve_passes(&self.pass_indices)
+            .unwrap_or_else(|_| from.clone());
+        let to_resolved = to
+            .resolve_passes(&self.pass_indices)
+            .unwrap_or_else(|_| to.clone());
+        Frame {
+            prefix: Rc::clone(&self.prefix),
+            pass_indices: Rc::clone(&self.pass_indices),
+            use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: Some(Rc::new((from_resolved, to_resolved))),
+        }
     }
 
     /// `core/effect_identity.py::nested_container` -- the [`Frame`] a
@@ -147,6 +221,7 @@ impl Frame {
             prefix: Rc::new(self.effect_path(path)),
             pass_indices: Rc::new(HashMap::new()),
             use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: None,
         }
     }
 
@@ -163,6 +238,7 @@ impl Frame {
             prefix: Rc::clone(&self.prefix),
             pass_indices: Rc::new(indices),
             use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: self.rebase.clone(),
         }
     }
 
@@ -180,6 +256,7 @@ impl Frame {
             prefix: Rc::clone(&self.prefix),
             pass_indices: Rc::clone(&self.pass_indices),
             use_call_stack: Rc::new(stack),
+            rebase: self.rebase.clone(),
         }
     }
 
@@ -305,6 +382,73 @@ mod tests {
         let frame2 = frame1.nested(&inner_use);
         let leaf = EffectPath::root().push_name("answer");
         assert_eq!(frame2.effect_path(&leaf).to_string(), "prime.a.b.answer");
+    }
+
+    #[test]
+    fn rebased_rewrites_the_matching_prefix() {
+        // The reflector's own seam: an inner effect compiled at
+        // `<refl>.<step>` (never `<refl>.inner.<step>` -- the compiler
+        // never emits that segment) must report the run-time path
+        // `<refl>.inner.<step>`.
+        let refl = EffectPath::root().push_name("plan_it");
+        let frame = Frame::root().rebased(&refl, &refl.push_name("inner"));
+        let refl_own_path = refl.clone();
+        assert_eq!(
+            frame.effect_path(&refl_own_path).to_string(),
+            "prime.plan_it.inner"
+        );
+        let step = refl.push_name("propose_steps");
+        assert_eq!(
+            frame.effect_path(&step).to_string(),
+            "prime.plan_it.inner.propose_steps"
+        );
+    }
+
+    #[test]
+    fn rebased_leaves_an_unrelated_path_untouched() {
+        let refl = EffectPath::root().push_name("plan_it");
+        let frame = Frame::root().rebased(&refl, &refl.push_name("inner"));
+        let sibling = EffectPath::root().push_name("other");
+        assert_eq!(frame.effect_path(&sibling).to_string(), "prime.other");
+    }
+
+    #[test]
+    fn rebased_composes_with_nested_a_reflector_inside_a_use_child() {
+        // A reflector running inside a `use` child: the child's own
+        // `Frame::nested` prefix must still land in front of the
+        // rebased `inner` segment, in `effect_path`'s own order
+        // (rebase first, prefix second).
+        let use_path = EffectPath::root().push_name("outer").push_name("fetch");
+        let child_frame = Frame::root().nested(&use_path);
+        let refl = EffectPath::root().push_name("plan_it");
+        let frame = child_frame.rebased(&refl, &refl.push_name("inner"));
+        let step = refl.push_name("propose_steps");
+        assert_eq!(
+            frame.effect_path(&step).to_string(),
+            "prime.outer.fetch.plan_it.inner.propose_steps"
+        );
+    }
+
+    #[test]
+    fn rebased_composes_with_with_pass_a_reflector_inside_a_named_loop() {
+        // A reflector inside a named loop body: the loop's own pass
+        // index must already be resolved (`Frame::with_pass`, applied
+        // by the loop before the reflector ever runs) by the time
+        // `rebased`'s own `from`/`to` -- which still carry the loop's
+        // `Pass` placeholder -- are themselves resolved.
+        let loop_id = LoopId(0);
+        let refl = EffectPath::root()
+            .push_name("shots")
+            .push_pass(loop_id)
+            .push_name("plan_it");
+        let frame = Frame::root()
+            .with_pass(loop_id, 2)
+            .rebased(&refl, &refl.push_name("inner"));
+        let step = refl.push_name("propose_steps");
+        assert_eq!(
+            frame.effect_path(&step).to_string(),
+            "prime.shots.iter_2.plan_it.inner.propose_steps"
+        );
     }
 
     #[test]
