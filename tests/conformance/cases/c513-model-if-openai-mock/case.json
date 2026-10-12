@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #513: model-mode `if`/`while`/a tool `expect:`, against a real (mocked) adapter",
-  "description": "A model `if`, a model `while` (one check, `min_iterations: 1`), and a `tool` effect's own `expect: {mode: model}`, all against the `lmstudio` (OpenAI-compatible) adapter through the loopback mock server. Pins the three request bodies byte-for-byte: the exact prompt text for each (the `if`/`while`/`expect` suffixes), one user turn, no system message, and no options beyond `model`/`messages`.",
+  "description": "A model `if`, a model `while` (one check, `min_iterations: 1`), and a `tool` effect's own `expect: {mode: model}`, all against the `lmstudio` (OpenAI-compatible) adapter through the loopback mock server. Pins the three request bodies byte-for-byte: the exact prompt text for each (the `if`/`while`/`expect` suffixes), one user turn, no system message, and no options beyond `model`/`messages`. The `if` template reads a sibling effect's own output (`{{prime.seed.value.text}}`, a string containing `<&'>`, pinning HTML-escaping), the `while` template reads the per-pass `{{iter.count}}` overlay, and the `expect` template reads both `{{value...}}` and `{{meta...}}`, pinning the `{**ctx, value, meta}` merge.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",

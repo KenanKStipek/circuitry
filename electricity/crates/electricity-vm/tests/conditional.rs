@@ -3,14 +3,219 @@
 
 mod support;
 
+use async_trait::async_trait;
 use electricity_bytecode::{EffectPath, Escape, OnError, ParamNode, TemplateText};
 use electricity_tools::ToolRegistry;
 use electricity_value::Value;
+use electricity_vm::adapter::{
+    Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateResult,
+};
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
+use std::rc::Rc;
 use support::{
     CancelOnStart, Event, RecordingObserver, TOOL_FAIL_TEXT, cel_if, chain_dynamic, json_registry,
     json_tool_leaf, model_if, refused_use_leaf, run_ctx, tool_leaf, tree_dynamic,
 };
+
+/// A `generate` that always answers `"yes"`, with token counts --
+/// issue #513 review finding 4: lets a model `if`'s own container-level
+/// `record_totals` hook be exercised end to end, not just probed for
+/// reaching `NoopAdapter`'s own failure.
+struct YesAdapter;
+
+#[async_trait(?Send)]
+impl Adapter for YesAdapter {
+    fn name(&self) -> &str {
+        "yes"
+    }
+
+    async fn generate(
+        &self,
+        _model: &str,
+        _prompt: &str,
+        _options: &GenerateOptions,
+        _call: &CallContext<'_>,
+    ) -> Result<GenerateResult, AdapterError> {
+        Ok(GenerateResult {
+            text: "yes".to_string(),
+            raw: Value::None,
+            tokens_sent: Some(1),
+            tokens_received: Some(1),
+            finish_reason: None,
+            warnings: Vec::new(),
+            cost_usd: None,
+        })
+    }
+
+    async fn check(&self) -> CheckResult {
+        CheckResult {
+            ok: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// A `generate` that never resolves -- lets a cancellation test race
+/// the token against a real in-flight call deterministically, rather
+/// than against a call that might already have returned.
+struct ForeverAdapter;
+
+#[async_trait(?Send)]
+impl Adapter for ForeverAdapter {
+    fn name(&self) -> &str {
+        "forever"
+    }
+
+    async fn generate(
+        &self,
+        _model: &str,
+        _prompt: &str,
+        _options: &GenerateOptions,
+        _call: &CallContext<'_>,
+    ) -> Result<GenerateResult, AdapterError> {
+        std::future::pending().await
+    }
+
+    async fn check(&self) -> CheckResult {
+        CheckResult {
+            ok: true,
+            ..Default::default()
+        }
+    }
+}
+
+async fn run_with_adapter(
+    root_op: electricity_bytecode::Op,
+    adapter: Rc<dyn Adapter>,
+    token: CancellationToken,
+) -> (Store, RecordingObserver, Result<(), VmError>) {
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = adapter;
+    let observer = RecordingObserver::new();
+    let result = electricity_vm::execute_root(
+        &support::program(root_op),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    (store, observer, result)
+}
+
+/// Issue #513 review finding 4: a named model `if`'s own successful
+/// pass calls `record_totals` exactly once.
+#[tokio::test]
+async fn a_named_model_if_calls_record_totals_once_on_success() {
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![model_if(
+            root_path().push_name("gate"),
+            Some("gate"),
+            "ok?",
+            OnError::Fail,
+        )],
+    );
+    let (_, observer, result) =
+        run_with_adapter(root, Rc::new(YesAdapter), CancellationToken::new()).await;
+    result.expect("a model if answered 'yes' must succeed");
+    let totals = observer
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, Event::Totals(_)))
+        .count();
+    assert_eq!(
+        totals, 1,
+        "a named model if must call record_totals exactly once"
+    );
+}
+
+/// The unnamed half of the same pair: an unnamed model `if` never calls
+/// `record_totals` at all, the same way it writes no `meta`/`value`
+/// node (`decide_and_run`'s own `named` guard).
+#[tokio::test]
+async fn an_unnamed_model_if_never_calls_record_totals() {
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![model_if(
+            root_path().push_name("gate"),
+            None,
+            "ok?",
+            OnError::Fail,
+        )],
+    );
+    let (_, observer, result) =
+        run_with_adapter(root, Rc::new(YesAdapter), CancellationToken::new()).await;
+    result.expect("an unnamed model if answered 'yes' must succeed");
+    assert!(
+        !observer
+            .events()
+            .iter()
+            .any(|e| matches!(e, Event::Totals(_))),
+        "an unnamed model if must never call record_totals"
+    );
+}
+
+/// A cancelled named model `if` never calls `record_totals` either --
+/// `meta.completed_at` stays unset on the `Cancelled` return path
+/// (`condition_model::evaluate_model_condition`'s own doc comment), so
+/// `execute_conditional`'s own `completed_at_is_truthy` guard must see
+/// `false` and skip the call.
+#[tokio::test]
+async fn a_cancelled_named_model_if_never_calls_record_totals() {
+    let token = CancellationToken::new();
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![model_if(
+            root_path().push_name("gate"),
+            Some("gate"),
+            "ok?",
+            OnError::Fail,
+        )],
+    );
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = Rc::new(ForeverAdapter);
+    let inner = RecordingObserver::new();
+    let observer = CancelOnStart {
+        inner,
+        token: &token,
+        target: "prime.gate",
+    };
+    let result = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(VmError::Cancelled)),
+        "expected Cancelled, got {result:?}"
+    );
+    assert!(
+        !observer
+            .inner
+            .events()
+            .iter()
+            .any(|e| matches!(e, Event::Totals(_))),
+        "a cancelled model if must never call record_totals"
+    );
+}
 
 fn root_path() -> EffectPath {
     EffectPath::root()

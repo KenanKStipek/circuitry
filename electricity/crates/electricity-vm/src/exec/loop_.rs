@@ -1415,9 +1415,8 @@ async fn run_each_tree<'a>(
     Ok(())
 }
 
-/// `core/loop.py::LoopRuntime.execute`'s own `while` branch (CEL
-/// conditions only in this build -- see this file's own module doc
-/// comment).
+/// `core/loop.py::LoopRuntime.execute`'s own `while` branch -- CEL or
+/// model mode (lane G2/#513), via a `Condition::Model` arm below.
 #[allow(clippy::too_many_arguments)]
 async fn run_while<'a>(
     op: &'a Op,

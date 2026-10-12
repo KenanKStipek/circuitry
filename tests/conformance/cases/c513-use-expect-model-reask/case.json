@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #513: a `use` effect's `expect: {mode: model}`, re-asked",
-  "description": "An inline `use` with explicit `outputs:`, `retries.max_attempts: 2`, a model expect over `{{value.x}}`, replies [\"no\", \"yes\"] at the use's own path `prime.u`. Pins: the child re-runs on retry, the final `meta.expect`, and `retries_used: 1`.",
+  "description": "An inline `use` with explicit `outputs:`, `retries.max_attempts: 2`, a model expect over `{{value.x}}` and `{{meta.inputs.y}}`, replies [\"no\", \"yes\"] at the use's own path `prime.u`. Pins: the child re-runs on retry, the final `meta.expect`, the `{**ctx, value, meta}` merge (`meta.inputs` reads the use effect's own rendered `inputs:`), and `retries_used: 1`.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success"

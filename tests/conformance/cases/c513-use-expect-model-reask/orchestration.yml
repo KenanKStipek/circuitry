@@ -5,9 +5,11 @@ effects:
   - type: use
     name: u
     retries: {max_attempts: 2}
+    inputs:
+      y: 7
     expect:
       mode: model
-      template: "is {{value.x}} ok?"
+      template: "is {{value.x}} ok, given {{meta.inputs.y}}?"
     outputs:
       x:
         path: prime.make.value

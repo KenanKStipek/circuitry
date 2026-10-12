@@ -1042,12 +1042,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                         }
                                                         Err(super::condition_model::ExpectCallError::Raised {
                                                             message,
-                                                            ..
+                                                            py_class,
                                                         }) => {
                                                             expect_failed = true;
-                                                            failure = Some(
-                                                                electricity_tools::ToolError::message(message),
-                                                            );
+                                                            failure = Some(electricity_tools::ToolError {
+                                                                py_class,
+                                                                message,
+                                                                cause: electricity_tools::ErrorCause::None,
+                                                            });
                                                         }
                                                     }
                                                 }
@@ -2034,6 +2036,126 @@ mod tests {
             .unwrap();
         let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
         assert_eq!(meta.get(&Value::from("expect")), None);
+    }
+
+    /// Captures the *timeout_seconds* a tool's own model `expect:`
+    /// dispatches with, replying `"yes"` so the attempt succeeds.
+    #[derive(Default)]
+    struct TimeoutCapturingAdapter {
+        seen: std::cell::Cell<Option<u32>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for TimeoutCapturingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            self.seen.set(Some(call.timeout_seconds));
+            Ok(crate::adapter::GenerateResult {
+                text: "yes".to_string(),
+                raw: Value::None,
+                tokens_sent: Some(1),
+                tokens_received: Some(1),
+                finish_reason: None,
+                warnings: Vec::new(),
+                cost_usd: None,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Issue #513 review finding 4: a tool's own model `expect:` must
+    /// dispatch with [`resolve_timeout_seconds`]'s own result (this
+    /// tool's `timeout_ms: 5000` resolves to 5s) -- never `run_ctx.
+    /// adapter_timeout_seconds` (120 here), which is only for `if`/
+    /// `while`/a `use` expect instead (that's `use_.rs`'s own call
+    /// site, pinned by its own sibling test).
+    #[tokio::test]
+    async fn a_tools_model_expect_dispatches_with_the_tools_own_resolved_timeout() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("{\"ok\": true}"));
+        let mut tool = tool_op(params);
+        tool.timeout_ms = Some(5000);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "ok?",
+                false,
+                electricity_bytecode::Escape::Html,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = electricity_config::ComplexitySettings::default();
+        let dir = std::path::PathBuf::from(".");
+        let declared_prompts: indexmap::IndexMap<String, String> = indexmap::IndexMap::new();
+        let effect_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let adapter = std::rc::Rc::new(TimeoutCapturingAdapter::default());
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: adapter.clone(),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .expect("a model expect answered 'yes' must succeed");
+
+        assert_eq!(
+            adapter.seen.get(),
+            Some(5),
+            "a tool's own model expect must dispatch with its own resolved timeout, \
+             never run_ctx.adapter_timeout_seconds"
+        );
     }
 
     #[tokio::test]

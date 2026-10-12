@@ -10,7 +10,7 @@
       ],
       [
         "content-length",
-        "162"
+        "182"
       ],
       [
         "content-type",
@@ -21,7 +21,7 @@
         "127.0.0.1:<MOCK_PORT>"
       ]
     ],
-    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following condition and respond with ONLY 'yes' or 'no':\\n\\nproceed?\\n\\nAnswer (yes/no):\"}]}"
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following condition and respond with ONLY 'yes' or 'no':\\n\\nproceed with &lt;&amp;'&gt;?\\n\\nAnswer (yes/no):\"}]}"
   },
   {
     "method": "POST",
@@ -34,7 +34,7 @@
       ],
       [
         "content-length",
-        "189"
+        "197"
       ],
       [
         "content-type",
@@ -45,7 +45,7 @@
         "127.0.0.1:<MOCK_PORT>"
       ]
     ],
-    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following condition and respond with ONLY 'yes' or 'no':\\n\\ncontinue?\\n\\nShould the loop continue? Answer (yes/no):\"}]}"
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following condition and respond with ONLY 'yes' or 'no':\\n\\ncontinue, pass 1?\\n\\nShould the loop continue? Answer (yes/no):\"}]}"
   },
   {
     "method": "POST",
@@ -58,7 +58,7 @@
       ],
       [
         "content-length",
-        "147"
+        "156"
       ],
       [
         "content-type",
@@ -69,6 +69,6 @@
         "127.0.0.1:<MOCK_PORT>"
       ]
     ],
-    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following and respond with ONLY 'yes' or 'no':\\n\\nok?\\n\\nAnswer (yes/no):\"}]}"
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"Evaluate the following and respond with ONLY 'yes' or 'no':\\n\\nok via json?\\n\\nAnswer (yes/no):\"}]}"
   }
 ]

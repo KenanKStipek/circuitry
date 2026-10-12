@@ -88,7 +88,7 @@ pub(crate) fn execute_conditional<'a>(
                 // (CEL adds 0, since it carries no `tokens_*`), but
                 // only once `meta.completed_at` is actually set --
                 // never for a cancellation, which leaves it `None`.
-                if meta_completed(store, &meta) {
+                if super::completed_at_is_truthy(store, &meta) {
                     observer.record_totals(&store.snapshot(&meta));
                 }
                 observer.effect_complete(
@@ -108,17 +108,6 @@ pub(crate) fn execute_conditional<'a>(
             }
         }
     })
-}
-
-/// Whether *meta*'s own `completed_at` is a string (set) rather than
-/// `None` -- [`execute_conditional`]'s own totals-hook guard (issue
-/// #513): never true after a cancellation, which returns before
-/// `decide_and_run` ever reaches a `completed_at` write.
-fn meta_completed(store: &Store, meta: &NodeRef) -> bool {
-    match &store.snapshot(meta) {
-        Value::Dict(map) => matches!(map.get(&key("completed_at")), Some(Value::Str(_))),
-        _ => false,
-    }
 }
 
 /// *meta*'s own current `error` value, if it is a string -- what
@@ -153,8 +142,9 @@ fn write_conditional_meta_start(
 }
 
 /// `core/conditional.py::ConditionalRuntime._decide_and_run` --
-/// evaluates *cond* (CEL only; a `mode: model` condition cannot reach
-/// this far, refused before the run starts), selects exactly one of
+/// evaluates *cond* (CEL or model mode, lane G2/#513 -- a
+/// `Condition::Model` arm below dispatches to `condition_model::
+/// evaluate_model_condition`), selects exactly one of
 /// *then_*/*else_*, and runs that branch's own effects in order against
 /// *branch_parent*, rebuilding the within-branch scope overlay
 /// (`scope_ctx`/`local_writes`, Quirk Q1) after each one. *named* is

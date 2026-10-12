@@ -970,9 +970,11 @@ async fn attempt_once<R: ParamsCtx>(
     // tool.py`'s own `expect_meta` block (`tool.rs`'s own CEL/model
     // arms). A CEL evaluation error and a model-mode answer-parse
     // failure are both ordinary attempt failures (retried, never
-    // fatal); only a fatal `VmError` out of the model-mode stub (a
-    // cancellation or a refusal reached while rendering/dispatching)
-    // propagates as fatal.
+    // fatal); a `Raised` failure not in [`PyExc::is_value_error_class`]
+    // or `RecursionError` is retried too (issue #513 settled question
+    // 5), and only a fatal `VmError` out of `condition_model::
+    // evaluate_model_expect` (a cancellation or a refusal reached
+    // while rendering/dispatching) propagates as fatal.
     if let Some(expect) = &use_op.expect {
         let value_snapshot = store.snapshot(effect_node);
         let value_for_expect = value_snapshot
@@ -1028,12 +1030,15 @@ async fn attempt_once<R: ParamsCtx>(
             // (`run_ctx.adapter_timeout_seconds`), never a resolved
             // tool timeout -- a `use` effect has none of its own.
             // `Raised`'s own *py_class* decides the split `core/
-            // use.py`'s `except (ValueError, RecursionError)` makes:
-            // not retried for that pair (a template render failure's
-            // own `TemplateError` counts as the `ValueError` it
-            // actually is in Python, [`PyExc::TemplateError`]'s own
-            // doc comment), retried for everything else (an adapter
-            // failure, always a `RuntimeError`/[`PyExc::
+            // use.py`'s `except (ValueError, RecursionError)` makes,
+            // via `isinstance` -- so every `ValueError` subclass
+            // counts, not just the bare class ([`PyExc::
+            // is_value_error_class`]'s own doc comment; review
+            // finding 1 on PR #514 named the real adapters'
+            // `UnicodeDecodeError` for a non-UTF-8 response body as
+            // the subclass this used to miss): not retried for that
+            // set plus `RecursionError`, retried for everything else
+            // (an adapter failure, always a `RuntimeError`/[`PyExc::
             // AdapterCallError`] class here, even a non-retryable
             // one).
             ExpectCondition::Model { template } => {
@@ -1067,10 +1072,7 @@ async fn attempt_once<R: ParamsCtx>(
                         message,
                         py_class,
                     }) => {
-                        if matches!(
-                            py_class,
-                            PyExc::ValueError | PyExc::RecursionError | PyExc::TemplateError
-                        ) {
+                        if py_class.is_value_error_class() || py_class == PyExc::RecursionError {
                             return Err(AttemptProblem::NotRetried { message, py_class });
                         }
                         return Err(AttemptProblem::Retryable {
@@ -1291,14 +1293,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
 
         set_leaf(store, &meta_node, "error", Value::Str(message.clone()));
         let is_last_attempt = attempt_index + 1 >= max_attempts;
-        // `PyExc::TemplateError` joins this check (issue #513): it is
-        // a `ValueError` subclass in Python (that variant's own doc
-        // comment), the class a model-mode `expect:`'s own template
-        // render failure carries.
-        let retryable = !matches!(
-            py_class,
-            PyExc::ValueError | PyExc::RecursionError | PyExc::TemplateError
-        );
+        // [`PyExc::is_value_error_class`] covers every `ValueError`
+        // subclass Python's own `isinstance` check would (issue
+        // #513; review finding 1 on PR #514), not just the bare
+        // class -- `RecursionError` itself is a `RuntimeError`
+        // subclass, checked separately.
+        let retryable = !(py_class.is_value_error_class() || py_class == PyExc::RecursionError);
         if !is_last_attempt && retryable {
             next_delay_ms = crate::retry::next_backoff_delay_ms(
                 &crate::retry::RetryInfo::retryable(),
@@ -1705,16 +1705,282 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         }
     }
 
+    /// Captures the *timeout_seconds* a `use` effect's own model
+    /// `expect:` dispatches with, replying `"yes"` so the attempt
+    /// succeeds -- issue #513 review finding 4: a `use` effect has no
+    /// timeout of its own, so this call site must forward
+    /// `run_ctx.adapter_timeout_seconds` verbatim, never a tool-shaped
+    /// resolved value (that's `tool.rs`'s own call site instead).
+    #[derive(Default)]
+    struct TimeoutCapturingAdapter {
+        seen: std::cell::Cell<Option<u32>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for TimeoutCapturingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            self.seen.set(Some(call.timeout_seconds));
+            Ok(crate::adapter::GenerateResult {
+                text: "yes".to_string(),
+                raw: Value::None,
+                tokens_sent: Some(1),
+                tokens_received: Some(1),
+                finish_reason: None,
+                warnings: Vec::new(),
+                cost_usd: None,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Issue #513 review finding 4: the outer `execute_use_with_ctx`
+    /// retry check, not just `attempt_once`'s own `Raised`
+    /// classification, must not retry a `TemplateError` -- a render
+    /// failure in the expect template itself (subscripting an `int`
+    /// like a list, the same trigger `exec::prompt`'s own render-
+    /// failure tests use), with `retries.max_attempts: 2` so a retry
+    /// would be observable as a second attempt (`meta.retries_used`
+    /// set).
+    #[tokio::test]
+    async fn a_uses_model_expect_template_error_is_not_retried_by_the_outer_loop() {
+        let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 2,
+                backoff_ms: 0,
+            },
+            expect: Some(ExpectCondition::Model {
+                template: electricity_bytecode::TemplateText::new(
+                    "{{value.0}} ok?",
+                    false,
+                    electricity_bytecode::Escape::Html,
+                ),
+            }),
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+
+        let store = Store::new();
+        let mut registry = electricity_tools::ToolRegistry::new();
+        registry.register(Box::new(electricity_tools::json::JsonTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let orchestration_dir = std::path::Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+
+        let err = execute_use_with_ctx(
+            &op,
+            &use_op,
+            &store,
+            &store.root,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+        )
+        .await
+        .expect_err("a TemplateError-class expect failure must still fail the use effect");
+
+        let VmError::Raised { cause_class, .. } = err else {
+            panic!("expected VmError::Raised, got {err:?}")
+        };
+        assert_eq!(
+            cause_class,
+            Some(PyExc::TemplateError),
+            "the outer loop must classify the final failure as TemplateError"
+        );
+
+        let snapshot = store.snapshot(&store.root);
+        let step = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("step"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = step.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            None,
+            "a TemplateError must not be retried, so there is never a second attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_uses_model_expect_dispatches_with_the_run_adapter_budget() {
+        let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
+        let use_op = UseOp {
+            source: UseSource::Inline(electricity_bytecode::TemplateText::new(
+                inline_yaml.to_string(),
+                true,
+                electricity_bytecode::Escape::Html,
+            )),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: electricity_bytecode::RetryPolicy {
+                max_attempts: 1,
+                backoff_ms: 0,
+            },
+            expect: Some(ExpectCondition::Model {
+                template: electricity_bytecode::TemplateText::new(
+                    "ok?",
+                    false,
+                    electricity_bytecode::Escape::Html,
+                ),
+            }),
+            description: None,
+        };
+        let op = Op {
+            path: EffectPath::root().push_name("step"),
+            name: Some("step".to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Use(use_op.clone()))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+
+        let store = Store::new();
+        let effect_node = store
+            .ensure_dict(&store.root, Value::Str("step".to_string()))
+            .unwrap();
+        set_leaf(&store, &effect_node, "value", Value::None);
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::Str("meta".to_string()))
+            .unwrap();
+
+        let mut registry = electricity_tools::ToolRegistry::new();
+        registry.register(Box::new(electricity_tools::json::JsonTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = ComplexitySettings::default();
+        let orchestration_dir = std::path::Path::new(".");
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let adapter = Rc::new(TimeoutCapturingAdapter::default());
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: adapter.clone(),
+            model_locked: false,
+            adapter_timeout_seconds: 77,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir,
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let frame = Frame::root();
+        let observer = NullObserver;
+        let token = CancellationToken::new();
+        let mut label = "inline".to_string();
+
+        let result = attempt_once(
+            &op,
+            &use_op,
+            "step",
+            &effect_node,
+            &meta_node,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &observer,
+            &token,
+            &store,
+            &mut label,
+            false,
+        )
+        .await;
+        assert!(result.is_ok(), "a model expect answered 'yes' must succeed");
+
+        assert_eq!(
+            adapter.seen.get(),
+            Some(77),
+            "a use effect's own model expect must dispatch with run_ctx.adapter_timeout_seconds, \
+             never a tool-shaped resolved timeout"
+        );
+    }
+
     /// Issue #513's settled question 5: `core/use.py`'s own `except
     /// (ValueError, RecursionError)` split -- a raised model-expect
     /// failure is retried unless its own Python class is one of that
-    /// pair. An `AdapterCallError` (a `RuntimeError` subclass, what
-    /// electricity's own real adapters raise for a malformed
-    /// response body, e.g. `electricity_adapters::openai_compat`'s
-    /// own `non_json_error`) is retried even though the adapter's own
-    /// `RetryInfo` on that failure is `not_retryable()` -- the
+    /// pair. An `AdapterCallError` (what electricity's own real
+    /// adapters raise for a transport-level failure, e.g.
+    /// `electricity_adapters::openai`'s own non-zero-exit curl
+    /// outcome) is retried even though that failure's own `RetryInfo`
+    /// can be `not_retryable()` (`classify_curl_outcome`) -- the
     /// retry/fail split for an `expect:`'s own raised failure is
-    /// decided by exception class alone, never by `RetryInfo`.
+    /// decided by exception class alone, never by `RetryInfo`. A
+    /// malformed response body (`non_json_error` and its siblings)
+    /// raises plain `RuntimeError` instead, also retried here, since
+    /// neither class is in [`PyExc::is_value_error_class`]'s set.
     #[tokio::test]
     async fn a_model_expects_adaptercallerror_failure_is_retried_despite_not_retryable() {
         let problem = model_expect_attempt_problem(electricity_tools::PyExc::AdapterCallError)
@@ -1734,6 +2000,25 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         let problem = model_expect_attempt_problem(electricity_tools::PyExc::ValueError)
             .await
             .expect_err("a ValueError-class failure must be an AttemptProblem");
+        assert!(
+            matches!(problem, AttemptProblem::NotRetried { .. }),
+            "expected NotRetried"
+        );
+    }
+
+    /// Review finding 1 on PR #514: `UnicodeDecodeError` is a
+    /// `ValueError` subclass in Python
+    /// ([`PyExc::is_value_error_class`]'s own doc comment) -- the
+    /// class electricity's real adapters raise for a response body
+    /// that isn't valid UTF-8 (`transport_failure_error` in
+    /// `electricity_adapters::openai`/`openai_compat`/`ollama`/
+    /// `anthropic`/`replicate`/`watsonx`). Not retried, like the
+    /// bare `ValueError` case above.
+    #[tokio::test]
+    async fn a_model_expects_unicodedecodeerror_failure_is_not_retried() {
+        let problem = model_expect_attempt_problem(electricity_tools::PyExc::UnicodeDecodeError)
+            .await
+            .expect_err("a UnicodeDecodeError-class failure must be an AttemptProblem");
         assert!(
             matches!(problem, AttemptProblem::NotRetried { .. }),
             "expected NotRetried"
