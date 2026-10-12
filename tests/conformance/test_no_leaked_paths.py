@@ -50,7 +50,13 @@ def _fixture_ids() -> list[str]:
 
 @pytest.mark.parametrize("path", _fixture_files(), ids=_fixture_ids())
 def test_no_local_filesystem_paths_committed(path: Path) -> None:
-    text = path.read_text(encoding="utf-8")
+    # A binary fixture (e.g. a prompt's own image asset) can't decode as
+    # UTF-8 text at all, and so can't contain one of these patterns as
+    # readable text either -- nothing to check, not a failure.
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return
     for pattern in _LEAK_PATTERNS:
         match = pattern.search(text)
         if match is not None:
