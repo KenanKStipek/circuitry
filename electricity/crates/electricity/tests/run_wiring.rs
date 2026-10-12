@@ -264,10 +264,13 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
 async fn a_document_level_adapter_is_refused_with_no_state_written() {
     let dir = temp_dir("document-adapter-refusal");
     let config = write(&dir, "config.json", "{}");
+    // `litellm` (a Python-SDK-only adapter, out of scope for lane F2,
+    // issue #503) stays the unbuildable example here -- `openai`
+    // became a real, buildable adapter in that same lane.
     let doc = write(
         &dir,
         "doc.yml",
-        "adapter: openai\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+        "adapter: litellm\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
     );
     let req = request(config, doc);
 
@@ -280,7 +283,7 @@ async fn a_document_level_adapter_is_refused_with_no_state_written() {
     );
     let error = result.error.unwrap();
     assert!(error.contains("is a preview and cannot run orchestrations yet"));
-    assert!(error.contains("openai"));
+    assert!(error.contains("litellm"));
 }
 
 #[tokio::test]

@@ -12,7 +12,24 @@ electricity-value = { path = "../electricity-value" }
 electricity-vm = { path = "../electricity-vm" }
 electricity-yaml = { path = "../electricity-yaml" }
 electricity-json = { path = "../electricity-json" }
+# Lane F2's own shared transport (`transport.rs`): every real provider
+# in this crate sends its request through `electricity_tools::
+# http_client`, the same client/proxy-convention/cancellation stack
+# the `http` tool (lane E) already uses.
+electricity-tools = { path = "../electricity-tools" }
 async-trait = "0.1"
+# `ollama.rs`'s own image-to-base64 encoding (`adapters/base.py::
+# ImageInput.base64_data`) and `watsonx.rs`'s own `Authorization:
+# Bearer` token handling -- the same crate `electricity-tools`
+# already depends on, so this adds no second base64 implementation to
+# the dependency tree.
+base64 = "0.22"
+# `watsonx.rs`'s own IAM token cache (`Instant`-based expiry) and
+# every adapter's own `Duration`-based timeout -- `tokio::time::sleep`
+# is not used directly by this crate (the retry loop that would call
+# it is lane G's own `exec/prompt.rs`), only `tokio::time::timeout`
+# wrapped by `electricity_tools::http_client::send` itself.
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

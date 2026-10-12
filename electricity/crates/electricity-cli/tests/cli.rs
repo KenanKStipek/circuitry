@@ -568,13 +568,14 @@ fn a_model_mode_while_condition_is_refused_with_no_files_written() {
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, with no file written at all, even though the rest of the
 /// document (`json`/`dynamic` only) is otherwise fully supported --
-/// `openai` has no electricity-side adapter build at all, so settled
-/// ruling 3's own stateless refusal (`unbuildable_known_adapter`) fires
-/// before preflight (issue #495, lane R) is ever reached, not because
-/// preflight itself is unported. `cof run` would instead reach its own
-/// real preflight check and fail there (no `OPENAI_API_KEY` in this
-/// test's own `env_clear`'d process) -- electricity has no openai
-/// adapter to run that check against.
+/// `litellm` (a Python-SDK-only adapter, out of scope for lane F2,
+/// issue #503) has no electricity-side adapter build at all, so
+/// settled ruling 3's own stateless refusal (`unbuildable_known_adapter`)
+/// fires before preflight (issue #495, lane R) is ever reached, not
+/// because preflight itself is unported. `openai` used to be this
+/// test's own example; it became a real, buildable adapter in lane F2,
+/// so it now reaches a real preflight failure instead (see the Python
+/// conformance case `document-adapter-preflight-not-ready`).
 #[test]
 fn a_document_level_adapter_is_refused_with_no_files_written() {
     let (mut cmd, home) = command("document-adapter-refusal");
@@ -582,7 +583,7 @@ fn a_document_level_adapter_is_refused_with_no_files_written() {
     let doc = home.path.join("doc.yml");
     fs::write(
         &doc,
-        "adapter: openai\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
+        "adapter: litellm\neffects:\n  - name: parse\n    type: tool\n    provider: json\n    params: {mode: parse, input: '{\"a\": 1}'}\n",
     )
     .unwrap();
     let out = home.path.join("out.json");
@@ -609,7 +610,7 @@ fn a_document_level_adapter_is_refused_with_no_files_written() {
         error.contains("is a preview and cannot run orchestrations yet"),
         "{error}"
     );
-    assert!(error.contains("openai"), "{error}");
+    assert!(error.contains("litellm"), "{error}");
     assert!(!out.exists());
     assert!(!events.exists());
     assert!(!live_state.exists());
