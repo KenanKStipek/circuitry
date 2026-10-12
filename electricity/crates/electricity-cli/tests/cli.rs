@@ -527,14 +527,14 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
 /// own hand-built-`Op` unit test,
 /// `a_while_loops_model_mode_condition_is_refused_even_once_loop_is_supported`.
 #[test]
-fn a_model_mode_while_condition_is_refused_with_no_files_written() {
-    let (mut cmd, home) = command("while-model-mode");
+fn a_reflector_effect_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("reflector");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(
         &doc,
-        "effects:\n  - name: poll\n    type: loop\n    while: {mode: model, template: \"done?\"}\n    \
-         body:\n      - name: step\n        type: tool\n        provider: json\n        \
+        "effects:\n  - name: think\n    type: reflector\n    \
+         effects:\n      - name: step\n        type: tool\n        provider: json\n        \
          params: {mode: stringify, input: {x: 1}}\n",
     )
     .unwrap();
