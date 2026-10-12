@@ -690,9 +690,15 @@ functions, `api_key_env=` in each adapter file):
 | `tgi` | `""` by default, configurable | `http://localhost:3000/v1` |
 | `qwen-dashscope` | `DASHSCOPE_API_KEY` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | `cohere` | `COHERE_API_KEY` | `https://api.cohere.com` |
-| `cloudflare-workers-ai` | `CF_API_TOKEN` | (requires `account_id`) |
+| `cloudflare-workers-ai` | `CF_API_TOKEN` | (requires `account_id`; `check()` also requires `CF_ACCOUNT_ID`) |
 | `gemini` | `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `azure-openai` | `""` (uses `api-key` header via `extra_headers`, not Bearer) | `AZURE_OPENAI_ENDPOINT` env or `endpoint` cfg |
+| `databricks` | `DATABRICKS_TOKEN` | `DATABRICKS_HOST` env (no static default — per-workspace) or `base_url` cfg |
+
+electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
+(native, not through this family)/`replicate`/`watsonx` — the unbuildable set after that lane is
+exactly `claude_code`, `cyberdiner`, `litellm` and `pi` (`electricity/README.md`'s own preview
+paragraph).
 
 `check_dependencies` (`_openai_compat.py:212-220`): `binary:curl` if `curl` isn't on PATH;
 `env:<api_key_env>` if that var is required and unset. electricity, using a native HTTP client

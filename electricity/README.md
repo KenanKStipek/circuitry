@@ -15,9 +15,14 @@ providers, aiming at the same final state, `--live-state` and `--events`
 output as `cof run`. A top-level `prompts:` map and `{{> name}}` composition
 run too, in every field that reaches them (a tool's `prompt`/`params`/
 `params_json`, a `use`'s `inputs`/`inline`, a `yield`'s `template`).
-Everything else (prompt effects and model adapters, reflectors, the other
-tool providers, persistence, runtime plugins, complexity routing) is refused
-with a preview message pointing at `cof run`. A document and its literal
+A document whose own top-level `adapter:`/a prompt's own `provider:` names a
+real provider (`ollama`, `openai`, `anthropic`, the OpenAI-compatible family,
+`replicate`, `watsonx`) now has its preflight check run for real against that
+provider -- `claude_code`, `cyberdiner`, `litellm` and `pi` are the only
+Circuitry-known adapter names with no electricity builder yet. Prompt
+effects themselves (dispatching a real model call), reflectors, the other
+tool providers, persistence, runtime plugins and complexity routing are
+still refused with a preview message pointing at `cof run`. A document and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
 options, and `--dump-ir` prints the compiled IR as unstable debugging JSON.
