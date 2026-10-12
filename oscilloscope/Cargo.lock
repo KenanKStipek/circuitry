@@ -794,6 +794,7 @@ dependencies = [
  "bytes",
  "chrono",
  "digest",
+ "electricity-bytecode",
  "electricity-json",
  "electricity-pyre",
  "electricity-redaction",

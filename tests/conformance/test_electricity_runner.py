@@ -32,14 +32,15 @@ from .normalize import (
 
 CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
-#: Every M0-H lane (issue #408/#431) is on main now, so nothing under
-#: `electricity/` emits this text any more -- a case that expects
+#: The stable substring every electricity preview refusal carries
+#: (issue #476), matched in lockstep by `electricity_bytecode::
+#: PREVIEW_MARKER` and osp's own e2e test -- a case that expects
 #: *failure* and lists `electricity` in its own engines may still
-#: legitimately get refused this way (content M0-H's own preview truly
-#: doesn't support yet, e.g. `prompt`/`loop`/`use`); a case that expects
-#: *success* must not (PR #441 review finding 6: a success case wrongly
-#: refused is a real regression, and must fail loudly, not skip).
-PREVIEW_MESSAGE_MARKER = "is a preview and cannot run orchestrations yet"
+#: legitimately get refused this way (content this preview truly
+#: doesn't support yet); a case that expects *success* must not
+#: (PR #441 review finding 6: a success case wrongly refused is a
+#: real regression, and must fail loudly, not skip).
+PREVIEW_MESSAGE_MARKER = "is a preview and can't run this orchestration"
 
 #: electricity's CLI has no notion yet of "no config file" the way `cof
 #: run` does (an explicit --config, CIRCUITRY_CONFIG, a discovered

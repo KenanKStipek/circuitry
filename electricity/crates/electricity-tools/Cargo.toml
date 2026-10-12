@@ -17,6 +17,12 @@ test-tools = []
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
+# `preview_marker_codec_error`'s own `PREVIEW_MARKER` (issue #476): the
+# one shared constant every preview refusal across the workspace is
+# built from, so this crate's codec refusal carries the exact same
+# marker text as `electricity-bytecode`'s own `format_refusal` without
+# a second, hand-copied literal to keep in sync.
+electricity-bytecode = { path = "../electricity-bytecode" }
 # Python-`re` pattern-syntax translation (#448 lane D2), shared with
 # `electricity-schema` -- moved out of this crate (PR #502's round-4
 # fix, finding F2) so both can depend on it without `electricity-schema`
