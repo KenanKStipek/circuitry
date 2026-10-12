@@ -282,9 +282,7 @@ async fn decomposition_enabled_is_refused_with_no_state_written() {
     );
     let error = result.error.unwrap();
     assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains(
-        "a run whose effective config enables complexity decomposition"
-    ));
+    assert!(error.contains("a run whose effective config enables complexity decomposition"));
 }
 
 /// The narrowing's other half: a config that only turns on
