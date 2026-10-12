@@ -606,6 +606,17 @@ def cases() -> list[dict]:
             },
             {"a": "x"},
         ),
+        _case(
+            # `_keywords.multipleOf`'s own `Fraction` fallback: `int(1e308
+            # / 0.5)` overflows (`instance / dB` is itself `inf`), caught
+            # only to retry via `Fraction(1e308) / Fraction(0.5)`, exact
+            # and never overflowing -- `1e308`'s own exact binary value
+            # really is a multiple of `0.5` (issue #498's own
+            # orchestrator follow-up, finding V5, probe-schema9 c6).
+            "multiple_of_a_large_float_instance_overflows_to_the_fraction_fallback",
+            {"multipleOf": 0.5},
+            1e308,
+        ),
     ]
 
 

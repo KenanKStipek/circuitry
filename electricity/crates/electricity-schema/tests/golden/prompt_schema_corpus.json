@@ -3098,5 +3098,13 @@
       "a": "x"
     },
     "message": null
+  },
+  {
+    "name": "multiple_of_a_large_float_instance_overflows_to_the_fraction_fallback",
+    "schema": {
+      "multipleOf": 0.5
+    },
+    "instance": 1e+308,
+    "message": null
   }
 ]

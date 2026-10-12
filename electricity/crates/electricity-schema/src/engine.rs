@@ -433,39 +433,142 @@ fn as_numeric(value: &Value) -> Value {
     }
 }
 
-/// `_utils.uniq`'s own two-phase algorithm over a `List`/`Dict` bucket
-/// (every hashable scalar is already ruled out by [`uniq_key`]'s own
-/// `O(n)` pass before this is ever called): a stable sort under
-/// [`py_sort_cmp`] (Python's own plain `<`), checking only *adjacent*
-/// pairs with [`py_equal`] afterward -- deliberately not an all-pairs
-/// `equal()` loop, because that is not what Python's own `uniq` does,
-/// and the difference is observable: a genuine duplicate the sort
-/// happens to separate with a third, merely *tied* element (`[[1],
-/// [True], [1]]` -- `[1]` and `[True]` compare *equal* under the plain
-/// `==` the sort itself uses, even though `equal()` tells them apart,
-/// so the sort leaves `[True]` sitting between the array's own two
-/// `[1]`s) is a real, confirmed Python result (`uniq([[1],[True],[1]])
-/// == True`), not a rounding error to correct (issue #498's own
-/// orchestrator follow-up, finding F8, probe-schema7 c10). Falls back to
-/// the genuine all-pairs loop only when [`py_sort_cmp`] itself can't
-/// order everything (a `dict` present, or incompatible types mixed
-/// together) -- Python's own `TypeError` branch.
+/// [`py_sort_cmp`], except a `NaN` on either side is a tie (`Some(
+/// Equal)`), never incomparable -- Python's own `float.__lt__` never
+/// raises for `NaN` (every comparison with it is simply `False`,
+/// unlike a genuine `TypeError` from e.g. a `dict`), so CPython's own
+/// sort never aborts over one; only [`uniq_equal`]'s own adjacency
+/// check gets to decide whether two `NaN`s collide (issue #498's own
+/// orchestrator follow-up, NaN uniqueness edges).
+fn uniq_sort_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    if let (Value::Float(x), Value::Float(y)) = (a, b) {
+        if x.is_nan() || y.is_nan() {
+            return Some(std::cmp::Ordering::Equal);
+        }
+    }
+    if let (Value::List(x), Value::List(y)) = (a, b) {
+        for (xi, yi) in x.iter().zip(y.iter()) {
+            match uniq_sort_cmp(xi, yi)? {
+                std::cmp::Ordering::Equal => continue,
+                other => return Some(other),
+            }
+        }
+        return Some(x.len().cmp(&y.len()));
+    }
+    py_sort_cmp(a, b)
+}
+
+/// [`py_equal`], except two `NaN`s are always equal -- within *one*
+/// decoded instance, every `NaN` literal is CPython's own `json`
+/// scanner's shared singleton object ([`UniqKey::Nan`]'s own doc
+/// comment), so `_utils.equal`'s `one is two` identity check (checked
+/// *before* any type-specific comparison, at every recursion level --
+/// `_sequence_equal`/`_mapping_equal` both recurse through `equal`
+/// itself, never a bare `==`) makes two `NaN`s nested at any depth
+/// collide too, e.g. `[[nan], [nan]]` (confirmed directly against
+/// Python). [`py_equal`] itself must stay narrower: a schema's own
+/// `const`/`enum` literal (parsed from a wholly separate document) is
+/// never identity-equal to anything an instance decodes, so that
+/// comparison correctly keeps `NaN != NaN` as plain `f64` equality
+/// already gives -- only *this* uniqueness-only path gets the identity
+/// treatment.
+fn uniq_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) if x.is_nan() && y.is_nan() => true,
+        (Value::List(x), Value::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| uniq_equal(p, q))
+        }
+        (Value::Dict(x), Value::Dict(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|v2| uniq_equal(v, v2)))
+        }
+        _ => py_equal(a, b),
+    }
+}
+
+/// Simulates CPython `listsort`'s own `count_run` + `binarysort` --
+/// together, the *entire* algorithm it uses for a list shorter than
+/// `merge_compute_minrun`'s own threshold (64; `minrun` is the list's
+/// own length below that, so there is only ever one "run" to begin
+/// with) -- over *order* (indices into *items*), comparing with
+/// [`uniq_sort_cmp`]. `count_run` first finds *order*'s own natural
+/// ascending (ties continue it) or strictly-descending (ties break it)
+/// prefix, reversing it in place if descending; `binarysort` then
+/// inserts every remaining element with a bisection search exactly like
+/// `bisect_right` (ties move *right*, preserving stability) and an
+/// in-place rotation. Returns `false` -- *order* left in an unspecified
+/// state, matching `_utils.uniq`'s own fallback-restarts-from-the-
+/// original-container semantics, so no caller may look at a partial
+/// sort -- the instant any comparison is incomparable (`None`), CPython's
+/// own uncaught `TypeError` unwinding the whole `sorted()` call.
+///
+/// For a list of 64 or more, real timsort instead finds and merges
+/// several shorter runs with a galloping merge; this keeps the same
+/// single-run algorithm there too -- correct (any genuine total order
+/// still ends up fully, stably sorted), just not bit-for-bit identical
+/// to CPython's own comparison *sequence* that large (a documented,
+/// narrower divergence, `DESIGN.md` §13) -- rather than ever risk the
+/// transitivity-violation panic `[T]::sort_by` itself can raise when a
+/// comparator isn't a genuine total order, the way mapping
+/// "incomparable" to `Equal` used to (issue #498's own orchestrator
+/// follow-up, finding C1).
+fn cpython_list_sort(order: &mut [usize], items: &[&Value]) -> bool {
+    let n = order.len();
+    if n < 2 {
+        return true;
+    }
+    let descending = match uniq_sort_cmp(items[order[1]], items[order[0]]) {
+        None => return false,
+        Some(std::cmp::Ordering::Less) => true,
+        _ => false,
+    };
+    let mut run_len = 2;
+    while run_len < n {
+        let cmp = match uniq_sort_cmp(items[order[run_len]], items[order[run_len - 1]]) {
+            None => return false,
+            Some(c) => c,
+        };
+        let continues = if descending {
+            cmp == std::cmp::Ordering::Less
+        } else {
+            cmp != std::cmp::Ordering::Less
+        };
+        if !continues {
+            break;
+        }
+        run_len += 1;
+    }
+    if descending {
+        order[..run_len].reverse();
+    }
+    for i in run_len..n {
+        let pivot = order[i];
+        let mut lo = 0usize;
+        let mut hi = i;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            match uniq_sort_cmp(items[pivot], items[order[mid]]) {
+                None => return false,
+                Some(std::cmp::Ordering::Less) => hi = mid,
+                _ => lo = mid + 1,
+            }
+        }
+        order[lo..=i].rotate_right(1);
+    }
+    true
+}
+
 fn containers_have_a_duplicate(items: &[&Value]) -> bool {
     let mut order: Vec<usize> = (0..items.len()).collect();
-    let mut sortable = true;
-    order.sort_by(|&a, &b| match py_sort_cmp(items[a], items[b]) {
-        Some(ordering) => ordering,
-        None => {
-            sortable = false;
-            std::cmp::Ordering::Equal
-        }
-    });
-    if sortable {
-        return order.windows(2).any(|w| py_equal(items[w[0]], items[w[1]]));
+    if cpython_list_sort(&mut order, items) {
+        return order
+            .windows(2)
+            .any(|w| uniq_equal(items[w[0]], items[w[1]]));
     }
     for i in 0..items.len() {
         for j in 0..i {
-            if py_equal(items[j], items[i]) {
+            if uniq_equal(items[j], items[i]) {
                 return true;
             }
         }
@@ -583,22 +686,23 @@ pub(crate) fn best_match<'a>(violations: &'a [Violation<'a>]) -> Option<&'a Viol
 /// documents Circuitry's own schemas as never using anything else, and a
 /// document author's own prompt `schema:` resolving to a genuinely remote
 /// `$ref` falls outside what `validate_prompt_schema` ever fetches anyway).
+///
+/// `referencing`'s own `Resource.pointer` unquotes the *whole* remaining
+/// fragment (everything after the pointer's own leading `/`) in one pass
+/// first, and only *then* splits on `/` and unescapes each segment's own
+/// `~1`/`~0` -- never per-segment, which would wrongly treat a literal
+/// `%2F` (an escaped `/`) inside one logical segment as a fresh path
+/// separator (issue #498's own orchestrator follow-up, finding C2).
 fn resolve_ref<'a>(root: &'a Value, pointer: &str) -> Option<&'a Value> {
-    let rest = pointer
-        .strip_prefix("#/")
-        .or_else(|| pointer.strip_prefix('#'))?;
-    let mut node = root;
-    if rest.is_empty() {
-        return Some(node);
+    let fragment = pointer.strip_prefix('#')?;
+    if fragment.is_empty() {
+        return Some(root);
     }
-    for raw_segment in rest.split('/') {
-        // A `$ref`'s own fragment is percent-decoded as a *URI* fragment
-        // first (`'#/$defs/a%20b'` -- a literal space in the `$defs`
-        // key), only *then* interpreted as a JSON Pointer with its own
-        // `~1`/`~0` escapes -- the same two-step Python's `referencing`
-        // library does.
-        let decoded = percent_decode(raw_segment);
-        let segment = decoded.replace("~1", "/").replace("~0", "~");
+    let rest = fragment.strip_prefix('/')?;
+    let decoded = percent_decode(rest);
+    let mut node = root;
+    for raw_segment in decoded.split('/') {
+        let segment = raw_segment.replace("~1", "/").replace("~0", "~");
         node = match node {
             Value::Dict(d) => get(d, &segment)?,
             Value::List(items) => items.get(segment.parse::<usize>().ok()?)?,
@@ -608,18 +712,59 @@ fn resolve_ref<'a>(root: &'a Value, pointer: &str) -> Option<&'a Value> {
     Some(node)
 }
 
+/// A `$ref` the walk above actually reaches (lazily, [`evaluate`]'s own
+/// "$ref" arm) but [`resolve_ref`] can't resolve is Python's own
+/// `referencing.exceptions.PointerToNowhere`, wrapped by `jsonschema`'s
+/// own `_WrappedReferencingError.__str__` into `f"{type(cause).__name__}:
+/// {cause}"` -- never caught by `core/prompt.py::_validate_schema`'s own
+/// `except jsonschema.ValidationError` (a `referencing` exception isn't
+/// one), so it reaches the attempt loop's generic `except Exception` as a
+/// non-retryable, generic failure, the same shape
+/// [`crate::take_python_exception`] already gives a `RecursionError`
+/// (issue #498's own orchestrator follow-up, finding V1). *pointer* only
+/// ever reaches here already filtered to [`is_same_document_pointer_syntax`]
+/// by every caller, so `ref` -- `pointer` with its leading `#` stripped,
+/// keeping the leading `/` -- is always `referencing`'s own `pointer`
+/// argument exactly (confirmed directly: for `"#"` itself `resolve_ref`
+/// always returns `Some`, so this is never reached with an empty `ref`).
+fn resolve_ref_or_raise<'a>(root: &'a Value, pointer: &str) -> Option<&'a Value> {
+    let resolved = resolve_ref(root, pointer);
+    if resolved.is_none() {
+        let fragment = pointer.strip_prefix('#').unwrap_or(pointer);
+        raise_python_exception(format!(
+            "PointerToNowhere: {} does not exist within {}",
+            Value::Str(fragment.to_string()).py_repr(),
+            root.py_repr(),
+        ));
+    }
+    resolved
+}
+
 /// A minimal `%XX`-hex URI-percent-decoder -- every byte that isn't a
 /// well-formed `%` escape passes through unchanged (a real JSON Pointer
 /// fragment is never full of literal, un-encoded `%` signs, so this
-/// never needs to be stricter than that).
+/// never needs to be stricter than that). Decodes raw bytes throughout,
+/// never slicing the original `&str` by a byte offset that could land
+/// inside a multi-byte UTF-8 character (issue #498's own orchestrator
+/// follow-up, finding C2: a `%` immediately followed by one was exactly
+/// `#/$defs/%1\u{e9}` -- `\u{e9}`'s own second byte sat right where the
+/// old `&segment[i + 1..i + 3]` slice end fell, panicking).
 fn percent_decode(segment: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&segment[i + 1..i + 3], 16) {
-                out.push(byte);
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
                 i += 3;
                 continue;
             }
@@ -779,7 +924,7 @@ pub(crate) fn evaluate<'a>(
         match k {
             "$ref" => {
                 if let Some(pointer) = value.as_str() {
-                    if let Some(resolved) = resolve_ref(root, pointer) {
+                    if let Some(resolved) = resolve_ref_or_raise(root, pointer) {
                         evaluate(resolved, instance, root, path, out);
                     }
                 }
@@ -857,14 +1002,11 @@ pub(crate) fn evaluate<'a>(
                     let Some(pattern) = pattern_key.as_str() else {
                         continue;
                     };
-                    let Some(re) = compile_pattern(pattern) else {
-                        continue;
-                    };
                     for (prop_key, prop_instance) in obj.iter() {
                         let Some(name) = prop_key.as_str() else {
                             continue;
                         };
-                        if re.is_match(name).unwrap_or(false) {
+                        if pattern_is_match(pattern, name) {
                             let mut child_path = path.to_vec();
                             child_path.push(PathSegment::Key(name.to_string()));
                             evaluate(subschema, prop_instance, root, &child_path, out);
@@ -911,9 +1053,20 @@ pub(crate) fn evaluate<'a>(
                             .join("|")
                     })
                     .unwrap_or_default();
-                let joined_regex = (!joined_pattern.is_empty())
-                    .then(|| compile_pattern(&joined_pattern))
-                    .flatten();
+                // Unlike `pattern`/`patternProperties`'s own keys,
+                // `schema_is_fully_supported` never checks the *joined*
+                // alternation itself, only each `patternProperties` key
+                // on its own -- `(?i)^x-` and `(?i)^y-` each translate
+                // fine alone, but joining them with `"|"` is genuinely
+                // Python-invalid (a global inline flag must lead the
+                // *whole* expression, not reappear after the first
+                // alternative), so this is the one place in the engine
+                // that can still reach a translation `Err` on a schema
+                // it otherwise accepts (issue #498's own orchestrator
+                // follow-up, finding V6, probe-schema9 c7).
+                let has_joined_pattern = !joined_pattern.is_empty();
+                let joined_translation =
+                    has_joined_pattern.then(|| translated_pattern(&joined_pattern));
                 let mut extras: Vec<&str> = Vec::new();
                 for (prop_key, _) in obj.iter() {
                     let Some(name) = prop_key.as_str() else {
@@ -922,10 +1075,19 @@ pub(crate) fn evaluate<'a>(
                     if properties.is_some_and(|p| p.contains_key(&key(name))) {
                         continue;
                     }
-                    if joined_regex
-                        .as_ref()
-                        .is_some_and(|re| re.is_match(name).unwrap_or(false))
-                    {
+                    if let Some(Err(translate_error)) = &joined_translation {
+                        // `_utils.find_additional_properties` calls
+                        // `re.search(patterns, property)` for the
+                        // *first* candidate property (one not already
+                        // covered by `properties`) and never gets any
+                        // further once that raises -- matching Python's
+                        // own generator-stops-at-the-first-exception
+                        // shape exactly, never a wrong `schema_invalid`
+                        // verdict treating the failure as "no match".
+                        raise_python_exception(translate_error.clone());
+                        return;
+                    }
+                    if has_joined_pattern && pattern_is_match(&joined_pattern, name) {
                         continue;
                     }
                     extras.push(name);
@@ -1178,15 +1340,13 @@ pub(crate) fn evaluate<'a>(
             }
             "pattern" => {
                 if let (Value::Str(s), Some(pattern)) = (instance, value.as_str()) {
-                    if let Some(re) = compile_pattern(pattern) {
-                        if !re.is_match(s).unwrap_or(true) {
-                            out.push(Violation {
-                                kind: Kind::Pattern,
-                                path: path.to_vec(),
-                                local_schema: schema,
-                                local_instance: instance,
-                            });
-                        }
+                    if !pattern_is_match(pattern, s) {
+                        out.push(Violation {
+                            kind: Kind::Pattern,
+                            path: path.to_vec(),
+                            local_schema: schema,
+                            local_instance: instance,
+                        });
                     }
                 }
             }
@@ -1418,14 +1578,71 @@ pub(crate) fn evaluate<'a>(
             }
             _ => {}
         }
+        // `next(iter_errors(instance), None) is None` (Python's own
+        // `Validator.is_valid`) only ever pulls *one* value total from
+        // the entire nested `iter_errors` generator tree -- every
+        // validator function it hasn't reached yet (including this
+        // schema's own remaining top-level keywords) simply never runs
+        // at all. [`LAZY_MODE`] mirrors that at this one granularity
+        // (between top-level keywords of one schema node; a keyword's
+        // own internal loop over several properties/elements/
+        // subschemas is a documented, narrower approximation,
+        // `DESIGN.md` §13) -- stopping here, not just at the end of
+        // [`is_valid`] itself, is what keeps a keyword `not`/`if`/
+        // `contains` never actually reaches (e.g. a `$ref` cycle sitting
+        // behind a sibling `type` that already failed) from ever
+        // running its own expensive or divergent work at all (issue
+        // #498's own orchestrator follow-up, finding V7: `not: {type:
+        // string, $ref: '#'}` against `5` is `Valid` in Python, since
+        // `type`'s own violation is the first and only one `next()`
+        // ever sees -- `$ref` is never reached, so no recursion ever
+        // happens, where this engine's own formerly-eager `is_valid`
+        // walked it anyway and hit the real cycle-detection fallback).
+        if lazy_mode_active() && !out.is_empty() {
+            return;
+        }
     }
+}
+
+thread_local! {
+    /// Set for the duration of an [`is_valid`] call (restored to its
+    /// prior value on return, via [`LazyModeGuard`], so a nested
+    /// `is_valid`-within-`is_valid` -- e.g. `not` inside `not` --
+    /// composes correctly) -- [`evaluate`]'s own per-keyword check
+    /// reads this, never a parameter threaded through every recursive
+    /// call, since the ordinary (non-lazy) top-level `evaluate` call
+    /// from [`crate::validate_prompt_schema`] and `anyOf`/`oneOf`'s own
+    /// branch descent (deliberately eager -- Python's own `_keywords.
+    /// anyOf`/`oneOf` call `list(...)` on each branch, never `next()`)
+    /// must never see this flag on just because they happen to run
+    /// while *nested inside* an enclosing `is_valid` call.
+    static LAZY_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn lazy_mode_active() -> bool {
+    LAZY_MODE.with(|m| m.get())
+}
+
+struct LazyModeGuard(bool);
+
+impl Drop for LazyModeGuard {
+    fn drop(&mut self) {
+        LAZY_MODE.with(|m| m.set(self.0));
+    }
+}
+
+fn enter_lazy_mode() -> LazyModeGuard {
+    LazyModeGuard(LAZY_MODE.with(|m| m.replace(true)))
 }
 
 /// `Validator.is_valid`: *schema* has no violations at all against
 /// *instance* -- used by `not`/`if`/`contains` exactly the way Python's
 /// own keyword functions call `validator.evolve(schema=...).is_valid(...)`
-/// rather than collecting (and discarding) a full violation list.
+/// rather than collecting (and discarding) a full violation list; lazy
+/// the same way Python's own `next(iter_errors(instance), None) is None`
+/// is -- see [`LAZY_MODE`]'s own doc comment.
 pub(crate) fn is_valid(schema: &Value, instance: &Value, root: &Value) -> bool {
+    let _lazy_guard = enter_lazy_mode();
     let mut violations = Vec::new();
     evaluate(schema, instance, root, &[], &mut violations);
     violations.is_empty()
@@ -1537,9 +1754,63 @@ fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
     }
     let quotient = i / d;
     if !quotient.is_finite() {
-        return true;
+        // `int(quotient)` raises `OverflowError` here (a finite `i`/`d`
+        // dividing to something `f64` itself can't hold -- the case
+        // `int()` actually raises for, not `is_infinite()`'s `NaN`/
+        // `Infinity`-*instance* cases above, which never reach this far
+        // at all): caught by `_keywords.multipleOf`'s own `except
+        // OverflowError`, retried exactly via `Fraction`, never a bare
+        // violation (issue #498's own orchestrator follow-up, finding
+        // V5, probe-schema9 c6: `1e308` against `multipleOf: 0.5`).
+        return fraction_multiple_of_failed(i, d);
     }
     quotient.trunc() != quotient
+}
+
+/// `(Fraction(instance) / Fraction(dB)).denominator != 1` -- exact,
+/// never losing precision the way routing either side through `f64`
+/// division would (the same reason [`float_exact_ratio`] exists at
+/// all): each finite `f64` has its own exact `(numerator, denominator)`
+/// ratio already; dividing two fractions and reducing the result by
+/// their `BigInt` `gcd` decides whether the quotient is a whole number
+/// without ever computing it as a `f64`.
+fn fraction_multiple_of_failed(instance: f64, divisor: f64) -> bool {
+    let (in_, id) = float_exact_ratio(instance).expect("instance already confirmed finite");
+    let (dn, dd) = float_exact_ratio(divisor).expect("divisor already confirmed finite");
+    let num = in_ * dd;
+    let den = id * dn;
+    if num == num_bigint::BigInt::from(0) {
+        return false;
+    }
+    let reduced_den = bigint_abs(&den) / bigint_gcd(&num, &den);
+    reduced_den != num_bigint::BigInt::from(1)
+}
+
+/// `num-bigint` has no inherent `abs` without also depending on
+/// `num-traits` (not otherwise needed here) -- [`bigint_gcd`] and
+/// [`fraction_multiple_of_failed`]'s own reduced denominator both need
+/// a magnitude, never a sign.
+fn bigint_abs(x: &num_bigint::BigInt) -> num_bigint::BigInt {
+    if *x < num_bigint::BigInt::from(0) {
+        -x
+    } else {
+        x.clone()
+    }
+}
+
+/// The Euclidean algorithm over `BigInt` magnitudes -- `num-bigint`
+/// itself has no `gcd` (that's `num-integer`, not a dependency this
+/// crate otherwise needs), and [`fraction_multiple_of_failed`]'s own
+/// fraction reduction is the only place one is needed.
+fn bigint_gcd(a: &num_bigint::BigInt, b: &num_bigint::BigInt) -> num_bigint::BigInt {
+    let mut a = bigint_abs(a);
+    let mut b = bigint_abs(b);
+    while b != num_bigint::BigInt::from(0) {
+        let r = &a % &b;
+        a = b;
+        b = r;
+    }
+    a
 }
 
 /// Python's own float `%`: floor division, sign of the result matches
@@ -1555,24 +1826,29 @@ fn py_fmod(a: f64, b: f64) -> f64 {
 }
 
 thread_local! {
-    /// A per-pattern-*text* compile cache -- `pattern`/`patternProperties`
-    /// (each key) is translated and compiled once no matter how many
-    /// instance nodes end up checked against it (every array element,
-    /// every object property), never once per visit (issue #498's own
-    /// orchestrator follow-up, finding F2's own "compiling" bullet).
-    /// Cleared at the start of every [`crate::validate_prompt_schema`]
-    /// call ([`clear_pattern_cache`]) -- purely a memory bound across
+    /// A per-pattern-*text* translation cache -- `pattern`/
+    /// `patternProperties` (each key) is translated once no matter how
+    /// many instance nodes end up checked against it (every array
+    /// element, every object property), never once per visit (issue
+    /// #498's own orchestrator follow-up, finding F2's own "compiling"
+    /// bullet). Caches the *translated pattern text*, not a compiled
+    /// `fancy_regex::Regex` -- [`pattern_is_match`]'s own backtrack
+    /// limit is sized per *instance*, so the compiled object itself can
+    /// never be reused across two differently-sized instances anyway
+    /// (issue #498's own orchestrator follow-up, finding V4). Cleared at
+    /// the start of every [`crate::validate_prompt_schema`] call
+    /// ([`clear_pattern_cache`]) -- purely a memory bound across
     /// unrelated schemas on the same thread, never a correctness one
-    /// (`compile_pattern` never varies by anything but the pattern text
+    /// (translation never varies by anything but the pattern text
     /// itself).
-    static PATTERN_CACHE: std::cell::RefCell<std::collections::HashMap<String, Option<std::rc::Rc<fancy_regex::Regex>>>> =
+    static TRANSLATED_PATTERN_CACHE: std::cell::RefCell<std::collections::HashMap<String, Result<std::rc::Rc<str>, String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Clears [`PATTERN_CACHE`] -- [`crate::validate_prompt_schema`]'s own
-/// first step, the same reason [`take_recursion_exceeded`] is.
+/// Clears [`TRANSLATED_PATTERN_CACHE`] -- [`crate::validate_prompt_schema`]'s
+/// own first step, the same reason [`take_recursion_exceeded`] is.
 pub(crate) fn clear_pattern_cache() {
-    PATTERN_CACHE.with(|c| c.borrow_mut().clear());
+    TRANSLATED_PATTERN_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 /// Whether *pattern* is a construct Python's own `re.compile` accepts --
@@ -1590,34 +1866,205 @@ fn python_regex_is_valid(pattern: &str) -> bool {
     .is_ok()
 }
 
+/// `jsonschema.validate`'s own `check_schema` step validates *schema*
+/// against its draft's metaschema -- which, for `pattern`'s own value
+/// and every `patternProperties` key, means `format: "regex"`
+/// (`re.compile`), checked unconditionally and *before* any instance is
+/// ever validated, regardless of which draft, regardless of whether
+/// anything else about the schema is otherwise supported or even
+/// reachable (issue #498's own orchestrator follow-up, finding V2,
+/// probe-schema9 c1/c2: confirmed directly that `\p{L}+` and
+/// `(?<year>\d{4})` -- each genuinely Python-`re`-invalid -- raise
+/// `jsonschema.SchemaError` from *every* schema position the metaschema
+/// recurses into as a subschema, `$defs`/`definitions`/`dependencies`
+/// included, even though none of those three is itself a real
+/// `Draft202012Validator` keyword). [`crate::validate_prompt_schema`]
+/// calls this *unconditionally*, before deciding which authority
+/// (engine or crate) to use at all -- the `jsonschema` Rust crate's own
+/// regex engine is ECMA-262-based and silently *accepts* both of those
+/// patterns (confirmed directly), so routing to crate authority instead
+/// of catching this first would misreport Python's own `SchemaError` as
+/// a plain accept. Walks every position Python's own 2020-12 metaschema
+/// validates as a schema -- `properties`/`patternProperties`/`$defs`/
+/// `definitions`'s own *values*, a dict-shaped `dependencies` value,
+/// `additionalProperties`/`items`/`not`/`propertyNames`/`contains`/
+/// `if`/`then`/`else`, and every `allOf`/`anyOf`/`oneOf`/`prefixItems`
+/// element -- never through `$ref` (a `$ref`'s own *target* is checked
+/// directly wherever it lives in the document; the metaschema's own
+/// `$ref` keyword definition only constrains the *pointer string*'s own
+/// type, never double-checks whatever it points to). Returns Python's
+/// own `str(SchemaError)` for the common, direct case (`'<pattern>' is
+/// not a 'regex'`) -- the real exception's full multi-line metaschema
+/// diagnostic is a documented, narrower gap (`DESIGN.md` §13); matching
+/// the verdict itself (a failed, non-retryable attempt) is what's
+/// required, not the exact text.
+pub(crate) fn find_invalid_pattern(schema: &Value) -> Option<String> {
+    let dict = schema.as_dict()?;
+    for (raw_key, v) in dict.iter() {
+        let Some(key_str) = raw_key.as_str() else {
+            continue;
+        };
+        match key_str {
+            "pattern" => {
+                if let Some(p) = v.as_str() {
+                    if !python_regex_is_valid(p) {
+                        return Some(format!(
+                            "{} is not a 'regex'",
+                            Value::Str(p.to_string()).py_repr()
+                        ));
+                    }
+                }
+            }
+            "patternProperties" => {
+                if let Some(d) = v.as_dict() {
+                    for (pk, sub) in d.iter() {
+                        if let Some(p) = pk.as_str() {
+                            if !python_regex_is_valid(p) {
+                                return Some(format!(
+                                    "{} is not a 'regex'",
+                                    Value::Str(p.to_string()).py_repr()
+                                ));
+                            }
+                        }
+                        if let Some(found) = find_invalid_pattern(sub) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            "properties" | "dependentSchemas" | "$defs" | "definitions" => {
+                if let Some(d) = v.as_dict() {
+                    for sub in d.values() {
+                        if let Some(found) = find_invalid_pattern(sub) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            "dependencies" => {
+                if let Some(d) = v.as_dict() {
+                    for sub in d.values() {
+                        if sub.as_dict().is_some() {
+                            if let Some(found) = find_invalid_pattern(sub) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                }
+            }
+            "additionalProperties"
+            | "items"
+            | "not"
+            | "propertyNames"
+            | "contains"
+            | "if"
+            | "then"
+            | "else"
+            | "unevaluatedProperties"
+            | "unevaluatedItems" => {
+                if let Some(found) = find_invalid_pattern(v) {
+                    return Some(found);
+                }
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                if let Some(items) = v.as_list() {
+                    for sub in items {
+                        if let Some(found) = find_invalid_pattern(sub) {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Translates *pattern* through [`electricity_pyre::translate::translate`]
 /// (Python-`re`-exact `\w`/`\s`/`\d`/`\b`/`\B`/non-MULTILINE `$`/`\Z`/...
 /// -- issue #498's own orchestrator follow-up, finding F2, replacing this
-/// module's own narrower ad hoc `\w`/`\s`/`$`/`\d` rewrites) then compiles
-/// it with `fancy-regex`, memoized by pattern text in [`PATTERN_CACHE`].
-/// `None` for anything Python's own `re.compile` would also reject --
-/// never reached on the engine-authority path at all, since
+/// module's own narrower ad hoc `\w`/`\s`/`$`/`\d` rewrites), memoized by
+/// pattern text in [`TRANSLATED_PATTERN_CACHE`]. `Err` for anything
+/// Python's own `re.compile` would also reject -- on the `pattern`/
+/// `patternProperties` keyword path this is never reached at all, since
 /// [`schema_is_fully_supported`] (via [`python_regex_is_valid`]) already
 /// vetoes a schema with an invalid pattern anywhere in it before
-/// [`evaluate`] ever runs (issue #498's own orchestrator follow-up,
-/// finding F13: a pattern that fails to compile must never be silently
-/// treated as matching).
-fn compile_pattern(pattern: &str) -> Option<std::rc::Rc<fancy_regex::Regex>> {
-    PATTERN_CACHE.with(|cache| {
+/// [`evaluate`] ever runs; the `additionalProperties`+`patternProperties`
+/// *joined* pattern is the one caller that genuinely reaches `Err` on a
+/// schema this engine still accepts (issue #498's own orchestrator
+/// follow-up, finding V6: each `patternProperties` key alone translates
+/// fine, but `"|"`-joining two that each open with their own inline
+/// flag group, e.g. `(?i)^x-` and `(?i)^y-`, is -- correctly -- Python-
+/// invalid, since a global flag must lead the *whole* expression).
+fn translated_pattern(pattern: &str) -> Result<std::rc::Rc<str>, String> {
+    TRANSLATED_PATTERN_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(cached) = cache.get(pattern) {
             return cached.clone();
         }
-        let compiled = electricity_pyre::translate::translate(
+        let result = electricity_pyre::translate::translate(
             pattern,
             electricity_pyre::translate::ResolvedFlags::default(),
         )
-        .ok()
-        .and_then(|t| fancy_regex::Regex::new(&t.pattern).ok())
-        .map(std::rc::Rc::new);
-        cache.insert(pattern.to_string(), compiled.clone());
-        compiled
+        .map(|t| std::rc::Rc::from(t.pattern.as_str()));
+        cache.insert(pattern.to_string(), result.clone());
+        result
     })
+}
+
+/// Whether *text* matches Python pattern *pattern*, through
+/// [`translated_pattern`] then a fresh `fancy-regex` build sized with a
+/// backtrack limit for *text*'s own length
+/// ([`electricity_pyre::backtrack_limit_for`], the same formula
+/// `electricity-tools::regex` already sizes its own limit with) --
+/// never fancy-regex's flat 1,000,000 default, which an otherwise-
+/// ordinary-length instance can exhaust through a lookaround this
+/// translation emits (non-MULTILINE `$`, `\b`/`\B`, a lookbehind) even
+/// though Python's own `re` (no such limit at all) matches it instantly
+/// (issue #498's own orchestrator follow-up, finding V4, probe-schema9
+/// c5). Never silently treats a *build* failure (fancy-regex rejecting
+/// syntax Python's own `re` accepts, e.g. a backreference inside a
+/// lookbehind -- `electricity-tools::regex`'s own module docs, finding
+/// V3, probe-schema9 c4) or this *match* call's own backtrack-limit
+/// error as a match: either one calls [`raise_python_exception`]
+/// instead, a documented, narrower divergence (`DESIGN.md` §13)
+/// `validate_prompt_schema` reports as a generic, non-retryable failure
+/// rather than a wrong `schema_invalid`/`Valid` verdict.
+fn pattern_is_match(pattern: &str, text: &str) -> bool {
+    let Ok(translated) = translated_pattern(pattern) else {
+        // Only reachable from the `additionalProperties` joined-pattern
+        // path, which checks `translated_pattern` itself first and
+        // never calls this at all once it has -- every other caller is
+        // already gated by `schema_is_fully_supported`.
+        return false;
+    };
+    let limit = electricity_pyre::backtrack_limit_for(text.len());
+    let compiled = match fancy_regex::RegexBuilder::new(&translated)
+        .backtrack_limit(limit)
+        .build()
+    {
+        Ok(re) => re,
+        Err(e) => {
+            raise_python_exception(format!(
+                "electricity's regex engine cannot compile the pattern {} that Python's `re` \
+                 accepts: {e}",
+                Value::Str(pattern.to_string()).py_repr(),
+            ));
+            return false;
+        }
+    };
+    match compiled.is_match(text) {
+        Ok(matched) => matched,
+        Err(e) => {
+            raise_python_exception(format!(
+                "electricity's regex engine gave up matching the pattern {} (Python's `re` has \
+                 no backtracking limit at all): {e}",
+                Value::Str(pattern.to_string()).py_repr(),
+            ));
+            false
+        }
+    }
 }
 
 /// Every keyword [`evaluate`] understands on its own, needing no
@@ -1785,6 +2232,21 @@ fn schema_is_fully_supported_inner(
                 // `$id` (`is_root`) changes nothing a same-document
                 // `"#/..."` pointer's own resolution needs, so it stays
                 // a plain annotation.
+                // A nested (non-root) `$schema` switches `jsonschema`'s
+                // own validator -- and therefore draft -- for that
+                // subschema and everything under it (`referencing`'s
+                // own per-resource specification detection); this
+                // engine always validates the *whole* document under
+                // one draft (`validate_prompt_schema`'s own top-level
+                // `is_2020_12_or_unset` check), so a nested `$schema`
+                // routes to the crate instead rather than silently
+                // validating that subtree under the wrong draft (issue
+                // #498's own orchestrator follow-up, P2 "nested
+                // `$schema`"). The document's own top-level `$schema`
+                // is already how `is_2020_12_or_unset` picked a draft
+                // in the first place, so it stays a plain annotation
+                // here, the same as `"$id"`.
+                "$schema" => is_root,
                 "$id" => is_root,
                 // A `$ref` that doesn't resolve is not, by itself, a
                 // reason to fall back to the crate: Python resolves a
@@ -2321,6 +2783,87 @@ mod tests {
             Value::Dict(dict),
         ];
         assert!(!py_uniq(&items));
+    }
+
+    /// A `NaN` nested inside a list is a duplicate of another nested
+    /// `NaN` -- within *one* decoded instance every `NaN` literal is
+    /// CPython's own `json` scanner's shared singleton, so `equal()`'s
+    /// own `one is two` identity check (at every recursion level) makes
+    /// `[[nan], [nan]]` collide even though `nan == nan` is plain-`==`
+    /// false (confirmed directly against Python; issue #498's own
+    /// orchestrator follow-up, NaN uniqueness edges).
+    #[test]
+    fn uniq_items_dedupes_a_nan_nested_inside_a_list() {
+        let items = vec![
+            Value::List(vec![Value::Float(f64::NAN)]),
+            Value::List(vec![Value::Float(f64::NAN)]),
+        ];
+        assert!(!py_uniq(&items));
+    }
+
+    /// Confirmed directly against Python: a bare top-level `NaN` *can*
+    /// still miss a duplicate, same shape as
+    /// `uniq_items_misses_a_duplicate_a_tied_but_unequal_element_
+    /// separates` above -- `[NaN, 1, NaN]` sorts (every `NaN`
+    /// comparison is plain `False`, never a `TypeError`) to leave `1`
+    /// sitting between the array's own two `NaN`s, and the adjacency
+    /// check never compares them to each other at all. A documented,
+    /// narrower residual gap (`DESIGN.md` §13): [`py_uniq`]'s own
+    /// hash-bucketed fast path (needed so a 50,000-element array stays
+    /// fast, [`uniq_items_stays_fast_at_scale`] above) counts every
+    /// `NaN` together regardless of what sits between them, so this
+    /// specific case (a bare `NaN` *and* a bare non-`NaN` scalar mixed
+    /// at the same top level) still diverges from Python's own result.
+    #[test]
+    fn uniq_items_bare_nan_separated_by_a_scalar_is_a_documented_divergence() {
+        let items = vec![
+            Value::Float(f64::NAN),
+            Value::from(1i64),
+            Value::Float(f64::NAN),
+        ];
+        assert!(
+            !py_uniq(&items),
+            "documented divergence: Python itself says unique here"
+        );
+    }
+
+    /// Finding C1: `[T]::sort_by` can panic (a transitivity-violation
+    /// check in Rust's own sort implementation) when fed a comparator
+    /// that isn't a genuine total order -- mapping "incomparable" to
+    /// `Equal` used to do exactly that. A randomized sweep over mixed
+    /// types (including several `dict`s, which make the whole list
+    /// unorderable), nested lists, `None`, `bool`s and `NaN`, at sizes
+    /// both below and at/above the `n = 64` single-run threshold, must
+    /// never panic regardless of what [`py_uniq`] it lands on.
+    #[test]
+    fn uniq_items_never_panics_on_a_randomized_mix_of_types() {
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next_u64 = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _trial in 0..500 {
+            let n = (next_u64() % 210) as usize;
+            let items: Vec<Value> = (0..n)
+                .map(|_| match next_u64() % 8 {
+                    0 => Value::from((next_u64() % 5) as i64),
+                    1 => Value::Str(format!("s{}", next_u64() % 5)),
+                    2 => Value::Bool(next_u64() % 2 == 0),
+                    3 => Value::None,
+                    4 => Value::Float(f64::NAN),
+                    5 => Value::List(vec![Value::from((next_u64() % 3) as i64)]),
+                    6 => Value::List(vec![Value::List(vec![Value::Float(f64::NAN)])]),
+                    _ => {
+                        let mut d = Dict::new();
+                        d.insert(key("k"), Value::from((next_u64() % 3) as i64));
+                        Value::Dict(d)
+                    }
+                })
+                .collect();
+            let _ = py_uniq(&items); // must not panic, whatever the verdict
+        }
     }
 
     /// Issue #498's own orchestrator follow-up, finding N11: `anyOf`

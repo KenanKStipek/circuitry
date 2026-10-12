@@ -12,5 +12,8 @@
 //! translate, and `electricity/DESIGN.md` §7.3/§16 for the accepted,
 //! documented parity gaps.
 
+mod backtrack;
 mod regex_unicode;
 pub mod translate;
+
+pub use backtrack::backtrack_limit_for;

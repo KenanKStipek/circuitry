@@ -659,6 +659,19 @@ pub fn validate_prompt_schema(
     engine::clear_pattern_cache();
     engine::clear_fully_supported_cache();
 
+    // `jsonschema.validate`'s own `check_schema` step validates
+    // *schema* against its draft's metaschema before anything else
+    // happens at all, regardless of draft and regardless of whether
+    // the schema is otherwise fully supported -- a Python-`re`-invalid
+    // `pattern`/`patternProperties` key anywhere in the document is
+    // always a `SchemaError`, never routed to crate authority (whose
+    // own ECMA-262 regex engine can silently accept syntax Python's
+    // own `re` rejects) and never a wrong accept (issue #498's own
+    // orchestrator follow-up, finding V2).
+    if let Some(message) = engine::find_invalid_pattern(schema) {
+        return PromptSchemaCheck::SchemaError(message);
+    }
+
     let result = if is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema)
     {
         // Ruling R6 (orchestrator follow-up), tightened by finding F5:

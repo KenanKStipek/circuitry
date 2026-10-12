@@ -135,20 +135,51 @@ fn a_pure_ref_cycle_reports_the_recursion_error_text_not_a_crash() {
     );
 }
 
-/// Pins the exact native-thread-stack safety margin this engine's own
-/// cycle detection relies on (`MAX_RECURSION_DEPTH`'s own module docs,
+/// Pins the realistic safety margin this engine's own cycle detection
+/// relies on (`MAX_RECURSION_DEPTH`'s own module docs,
 /// `electricity-schema/src/engine.rs`): a decoder-max-depth instance
 /// (`electricity_value::MAX_DEPTH`, the JSON decoder's own ceiling -- no
 /// real document's instance can ever nest deeper than this) against the
-/// tree-shaped recursive schema, run on an unoptimized debug build's
-/// *default* main-thread stack (no `std::thread::Builder::stack_size`
-/// override at all, unlike every other depth-safety test in this
-/// workspace -- a real `cof run` validates a prompt's schema on
-/// electricity's own main thread, never a thread this test's own 2MiB
-/// convention would reproduce).
+/// tree-shaped recursive schema, run on whatever stack `cargo test`'s
+/// own harness gives this test's thread -- *not* "electricity's own
+/// main thread", despite what an earlier revision of this comment
+/// claimed (`cargo test` always runs every test on its own spawned
+/// worker thread, never literally the process's own `main`; the real
+/// `electricity` binary's main thread is a separate, generally *larger*
+/// stack this test was never actually exercising). [`max_recursion_
+/// depth_cap_does_not_overflow_a_dedicated_stack`] below covers the
+/// worst case explicitly, on a stack sized to not depend on either
+/// platform's own default.
 #[test]
-fn decoder_max_depth_instance_does_not_overflow_the_main_threads_own_stack() {
+fn decoder_max_depth_instance_does_not_overflow_the_default_test_thread_stack() {
     let schema = tree_ref_schema();
     let instance = chain(electricity_value::MAX_DEPTH, json!(1));
     assert_eq!(check(&schema, &instance), PromptSchemaCheck::Valid);
+}
+
+/// [`decoder_max_depth_instance_does_not_overflow_the_default_test_
+/// thread_stack`] only reaches `electricity_value::MAX_DEPTH` (512)
+/// levels of *instance* nesting -- comfortably under
+/// `MAX_RECURSION_DEPTH` (4096) itself, since a real document's
+/// instance can never decode any deeper. This test instead constructs
+/// an instance deeper than any real decoder would ever produce (bypassing
+/// the decoder entirely, straight through `value_from_json`), chosen so
+/// the self-referencing (linked-list) schema's own per-level `evaluate`
+/// frames land close to the cap itself -- and runs it on an explicit,
+/// generously sized stack (`std::thread::Builder::stack_size`, the same
+/// convention every other depth-safety test in this workspace uses) so
+/// the result doesn't depend on whatever stack size a test harness or
+/// platform happens to default to.
+#[test]
+fn max_recursion_depth_cap_does_not_overflow_a_dedicated_stack() {
+    let schema = self_ref_schema();
+    let instance = chain(2000, json!(1));
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || check(&schema, &instance))
+        .expect("spawn a dedicated-stack thread");
+    assert_eq!(
+        handle.join().expect("the spawned thread must not panic"),
+        PromptSchemaCheck::Valid
+    );
 }
