@@ -1,0 +1,28 @@
+name: prompt-in-loops-and-use
+adapter: scripted
+model: m
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    name: L
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: prompt
+        name: p
+        template: "named {{item}}"
+  - type: loop
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: prompt
+        name: q
+        template: "unnamed {{item}}"
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: prompt
+          name: r
+          template: "in use"

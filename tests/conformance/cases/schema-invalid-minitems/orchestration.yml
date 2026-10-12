@@ -1,0 +1,13 @@
+name: schema-invalid-minitems
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    schema:
+      type: array
+      items: {type: string}
+      minItems: 2
+    template: "give json"

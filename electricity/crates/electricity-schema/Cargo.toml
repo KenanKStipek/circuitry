@@ -15,6 +15,11 @@ description = "Offline JSON Schema (Draft 7) validation against Circuitry's own 
 # dependency for the `pattern` keyword, so nothing further is added for it.
 jsonschema = { version = "0.26", default-features = false }
 serde_json = "1"
+# `validate_prompt_schema`'s own Python-`jsonschema`-style message text
+# (issue #498 ruling 6, tightened by PR #502's review) -- `py_repr`/
+# `py_float_repr` for rendering a failing instance/limit the same way
+# Python's own `%r`/`repr()` would.
+electricity-value = { path = "../electricity-value" }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

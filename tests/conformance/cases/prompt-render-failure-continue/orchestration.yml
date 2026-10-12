@@ -1,0 +1,8 @@
+name: prompt-render-failure-continue
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: broken
+    template: "{{input.n.0}}"
+    on_error: continue

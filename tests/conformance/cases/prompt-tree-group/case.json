@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime.execute, issue #498",
+  "description": "Two prompts in a tree dynamic sharing a group with a `runtime.concurrency_groups` limit of 1 -- one limiter slot per pass, the entire fallback chain, acquired/released around each prompt's own call; both still run to completion and land in state identically regardless of dispatch order (review of PR #502, finding 4).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

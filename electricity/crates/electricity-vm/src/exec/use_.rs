@@ -1411,6 +1411,10 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.warning(message);
     }
 
+    fn record_totals(&self, meta: &Value) {
+        self.parent.record_totals(meta);
+    }
+
     fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
         self.parent.graft_child_write(node_path, snapshot);
     }

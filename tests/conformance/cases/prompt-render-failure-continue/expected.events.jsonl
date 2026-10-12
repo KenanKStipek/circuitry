@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-12T04:17:15.895Z","ev":"run_start","run_id":"c1e879eb-1711-46a4-bfab-8fcbf83ac6c4","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":94289}
+{"v":1,"seq":1,"ts":"2026-10-12T04:17:15.902Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T04:17:15.902Z","ev":"start","id":1,"path":"prime.broken"}
+{"v":1,"seq":3,"ts":"2026-10-12T04:17:15.902Z","ev":"end","id":1,"path":"prime.broken","ok":false,"ms":0,"error":"template: could not render: 'int' object is not subscriptable"}
+{"v":1,"seq":4,"ts":"2026-10-12T04:17:15.902Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-12T04:17:15.902Z","ev":"run_end","ok":true}

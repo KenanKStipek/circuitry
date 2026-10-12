@@ -94,6 +94,8 @@ use jsonschema::primitive_type::PrimitiveType;
 use jsonschema::{Keyword, ValidationError};
 use serde_json::{Map, Number, Value};
 
+mod python_message;
+
 /// The marker key `electricity-compiler`'s `schema_instance.rs` wraps a
 /// `Date`/`DateTime`/`Bytes`/`NaN`/`Infinity` value's text under,
 /// standing in for a Python value with no `serde_json::Value` shape of
@@ -604,10 +606,14 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptSchemaCheck {
     Valid,
-    /// `jsonschema.ValidationError.message` text (never required to
-    /// match Circuitry's own Python `jsonschema` text word for word --
-    /// see this crate's own docs; the `"Schema validation failed: "`
-    /// prefix is the caller's, as it is in `core/prompt.py`).
+    /// `jsonschema.ValidationError.message` text -- matched exactly
+    /// against Python's own `jsonschema` output for the keyword
+    /// families [`python_message::python_message`] covers (issue #498
+    /// ruling 6, tightened by PR #502's review finding 2/orchestrator
+    /// ruling 2); `oneOf`/`anyOf` fall back to the `jsonschema` crate's
+    /// own `Display` text, a known, narrower gap now (`DESIGN.md` §13).
+    /// The `"Schema validation failed: "` prefix is the caller's, as
+    /// it is in `core/prompt.py`.
     Invalid(String),
     /// The schema itself doesn't compile into a validator at all
     /// (`jsonschema.SchemaError`, which `_validate_schema`'s own
@@ -618,16 +624,20 @@ pub enum PromptSchemaCheck {
 
 /// `jsonschema.validate(value, schema)`, draft auto-selected from
 /// *schema*'s own `$schema` (defaulting to the latest draft) exactly
-/// as Python's own `jsonschema.validate` does.
+/// as Python's own `jsonschema.validate` does -- including Python's own
+/// `best_match` error *selection* among every violation, not just the
+/// first one `iter_errors` happens to yield (issue #498 ruling 6,
+/// tightened by PR #502's review finding 2/orchestrator ruling 2).
 pub fn validate_prompt_schema(schema: &Value, instance: &Value) -> PromptSchemaCheck {
     let validator = match jsonschema::validator_for(schema) {
         Ok(validator) => validator,
         Err(err) => return PromptSchemaCheck::SchemaError(err.to_string()),
     };
-    match validator.validate(instance) {
-        Ok(()) => PromptSchemaCheck::Valid,
-        Err(err) => {
-            let message = substitute_value_prefix(&err.instance, err.to_string());
+    match python_message::best_match(validator.iter_errors(instance)) {
+        None => PromptSchemaCheck::Valid,
+        Some(err) => {
+            let message = python_message::python_message(&err, schema)
+                .unwrap_or_else(|| substitute_value_prefix(&err.instance, err.to_string()));
             PromptSchemaCheck::Invalid(message)
         }
     }
@@ -960,51 +970,59 @@ mod prompt_schema_tests {
     #[test]
     fn a_missing_required_property_is_invalid() {
         let schema = json!({"type": "object", "required": ["a"]});
-        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!({}))
-        else {
-            panic!("expected Invalid");
-        };
-        assert!(message.contains("required") && message.contains('a'));
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!({})),
+            PromptSchemaCheck::Invalid("'a' is a required property".to_string())
+        );
     }
 
     #[test]
     fn a_type_mismatch_is_invalid() {
         let schema = json!({"type": "string"});
-        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!(5)) else {
-            panic!("expected Invalid");
-        };
-        assert!(message.contains("string"));
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!(5)),
+            PromptSchemaCheck::Invalid("5 is not of type 'string'".to_string())
+        );
     }
 
     #[test]
     fn an_enum_mismatch_is_invalid() {
         let schema = json!({"enum": ["a", "b"]});
-        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!("c"))
-        else {
-            panic!("expected Invalid");
-        };
-        assert!(message.contains("is not one of"));
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!("c")),
+            PromptSchemaCheck::Invalid("'c' is not one of ['a', 'b']".to_string())
+        );
     }
 
     #[test]
     fn additional_properties_false_rejects_an_extra_key() {
-        let schema = json!({"type": "object", "additionalProperties": false});
-        let PromptSchemaCheck::Invalid(message) =
-            validate_prompt_schema(&schema, &json!({"extra": 1}))
-        else {
-            panic!("expected Invalid");
-        };
-        assert!(message.contains("does not allow"));
+        // `properties` must be declared (even empty) for the `jsonschema`
+        // Rust crate to report one combined `AdditionalProperties` error
+        // for every extra key -- with no `properties` keyword at all, it
+        // validates each extra key against the bare `false` schema
+        // instead (`FalseSchema`, a different, per-key error), unlike
+        // Python's own `additionalProperties` keyword handler, which
+        // always collects every extra key into one list regardless.
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {}},
+            "additionalProperties": false
+        });
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!({"a": 1, "extra": 2})),
+            PromptSchemaCheck::Invalid(
+                "Additional properties are not allowed ('extra' was unexpected)".to_string()
+            )
+        );
     }
 
     #[test]
     fn min_items_rejects_a_short_array() {
         let schema = json!({"type": "array", "minItems": 2});
-        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!([1]))
-        else {
-            panic!("expected Invalid");
-        };
-        assert!(message.contains("less than 2 items"));
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!([1])),
+            PromptSchemaCheck::Invalid("[1] is too short".to_string())
+        );
     }
 
     #[test]
@@ -1021,7 +1039,7 @@ mod prompt_schema_tests {
         });
         assert_eq!(
             validate_prompt_schema(&schema, &json!({})),
-            PromptSchemaCheck::Invalid("\"a\" is a required property".to_string())
+            PromptSchemaCheck::Invalid("'a' is a required property".to_string())
         );
     }
 

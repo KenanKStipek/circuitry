@@ -71,18 +71,16 @@ fn warnings_list(store: &Store, node: &NodeRef) -> Vec<Value> {
     }
 }
 
-fn push_warning(
-    store: &Store,
-    meta_node: &NodeRef,
-    name: &str,
-    warning: String,
-    observer: &dyn RunObserver,
-) {
+fn push_warning(store: &Store, meta_node: &NodeRef, name: &str, warning: String) {
     // `logger.warning("prompt %r: %s", name, w)` -- Python's `%r` is
     // `repr(name)`, never Rust's own `{:?}` (double-quoted) Debug form.
+    // Ruling 8: `log::warn!` carries this, the same as every other
+    // `_add_warnings` line -- there is no second, `RunObserver::warning`
+    // channel for it (review of PR #502, P2 note b: once that hook is
+    // wired to stderr, a second call here would print every prompt
+    // warning twice).
     let name_repr = Value::Str(name.to_string()).py_repr();
     log::warn!("prompt {name_repr}: {warning}");
-    observer.warning(&format!("prompt {name_repr}: {warning}"));
     let mut current = warnings_list(store, meta_node);
     current.push(Value::Str(warning));
     set_leaf(store, meta_node, "warnings", Value::List(current));
@@ -116,6 +114,18 @@ fn prompt_type_str(prompt_type: PromptType) -> &'static str {
 fn raw_dict(node: &Option<ParamNode>) -> Option<&Dict> {
     match node {
         Some(ParamNode::Literal(Value::Dict(dict))) => Some(dict),
+        _ => None,
+    }
+}
+
+/// `self.defn.schema` read as Python reads it: `{}` is falsy, so an
+/// empty schema means no schema at all, not "validate against
+/// nothing" (`prompt.py:1199-1203`, `:1357`). The compiler only
+/// rejects a missing schema (`core/compiler.py:1536-1537`), never an
+/// empty one, so `PromptOp::schema` can legitimately hold `Some({})`.
+fn truthy_schema(schema: &Option<Value>) -> Option<&Value> {
+    match schema {
+        Some(value @ Value::Dict(dict)) if !dict.is_empty() => Some(value),
         _ => None,
     }
 }
@@ -338,7 +348,7 @@ fn decode_and_validate(
             electricity_tools::PyExc::AnswerParseError,
         )
     })?;
-    if let Some(schema) = &prompt.schema {
+    if let Some(schema) = truthy_schema(&prompt.schema) {
         if matches!(
             prompt.prompt_type,
             PromptType::Json | PromptType::Object | PromptType::Array
@@ -389,10 +399,9 @@ fn record_reply(
     name: &str,
     result: &crate::adapter::GenerateResult,
     option_warnings: &[String],
-    observer: &dyn RunObserver,
 ) {
     pop_leaf(meta_node, "finish_reason");
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = result.warnings.clone();
     if let Some(finish_reason) = &result.finish_reason {
         set_leaf(
             store,
@@ -417,9 +426,8 @@ fn record_reply(
     } else {
         pop_leaf(meta_node, "warnings");
     }
-    warnings.extend(result.warnings.iter().cloned());
     for warning in warnings {
-        push_warning(store, meta_node, name, warning, observer);
+        push_warning(store, meta_node, name, warning);
     }
 }
 
@@ -440,7 +448,6 @@ async fn generate_with_fallbacks(
     run_ctx: &RunContext<'_>,
     call_path: &EffectPath,
     token: &CancellationToken,
-    observer: &dyn RunObserver,
 ) -> Result<PassOutcome, HardStop> {
     let mut attempts_meta: Vec<Value> = Vec::new();
     let mut last_failure: Option<LastFailure> = None;
@@ -533,7 +540,7 @@ async fn generate_with_fallbacks(
                 });
             }
             Ok(result) => {
-                record_reply(store, meta_node, name, &result, option_warnings, observer);
+                record_reply(store, meta_node, name, &result, option_warnings);
                 match decode_and_validate(prompt, meta_node, store, &result.text) {
                     Ok(decoded_value) => {
                         attempts_meta.push(
@@ -716,6 +723,7 @@ pub(crate) async fn execute_prompt(
             set_leaf(store, &effect_node, "value", Value::None);
             let effect_path = frame.effect_path(&op.path);
             let instance = observer.effect_start(&effect_path);
+            observer.record_totals(&store.snapshot(&meta_node));
             observer.effect_complete(&effect_path, instance, Some(&redact_str(&message)));
             observer.write();
             if op.on_error == OnError::Fail {
@@ -730,11 +738,16 @@ pub(crate) async fn execute_prompt(
         }
     };
 
-    let resolved_model = prompt
-        .model
-        .clone()
+    // `resolved_model = defn.model or self.model` (`prompt.py:513`) --
+    // Python's `or` is falsy for `""` too, not just `None` (review of
+    // PR #502, P2 note a): a document that writes `model: ""` still
+    // falls back to the run's own default model, `model_reason:
+    // "default"`.
+    let explicit_model = prompt.model.as_deref().filter(|m| !m.is_empty());
+    let resolved_model = explicit_model
+        .map(str::to_string)
         .unwrap_or_else(|| run_ctx.model.to_string());
-    let model_reason = if prompt.model.is_some() {
+    let model_reason = if explicit_model.is_some() {
         "explicit"
     } else {
         "default"
@@ -786,10 +799,6 @@ pub(crate) async fn execute_prompt(
     );
     set_leaf(store, &meta_node, "fallback_recovered", Value::Bool(false));
     pop_leaf(&meta_node, "retries_used");
-    // K2/L2's own model-mode routing/decomposition call-site placeholder:
-    // `_score_and_route`/`_maybe_decompose` are out of scope for this
-    // lane (issue #498 rulings 1-2) -- `meta.complexity`/`meta.decomposition`
-    // are simply never written.
     pop_leaf(&meta_node, "decomposition");
     pop_leaf(&meta_node, "answer");
     pop_leaf(&meta_node, "finish_reason");
@@ -797,6 +806,12 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
+    // K2's own call-site placeholder: `_score_and_route` runs here in
+    // Python (`prompt.py:546-556`), right after `meta.waiting_for` is
+    // set and before `effect_start` fires, writing `meta.complexity`
+    // and (on a routed model) overriding `resolved_model`/`model_reason:
+    // "router"`. Out of scope for this lane (issue #498 ruling 2) --
+    // `meta.complexity` is simply never written.
     observer.write();
 
     let effect_path = frame.effect_path(&op.path);
@@ -880,7 +895,7 @@ pub(crate) async fn execute_prompt(
                 asset_meta.push(record);
             }
             Ok(options::LoadedAsset::NonImageWarning(warning)) => {
-                push_warning(store, &meta_node, name, warning, observer);
+                push_warning(store, &meta_node, name, warning);
             }
             Err(message) => {
                 return finish_failure(
@@ -907,7 +922,7 @@ pub(crate) async fn execute_prompt(
         prompt.prompt_type,
         PromptType::Json | PromptType::Object | PromptType::Array
     ) {
-        prompt.schema.clone()
+        truthy_schema(&prompt.schema).cloned()
     } else {
         None
     };
@@ -924,6 +939,13 @@ pub(crate) async fn execute_prompt(
     let mut totals: (Option<i64>, Option<i64>) = (None, None);
     let mut next_delay_ms = backoff_ms;
 
+    // L2's own call-site placeholder: `_maybe_decompose` runs here in
+    // Python (`prompt.py:624-658`), once before the retry loop starts
+    // -- it either replaces the dispatch entirely (the merged child
+    // result lands at this effect's own path), falls through to an
+    // ordinary dispatch (possibly on a routed-up model), or raises
+    // under `on_failure: fail`. Out of scope for this lane (issue #498
+    // ruling 2) -- `meta.decomposition` is simply never written.
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -993,7 +1015,6 @@ pub(crate) async fn execute_prompt(
             run_ctx,
             &call_path,
             token,
-            observer,
         )
         .await;
         drop(guard);
@@ -1193,5 +1214,236 @@ fn render_prompt<R: electricity_template::ScopeRoot>(
             }
             Ok((rendered, flattened.join("\n\n")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Limiter;
+    use crate::adapter::AdapterRegistry;
+    use electricity_config::ComplexitySettings;
+    use electricity_tools::ToolRegistry;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// A bare-minimum [`RunContext`] -- mirrors `electricity_vm::lib`'s
+    /// own `execute_root_runs_an_empty_document_to_completion` test
+    /// helper, built fresh here since these helpers (`build_attempts`,
+    /// `attempt_timeout_seconds`, ...) are module-private.
+    fn test_run_ctx<'a>(
+        registry: &'a ToolRegistry,
+        limiter: &'a Limiter,
+        runtime_config: &'a Value,
+        complexity: &'a ComplexitySettings,
+        declared_prompts: &'a indexmap::IndexMap<String, String>,
+        effect_names: &'a BTreeSet<String>,
+        adapters: &'a AdapterRegistry,
+    ) -> RunContext<'a> {
+        RunContext {
+            registry,
+            limiter,
+            model: "m",
+            adapter: "_noop",
+            runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity,
+            decomposition_depth: 0,
+            orchestration_dir: Path::new("."),
+            declared_prompts,
+            effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        }
+    }
+
+    fn prompt_op() -> PromptOp {
+        PromptOp {
+            content: PromptContent::Template(electricity_bytecode::template::TemplateText::new(
+                "",
+                true,
+                electricity_bytecode::template::Escape::None,
+            )),
+            prompt_type: PromptType::Text,
+            schema: None,
+            model: None,
+            provider: None,
+            provider_fallbacks: Vec::new(),
+            routing_override: None,
+            model_params: None,
+            timeout_ms: None,
+            deterministic: false,
+            inputs: None,
+            assets: Vec::new(),
+            retries: None,
+            description: None,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn parse_provider_token_blank_gives_the_default_pair() {
+        assert_eq!(
+            parse_provider_token("", "scripted", "m"),
+            ("scripted".to_string(), "m".to_string())
+        );
+        assert_eq!(
+            parse_provider_token("   ", "scripted", "m"),
+            ("scripted".to_string(), "m".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_provider_token_with_no_colon_keeps_the_default_model() {
+        assert_eq!(
+            parse_provider_token("other", "scripted", "m"),
+            ("other".to_string(), "m".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_provider_token_splits_on_the_first_colon_and_strips_both_halves() {
+        assert_eq!(
+            parse_provider_token(" a : b ", "scripted", "m"),
+            ("a".to_string(), "b".to_string())
+        );
+        // `a:` -- an empty model half falls back to the default model.
+        assert_eq!(
+            parse_provider_token("a:", "scripted", "m"),
+            ("a".to_string(), "m".to_string())
+        );
+        // A later colon (inside the model half) is kept, not split on.
+        assert_eq!(
+            parse_provider_token("a:b:c", "scripted", "m"),
+            ("a".to_string(), "b:c".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_provider_token_never_lowercases_the_adapter_half() {
+        assert_eq!(
+            parse_provider_token("Scripted:M2", "scripted", "m"),
+            ("Scripted".to_string(), "M2".to_string())
+        );
+    }
+
+    #[test]
+    fn build_attempts_inserts_provider_at_the_front() {
+        let mut op = prompt_op();
+        op.provider = Some("scripted:other".to_string());
+        assert_eq!(
+            build_attempts(&op, "scripted", "m"),
+            vec![
+                ("scripted".to_string(), "other".to_string()),
+                ("scripted".to_string(), "m".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_attempts_appends_fallbacks_after_the_default() {
+        let mut op = prompt_op();
+        op.provider_fallbacks = vec!["scripted:m2".to_string(), "scripted:m3".to_string()];
+        assert_eq!(
+            build_attempts(&op, "scripted", "m"),
+            vec![
+                ("scripted".to_string(), "m".to_string()),
+                ("scripted".to_string(), "m2".to_string()),
+                ("scripted".to_string(), "m3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_attempts_dedupes_exact_pairs_keeping_the_first_occurrence() {
+        let mut op = prompt_op();
+        op.provider = Some("scripted:m".to_string());
+        op.provider_fallbacks = vec!["scripted:m".to_string(), "scripted:m2".to_string()];
+        // `provider:` duplicates the (default adapter, default model)
+        // pair build_attempts starts from -- kept once, at the front.
+        assert_eq!(
+            build_attempts(&op, "scripted", "m"),
+            vec![
+                ("scripted".to_string(), "m".to_string()),
+                ("scripted".to_string(), "m2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn attempt_timeout_seconds_with_no_timeout_ms_is_the_adapter_budget() {
+        let registry = ToolRegistry::new();
+        let limiter = Limiter::new();
+        let runtime_config = Value::None;
+        let complexity = ComplexitySettings::default();
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let adapters = AdapterRegistry::new();
+        let run_ctx = test_run_ctx(
+            &registry,
+            &limiter,
+            &runtime_config,
+            &complexity,
+            &declared_prompts,
+            &effect_names,
+            &adapters,
+        );
+        assert_eq!(attempt_timeout_seconds("scripted", None, &run_ctx), 120);
+        // `0` is "unset", same as `None` (`_attempt_timeout_seconds`'s
+        // own `if timeout_ms` truthiness check).
+        assert_eq!(attempt_timeout_seconds("scripted", Some(0), &run_ctx), 120);
+    }
+
+    #[test]
+    fn attempt_timeout_seconds_rounds_up_and_caps_at_the_adapter_budget() {
+        let registry = ToolRegistry::new();
+        let limiter = Limiter::new();
+        let runtime_config = Value::None;
+        let complexity = ComplexitySettings::default();
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let adapters = AdapterRegistry::new();
+        let run_ctx = test_run_ctx(
+            &registry,
+            &limiter,
+            &runtime_config,
+            &complexity,
+            &declared_prompts,
+            &effect_names,
+            &adapters,
+        );
+        // 1ms still rounds up to at least one second.
+        assert_eq!(attempt_timeout_seconds("scripted", Some(1), &run_ctx), 1);
+        // 1500ms -> 2s, under the 120s adapter budget.
+        assert_eq!(attempt_timeout_seconds("scripted", Some(1500), &run_ctx), 2);
+    }
+
+    #[test]
+    fn cap_reply_text_leaves_a_short_reply_untouched() {
+        assert_eq!(cap_reply_text("hello"), "hello");
+    }
+
+    #[test]
+    fn cap_reply_text_truncates_by_code_points_not_bytes() {
+        let text: String = "é".repeat(2001);
+        let capped = cap_reply_text(&text);
+        assert!(capped.ends_with("... [truncated, 2001 chars total]"));
+        let (prefix, _) = capped.split_once("...").unwrap();
+        assert_eq!(prefix.chars().count(), 2000);
+    }
+
+    #[test]
+    fn truthy_schema_treats_an_empty_dict_as_none() {
+        assert_eq!(truthy_schema(&None), None);
+        assert_eq!(truthy_schema(&Some(Value::Dict(Dict::new()))), None);
+        let mut non_empty = Dict::new();
+        non_empty.insert(key("type"), Value::Str("object".to_string()));
+        let schema = Value::Dict(non_empty);
+        assert_eq!(truthy_schema(&Some(schema.clone())), Some(&schema));
     }
 }

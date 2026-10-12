@@ -308,11 +308,16 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
 /// effect. A `use` effect's own body never counts on its own (the
 /// placeholder below exists precisely for a default reached *only*
 /// through one) -- only its own `expect:`, when present and model-mode,
-/// does. Every one of these is refused outright before a run reaches
-/// this call under this build's own `Supported` (`prompt`/
-/// `model_condition`/`model_expect` all `false` still) -- this
-/// predicate's own unit tests exercise it directly, against a
-/// hand-built `Op`, rather than through a real run.
+/// does. Lane G (#498) flips `Supported::prompt` to `true`, so a
+/// `prompt` effect itself no longer refuses outright under this
+/// build's own `Supported` -- this predicate still matters for it,
+/// now for a different reason: catching an *unbuildable* default
+/// adapter before a `prompt` ever dispatches to it (this module's own
+/// up-front refusal, below). `model_condition`/`model_expect` stay
+/// `false` (G2), so an `if`/`while`/`expect:` in `mode: model` still
+/// refuses outright regardless. This predicate's own unit tests
+/// exercise it directly, against a hand-built `Op`, rather than
+/// through a real run.
 fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
     use electricity_bytecode::{Condition, ExpectCondition, LeafKind, LoopSpec, NodeKind, Region};
 

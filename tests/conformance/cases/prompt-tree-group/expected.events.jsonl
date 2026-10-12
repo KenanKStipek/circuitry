@@ -1,0 +1,11 @@
+{"v":1,"seq":0,"ts":"2026-10-12T04:21:09.399Z","ev":"run_start","run_id":"cb74c06b-1df4-40f9-bc0d-85e44c9e5fd0","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":98032}
+{"v":1,"seq":1,"ts":"2026-10-12T04:21:09.434Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T04:21:09.434Z","ev":"start","id":1,"path":"prime.fan"}
+{"v":1,"seq":3,"ts":"2026-10-12T04:21:09.434Z","ev":"dispatch","path":"prime.fan","branches":2,"concurrency":2}
+{"v":1,"seq":4,"ts":"2026-10-12T04:21:09.437Z","ev":"start","id":2,"path":"prime.fan.a"}
+{"v":1,"seq":5,"ts":"2026-10-12T04:21:09.438Z","ev":"end","id":2,"path":"prime.fan.a","ok":true,"ms":2}
+{"v":1,"seq":6,"ts":"2026-10-12T04:21:09.438Z","ev":"start","id":3,"path":"prime.fan.b"}
+{"v":1,"seq":7,"ts":"2026-10-12T04:21:09.439Z","ev":"end","id":3,"path":"prime.fan.b","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-12T04:21:09.445Z","ev":"end","id":1,"path":"prime.fan","ok":true,"ms":11}
+{"v":1,"seq":9,"ts":"2026-10-12T04:21:09.445Z","ev":"end","id":0,"path":"prime","ok":true,"ms":11}
+{"v":1,"seq":10,"ts":"2026-10-12T04:21:09.445Z","ev":"run_end","ok":true}
