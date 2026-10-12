@@ -2828,5 +2828,275 @@
       "z": 9007199254740993
     },
     "message": "9007199254740993 is greater than the maximum of 9007199254740992"
+  },
+  {
+    "name": "recursive_tree_ref_is_valid_at_depth_3",
+    "schema": {
+      "$defs": {
+        "node": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "integer"
+            },
+            "c": {
+              "$ref": "#/$defs/node"
+            }
+          }
+        }
+      },
+      "$ref": "#/$defs/node"
+    },
+    "instance": {
+      "v": 1,
+      "c": {
+        "v": 1,
+        "c": {
+          "v": 1
+        }
+      }
+    },
+    "message": null
+  },
+  {
+    "name": "recursive_tree_ref_mismatch_at_the_deepest_leaf",
+    "schema": {
+      "$defs": {
+        "node": {
+          "type": "object",
+          "properties": {
+            "v": {
+              "type": "integer"
+            },
+            "c": {
+              "$ref": "#/$defs/node"
+            }
+          }
+        }
+      },
+      "$ref": "#/$defs/node"
+    },
+    "instance": {
+      "v": 1,
+      "c": {
+        "v": 1,
+        "c": {
+          "v": "bad"
+        }
+      }
+    },
+    "message": "'bad' is not of type 'integer'"
+  },
+  {
+    "name": "recursive_self_ref_is_valid_at_depth_3",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "type": "integer"
+        },
+        "c": {
+          "$ref": "#"
+        }
+      }
+    },
+    "instance": {
+      "v": 1,
+      "c": {
+        "v": 1,
+        "c": {
+          "v": 1
+        }
+      }
+    },
+    "message": null
+  },
+  {
+    "name": "recursive_self_ref_mismatch_at_the_deepest_leaf",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "type": "integer"
+        },
+        "c": {
+          "$ref": "#"
+        }
+      }
+    },
+    "instance": {
+      "v": 1,
+      "c": {
+        "v": 1,
+        "c": {
+          "v": "bad"
+        }
+      }
+    },
+    "message": "'bad' is not of type 'integer'"
+  },
+  {
+    "name": "unrecognized_schema_uri_defaults_to_the_latest_draft",
+    "schema": {
+      "$schema": "http://json-schema.org/schema#",
+      "type": "string"
+    },
+    "instance": 5,
+    "message": "5 is not of type 'string'"
+  },
+  {
+    "name": "an_http_2020_12_schema_uri_also_defaults_to_the_latest_draft",
+    "schema": {
+      "$schema": "http://json-schema.org/draft/2020-12/schema",
+      "type": "string"
+    },
+    "instance": 5,
+    "message": "5 is not of type 'string'"
+  },
+  {
+    "name": "dependencies_is_an_annotation_on_2020_12_not_draft_7s_own_keyword",
+    "schema": {
+      "type": "object",
+      "dependencies": {
+        "a": [
+          "b"
+        ]
+      }
+    },
+    "instance": {
+      "a": 1
+    },
+    "message": null
+  },
+  {
+    "name": "a_misspelled_keyword_is_an_annotation_not_an_unsupported_one",
+    "schema": {
+      "type": "number",
+      "descripton": "typo"
+    },
+    "instance": "x",
+    "message": "'x' is not of type 'number'"
+  },
+  {
+    "name": "min_items_accepts_an_integral_float_limit",
+    "schema": {
+      "minItems": 2.0
+    },
+    "instance": [],
+    "message": "[] is too short"
+  },
+  {
+    "name": "max_contains_renders_its_own_float_repr_in_the_message",
+    "schema": {
+      "contains": {
+        "const": 1
+      },
+      "maxContains": 1.0
+    },
+    "instance": [
+      1,
+      1
+    ],
+    "message": "Too many items match the given schema (expected at most 1.0)"
+  },
+  {
+    "name": "an_empty_pattern_properties_join_never_matches_anything",
+    "schema": {
+      "patternProperties": {
+        "": {}
+      },
+      "additionalProperties": false
+    },
+    "instance": {
+      "x": 1
+    },
+    "message": "'x' does not match any of the regexes: ''"
+  },
+  {
+    "name": "a_leading_inline_flag_in_the_join_scopes_over_every_pattern",
+    "schema": {
+      "patternProperties": {
+        "(?i)^x": {},
+        "^y": {}
+      },
+      "additionalProperties": false
+    },
+    "instance": {
+      "Y": 1
+    },
+    "message": null
+  },
+  {
+    "name": "unique_items_a_duplicate_bool_int_pair_is_not_the_same_value",
+    "schema": {
+      "uniqueItems": true
+    },
+    "instance": [
+      [
+        1
+      ],
+      [
+        true
+      ],
+      [
+        1
+      ]
+    ],
+    "message": null
+  },
+  {
+    "name": "unique_items_a_big_int_equals_its_exact_float_counterpart",
+    "schema": {
+      "uniqueItems": true
+    },
+    "instance": [
+      10000000000000000000,
+      1e+19
+    ],
+    "message": "[10000000000000000000, 1e+19] has non-unique elements"
+  },
+  {
+    "name": "unique_items_i64_max_is_not_its_float_neighbor",
+    "schema": {
+      "uniqueItems": true
+    },
+    "instance": [
+      9223372036854775807,
+      9.223372036854776e+18
+    ],
+    "message": null
+  },
+  {
+    "name": "maximum_compares_a_big_int_against_an_exact_float_limit_precisely",
+    "schema": {
+      "maximum": 9007199254740992.0
+    },
+    "instance": 9007199254740993,
+    "message": "9007199254740993 is greater than the maximum of 9007199254740992.0"
+  },
+  {
+    "name": "a_nested_id_changes_the_ref_base_for_everything_under_it",
+    "schema": {
+      "properties": {
+        "a": {
+          "$id": "http://e/a",
+          "$defs": {
+            "s": {
+              "type": "string"
+            }
+          },
+          "$ref": "#/$defs/s"
+        }
+      },
+      "$defs": {
+        "s": {
+          "type": "integer"
+        }
+      }
+    },
+    "instance": {
+      "a": "x"
+    },
+    "message": null
   }
 ]

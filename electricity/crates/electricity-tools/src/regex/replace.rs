@@ -55,7 +55,7 @@ type PResult<T> = Result<T, String>;
 
 /// Parses *repl* against a pattern with *group_count* capturing groups
 /// and *group_names* (name -> number) -- both from
-/// [`crate::regex::translate::Translated`].
+/// [`electricity_pyre::translate::Translated`].
 pub fn parse_template(
     repl: &str,
     group_count: usize,
@@ -445,7 +445,7 @@ pub fn max_replacements(count: i64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::regex::translate::{ResolvedFlags, translate};
+    use electricity_pyre::translate::{ResolvedFlags, translate};
 
     fn compile(pattern: &str) -> (fancy_regex::Regex, usize, HashMap<String, usize>) {
         let t = translate(pattern, ResolvedFlags::default()).unwrap();

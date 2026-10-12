@@ -22,12 +22,19 @@ jsonschema = { version = "0.26", default-features = false }
 # so this isn't a new feature-unification risk.
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 # `engine.rs`'s own `pattern`/`patternProperties`/`additionalProperties`
-# matching -- the same regex engine (and the same two Python-`re`
-# corrections, `rewrite_digit_class`/`rewrite_trailing_dollar`) the
-# `jsonschema` crate itself already uses internally for every other
-# keyword's own pattern matching; pinned to the same version Cargo.lock
-# already resolves it to as that crate's own transitive dependency.
+# matching -- the same regex engine the `jsonschema` crate itself already
+# uses internally for every other keyword's own pattern matching; pinned
+# to the same version Cargo.lock already resolves it to as that crate's
+# own transitive dependency. Patterns are translated to this engine's own
+# syntax by `electricity-pyre` first (below), never compiled raw.
 fancy-regex = "0.14"
+# The exact CPython-3.11 Python-`re`-to-`fancy-regex` pattern translator
+# (#448 lane D2, issue #479), shared with `electricity-tools::regex` --
+# `pattern`/`patternProperties`/`propertyNames.pattern`/the
+# `additionalProperties`+`patternProperties` filter all compile through
+# it rather than this crate's own, narrower ad hoc `\w`/`\s`/`\d`/`$`
+# rewrites (PR #502's round-4 fix, finding F2).
+electricity-pyre = { path = "../electricity-pyre" }
 # `validate_prompt_schema`'s own Python-`jsonschema`-style message text
 # (issue #498 ruling 6, tightened by PR #502's review and its own
 # orchestrator follow-up) -- `py_repr`/`py_float_repr` for rendering a

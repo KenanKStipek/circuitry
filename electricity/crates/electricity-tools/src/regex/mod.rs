@@ -44,14 +44,14 @@
 //!   `[...]`, so the guard has nowhere to go there.
 
 pub mod replace;
-pub mod translate;
 
 use crate::fs::{get, value_error};
 use crate::{CheckResult, ErrorCause, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
+use electricity_pyre::translate;
+use electricity_pyre::translate::ResolvedFlags;
 use electricity_value::pycompat::PyExc;
 use electricity_value::{Dict, Value};
-use translate::ResolvedFlags;
 
 pub struct RegexPlugin;
 

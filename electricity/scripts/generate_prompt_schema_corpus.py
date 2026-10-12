@@ -476,6 +476,136 @@ def cases() -> list[dict]:
         _case('probe_schema5_c7', {'properties': {'a': {'type': 'string'}, 'z': {'multipleOf': 3}}}, {'a': 1, 'z': 1e+17}),
         _case('probe_schema5_c8', {'patternProperties': {}, 'additionalProperties': False}, {'x': 1}),
         _case('probe_schema5_c9', {'properties': {'a': {'type': 'string'}, 'z': {'maximum': 9007199254740992}}}, {'a': 1, 'z': 9007199254740993}),
+        # PR #502's round-4 fix, finding F1: a schema that is itself
+        # recursive (a `$ref` cycle back to an ancestor) is a real,
+        # finite-instance-terminating shape -- a tree (`recursive_tree_
+        # ref_*`) or a linked list (`recursive_self_ref_*`) -- that
+        # Python validates up to roughly 200-240 levels before its own
+        # `RecursionError`, not an automatic failure at any depth. These
+        # pin the message text at a shallow depth; `tests/recursive_
+        # schema.rs` covers depth 1, 25 and 200 directly in Rust (no
+        # Python recursion-limit risk at *generation* time for the
+        # deeper ones).
+        _case(
+            "recursive_tree_ref_is_valid_at_depth_3",
+            {
+                "$defs": {
+                    "node": {
+                        "type": "object",
+                        "properties": {"v": {"type": "integer"}, "c": {"$ref": "#/$defs/node"}},
+                    }
+                },
+                "$ref": "#/$defs/node",
+            },
+            {"v": 1, "c": {"v": 1, "c": {"v": 1}}},
+        ),
+        _case(
+            "recursive_tree_ref_mismatch_at_the_deepest_leaf",
+            {
+                "$defs": {
+                    "node": {
+                        "type": "object",
+                        "properties": {"v": {"type": "integer"}, "c": {"$ref": "#/$defs/node"}},
+                    }
+                },
+                "$ref": "#/$defs/node",
+            },
+            {"v": 1, "c": {"v": 1, "c": {"v": "bad"}}},
+        ),
+        _case(
+            "recursive_self_ref_is_valid_at_depth_3",
+            {
+                "type": "object",
+                "properties": {"v": {"type": "integer"}, "c": {"$ref": "#"}},
+            },
+            {"v": 1, "c": {"v": 1, "c": {"v": 1}}},
+        ),
+        _case(
+            "recursive_self_ref_mismatch_at_the_deepest_leaf",
+            {
+                "type": "object",
+                "properties": {"v": {"type": "integer"}, "c": {"$ref": "#"}},
+            },
+            {"v": 1, "c": {"v": 1, "c": {"v": "bad"}}},
+        ),
+        # PR #502's round-4 fix: a parallel review of the engine found
+        # more wrong verdicts (findings F3-F10), confirmed against real
+        # `cof run` by probe-schema7's own c0-c20 (NaN/Infinity instances
+        # aren't representable in plain JSON, so those live in
+        # `prompt_schema_tests` -- Rust unit tests -- instead).
+        _case(
+            "unrecognized_schema_uri_defaults_to_the_latest_draft",
+            {"$schema": "http://json-schema.org/schema#", "type": "string"},
+            5,
+        ),
+        _case(
+            "an_http_2020_12_schema_uri_also_defaults_to_the_latest_draft",
+            {"$schema": "http://json-schema.org/draft/2020-12/schema", "type": "string"},
+            5,
+        ),
+        _case(
+            "dependencies_is_an_annotation_on_2020_12_not_draft_7s_own_keyword",
+            {"type": "object", "dependencies": {"a": ["b"]}},
+            {"a": 1},
+        ),
+        _case(
+            "a_misspelled_keyword_is_an_annotation_not_an_unsupported_one",
+            {"type": "number", "descripton": "typo"},
+            "x",
+        ),
+        _case("min_items_accepts_an_integral_float_limit", {"minItems": 2.0}, []),
+        _case(
+            "max_contains_renders_its_own_float_repr_in_the_message",
+            {"contains": {"const": 1}, "maxContains": 1.0},
+            [1, 1],
+        ),
+        _case(
+            "an_empty_pattern_properties_join_never_matches_anything",
+            {"patternProperties": {"": {}}, "additionalProperties": False},
+            {"x": 1},
+        ),
+        _case(
+            "a_leading_inline_flag_in_the_join_scopes_over_every_pattern",
+            {
+                "patternProperties": {"(?i)^x": {}, "^y": {}},
+                "additionalProperties": False,
+            },
+            {"Y": 1},
+        ),
+        _case(
+            "unique_items_a_duplicate_bool_int_pair_is_not_the_same_value",
+            {"uniqueItems": True},
+            [[1], [True], [1]],
+        ),
+        _case(
+            "unique_items_a_big_int_equals_its_exact_float_counterpart",
+            {"uniqueItems": True},
+            [10000000000000000000, 1e19],
+        ),
+        _case(
+            "unique_items_i64_max_is_not_its_float_neighbor",
+            {"uniqueItems": True},
+            [9223372036854775807, 9223372036854775808.0],
+        ),
+        _case(
+            "maximum_compares_a_big_int_against_an_exact_float_limit_precisely",
+            {"maximum": 9007199254740992.0},
+            9007199254740993,
+        ),
+        _case(
+            "a_nested_id_changes_the_ref_base_for_everything_under_it",
+            {
+                "properties": {
+                    "a": {
+                        "$id": "http://e/a",
+                        "$defs": {"s": {"type": "string"}},
+                        "$ref": "#/$defs/s",
+                    }
+                },
+                "$defs": {"s": {"type": "integer"}},
+            },
+            {"a": "x"},
+        ),
     ]
 
 
