@@ -1,7 +1,7 @@
 //! `_walk_schema`/`_declared_output_tokens` (`core/complexity.py:539-612`):
 //! the `output_schema` and `output_size` signals' JSON-Schema-ish walk.
 
-use crate::{as_number, ScoreError, CHARS_PER_TOKEN, TOKENS_PER_ITEM};
+use crate::{CHARS_PER_TOKEN, ScoreError, TOKENS_PER_ITEM, as_number};
 use electricity_value::{Dict, Value};
 
 fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {

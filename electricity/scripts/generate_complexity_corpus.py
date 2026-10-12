@@ -33,7 +33,6 @@ from typing import Any
 
 from circuitry.core.complexity import (
     DEFAULT_KEYWORD_WEIGHTS,
-    DEFAULT_WEIGHTS,
     SIGNAL_NAMES,
     score,
 )
@@ -80,7 +79,7 @@ def run_case(
 
     try:
         result = score(**kwargs)
-    except Exception as exc:  # noqa: BLE001 -- recording the raise *is* the test.
+    except Exception as exc:
         return {
             "description": description,
             "input": input_json,
@@ -240,22 +239,22 @@ def family_output_schema() -> list[dict[str, Any]]:
 
 def family_output_size() -> list[dict[str, Any]]:
     cases = []
-    for key in ["max_tokens", "num_predict", "max_output_tokens"]:
-        for value in [100, 100.0, True, "100", 0, -5, float("nan"), float("inf")]:
-            cases.append(
-                run_case(
-                    f"output_size params.{key}={value!r}",
-                    definition=_basic_definition(template="x", params={key: value}),
-                )
-            )
-    for key in ["maxLength", "maxItems", "maxProperties"]:
-        for value in [400, 400.0, True, "400", 0, -5, float("nan"), float("inf")]:
-            cases.append(
-                run_case(
-                    f"output_size schema.{key}={value!r}",
-                    definition=_basic_definition(template="x", schema={key: value}),
-                )
-            )
+    cases.extend(
+        run_case(
+            f"output_size params.{key}={value!r}",
+            definition=_basic_definition(template="x", params={key: value}),
+        )
+        for key in ["max_tokens", "num_predict", "max_output_tokens"]
+        for value in [100, 100.0, True, "100", 0, -5, float("nan"), float("inf")]
+    )
+    cases.extend(
+        run_case(
+            f"output_size schema.{key}={value!r}",
+            definition=_basic_definition(template="x", schema={key: value}),
+        )
+        for key in ["maxLength", "maxItems", "maxProperties"]
+        for value in [400, 400.0, True, "400", 0, -5, float("nan"), float("inf")]
+    )
     cases.append(
         run_case(
             "output_size maxItems with items.maxLength",
@@ -274,13 +273,13 @@ def family_output_size() -> list[dict[str, Any]]:
             definition=_basic_definition(template="x", params={"max_tokens": 128}, schema={"maxLength": 512}),
         )
     )
-    for n in [2, 6, 10, 14]:
-        cases.append(
-            run_case(
-                f"output_size half-even tie maxLength={n}",
-                definition=_basic_definition(template="x", schema={"maxLength": n * 4 + 2}),
-            )
+    cases.extend(
+        run_case(
+            f"output_size half-even tie maxLength={n}",
+            definition=_basic_definition(template="x", schema={"maxLength": n * 4 + 2}),
         )
+        for n in [2, 6, 10, 14]
+    )
     cases.append(
         run_case(
             "output_size fractional max_tokens half-even",
@@ -297,17 +296,18 @@ def family_output_size() -> list[dict[str, Any]]:
 
 
 def family_structural_position() -> list[dict[str, Any]]:
-    cases = []
-    for depth in range(0, 11):
-        cases.append(run_case(f"structural_position depth {depth}", rendered_prompt="x", structure={"depth": depth}))
-    for loop_depth in [0, 1, 2, 5]:
-        cases.append(
-            run_case(
-                f"structural_position loop_depth {loop_depth}",
-                rendered_prompt="x",
-                structure={"depth": 1, "loop_depth": loop_depth},
-            )
+    cases = [
+        run_case(f"structural_position depth {depth}", rendered_prompt="x", structure={"depth": depth})
+        for depth in range(11)
+    ]
+    cases.extend(
+        run_case(
+            f"structural_position loop_depth {loop_depth}",
+            rendered_prompt="x",
+            structure={"depth": 1, "loop_depth": loop_depth},
         )
+        for loop_depth in [0, 1, 2, 5]
+    )
     cases.append(run_case("structural_position reflector", rendered_prompt="x", structure={"depth": 1, "reflector_generated": True}))
     cases.append(run_case("structural_position in_loop true", rendered_prompt="x", structure={"in_loop": True}))
     cases.append(run_case("structural_position in_loop with loop_depth 0", rendered_prompt="x", structure={"loop_depth": 0, "in_loop": True}))
@@ -329,15 +329,22 @@ def family_structural_position() -> list[dict[str, Any]]:
 
 
 def family_keywords() -> list[dict[str, Any]]:
-    cases = []
     suffixes = ["", "e", "es", "s", "ed", "ing", "ion", "ions"]
-    for phrase in list(DEFAULT_KEYWORD_WEIGHTS)[:6]:
+
+    def phrase_and_base(phrase: str) -> tuple[str, str]:
         stem = phrase.lower().rstrip()
         base = stem[:-1] if len(stem) > 3 and stem.endswith("e") else stem
-        for suffix in suffixes:
-            cases.append(run_case(f"keyword {phrase!r} + {suffix!r}", rendered_prompt=f"please {base}{suffix} this"))
-    for near_miss in ["planning", "inference", "reasonable"]:
-        cases.append(run_case(f"keyword near-miss {near_miss!r}", rendered_prompt=f"a {near_miss} example"))
+        return phrase, base
+
+    cases = [
+        run_case(f"keyword {phrase!r} + {suffix!r}", rendered_prompt=f"please {base}{suffix} this")
+        for phrase, base in (phrase_and_base(p) for p in list(DEFAULT_KEYWORD_WEIGHTS)[:6])
+        for suffix in suffixes
+    ]
+    cases.extend(
+        run_case(f"keyword near-miss {near_miss!r}", rendered_prompt=f"a {near_miss} example")
+        for near_miss in ["planning", "inference", "reasonable"]
+    )
 
     boundary_cases = [
         "under_score_analyze",
@@ -349,8 +356,7 @@ def family_keywords() -> list[dict[str, Any]]:
         "analyze's",
         "co-analyze",
     ]
-    for text in boundary_cases:
-        cases.append(run_case(f"keyword boundary {text!r}", rendered_prompt=text))
+    cases.extend(run_case(f"keyword boundary {text!r}", rendered_prompt=text) for text in boundary_cases)
 
     cases.append(run_case("keyword turkish dotted I", rendered_prompt="İstanbul", keyword_weights={"istanbul": 0.5}))
     cases.append(run_case("keyword greek final sigma", rendered_prompt="ΟΔΥΣΣΕΎΣ", keyword_weights={"οδυσσεύς": 0.5}))
@@ -420,20 +426,30 @@ def family_weights() -> list[dict[str, Any]]:
     cases.append(run_case("weights not a mapping", rendered_prompt="x", weights="nope"))
     cases.append(run_case("weights non-number", rendered_prompt="x", weights={"prompt_size": "big"}))
     cases.append(run_case("weights negative", rendered_prompt="x", weights={"prompt_size": -2}))
-    cases.append(run_case("weights all zero", rendered_prompt="x", weights={n: 0 for n in SIGNAL_NAMES}))
+    cases.append(run_case("weights all zero", rendered_prompt="x", weights=dict.fromkeys(SIGNAL_NAMES, 0)))
     cases.append(run_case("weights nan", rendered_prompt="x", weights={"prompt_size": float("nan")}))
     cases.append(run_case("weights inf", rendered_prompt="x", weights={"prompt_size": float("inf")}))
     cases.append(run_case("weights round to zero", rendered_prompt="x", weights={"prompt_size": 0.0000001}))
     cases.append(run_case("weights scorer default table", rendered_prompt="x"))
-    cases.append(run_case("weights config default table", rendered_prompt="x", weights={n: v for n, v in [("prompt_size", 1.0), ("state_references", 1.5), ("prompt_type", 0.75), ("output_schema", 1.25), ("output_size", 1.0), ("structural_position", 0.5), ("keywords", 1.0)]}))
+    config_default_weights = {
+        "prompt_size": 1.0,
+        "state_references": 1.5,
+        "prompt_type": 0.75,
+        "output_schema": 1.25,
+        "output_size": 1.0,
+        "structural_position": 0.5,
+        "keywords": 1.0,
+    }
+    cases.append(run_case("weights config default table", rendered_prompt="x", weights=config_default_weights))
     return cases
 
 
 def family_definition_shape() -> list[dict[str, Any]]:
     cases = [run_case("definition none no rendered")]
     cases.append(run_case("definition none with rendered", rendered_prompt="x"))
-    for scalar in ["text", 5, 5.0, True]:
-        cases.append(run_case(f"definition scalar {scalar!r}", definition=scalar))
+    cases.extend(
+        run_case(f"definition scalar {scalar!r}", definition=scalar) for scalar in ["text", 5, 5.0, True]
+    )
     cases.append(run_case("definition non-string template", definition=_basic_definition(template=5)))
     cases.append(run_case("definition empty template with messages", definition=_basic_definition(template="", messages=[{"role": "user", "content": "hi"}])))
     cases.append(run_case("definition non-string message content", definition=_basic_definition(messages=[{"role": "user", "content": 5}])))

@@ -60,10 +60,10 @@ mod router;
 mod schema;
 mod tags;
 
-pub use router::{route_model, RouteDecision};
+pub use router::{RouteDecision, route_model};
 
 use electricity_config::ScoringSettings;
-use electricity_value::pycompat::{py_strip, PyExc};
+use electricity_value::pycompat::{PyExc, py_strip};
 use electricity_value::{Dict, Value};
 use std::sync::OnceLock;
 
@@ -198,7 +198,9 @@ impl StructureContext {
     /// = {"depth": 10**400}` raises there too). A non-`Result` signature
     /// could only reproduce this by silently not raising, which would be
     /// the actual divergence; this one is documented and literal.
-    pub fn from_value(value: Option<&Value>) -> Result<(StructureContext, Vec<String>), ScoreError> {
+    pub fn from_value(
+        value: Option<&Value>,
+    ) -> Result<(StructureContext, Vec<String>), ScoreError> {
         let Some(value) = value else {
             return Ok((StructureContext::default(), Vec::new()));
         };
@@ -229,10 +231,8 @@ impl StructureContext {
                 }
                 Some(n) => Ok(n as u64),
                 None => {
-                    let falsy_default = matches!(
-                        &repr_value,
-                        Value::None
-                    ) || matches!(&repr_value, Value::Int(i) if i.is_zero())
+                    let falsy_default = matches!(&repr_value, Value::None)
+                        || matches!(&repr_value, Value::Int(i) if i.is_zero())
                         || matches!(&repr_value, Value::Bool(false));
                     if !falsy_default {
                         warnings.push(format!(
@@ -437,31 +437,19 @@ pub(crate) fn as_number(value: &Value) -> Result<Option<f64>, ScoreError> {
 
 /// Python's `min(a, b)`: returns `a` unless `b < a`.
 pub(crate) fn py_min(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
+    if b < a { b } else { a }
 }
 
 /// Python's `max(a, b)`: returns `a` unless `b > a`.
 pub(crate) fn py_max(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
+    if b > a { b } else { a }
 }
 
 /// `_clamp01` (`core/complexity.py:227`): `0.0` below zero, otherwise
 /// [`py_min`] against `1.0` -- `NaN` passes through as `NaN`, where
 /// `f64::min` would give `1.0`.
 pub(crate) fn clamp01(value: f64) -> f64 {
-    if value < 0.0 {
-        0.0
-    } else {
-        py_min(value, 1.0)
-    }
+    if value < 0.0 { 0.0 } else { py_min(value, 1.0) }
 }
 
 /// `_saturate` (`core/complexity.py:231`): `value / (value + half)`,
@@ -677,11 +665,7 @@ struct Measurement {
 
 fn measure_prompt_size(text: &str, mode: ScoreMode) -> Measurement {
     let chars = text.chars().count() as u64;
-    let tokens = if chars == 0 {
-        0
-    } else {
-        (chars + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN
-    };
+    let tokens = if chars == 0 { 0 } else { chars.div_ceil(CHARS_PER_TOKEN) };
     let rendered = mode == ScoreMode::Rendered;
     Measurement {
         name: "prompt_size",
@@ -730,7 +714,8 @@ fn measure_prompt_type(type_name: &str, type_normal: f64) -> Measurement {
 fn measure_output_schema(schema: Option<&Dict>) -> Measurement {
     let (depth, fields) = schema::walk_schema(schema);
     let normalized = clamp01(
-        0.5 * saturate(depth as f64, SCHEMA_DEPTH_HALF) + 0.5 * saturate(fields as f64, SCHEMA_FIELDS_HALF),
+        0.5 * saturate(depth as f64, SCHEMA_DEPTH_HALF)
+            + 0.5 * saturate(fields as f64, SCHEMA_FIELDS_HALF),
     );
     Measurement {
         name: "output_schema",
@@ -754,7 +739,11 @@ fn measure_output_size(
     let note = if keys.is_empty() {
         "no declared output limit".to_string()
     } else {
-        format!("~{} tokens declared ({})", format_f0(tokens), keys.join(", "))
+        format!(
+            "~{} tokens declared ({})",
+            format_f0(tokens),
+            keys.join(", ")
+        )
     };
     Ok(Measurement {
         name: "output_size",
@@ -769,7 +758,11 @@ fn measure_structural_position(context: &StructureContext) -> Measurement {
     let normalized = clamp01(
         0.5 * saturate(context.depth as f64, DEPTH_HALF)
             + 0.15 * py_min(context.loop_depth as f64, 2.0)
-            + if context.reflector_generated { 0.2 } else { 0.0 },
+            + if context.reflector_generated {
+                0.2
+            } else {
+                0.0
+            },
     );
     let mut notes = vec![format!("depth {}", context.depth)];
     if context.in_loop() {
@@ -787,10 +780,7 @@ fn measure_structural_position(context: &StructureContext) -> Measurement {
     }
 }
 
-fn measure_keywords(
-    haystack: &str,
-    table: &Dict,
-) -> Result<Measurement, ScoreError> {
+fn measure_keywords(haystack: &str, table: &Dict) -> Result<Measurement, ScoreError> {
     let matches = keywords::match_keywords(haystack, table)?;
     let sum = matches.iter().fold(0.0, |acc, (_, w)| acc + w);
     let note = if matches.is_empty() {
@@ -832,7 +822,9 @@ fn assemble(
     let weight_total = round6(measured.iter().fold(0.0, |acc, m| acc + weight_of(m.name)));
 
     if weight_total <= 0.0 {
-        warnings.push("weights: every weight is zero; score is 0 and no signal contributes.".to_string());
+        warnings.push(
+            "weights: every weight is zero; score is 0 and no signal contributes.".to_string(),
+        );
     }
 
     let mut signals = Vec::with_capacity(measured.len());
@@ -1016,9 +1008,11 @@ mod tests {
         // with nothing to score, so the overall score is not zero --
         // confirmed directly against `circuitry.core.complexity.score(None)`.
         assert_eq!(result.score, 3.5);
-        assert!(result
-            .warnings
-            .contains(&"definition: nothing to score; every signal read as empty.".to_string()));
+        assert!(
+            result
+                .warnings
+                .contains(&"definition: nothing to score; every signal read as empty.".to_string())
+        );
     }
 
     #[test]
@@ -1030,7 +1024,12 @@ mod tests {
             ..Default::default()
         };
         let result = score(&input).unwrap();
-        assert!(result.warnings.iter().any(|w| w.contains("expected a mapping or definition object")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("expected a mapping or definition object"))
+        );
     }
 
     #[test]
@@ -1053,9 +1052,11 @@ mod tests {
             ..Default::default()
         };
         let result = score(&input).unwrap();
-        assert!(result
-            .warnings
-            .contains(&"template: no template or messages found; size read as empty.".to_string()));
+        assert!(
+            result.warnings.contains(
+                &"template: no template or messages found; size read as empty.".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1077,7 +1078,12 @@ mod tests {
 
     #[test]
     fn all_zero_weights_warns_and_scores_zero() {
-        let weights = dict_of(SIGNAL_NAMES.iter().map(|n| (*n, Value::from(0i64))).collect());
+        let weights = dict_of(
+            SIGNAL_NAMES
+                .iter()
+                .map(|n| (*n, Value::from(0i64)))
+                .collect(),
+        );
         let weights_value = Value::Dict(weights);
         let input = ScoreInput {
             rendered_prompt: Some("x"),
@@ -1086,9 +1092,9 @@ mod tests {
         };
         let result = score(&input).unwrap();
         assert_eq!(result.score, 0.0);
-        assert!(result
-            .warnings
-            .contains(&"weights: every weight is zero; score is 0 and no signal contributes.".to_string()));
+        assert!(result.warnings.contains(
+            &"weights: every weight is zero; score is 0 and no signal contributes.".to_string()
+        ));
     }
 
     #[test]

@@ -1,14 +1,12 @@
 //! `cli/complexity_config.py`'s own `runtime.complexity` validation --
-//! the block's shape and defaults only (what [`resolve_complexity_settings`]
-//! needs to raise the identical [`ConfigError`] text Circuitry's own
-//! `ComplexityConfigError` would for a malformed block, and what
-//! [`crate::effective_settings`] needs to record `sources` for). Scoring,
-//! routing and decomposition *behaviour* -- picking a model, splitting an
-//! effect -- are out of scope for M0-H (no prompt effects run at all), so
-//! only [`RoutingSettings`]'s own shape is kept beyond validation: issue
-//! #431's lane D still has to decide whether a run's `model` was pinned
-//! above the router or resolved from its catch-all band
-//! (`_apply_router_precedence`), which [`crate::effective_settings`] needs.
+//! the block's shape and defaults, plus (since issue #505's K1 lane)
+//! the *resolved* `scoring.weights`/`keywords` tables
+//! `electricity-complexity::runtime_tables` reads directly. Scoring,
+//! routing and decomposition *behaviour* -- picking a model, splitting
+//! an effect -- stay out of this crate itself: `RoutingSettings`'s own
+//! shape (`band_for`/`band_named`) and `ScoringSettings`'s own
+//! `weights`/`keywords` are read by `electricity-complexity` and
+//! `electricity-vm` (K2), never consulted here.
 
 use crate::config::ConfigError;
 use crate::util::{as_dict, get, py_format_g, type_name};
@@ -720,5 +718,51 @@ mod tests {
         assert_eq!(settings.routing.bands.len(), 2);
         assert_eq!(settings.routing.band_for(10.0).unwrap().model, "gpt-3.5");
         assert_eq!(settings.routing.band_for(99.0).unwrap().model, "gpt-4");
+    }
+
+    #[test]
+    fn scoring_settings_default_matches_the_config_table() {
+        let settings = ScoringSettings::default();
+        assert_eq!(settings.weights.get("prompt_size"), Some(&1.0));
+        assert_eq!(settings.weights.get("state_references"), Some(&1.5));
+        assert_eq!(settings.weights.get("prompt_type"), Some(&0.75));
+        assert_eq!(settings.weights.get("output_schema"), Some(&1.25));
+        assert_eq!(settings.weights.get("output_size"), Some(&1.0));
+        assert_eq!(settings.weights.get("structural_position"), Some(&0.5));
+        assert_eq!(settings.weights.get("keywords"), Some(&1.0));
+        assert_eq!(settings.weights.len(), 7);
+        assert!(settings.keywords.is_empty());
+    }
+
+    #[test]
+    fn scoring_weights_overlay_a_partial_table_onto_the_defaults() {
+        let mut weights = Dict::new();
+        weights.insert(Value::Str("prompt_size".to_string()), Value::from(9i64));
+        let mut scoring = Dict::new();
+        scoring.insert(Value::Str("weights".to_string()), Value::Dict(weights));
+        let settings = parse_scoring(&Value::Dict(scoring), "runtime.complexity.scoring").unwrap();
+        // `float(value)`: an int overlay becomes a float.
+        assert_eq!(settings.weights.get("prompt_size"), Some(&9.0));
+        // Every other signal keeps the config's own default.
+        assert_eq!(settings.weights.get("state_references"), Some(&1.5));
+    }
+
+    #[test]
+    fn scoring_keywords_strip_keys_and_a_collision_after_stripping_keeps_first_position_last_value()
+    {
+        let mut keywords = Dict::new();
+        keywords.insert(Value::Str("  analyze  ".to_string()), Value::from(1i64));
+        keywords.insert(Value::Str("compare".to_string()), Value::from(2i64));
+        keywords.insert(Value::Str("analyze".to_string()), Value::from(3i64));
+        let mut scoring = Dict::new();
+        scoring.insert(Value::Str("keywords".to_string()), Value::Dict(keywords));
+        let settings = parse_scoring(&Value::Dict(scoring), "runtime.complexity.scoring").unwrap();
+        assert_eq!(settings.keywords.get("analyze"), Some(&3.0));
+        // First position (from "  analyze  ") is kept, not pushed to the
+        // end by the later "analyze" insert.
+        assert_eq!(
+            settings.keywords.keys().collect::<Vec<_>>(),
+            vec!["analyze", "compare"]
+        );
     }
 }

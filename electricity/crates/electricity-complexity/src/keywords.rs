@@ -10,9 +10,9 @@
 //! (e.g. every orchestration's shared default table) is matched repeatedly
 //! across many `score()` calls.
 
-use crate::{as_number, ScoreError};
+use crate::{ScoreError, as_number};
 use electricity_pyre::backtrack_limit_for;
-use electricity_pyre::translate::{translate, ResolvedFlags};
+use electricity_pyre::translate::{ResolvedFlags, translate};
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use std::collections::HashMap;
@@ -74,7 +74,10 @@ fn keyword_stem(phrase: &str) -> String {
 /// `_keyword_pattern` (`core/complexity.py:639`): the stem wrapped in
 /// `\b` + the inflection suffixes.
 fn keyword_pattern_text(phrase: &str) -> String {
-    format!(r"\b{}{KEYWORD_SUFFIXES}\b", py_re_escape(&keyword_stem(phrase)))
+    format!(
+        r"\b{}{KEYWORD_SUFFIXES}\b",
+        py_re_escape(&keyword_stem(phrase))
+    )
 }
 
 fn translated_pattern_cache() -> &'static Mutex<HashMap<String, Arc<String>>> {
@@ -132,7 +135,9 @@ fn compiled_keyword_pattern(
         .backtrack_limit(backtrack_limit_for(haystack_len))
         .build()
         .map_err(|e| {
-            ScoreError::runtime_error(format!("keyword pattern for {phrase:?} failed to compile: {e}"))
+            ScoreError::runtime_error(format!(
+                "keyword pattern for {phrase:?} failed to compile: {e}"
+            ))
         })
 }
 
@@ -263,15 +268,24 @@ mod tests {
 
     #[test]
     fn stem_drops_trailing_e_only_past_three_characters() {
-        assert_eq!(keyword_pattern_text("rewrite"), r"\brewrit(?:e|es|s|ed|ing|ion|ions)?\b");
+        assert_eq!(
+            keyword_pattern_text("rewrite"),
+            r"\brewrit(?:e|es|s|ed|ing|ion|ions)?\b"
+        );
         // "we" is 2 characters -- too short for the trailing-e drop.
-        assert_eq!(keyword_pattern_text("we"), r"\bwe(?:e|es|s|ed|ing|ion|ions)?\b");
+        assert_eq!(
+            keyword_pattern_text("we"),
+            r"\bwe(?:e|es|s|ed|ing|ion|ions)?\b"
+        );
     }
 
     #[test]
     fn empty_haystack_or_table_disables_the_signal() {
         assert_eq!(match_keywords("", &sample_table()).unwrap(), vec![]);
-        assert_eq!(match_keywords("analyze this", &Dict::new()).unwrap(), vec![]);
+        assert_eq!(
+            match_keywords("analyze this", &Dict::new()).unwrap(),
+            vec![]
+        );
     }
 
     fn sample_table() -> Dict {

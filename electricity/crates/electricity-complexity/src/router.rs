@@ -31,7 +31,10 @@ pub fn route_model<'a>(
     if band.model.is_empty() {
         return None;
     }
-    Some(RouteDecision { model: &band.model, band })
+    Some(RouteDecision {
+        model: &band.model,
+        band,
+    })
 }
 
 #[cfg(test)]
@@ -46,7 +49,11 @@ mod tests {
         }
     }
 
-    fn settings(enabled: bool, bands: Vec<ComplexityBand>, respect_explicit: bool) -> RoutingSettings {
+    fn settings(
+        enabled: bool,
+        bands: Vec<ComplexityBand>,
+        respect_explicit: bool,
+    ) -> RoutingSettings {
         RoutingSettings {
             enabled,
             bands,
@@ -83,7 +90,10 @@ mod tests {
     fn score_at_just_below_and_above_a_boundary() {
         let s = settings(
             true,
-            vec![band("small", Some(50.0), Some("low")), band("big", None, Some("catch_all"))],
+            vec![
+                band("small", Some(50.0), Some("low")),
+                band("big", None, Some("catch_all")),
+            ],
             true,
         );
         assert_eq!(route_model(49.9, &s, false).unwrap().model, "small");

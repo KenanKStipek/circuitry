@@ -12,7 +12,7 @@
 //! own `allow_nan=True` default writes verbatim and `serde_json` does not
 //! accept.
 
-use electricity_complexity::{score, ScoreError, ScoreInput};
+use electricity_complexity::{ScoreError, ScoreInput, score};
 use electricity_value::{Dict, Value};
 
 fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
@@ -70,11 +70,12 @@ fn py_exc_name(err: &ScoreError) -> &'static str {
 #[test]
 fn golden_corpus_complexity() {
     let text = include_str!("golden/complexity_corpus.json");
-    let parsed = electricity_json::loads(text).expect("golden/complexity_corpus.json is valid JSON");
+    let parsed =
+        electricity_json::loads(text).expect("golden/complexity_corpus.json is valid JSON");
     let Value::Dict(ref root) = parsed else {
         panic!("corpus root must be an object");
     };
-    let Some(Value::List(cases)) = dict_get(&root, "score_cases") else {
+    let Some(Value::List(cases)) = dict_get(root, "score_cases") else {
         panic!("corpus must have a 'score_cases' list");
     };
     assert!(!cases.is_empty());
@@ -89,7 +90,9 @@ fn golden_corpus_complexity() {
             Some(Value::Str(s)) => s.clone(),
             _ => format!("case {i}"),
         };
-        let input_value = dict_get(case, "input").cloned().unwrap_or(Value::Dict(Dict::new()));
+        let input_value = dict_get(case, "input")
+            .cloned()
+            .unwrap_or(Value::Dict(Dict::new()));
         let input = build_input(&input_value);
         let result = score(&input);
 
@@ -120,12 +123,15 @@ fn golden_corpus_complexity() {
             }
             (None, Some(Value::Dict(expected))) => {
                 let expected_meta = dict_get(expected, "meta").expect("expected.meta present");
-                let expected_estimated: Vec<String> = match dict_get(expected, "estimated_signals") {
+                let expected_estimated: Vec<String> = match dict_get(expected, "estimated_signals")
+                {
                     Some(Value::List(items)) => items
                         .iter()
                         .map(|v| match v {
                             Value::Str(s) => s.clone(),
-                            other => panic!("estimated_signals entries must be strings, got {other:?}"),
+                            other => {
+                                panic!("estimated_signals entries must be strings, got {other:?}")
+                            }
                         })
                         .collect(),
                     _ => Vec::new(),

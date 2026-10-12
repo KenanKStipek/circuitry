@@ -5,7 +5,7 @@
 //! the life of the process.
 
 use crate::ScoreError;
-use electricity_pyre::translate::{translate, ResolvedFlags};
+use electricity_pyre::translate::{ResolvedFlags, translate};
 use electricity_value::pycompat::py_strip;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -32,9 +32,8 @@ pub fn extract_references(template: &str) -> Result<(usize, usize), ScoreError> 
     let mut references: HashSet<String> = HashSet::new();
     let mut sections: HashSet<String> = HashSet::new();
     for caps in re.captures_iter(template) {
-        let caps = caps.map_err(|e| {
-            ScoreError::runtime_error(format!("state_references scan failed: {e}"))
-        })?;
+        let caps = caps
+            .map_err(|e| ScoreError::runtime_error(format!("state_references scan failed: {e}")))?;
         let sigil = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
         if matches!(sigil, "!" | ">" | "/") {
@@ -71,7 +70,10 @@ mod tests {
 
     #[test]
     fn triple_braces_and_ampersand_are_references() {
-        assert_eq!(extract_references("{{{raw}}} {{&unescaped}}").unwrap(), (2, 0));
+        assert_eq!(
+            extract_references("{{{raw}}} {{&unescaped}}").unwrap(),
+            (2, 0)
+        );
     }
 
     #[test]
