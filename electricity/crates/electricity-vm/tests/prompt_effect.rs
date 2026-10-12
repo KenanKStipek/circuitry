@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use electricity_bytecode::effects::{Message, PromptContent, PromptOp, PromptType, Role};
 use electricity_bytecode::template::{Escape, TemplateText};
 use electricity_bytecode::{
-    EffectPath, LeafKind, NodeKind, OnError, Op, ParamNode, RetryPolicy, UseSource,
+    EffectPath, LeafKind, NodeKind, OnError, Op, ParamNode, RetryPolicy, RoutingOverride, UseSource,
 };
 use electricity_value::{Dict, Value};
 use electricity_vm::adapter::{
@@ -1449,5 +1449,169 @@ async fn cancelling_between_fallback_attempts_never_dispatches_the_next_one() {
         calls.calls.get(),
         1,
         "the second fallback entry must never dispatch once the token is set"
+    );
+}
+
+/// Issue #516 §6: a pinned/routed model replaces `resolved_model`
+/// before `build_attempts` ever runs, so a `provider_fallbacks` token
+/// with no model of its own (`parse_provider_token`'s own default,
+/// `exec/prompt.rs`) inherits the *routed* model, not the run's own
+/// ambient `ctx.model`.
+#[tokio::test]
+async fn a_routed_model_becomes_the_fallback_chains_default_model() {
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![Err(AdapterError {
+            message: "scripted: server_error".to_string(),
+            retry: RetryInfo::retryable(),
+            py_class: PyExc::AdapterCallError,
+        })],
+    ));
+    let mut adapters = registry_with_scripted();
+    adapters.register(
+        "ollama",
+        Box::new(|_cfg| {
+            Ok(
+                Box::new(FakeAdapter::new("ollama", vec![FakeAdapter::text("done")]))
+                    as Box<dyn Adapter>,
+            )
+        }),
+    );
+    let band = electricity_config::ComplexityBand {
+        model: "routed-model".to_string(),
+        max: None,
+        name: Some("big".to_string()),
+    };
+    let complexity = electricity_config::ComplexitySettings {
+        routing: electricity_config::RoutingSettings {
+            enabled: true,
+            bands: vec![band],
+            ..electricity_config::RoutingSettings::default()
+        },
+        ..electricity_config::ComplexitySettings::default()
+    };
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    ctx.complexity = &complexity;
+    let mut op = template_prompt("hi");
+    op.routing_override = Some(RoutingOverride::Named("big".to_string()));
+    op.provider_fallbacks = vec!["ollama".to_string()];
+    let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, OnError::Fail);
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let token = CancellationToken::new();
+    let observer = RecordingObserver::new();
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    result.unwrap();
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert_eq!(
+        get(meta, "model"),
+        Some(&Value::Str("routed-model".to_string()))
+    );
+    let Some(Value::List(fallback_attempts)) = get(meta, "fallback_attempts") else {
+        panic!("expected a fallback_attempts list");
+    };
+    assert!(
+        fallback_attempts.iter().any(|entry| {
+            let entry = as_dict(entry);
+            get(entry, "adapter") == Some(&Value::Str("ollama".to_string()))
+                && get(entry, "model") == Some(&Value::Str("routed-model".to_string()))
+        }),
+        "expected the fallback token (no model of its own) to inherit the routed model: {fallback_attempts:?}"
+    );
+}
+
+/// Issue #516 §3 finding 7: an unknown pinned band raises before
+/// `effect_start`, so no start/complete pair fires -- and `on_error:
+/// skip` never gets a chance to absorb it, the same way it never
+/// absorbs the fatal refusals above (the `?` in `exec/prompt.rs`
+/// returns straight out of `execute_prompt`, never through
+/// `finish_failure`'s own `op.on_error` check at all).
+#[tokio::test]
+async fn an_unknown_pinned_band_raises_before_effect_start_and_on_error_skip_does_not_absorb_it() {
+    let band = electricity_config::ComplexityBand {
+        model: "model-big".to_string(),
+        max: None,
+        name: Some("big".to_string()),
+    };
+    let complexity = electricity_config::ComplexitySettings {
+        routing: electricity_config::RoutingSettings {
+            enabled: true,
+            bands: vec![band],
+            ..electricity_config::RoutingSettings::default()
+        },
+        ..electricity_config::ComplexitySettings::default()
+    };
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![FakeAdapter::text("hello")],
+    ));
+    let adapters = registry_with_scripted();
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    ctx.complexity = &complexity;
+    let mut op = template_prompt("hi");
+    op.routing_override = Some(RoutingOverride::Named("nope".to_string()));
+    let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, OnError::Skip);
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let token = CancellationToken::new();
+    let observer = RecordingObserver::new();
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    let VmError::Raised {
+        message,
+        cause_class,
+        ..
+    } = result.unwrap_err()
+    else {
+        panic!("expected VmError::Raised, on_error: skip must not absorb the unknown-pin error");
+    };
+    // Wrapped like any other leaf error once it crosses the containing
+    // chain (issue #516 §7 ruling 4) -- `cause_class` is the
+    // unwrapped `ValueError` [`VmError::displayed_class`] reads back
+    // off, the exact text still inside *message* after the chain's
+    // own label prefix.
+    assert_eq!(cause_class, Some(PyExc::ValueError));
+    assert!(
+        message.ends_with(
+            "Prompt 'ask' is pinned to routing band 'nope', which is not in \
+             runtime.complexity.routing.bands. Valid band names: big."
+        ),
+        "unexpected message: {message}"
+    );
+    assert!(
+        !observer.events().iter().any(|e| matches!(
+            e,
+            support::Event::Start(p) | support::Event::Complete(p, _) if p == "prime.ask"
+        )),
+        "no start/complete pair must ever fire for the prompt's own node: {:?}",
+        observer.events()
     );
 }

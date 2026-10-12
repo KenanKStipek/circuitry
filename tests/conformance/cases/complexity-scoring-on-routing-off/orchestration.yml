@@ -1,0 +1,22 @@
+name: complexity-scoring-on-routing-off
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask_template
+    template: "Please analyze this thoroughly and explain why it matters."
+    description: "a template prompt"
+    params: {max_tokens: 256}
+  - type: prompt
+    name: ask_messages
+    messages:
+      - role: system
+        content: "be terse"
+      - role: user
+        content: "classify this"
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        answer: {type: string}
+      required: [answer]

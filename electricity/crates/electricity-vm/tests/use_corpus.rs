@@ -707,7 +707,6 @@ async fn golden_corpus_end_to_end() {
             orchestration_dir: &tmp,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             // `path_cycle`'s own child (`cycle_a.yml`) names a nested
             // `use` effect -- `Supported::current` (`use_: true`, M1
             // lane I), not `Supported::m0`, or the runtime refusal

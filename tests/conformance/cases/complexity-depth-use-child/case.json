@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #516 §4(c): a use child's own root dynamic is one display level deeper",
+  "description": "A use child's top-level prompt scores at depth 1; a use inside an if branch (itself at depth 1) has its own child prompt at depth 2.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

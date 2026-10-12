@@ -1,0 +1,9 @@
+name: complexity-nonfinite-signal
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    params:
+      num_predict: .inf

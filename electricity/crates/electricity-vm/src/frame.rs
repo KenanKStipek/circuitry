@@ -98,17 +98,53 @@ pub struct Frame {
     /// [`Frame::rebased`]'s own doc comment for why this composes
     /// correctly with both [`Frame::nested`] and [`Frame::with_pass`].
     rebase: Rc<Vec<(EffectPath, EffectPath)>>,
+    /// `core/prompt.py`'s own container-nesting display depth
+    /// (`structure.depth`, a.k.a. the `structural_position` signal) --
+    /// issue #516's §4(c) table, superseding the one-value-per-run
+    /// `RunContext::display_depth` lane K1 left behind (that field no
+    /// longer exists -- §4(c)'s own "one source of truth" ruling): every
+    /// container executor hands a child frame its own depth through
+    /// [`crate::complexity`]'s table functions, called right where
+    /// that child is dispatched, never derived from [`Frame::prefix`]/
+    /// [`Frame::pass_indices`] (a `use` child's own root depth and a
+    /// reflector's own reset both move independently of path nesting).
+    display_depth: u32,
 }
 
 impl Frame {
     /// The frame a run's own root `dynamic` starts under -- no
-    /// `use`/decomposition nesting, no loop pass resolved yet.
+    /// `use`/decomposition nesting, no loop pass resolved yet, depth 0
+    /// (`cli/runtime_shim.py` constructs the root `DynamicRuntime`
+    /// without `depth=`, so Python's own default applies).
     pub fn root() -> Self {
         Frame {
             prefix: Rc::new(EffectPath(Vec::new())),
             pass_indices: Rc::new(HashMap::new()),
             use_call_stack: Rc::new(Vec::new()),
             rebase: Rc::new(Vec::new()),
+            display_depth: 0,
+        }
+    }
+
+    /// `core/prompt.py`'s own `self.depth` for the runtime about to
+    /// dispatch through this frame.
+    pub fn display_depth(&self) -> u32 {
+        self.display_depth
+    }
+
+    /// This frame, with [`Frame::display_depth`] overridden -- every
+    /// other field unchanged. A container executor calls this (never
+    /// constructs a bare [`Frame`] literal) whenever issue #516's
+    /// §4(c) table gives a child a depth other than this frame's own:
+    /// a nested `dynamic`/an `if` branch/a loop body's own ambient
+    /// bump, or a reflector's own reset to `0`.
+    pub fn with_display_depth(&self, display_depth: u32) -> Frame {
+        Frame {
+            prefix: Rc::clone(&self.prefix),
+            pass_indices: Rc::clone(&self.pass_indices),
+            use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: self.rebase.clone(),
+            display_depth,
         }
     }
 
@@ -221,6 +257,7 @@ impl Frame {
             pass_indices: Rc::clone(&self.pass_indices),
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: Rc::new(stack),
+            display_depth: self.display_depth,
         }
     }
 
@@ -233,13 +270,22 @@ impl Frame {
     /// compiled paths carry no [`LoopId`] of the parent run's. The
     /// [`Frame::use_call_stack`] carries forward unchanged; a caller
     /// that is pushing a `use` effect's own name onto it chains
-    /// [`Frame::push_use`] separately.
+    /// [`Frame::push_use`] separately. [`Frame::display_depth`] carries
+    /// forward unchanged -- issue #516 §4(c)'s "`use` child root
+    /// `dynamic`" row is one level deeper than the `use` effect that
+    /// spawned it, but that's [`crate::complexity::depth::use_child_root`]'s
+    /// call site's own job ([`Frame::with_display_depth`], chained onto
+    /// this call) to apply, not this method's -- every other builder on
+    /// this struct carries the field forward the same way, and
+    /// `use`/decomposition is the one case this crate's own table of
+    /// child-depth rules lives outside `frame.rs` altogether.
     pub fn nested(&self, path: &EffectPath) -> Frame {
         Frame {
             prefix: Rc::new(self.effect_path(path)),
             pass_indices: Rc::new(HashMap::new()),
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: Rc::new(Vec::new()),
+            display_depth: self.display_depth,
         }
     }
 
@@ -257,6 +303,7 @@ impl Frame {
             pass_indices: Rc::new(indices),
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: self.rebase.clone(),
+            display_depth: self.display_depth,
         }
     }
 
@@ -275,6 +322,7 @@ impl Frame {
             pass_indices: Rc::clone(&self.pass_indices),
             use_call_stack: Rc::new(stack),
             rebase: self.rebase.clone(),
+            display_depth: self.display_depth,
         }
     }
 
@@ -505,6 +553,44 @@ mod tests {
         // parent's) still round-trips.
         let parent = path(&["prime", "outer"]);
         assert_eq!(Frame::root().effect_path(&parent), parent);
+    }
+
+    #[test]
+    fn root_frame_has_display_depth_zero() {
+        assert_eq!(Frame::root().display_depth(), 0);
+    }
+
+    #[test]
+    fn with_display_depth_overrides_only_that_field() {
+        let frame = Frame::root().with_pass(LoopId(0), 3).with_display_depth(5);
+        assert_eq!(frame.display_depth(), 5);
+        assert_eq!(frame.with_display_depth(0).display_depth(), 0);
+    }
+
+    #[test]
+    fn nested_carries_display_depth_forward_unchanged() {
+        // A `use`/decomposition child's own root `dynamic` is one level
+        // deeper (issue #516 §4(c)) -- but that's applied at the call
+        // site (`crate::complexity::depth::use_child_root`, chained
+        // through `with_display_depth`), not by `nested` itself.
+        let use_path = EffectPath::root().push_name("fetch");
+        assert_eq!(Frame::root().nested(&use_path).display_depth(), 0);
+        let bumped = Frame::root().with_display_depth(2);
+        assert_eq!(bumped.nested(&use_path).display_depth(), 2);
+    }
+
+    #[test]
+    fn rebased_with_pass_and_push_use_all_preserve_display_depth() {
+        let frame = Frame::root().with_display_depth(4);
+        let refl = EffectPath::root().push_name("plan_it");
+        assert_eq!(
+            frame
+                .rebased(&refl, &refl.push_name("inner"))
+                .display_depth(),
+            4
+        );
+        assert_eq!(frame.with_pass(LoopId(0), 1).display_depth(), 4);
+        assert_eq!(frame.push_use("a.yml".to_string()).display_depth(), 4);
     }
 
     #[test]

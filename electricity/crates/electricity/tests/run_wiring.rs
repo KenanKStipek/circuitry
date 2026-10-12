@@ -259,6 +259,53 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
     assert!(error.contains("prime.ask"));
 }
 
+/// Issue #516 §4(b): decomposition stays refused through the
+/// narrowed `RefusalReason::DecompositionEnabled`, gated on
+/// `runtime.complexity.decomposition.enabled` alone -- a config that
+/// only turns on scoring/routing (the two K2 wires into `prompt`) must
+/// not hit this at all; that's the next test.
+#[tokio::test]
+async fn decomposition_enabled_is_refused_with_no_state_written() {
+    let dir = temp_dir("decomposition-refusal");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"complexity": {"scoring": {"enabled": true}, "decomposition": {"enabled": true}}}}"#,
+    );
+    let doc = write(&dir, "doc.yml", "effects: []\n");
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("a run whose effective config enables complexity decomposition"));
+}
+
+/// The narrowing's other half: a config that only turns on
+/// scoring/routing (never decomposition) must run, not refuse --
+/// K2 wires those two into `prompt` in this same lane.
+#[tokio::test]
+async fn scoring_and_routing_enabled_without_decomposition_runs() {
+    let dir = temp_dir("scoring-routing-no-decomposition");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"complexity": {"scoring": {"enabled": true}, "routing": {"enabled": true, "bands": [{"model": "m"}]}}}}"#,
+    );
+    let doc = write(&dir, "doc.yml", "effects: []\n");
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+}
+
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, before the VM would otherwise run it fine (`json`/`dynamic`
 /// only) -- `cof run` would fail this one in preflight instead (no

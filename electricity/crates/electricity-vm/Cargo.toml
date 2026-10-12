@@ -15,6 +15,9 @@ electricity-bytecode = { path = "../electricity-bytecode" }
 # ("config → compiler, vm, tools, adapters, runtime-plugins": everyone
 # reads config, config reads nothing).
 electricity-config = { path = "../electricity-config" }
+# Lane K2 (issue #516): `complexity::score_and_route` calls straight
+# into K1's pure scorer/router library.
+electricity-complexity = { path = "../electricity-complexity" }
 electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }

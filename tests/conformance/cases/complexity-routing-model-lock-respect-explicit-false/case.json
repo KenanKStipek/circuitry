@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #516 (M1-K2): the same locked profile, with routing.respect_explicit: false",
+  "description": "The router wins despite the run-level lock: model_reason: \"router\", model becomes the scored band's model. A second prompt, ask_explicit, sets its own model: directly (no run-level lock involved) and is routed the same way, since respect_explicit: false overrides a prompt's own explicit model just as it overrides the run-level lock.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "config": "config.json",
+  "expect": "success"
+}
