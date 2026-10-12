@@ -153,7 +153,7 @@ fn structure_value(display_depth: u32) -> Value {
 /// `meta["band"] = {"name": ..., "model": ...}` (`core/prompt.py:
 /// ~1000-1027`), inserted (or overwritten, for a pin) after every other
 /// key `ComplexityScore::to_meta` already wrote -- `band` is always the
-/// last key, R3's own key-order ruling.
+/// last key, issue #516 §3.2's own key-order ruling.
 fn set_band(meta: &mut Value, name: &str, model: &str) {
     let Value::Dict(dict) = meta else {
         unreachable!("score_and_route only ever builds a Dict meta")

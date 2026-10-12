@@ -6,6 +6,8 @@ prime.branch.if_prompt:
   - text: "c-out"
 prime.branch.dyn_in_if.dyn_in_if_prompt:
   - text: "d-out"
+prime.branch.loop_in_if.iter_0.loop_in_if_prompt:
+  - text: "j-out"
 prime.lp.iter_0.loop_prompt:
   - text: "e-out"
 prime.lp.iter_0.dyn_in_loop.dyn_in_loop_prompt:

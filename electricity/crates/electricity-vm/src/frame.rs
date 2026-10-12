@@ -102,7 +102,7 @@ pub struct Frame {
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
     /// `RunContext::display_depth` lane K1 left behind (that field no
-    /// longer exists -- R2's own "one source of truth" ruling): every
+    /// longer exists -- §4(c)'s own "one source of truth" ruling): every
     /// container executor hands a child frame its own depth through
     /// [`crate::complexity`]'s table functions, called right where
     /// that child is dispatched, never derived from [`Frame::prefix`]/

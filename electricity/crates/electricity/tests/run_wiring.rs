@@ -257,7 +257,7 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
     assert!(error.contains("prime.ask"));
 }
 
-/// Issue #516 (M1-K2), R1: decomposition stays refused through the
+/// Issue #516 §4(b): decomposition stays refused through the
 /// narrowed `RefusalReason::DecompositionEnabled`, gated on
 /// `runtime.complexity.decomposition.enabled` alone -- a config that
 /// only turns on scoring/routing (the two K2 wires into `prompt`) must

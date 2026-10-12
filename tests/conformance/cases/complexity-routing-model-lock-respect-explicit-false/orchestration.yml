@@ -5,3 +5,7 @@ effects:
   - type: prompt
     name: ask
     template: "hi"
+  - type: prompt
+    name: ask_explicit
+    template: "hi"
+    model: "explicit-model"

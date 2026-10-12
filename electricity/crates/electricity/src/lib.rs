@@ -1360,10 +1360,12 @@ pub async fn run_orchestration_with_config(
 
     // Resolved before the refusal walker below needs it (review P2-10
     // on PR #454's second review: whether this run's own effective
-    // config enables complexity scoring/routing/decomposition isn't a
-    // property of *program* itself, so the walker takes it as an
-    // argument rather than re-deriving it) -- the same value `run_ctx.
-    // complexity` below reuses, resolved only once.
+    // config enables complexity decomposition isn't a property of
+    // *program* itself, so the walker takes it as an argument rather
+    // than re-deriving it -- narrowed to decomposition alone by issue
+    // #516 §4(b), once K2 wired scoring/routing into `prompt`) -- the
+    // same value `run_ctx.complexity` below reuses, resolved only
+    // once.
     let complexity = electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
         .unwrap_or_default();
 

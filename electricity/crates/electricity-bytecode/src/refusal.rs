@@ -930,9 +930,16 @@ mod tests {
 
     #[test]
     fn scoring_only_config_runs_under_current_without_decomposition() {
-        // Issue #516 R1: a config that turns on only `scoring`/`routing`
-        // (`ComplexitySettings::enabled()` is still `true`) must run --
-        // only decomposition narrows to a refusal from this lane on.
+        // Issue #516 §4(b): a config that turns on only `scoring`/
+        // `routing` must run -- only decomposition narrows to a
+        // refusal from this lane on. This test passes `false` for
+        // *decomposition_enabled* the same as it would have before
+        // this lane's own narrowing, so it would have passed either
+        // way; the real guard for the narrowing itself is `electricity`
+        // (lib)'s own `run_wiring.rs::
+        // scoring_and_routing_enabled_without_decomposition_runs`,
+        // which resolves a real `runtime.complexity` config with
+        // scoring/routing on and checks the walker doesn't refuse it.
         let program = program_with_root(root_block(vec![]));
         assert!(first_unsupported(&program, false, &Supported::current(&["json"])).is_none());
     }

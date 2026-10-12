@@ -26,6 +26,14 @@ effects:
           - type: prompt
             name: dyn_in_if_prompt
             template: "d"
+      - type: loop
+        name: loop_in_if
+        max_iterations: 1
+        while: {mode: cel, expr: "true"}
+        body:
+          - type: prompt
+            name: loop_in_if_prompt
+            template: "j"
   - type: tool
     name: seed
     provider: json
