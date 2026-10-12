@@ -665,7 +665,11 @@ struct Measurement {
 
 fn measure_prompt_size(text: &str, mode: ScoreMode) -> Measurement {
     let chars = text.chars().count() as u64;
-    let tokens = if chars == 0 { 0 } else { chars.div_ceil(CHARS_PER_TOKEN) };
+    let tokens = if chars == 0 {
+        0
+    } else {
+        chars.div_ceil(CHARS_PER_TOKEN)
+    };
     let rendered = mode == ScoreMode::Rendered;
     Measurement {
         name: "prompt_size",
