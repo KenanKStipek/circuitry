@@ -175,12 +175,20 @@ fn redact_url_for_error(url: &str) -> String {
 }
 
 fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
-    let (scheme, rest) = url.split_once("://").ok_or_else(|| {
-        TransportFailure::Validation(format!(
-            "electricity: unsupported URL: {}",
-            redact_url_for_error(url)
-        ))
-    })?;
+    // curl's own convention, same as a proxy value
+    // ([`resolve_curl_proxy_from`]): a URL with no `scheme://` prefix
+    // (a configured `base_url` of `localhost:11434`, say) defaults to
+    // `http://` rather than being refused -- confirmed directly
+    // against a real curl invocation with a schemeless `--config`
+    // `url =` line.
+    let normalized = if url.contains("://") {
+        std::borrow::Cow::Borrowed(url)
+    } else {
+        std::borrow::Cow::Owned(format!("http://{url}"))
+    };
+    let (scheme, rest) = normalized
+        .split_once("://")
+        .expect("normalized always contains \"://\"");
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return Err(TransportFailure::Validation(format!(
@@ -591,10 +599,17 @@ fn build_client() -> Result<HttpClient, TransportFailure> {
 }
 
 /// Ollama's own `check()` probe (`adapters/ollama.py:220-244`):
-/// `HEAD {base_url}/api/tags`, curl's own `-q --silent --max-time 2
-/// --head` -- one 2-second total deadline, headers `Host`/`Accept:
-/// */*`, **any** HTTP response (status included -- no `--fail`) means
-/// reachable. `false` for a connection-level failure or the timeout.
+/// `HEAD {base_url}/api/tags` run through the real `curl` binary,
+/// `-q --silent --max-time 2 --head` -- which, with no explicit
+/// `--proxy`/`-u` of its own, still honors the proxy environment and
+/// a URL's own userinfo exactly as any other curl invocation does.
+/// This port reproduces both rather than special-casing the probe:
+/// one 2-second total deadline, headers `Host`/`Accept: */*` plus a
+/// `Basic` `Authorization` from URL userinfo when present (same as
+/// [`run_curl`]), through the same proxy resolution. **Any** HTTP
+/// response (status included -- no `--fail`) means reachable; `false`
+/// for a connection-level failure, a refused proxy scheme, or the
+/// timeout.
 pub async fn head_probe(url: &str, timeout: Duration) -> bool {
     let Ok(parsed) = parse_url(url) else {
         return false;
@@ -605,25 +620,38 @@ pub async fn head_probe(url: &str, timeout: Duration) -> bool {
     } else {
         Scheme::Http
     };
+    let Ok(proxy) = resolve_curl_proxy(&parsed.scheme, &parsed.host) else {
+        return false;
+    };
     let Ok(client) = http_client::build_client() else {
         return false;
+    };
+    let host_display = host_header_value(&parsed.host, port, &parsed.scheme);
+    let target = match (&proxy, scheme_enum) {
+        (Some(_), Scheme::Http) => {
+            format!("{}://{}{}", parsed.scheme, host_display, parsed.target)
+        }
+        _ => parsed.target.clone(),
     };
     let connect_target = ConnectTarget {
         scheme: scheme_enum,
         host: parsed.host.clone(),
         port,
-        proxy: None,
+        proxy,
     };
+    let mut headers = vec![
+        ("Host".to_string(), host_display),
+        ("Accept".to_string(), "*/*".to_string()),
+    ];
+    if let Some((user, password)) = &parsed.userinfo {
+        use base64::Engine;
+        let creds = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+        headers.push(("Authorization".to_string(), format!("Basic {creds}")));
+    }
     let raw_request = RawRequest {
         method: "HEAD".to_string(),
-        target: parsed.target.clone(),
-        headers: vec![
-            (
-                "Host".to_string(),
-                host_header_value(&parsed.host, port, &parsed.scheme),
-            ),
-            ("Accept".to_string(), "*/*".to_string()),
-        ],
+        target,
+        headers,
         body: None,
     };
     http_client::send(
@@ -697,6 +725,16 @@ mod tests {
         assert!(lower.contains("authorization: bearer t"));
         assert!(!lower.contains("expect:"));
         assert!(!lower.contains("accept-encoding"));
+    }
+
+    #[tokio::test]
+    async fn a_scheme_less_request_url_defaults_to_http_like_curl() {
+        let addr =
+            spawn_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        let url = format!("{addr}/path");
+        let outcome = run_curl(&url, &[], None, 5).await.unwrap();
+        assert_eq!(outcome.returncode, 0);
+        assert_eq!(outcome.stdout, "ok");
     }
 
     #[tokio::test]
@@ -1040,7 +1078,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_url_refusal_masks_userinfo_and_credential_query_params() {
-        match parse_url("not-a-url?api_key=sk-test") {
+        match parse_url("https://?api_key=sk-test") {
             Err(TransportFailure::Validation(text)) => {
                 assert!(!text.contains("sk-test"));
                 assert!(text.contains("unsupported URL"));
@@ -1076,5 +1114,54 @@ mod tests {
         assert_eq!(target.host, "proxy");
         assert_eq!(target.port, 3128);
         assert_eq!(target.basic_auth, Some("dXNlcjpwYXNz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn head_probe_succeeds_on_any_response_status() {
+        let addr = spawn_server(
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        let url = format!("http://{addr}/api/tags");
+        assert!(head_probe(&url, Duration::from_secs(2)).await);
+    }
+
+    #[tokio::test]
+    async fn head_probe_fails_on_a_closed_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://{addr}/api/tags");
+        assert!(!head_probe(&url, Duration::from_secs(2)).await);
+    }
+
+    #[tokio::test]
+    async fn head_probe_accepts_a_scheme_less_base_url_like_curl() {
+        let addr =
+            spawn_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let url = format!("{addr}/api/tags");
+        assert!(head_probe(&url, Duration::from_secs(2)).await);
+    }
+
+    #[tokio::test]
+    async fn head_probe_sends_basic_auth_from_url_userinfo() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = stream.read(&mut buf).unwrap();
+            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            text
+        });
+        let url = format!("http://user:pass@{addr}/api/tags");
+        assert!(head_probe(&url, Duration::from_secs(2)).await);
+        let request_text = handle.join().unwrap();
+        assert!(
+            request_text
+                .to_ascii_lowercase()
+                .contains("authorization: basic dxnlcjpwyxnz")
+        );
     }
 }
