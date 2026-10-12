@@ -167,10 +167,10 @@ pub fn dump_ir(
 // run_orchestration -- issue #431's run-wiring steps 1-19
 // ---------------------------------------------------------------------
 
-use electricity_bytecode::{EffectPath, PathSegment, first_unsupported, format_refusal};
+use electricity_bytecode::{EffectPath, PREVIEW_MARKER, first_unsupported, format_refusal};
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
-use electricity_vm::{Limiter, RunContext, RunObserver, Slot, Store};
+use electricity_vm::{Limiter, RunContext, RunObserver, Store};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
@@ -373,7 +373,7 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
 /// tree.
 fn format_config_refusal(reason: &str) -> String {
     format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: {reason} is not \
+        "electricity {VERSION} {PREVIEW_MARKER}: {reason} is not \
          supported until a later milestone; use `cof run` instead"
     )
 }
@@ -512,12 +512,20 @@ fn now_iso() -> String {
 
 /// `state.runtime.last_run.totals` (issue #431's run-wiring step 17/18):
 /// `effects_run` counts every completed node, root and containers
-/// included, whose own `meta.completed_at` is truthy (`Observer::
-/// effect_complete`'s own [`effect_completed_at_is_truthy`] guard,
-/// matching `_TotalsAccumulator.observe`'s identical check exactly --
-/// issue #506's lane L1: a successful `reflector` is the one effect
-/// type that never writes one at all, so it is the one call `Totals::
-/// observe_complete` below must not count).
+/// included, whose own `meta.completed_at` is truthy -- `Observer::
+/// effect_complete`'s own *completed_at_is_truthy* parameter
+/// ([`electricity_vm::RunObserver::effect_complete`]'s own doc
+/// comment), matching `_TotalsAccumulator.observe`'s identical check
+/// exactly. Issue #506's lane L1, review round 2: that parameter used
+/// to be re-derived here by walking *this run's own root* `Store` from
+/// *path* alone, which could never see a node still isolated in its
+/// own `use` child's or tree branch's own `Store` at the moment its
+/// own `effect_complete` fired -- silently over-counting a successful
+/// `reflector` inside either container shape (the one effect type
+/// that never writes `completed_at` on success at all, so it's the one
+/// call `Totals::observe_complete` below must not count). Every
+/// caller now decides the parameter itself, from whichever store/node
+/// it already has in scope.
 /// `tokens_sent`/`tokens_received`/`cost_usd` (issue #498 ruling 7) are
 /// real now -- `cli/runtime_shim.py::_TotalsAccumulator`'s own
 /// `_int_field(meta, "<f>_total", "<f>")`/cost-sum rules, applied to
@@ -618,60 +626,6 @@ impl Totals {
     }
 }
 
-/// *path*'s own node's `meta.completed_at`, Python-truthy --
-/// `_TotalsAccumulator.observe`'s own `if not isinstance(meta, dict) or
-/// not meta.get("completed_at"): return` guard (`cli/runtime_shim.py`),
-/// which [`Observer::effect_complete`] below applies before ever
-/// calling [`Totals::observe_complete`]. A plain, read-only walk from
-/// *store*'s own root through *path*'s segments (never [`Store::
-/// ensure_dict`], which would create a node this lookup has no
-/// business creating) -- cheap, since every segment is already a
-/// concrete name by the time an effect's own path reaches `effect_
-/// complete` (`Frame::effect_path` has already resolved every pass
-/// placeholder). A successful `reflector` is the one effect type this
-/// ever actually excludes today (issue #506's lane L1: success leaves
-/// its own `meta` as `{"iterations": [...]}` only, no `completed_at`
-/// at all) -- every other M0/M1 effect type always writes one on every
-/// exit, success included, so this was unreachable before that lane.
-fn effect_completed_at_is_truthy(store: &Store, path: &EffectPath) -> bool {
-    let mut node = store.root.clone();
-    for segment in &path.0 {
-        let PathSegment::Name(name) = segment else {
-            // Can only mean a path this frame never resolved the
-            // placeholder for -- a caller bug `Frame::effect_path`
-            // itself already `debug_assert!`s on; count it rather
-            // than guess.
-            return true;
-        };
-        match store.child(&node, &Value::Str(name.clone())) {
-            Ok(Some(next)) => node = next,
-            // Not visible in *this* store yet -- almost always a
-            // `use`/decomposition child's own nested effect, still
-            // isolated in its own `Store` at the moment its own
-            // `effect_complete` fires (lane I's `ChildObserver`
-            // forwards the call itself well before the child's data
-            // is ever grafted into the parent tree this function
-            // walks). Assume it completes normally rather than
-            // excluding it -- the one real exclusion this function
-            // exists for (a successful `reflector`) is never itself
-            // reached this way, since the reflector's own node
-            // always lives directly in the store its own
-            // `effect_complete` call already has in scope.
-            _ => return true,
-        }
-    }
-    let Ok(Some(meta)) = store.child(&node, &Value::Str("meta".to_string())) else {
-        return true;
-    };
-    match store.peek(&meta, &Value::Str("completed_at".to_string())) {
-        Some(Slot::Value(v)) => v.as_str().is_some_and(|s| !s.is_empty()),
-        // *meta* resolved in this same store, but `completed_at` is
-        // absent or `None` -- a successful `reflector` (issue #506's
-        // lane L1), the one real exclusion.
-        _ => false,
-    }
-}
-
 /// Fans every [`RunObserver`] hook out to `--events`/`--live-state`
 /// (issue #431's run-wiring step 16) and [`Totals`] -- the one place
 /// `execute_root`'s three observer hooks (`effect_start`/
@@ -682,7 +636,6 @@ fn effect_completed_at_is_truthy(store: &Store, path: &EffectPath) -> bool {
 /// `EventLog`, `LiveStateMirror` -- is each already `Cell`/`RefCell`-
 /// based for exactly that reason).
 struct Observer<'a> {
-    store: &'a Store,
     totals: &'a Totals,
     events: Option<&'a events::EventLog>,
     live_state: Option<&'a live_state::LiveStateMirror>,
@@ -712,8 +665,9 @@ impl RunObserver for Observer<'_> {
         path: &EffectPath,
         instance: electricity_vm::observer::InstanceId,
         error: Option<&str>,
+        completed_at_is_truthy: bool,
     ) {
-        if effect_completed_at_is_truthy(self.store, path) {
+        if completed_at_is_truthy {
             self.totals.observe_complete();
         }
         if let Some(log) = self.events {
@@ -1678,7 +1632,6 @@ pub async fn run_orchestration_with_config(
 
     let totals = Totals::new();
     let observer = Observer {
-        store: &store,
         totals: &totals,
         events: event_log.as_ref(),
         live_state: live_mirror.as_ref(),

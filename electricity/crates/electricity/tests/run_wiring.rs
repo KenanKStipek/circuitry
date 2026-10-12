@@ -253,7 +253,7 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
         "a refusal must write no state at all"
     );
     let error = result.error.unwrap();
-    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("prime.ask"));
 }
 
@@ -281,7 +281,7 @@ async fn a_document_level_adapter_is_refused_with_no_state_written() {
         "a refusal must write no state at all"
     );
     let error = result.error.unwrap();
-    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("openai"));
 }
 
@@ -376,7 +376,7 @@ async fn a_configured_persistence_backend_is_refused_with_no_state_written() {
     assert!(!result.ok);
     assert!(result.state.is_none());
     let error = result.error.unwrap();
-    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("runtime.persistence"));
 }
 
@@ -399,7 +399,7 @@ async fn a_persistence_block_enabled_with_a_truthy_non_boolean_is_still_refused(
     assert!(!result.ok);
     assert!(result.state.is_none());
     let error = result.error.unwrap();
-    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("runtime.persistence"));
 }
 
@@ -420,7 +420,7 @@ async fn a_malformed_persistence_backend_fails_validation_not_the_refusal() {
     let result = run(&req).await;
     assert!(!result.ok);
     let error = result.error.unwrap();
-    assert!(!error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(!error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("requires runtime.persistence.db_path"));
     // A validation failure (unlike the refusal) still writes state --
     // it's an ordinary pre_state_checks error.
@@ -440,7 +440,7 @@ async fn a_declared_runtime_plugin_is_refused_with_no_state_written() {
     assert!(!result.ok);
     assert!(result.state.is_none());
     let error = result.error.unwrap();
-    assert!(error.contains("is a preview and cannot run orchestrations yet"));
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("my-plugin"));
 }
 

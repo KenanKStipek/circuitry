@@ -352,17 +352,16 @@ osp behaviour:
 
 **M0-H's run wiring (issue #441) landed electricity's own side of
 this; issue #431's lane E2 wires osp to it.** electricity is still a
-preview: it runs `tool`/`dynamic`/a CEL `if`/`finally:` documents only,
-with `json` as its one tool provider, and refuses everything else
-(`prompt`/`loop`/`use`/`reflector`/`yield`, a model-mode `if`,
-persistence/runtime plugins, `--profile`) up front, before any state is
-written, with a message naming the preview marker
-(`is a preview and cannot run orchestrations yet`). osp shows that
-refusal the same way it shows an invalid document: a pre-execution
-failure, `■ run failed: ...`, exit 1 -- though only the refusal writes
-nothing at all under the run directory; an invalid document still gets
-its own `--out` (electricity's `fail!` macro saves state before
-returning the error).
+preview: `electricity/README.md`'s preview section is the single
+source of truth for what it runs, and it refuses everything else up
+front, before any state is written, with a message naming the preview
+marker (`is a preview and can't run this orchestration`,
+`electricity_bytecode::PREVIEW_MARKER`). osp shows that refusal the
+same way it shows an invalid document: a pre-execution failure,
+`■ run failed: ...`, exit 1 -- though only the refusal writes nothing
+at all under the run directory; an invalid document still gets its own
+`--out` (electricity's `fail!` macro saves state before returning the
+error).
 
 - `electricity <config.json> <orchestration.yml> -e k=v... --out
   <dir>/state.json [--events <dir>/events.jsonl] [--live-state
