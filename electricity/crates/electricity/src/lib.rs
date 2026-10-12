@@ -507,23 +507,79 @@ fn now_iso() -> String {
 
 /// `state.runtime.last_run.totals` (issue #431's run-wiring step 17/18):
 /// `effects_run` counts every completed node, root and containers
-/// included (`RunObserver::effect_complete`'s own call count) --
-/// `tokens_sent`/`tokens_received`/`cost_usd` stay at Circuitry's own
-/// zero/zero/`null` defaults through M0-H, since no prompt effect (the
-/// only thing that ever sets them) exists yet to report anything else.
+/// included (`RunObserver::effect_complete`'s own call count).
+/// `tokens_sent`/`tokens_received`/`cost_usd` (issue #498 ruling 7) are
+/// real now -- `cli/runtime_shim.py::_TotalsAccumulator`'s own
+/// `_int_field(meta, "<f>_total", "<f>")`/cost-sum rules, applied to
+/// every [`RunObserver::record_totals`] call (`exec::prompt::
+/// execute_prompt`'s own call, immediately before `effect_complete`,
+/// on every pass that writes a `meta` at all -- the reused-node case,
+/// where a render failure keeps an earlier pass's `tokens_sent_total`,
+/// is exactly why this reads *meta* fresh each call rather than
+/// tracking its own running delta); still zero/zero/`null` for every
+/// run with no prompt effect, since nothing else calls it yet.
 struct Totals {
     effects_run: Cell<u64>,
+    tokens_sent: Cell<i64>,
+    tokens_received: Cell<i64>,
+    cost_usd: Cell<Option<f64>>,
 }
 
 impl Totals {
     fn new() -> Self {
         Totals {
             effects_run: Cell::new(0),
+            tokens_sent: Cell::new(0),
+            tokens_received: Cell::new(0),
+            cost_usd: Cell::new(None),
         }
     }
 
     fn observe_complete(&self) {
         self.effects_run.set(self.effects_run.get() + 1);
+    }
+
+    /// `_int_field(meta, *keys)`: the first of *keys* present on *meta*
+    /// as a real (non-`bool`) int, else `0` -- `<field>_total` tried
+    /// before the plain field, so a prompt's own run total (every
+    /// attempt, not just the one that answered) counts when present.
+    fn int_field(meta: &electricity_value::Dict, keys: &[&str]) -> i64 {
+        for key in keys {
+            if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
+                meta.get(&Value::Str((*key).to_string()))
+            {
+                return *n;
+            }
+        }
+        0
+    }
+
+    /// `_TotalsAccumulator.observe`'s own tokens/cost half -- *meta* is
+    /// a completing effect's own `meta` snapshot, already known to have
+    /// a truthy `completed_at` by the caller (every [`RunObserver::
+    /// record_totals`] call site only ever fires alongside its own
+    /// `effect_complete`, which only ever happens once `meta.
+    /// completed_at` is set).
+    fn observe_meta(&self, meta: &Value) {
+        let Some(meta) = meta.as_dict() else {
+            return;
+        };
+        self.tokens_sent.set(
+            self.tokens_sent.get() + Self::int_field(meta, &["tokens_sent_total", "tokens_sent"]),
+        );
+        self.tokens_received.set(
+            self.tokens_received.get()
+                + Self::int_field(meta, &["tokens_received_total", "tokens_received"]),
+        );
+        let cost = match meta.get(&Value::Str("cost_usd".to_string())) {
+            Some(Value::Int(electricity_value::IntValue::Small(n))) => Some(*n as f64),
+            Some(Value::Float(f)) => Some(*f),
+            _ => None,
+        };
+        if let Some(cost) = cost {
+            self.cost_usd
+                .set(Some(self.cost_usd.get().unwrap_or(0.0) + cost));
+        }
     }
 
     fn value(&self, wall_time_s: f64) -> Value {
@@ -536,9 +592,18 @@ impl Totals {
             Value::Str("effects_run".to_string()),
             Value::from(self.effects_run.get() as i64),
         );
-        dict.insert(Value::Str("tokens_sent".to_string()), Value::from(0i64));
-        dict.insert(Value::Str("tokens_received".to_string()), Value::from(0i64));
-        dict.insert(Value::Str("cost_usd".to_string()), Value::None);
+        dict.insert(
+            Value::Str("tokens_sent".to_string()),
+            Value::from(self.tokens_sent.get()),
+        );
+        dict.insert(
+            Value::Str("tokens_received".to_string()),
+            Value::from(self.tokens_received.get()),
+        );
+        dict.insert(
+            Value::Str("cost_usd".to_string()),
+            self.cost_usd.get().map(Value::from).unwrap_or(Value::None),
+        );
         Value::Dict(dict)
     }
 }
@@ -627,6 +692,10 @@ impl RunObserver for Observer<'_> {
     // actually running.
     fn wants_child_snapshots(&self) -> bool {
         self.live_state.is_some()
+    }
+
+    fn record_totals(&self, meta: &Value) {
+        self.totals.observe_meta(meta);
     }
 }
 

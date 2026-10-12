@@ -589,6 +589,50 @@ pub fn profile_errors(document: &Value) -> Vec<SchemaError> {
         .collect()
 }
 
+/// A `prompt` effect's own `schema:` check (issue #498, lane G) --
+/// `core/prompt.py::PromptRuntime._validate_schema`'s own
+/// `jsonschema.validate(value, schema)`, whose validator class is
+/// picked from the schema's own `$schema` keyword (defaulting to the
+/// latest draft -- `jsonschema.validate`'s own `validator_for`
+/// default, matched here by [`jsonschema::validator_for`], which picks
+/// the same way). Unlike [`orchestration_errors`]/[`profile_errors`],
+/// *schema* here is never one of Circuitry's own bundled schemas --
+/// it's a document author's own `schema:` block -- so there is no
+/// fixed validator to cache, and no marker-instance filtering (a
+/// prompt's decoded JSON value is plain `json.loads`-shaped data,
+/// never a `Date`/`DateTime`/`Bytes`/non-string-key marker).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptSchemaCheck {
+    Valid,
+    /// `jsonschema.ValidationError.message` text (never required to
+    /// match Circuitry's own Python `jsonschema` text word for word --
+    /// see this crate's own docs; the `"Schema validation failed: "`
+    /// prefix is the caller's, as it is in `core/prompt.py`).
+    Invalid(String),
+    /// The schema itself doesn't compile into a validator at all
+    /// (`jsonschema.SchemaError`, which `_validate_schema`'s own
+    /// `except jsonschema.ValidationError` never catches -- a
+    /// different, non-retryable failure than an ordinary mismatch).
+    SchemaError(String),
+}
+
+/// `jsonschema.validate(value, schema)`, draft auto-selected from
+/// *schema*'s own `$schema` (defaulting to the latest draft) exactly
+/// as Python's own `jsonschema.validate` does.
+pub fn validate_prompt_schema(schema: &Value, instance: &Value) -> PromptSchemaCheck {
+    let validator = match jsonschema::validator_for(schema) {
+        Ok(validator) => validator,
+        Err(err) => return PromptSchemaCheck::SchemaError(err.to_string()),
+    };
+    match validator.validate(instance) {
+        Ok(()) => PromptSchemaCheck::Valid,
+        Err(err) => {
+            let message = substitute_value_prefix(&err.instance, err.to_string());
+            PromptSchemaCheck::Invalid(message)
+        }
+    }
+}
+
 /// `core.document_check._describe_schema_error`'s `repr(err.instance)` ->
 /// `"value"` substitution: when the failing instance is an object or array
 /// and `message` starts with that instance rendered as JSON (`jsonschema`
@@ -897,6 +941,109 @@ fn is_json_path_compatible_property(segment: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod prompt_schema_tests {
+    use super::{PromptSchemaCheck, validate_prompt_schema};
+    use serde_json::json;
+
+    #[test]
+    fn a_matching_instance_is_valid() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!({"a": 1})),
+            PromptSchemaCheck::Valid
+        );
+    }
+
+    #[test]
+    fn a_missing_required_property_is_invalid() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!({}))
+        else {
+            panic!("expected Invalid");
+        };
+        assert!(message.contains("required") && message.contains('a'));
+    }
+
+    #[test]
+    fn a_type_mismatch_is_invalid() {
+        let schema = json!({"type": "string"});
+        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!(5)) else {
+            panic!("expected Invalid");
+        };
+        assert!(message.contains("string"));
+    }
+
+    #[test]
+    fn an_enum_mismatch_is_invalid() {
+        let schema = json!({"enum": ["a", "b"]});
+        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!("c"))
+        else {
+            panic!("expected Invalid");
+        };
+        assert!(message.contains("is not one of"));
+    }
+
+    #[test]
+    fn additional_properties_false_rejects_an_extra_key() {
+        let schema = json!({"type": "object", "additionalProperties": false});
+        let PromptSchemaCheck::Invalid(message) =
+            validate_prompt_schema(&schema, &json!({"extra": 1}))
+        else {
+            panic!("expected Invalid");
+        };
+        assert!(message.contains("does not allow"));
+    }
+
+    #[test]
+    fn min_items_rejects_a_short_array() {
+        let schema = json!({"type": "array", "minItems": 2});
+        let PromptSchemaCheck::Invalid(message) = validate_prompt_schema(&schema, &json!([1]))
+        else {
+            panic!("expected Invalid");
+        };
+        assert!(message.contains("less than 2 items"));
+    }
+
+    #[test]
+    fn draft7_schema_is_picked_from_its_own_schema_keyword() {
+        // Draft 7 has no `$recursiveAnchor`/`unevaluatedProperties` --
+        // picking the wrong draft for a schema this old can itself
+        // change which keywords are even recognized. A plain
+        // `required` failure is enough to prove the schema at least
+        // compiled and ran under the declared draft.
+        let schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "required": ["a"]
+        });
+        assert_eq!(
+            validate_prompt_schema(&schema, &json!({})),
+            PromptSchemaCheck::Invalid("\"a\" is a required property".to_string())
+        );
+    }
+
+    #[test]
+    fn no_schema_keyword_defaults_to_the_latest_draft() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert!(matches!(
+            validate_prompt_schema(&schema, &json!({})),
+            PromptSchemaCheck::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn an_invalid_schema_is_a_schema_error_not_an_ordinary_mismatch() {
+        // A `type` keyword with a non-string/array value doesn't
+        // compile as a schema at all.
+        let schema = json!({"type": 5});
+        assert!(matches!(
+            validate_prompt_schema(&schema, &json!("anything")),
+            PromptSchemaCheck::SchemaError(_)
+        ));
+    }
 }
 
 #[cfg(test)]
