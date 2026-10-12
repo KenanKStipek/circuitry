@@ -1,0 +1,3 @@
+{
+  "error": "Profile 'p' targets condition path(s): gate.if. A conditional's 'if' and a loop's 'while' are conditions, not effects \u2014 they cannot be disabled or overridden, because a container with no condition has no defined branch. Disable the whole container instead (e.g. gate: {enabled: false}), which disables its entire subtree."
+}

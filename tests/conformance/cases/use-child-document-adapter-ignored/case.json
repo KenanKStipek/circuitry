@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.1, cli/allowlist.py::include_document_adapter",
+  "description": "An inline `use` child and a path `use` child, each with its own top-level `adapter: bogus`: Python never checks a use child's own document-level adapter (cli/allowlist.py's include_document_adapter=False for a child), so both run successfully -- electricity used to refuse both via the over-broad DocumentAdapter check; this lane lifts it.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

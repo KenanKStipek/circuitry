@@ -1,0 +1,1 @@
+WARNING: prompt 'greeting': adapter 'scripted' ignored: images

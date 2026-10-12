@@ -480,6 +480,16 @@ fn parse_python_float(raw: &str) -> Option<f64> {
 /// rather than becoming absent).
 fn cli_inline_entries(options: &CheckOptions, iface_inputs: &Dict) -> IndexMap<String, Value> {
     let mut inline: IndexMap<String, Value> = IndexMap::new();
+    // A loaded `--profile`'s own `inputs:` (issue #495, lane R) is the
+    // base layer: inserted first, so its keys establish position --
+    // an `-e` value for the same key below overwrites the value in
+    // place, and an `-e`-only key appends after every profile key,
+    // exactly `IndexMap::insert`'s own semantics on a repeated vs. a
+    // new key (`cli/runtime_shim.py::run`'s own `dict(profile.inputs);
+    // merged.update(input_ns)`).
+    for (key, value) in &options.profile_inputs {
+        inline.insert(key.clone(), value.clone());
+    }
     for (key, raw) in &options.inputs {
         let sniffed = electricity_json::loads(raw).unwrap_or_else(|_| Value::Str(raw.clone()));
         inline.insert(key.clone(), sniffed);
@@ -1655,6 +1665,32 @@ mod tests {
             namespace.get(&vkey("x")),
             Some(&Value::Str("hi".to_string()))
         );
+    }
+
+    /// Issue #495, lane R: a loaded `--profile`'s own `inputs:` is a
+    /// base layer under `-e` -- the profile key establishes its own
+    /// position, an `-e` value for the same key wins but keeps that
+    /// position, and an `-e`-only key follows every profile key.
+    #[test]
+    fn profile_inputs_are_a_base_layer_under_e_values() {
+        let doc = doc_with_top_level(vec![]);
+        let mut options = CheckOptions::default();
+        options
+            .profile_inputs
+            .insert("a".to_string(), Value::from("profile-a"));
+        options
+            .profile_inputs
+            .insert("b".to_string(), Value::from("profile-b"));
+        options.inputs.insert("b".to_string(), "cli-b".to_string());
+        options.inputs.insert("c".to_string(), "cli-c".to_string());
+        let namespace = build_input_namespace(&doc, &options).unwrap();
+        assert_eq!(
+            namespace.keys().map(Value::py_str).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(namespace.get(&vkey("a")), Some(&Value::from("profile-a")));
+        assert_eq!(namespace.get(&vkey("b")), Some(&Value::from("cli-b")));
+        assert_eq!(namespace.get(&vkey("c")), Some(&Value::from("cli-c")));
     }
 
     /// Two declared inputs, processed in order (issue #431 PR #441

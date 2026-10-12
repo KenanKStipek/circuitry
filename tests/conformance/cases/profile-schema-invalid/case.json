@@ -1,0 +1,9 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), cli/profiles.py::_validate_profile_schema",
+  "description": "A profile whose `adapter:` is a number fails Draft 7 schema validation -- a third-party (jsonschema) message, compared only for failing at the same place with a non-empty message, never byte-for-byte: Python's `jsonschema` and electricity's own Rust `jsonschema` crate word the same violation differently (settled ruling 9), so this is error_compare: location, not exact.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "- adapter:"
+}

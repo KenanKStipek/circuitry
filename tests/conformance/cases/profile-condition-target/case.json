@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), cli/profiles.py::condition_target_message",
+  "description": "A profile's `effects:` map targets a named conditional's own `.if` pseudo-path: a condition isn't an overridable effect, so this is J1's own distinct validation text, not the generic unknown-path message.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "failure",
+  "error_compare": "exact"
+}

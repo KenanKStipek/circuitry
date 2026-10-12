@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), issue #495",
+  "description": "A profile with `adapter`, `model` and `inputs: {a, b}`, run with `-e b=...` on a tool-only document: pins the `input` key order and values (profile keys first, a cli -e value wins but keeps the profile key's own position), `sources.model`/`adapter == \"profile\"`, and the `effective_settings.profile` record.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "cli_args": ["-e", "b=cli-b"],
+  "expect": "success"
+}

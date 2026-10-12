@@ -143,12 +143,14 @@ impl Case {
                 trust_document: options.trust_document,
                 config_runtime: None,
                 inputs: options.inputs.clone(),
+                profile_inputs: IndexMap::new(),
             },
             None => CheckOptions {
                 skip_preflight: true,
                 trust_document: true,
                 config_runtime: None,
                 inputs: IndexMap::new(),
+                profile_inputs: IndexMap::new(),
             },
         }
     }

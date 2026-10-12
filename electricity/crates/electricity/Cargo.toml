@@ -36,6 +36,13 @@ serde_json = "1"
 # runtime of its own; it always runs inside a caller's.
 tokio = { version = "1", features = ["time", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+# `PlaceholderAdapter`'s own `Adapter` impl (issue #495, lane R).
+async-trait = "0.1"
+# `FutureExt::catch_unwind` -- preflight's own driver (issue #495, lane
+# R) can't let an adapter's panicking `check()` take down the whole
+# run (settled ruling 5); already in the workspace lockfile via
+# electricity-vm's own `FuturesUnordered` use.
+futures = { version = "0.3", default-features = false, features = ["std"] }
 # `logger.warning` parity for `cli/live_state.py`/`cli/events.py`'s own
 # mid-run write-failure warnings (issue #442) -- a no-op unless a binary
 # later installs a logger, same as electricity-cel's/electricity-vm's.

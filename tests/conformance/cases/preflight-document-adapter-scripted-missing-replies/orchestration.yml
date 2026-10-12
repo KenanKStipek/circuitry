@@ -1,0 +1,7 @@
+name: preflight-document-adapter-scripted-missing-replies
+adapter: scripted
+effects:
+  - name: parse
+    type: tool
+    provider: json
+    params: {mode: parse, input: '{"a": 1}'}
