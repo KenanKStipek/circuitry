@@ -1211,6 +1211,71 @@
     "repr": "'text'"
   },
   {
+    "yaml": "input: |\n  text\n ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}"
+  },
+  {
+    "yaml": "input: |+\n  text\n ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}"
+  },
+  {
+    "yaml": "input: |\n  text\n    ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n  '}"
+  },
+  {
+    "yaml": "input: |\n  a-b",
+    "kind": "value",
+    "repr": "{'input': 'a-b'}"
+  },
+  {
+    "yaml": "input: |+\n  --flag",
+    "kind": "value",
+    "repr": "{'input': '--flag'}"
+  },
+  {
+    "yaml": "- |\n  1-2",
+    "kind": "value",
+    "repr": "['1-2']"
+  },
+  {
+    "yaml": "input: |\n",
+    "kind": "value",
+    "repr": "{'input': ''}"
+  },
+  {
+    "yaml": "input: |\n        \n",
+    "kind": "value",
+    "repr": "{'input': ''}"
+  },
+  {
+    "yaml": "input: |+\n",
+    "kind": "value",
+    "repr": "{'input': ''}"
+  },
+  {
+    "yaml": "input: |+\n\n",
+    "kind": "value",
+    "repr": "{'input': '\\n'}"
+  },
+  {
+    "yaml": "input: |2+\n     ",
+    "kind": "value",
+    "repr": "{'input': '   '}"
+  },
+  {
+    "yaml": "input: | # c\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}"
+  },
+  {
+    "yaml": "input: |+ # c\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}"
+  },
+  {
     "yaml": "# non-ascii marker é\na: on\n",
     "kind": "value",
     "repr": "{'a': True}",
@@ -3805,5 +3870,83 @@
     "kind": "value",
     "repr": "'text'",
     "original_index": 230
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |\n  text\n ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}",
+    "original_index": 231
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |+\n  text\n ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}",
+    "original_index": 232
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: |\n  text\n    ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n  '}",
+    "original_index": 233
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |\n  a-b",
+    "kind": "value",
+    "repr": "{'input': 'a-b'}",
+    "original_index": 234
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |+\n  --flag",
+    "kind": "value",
+    "repr": "{'input': '--flag'}",
+    "original_index": 235
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n- |\n  1-2",
+    "kind": "value",
+    "repr": "['1-2']",
+    "original_index": 236
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |\n",
+    "kind": "value",
+    "repr": "{'input': ''}",
+    "original_index": 237
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |\n        \n",
+    "kind": "value",
+    "repr": "{'input': ''}",
+    "original_index": 238
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: |+\n",
+    "kind": "value",
+    "repr": "{'input': ''}",
+    "original_index": 239
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |+\n\n",
+    "kind": "value",
+    "repr": "{'input': '\\n'}",
+    "original_index": 240
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |2+\n     ",
+    "kind": "value",
+    "repr": "{'input': '   '}",
+    "original_index": 241
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: | # c\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}",
+    "original_index": 242
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |+ # c\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}",
+    "original_index": 243
   }
 ]

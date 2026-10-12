@@ -1,5 +1,5 @@
 {
-  "spec_case": "runtime-semantics.md Section 1.1 (YAML block scalars) / Section 8.6 (use, inline)",
+  "spec_case": "electricity/docs/spec/runtime-semantics.md §1.1 (YAML block scalars) / §5.3 (use, inline)",
   "description": "An inline `use` child's rendered text is always stripped of its own trailing line break (core/use.py::_clean_yaml_fences), so a child document whose last value is a block scalar is the common, real-world case issue #493's end-of-input divergence actually hits. Both engines now load that trailing block scalar the same way PyYAML does.",
   "engines": ["python", "electricity"],
   "expect": "success"

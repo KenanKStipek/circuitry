@@ -919,6 +919,41 @@ def block_scalar_eof_cases() -> list[dict]:
         "input: >2\n   folded\n   text",  # ... folded
         "input: |\r\n  text",  # CRLF throughout
         "|\n  text",  # a document that is only a block scalar
+        # PR #500 review, finding 1: the scalar's last line holds *fewer*
+        # columns than its own body indent -- `saphyr-parser`'s own EOF
+        # check (`self.mark.col >= indent.max(1)`) already agrees with
+        # PyYAML without any correction here; a fix that pops regardless
+        # regresses these two relative to `main`.
+        "input: |\n  text\n ",  # clip, last line shorter than the indent
+        "input: |+\n  text\n ",  # keep, same
+        # finding 1's mirror: a last line *longer* than the indent still
+        # needs the correction (content continues past the indent column).
+        "input: |\n  text\n    ",
+        # finding 2: chomping must never be read back out of the scalar's
+        # own content -- a content line starting with `-` right after the
+        # header reads as strip chomping if the header lookup starts at
+        # the first content character instead of the real `|`/`>`.
+        "input: |\n  a-b",
+        "input: |+\n  --flag",
+        "- |\n  1-2",
+        # finding 5 / the orchestrator's ruling: an all-blank body at end
+        # of input, for clip and keep, with and without one further
+        # blank line -- `saphyr-parser`'s empty-body branch substitutes
+        # the header's own line break for PyYAML's (which never fires
+        # the content loop, so stays `''`) whenever no further blank
+        # line followed it.
+        "input: |\n",
+        "input: |\n        \n",
+        "input: |+\n",
+        "input: |+\n\n",
+        # an explicit indentation indicator whose only body line is blank
+        # -- still the content path (the loop runs once, at the
+        # indicated column, even though that line holds only spaces).
+        "input: |2+\n     ",
+        # a header followed by a trailing comment, still ending at EOF
+        # with no final line break.
+        "input: | # c\n  text",
+        "input: |+ # c\n  text",
     ]
     return [case(y) for y in yaml_texts]
 

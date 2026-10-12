@@ -296,6 +296,26 @@ fn block_scalar_chomping(header: &str) -> Chomping {
     }
 }
 
+/// Removes exactly one trailing `char` from `text` -- [`fix_block_scalar_eof`]'s
+/// own single-break correction, named so every call site reads as "pop
+/// the one synthetic break" rather than a bare `pop()`.
+fn pop_one(mut text: String) -> String {
+    text.pop();
+    text
+}
+
+/// The character count of `s`'s last line (after its last `'\n'`/`'\r'`,
+/// or the whole string if it holds no break at all) -- [`fix_block_scalar_eof`]'s
+/// own stand-in for `saphyr-parser`'s `self.mark.col` at end of input,
+/// read from the raw document text rather than re-derived from the
+/// scanner, since by the time this runs the scan is already over.
+fn last_raw_line_len(s: &str) -> usize {
+    match s.rfind(['\n', '\r']) {
+        Some(idx) => s[idx + 1..].chars().count(),
+        None => s.chars().count(),
+    }
+}
+
 /// Counts line breaks in `s`, a `\r\n` pair counting as one -- same
 /// convention as [`advance_marker`]'s own doc comment.
 fn count_line_breaks(s: &str) -> usize {
@@ -977,7 +997,7 @@ impl<'t> Composer<'t> {
     ) -> Result<Rc<Node>, YamlError> {
         let (mark, name) = self.node_prefix(span, before, anchor_id != 0);
         self.check_anchor_name(name.as_deref(), mark)?;
-        let text = self.fix_block_scalar_eof(text.into_owned(), style, span);
+        let text = self.fix_block_scalar_eof(text.into_owned(), style, span, before);
         let tag_str = scalar_tag(&text, style, tag.as_deref());
         let node = Rc::new(Node::Scalar {
             text,
@@ -990,70 +1010,95 @@ impl<'t> Composer<'t> {
 
     /// `saphyr-parser` 0.1.0's block-scalar scanner, unlike PyYAML's own
     /// `Scanner.scan_block_scalar` (whose `scan_line_break` returns `''`
-    /// at end of input, never a real line break), treats reaching
-    /// end-of-input as though the scalar's final line *did* end in one --
-    /// appending a line break PyYAML never does whenever a literal/folded
-    /// scalar is the very last thing in a document that itself has no
-    /// final line break (issue #493). Scoped narrowly to that one
-    /// divergence by the two EOF checks below: a document that *does*
-    /// end with a line break (or a comment line after the scalar) never
-    /// reaches this function's corrections at all, matching
-    /// `saphyr-parser`'s own, already-correct behaviour for those cases
-    /// untouched.
+    /// at end of input, never a real line break), can add a line break
+    /// PyYAML never would when a literal/folded scalar reaches the very
+    /// end of the input (issue #493), through two unrelated mechanisms --
+    /// which path applies is told apart below by whether the gap between
+    /// `before` and `span.start` holds the scalar's own `|`/`>` header
+    /// character: when it does, `span.start` points at the first real
+    /// content line (`scanner.rs::scan_block_scalar` reassigns its own
+    /// `start_mark` right there); when it doesn't, the body never scanned
+    /// any content line at all and `span.start` *is* the header
+    /// (`scanner.rs`'s earlier `next_is_z()` branch, taken before the
+    /// content loop ever runs).
     ///
-    /// Chomping governs the correction PyYAML's own tail-chomp logic
-    /// (`scanner.py::scan_block_scalar`) would have applied, worked out
-    /// empirically against real `yaml.safe_load` runs rather than a
-    /// line-by-line port of that scanner (`generate_yaml_corpus.py` is
-    /// the record of that derivation, not this comment):
-    /// - strip (`|-`/`>-`) never produces a trailing line break to begin
-    ///   with, so it's never touched here.
-    /// - clip (`|`/`>`) and keep (`|+`/`>+`) both need exactly one
-    ///   trailing `'\n'` removed whenever the scalar held any real
-    ///   (non-whitespace) content -- PyYAML's own `line_break` variable
-    ///   only ever holds the break *after the last real content line*,
-    ///   which is empty at EOF; `saphyr-parser` adds one anyway.
-    /// - when the body is blank throughout (no real content at all),
-    ///   clip still needs that one `'\n'` removed, but keep does *not*
-    ///   when the body already held its own internal line break (a
-    ///   fully terminated blank line before the final, unterminated
-    ///   one) -- PyYAML's `breaks` list already carries that count
-    ///   correctly in this case, and `saphyr-parser` happens to agree;
-    ///   it only disagrees when the header's own line break is the one
-    ///   and only break anywhere in the scalar's span, which keep must
-    ///   *not* carry into its own output (`count_line_breaks(header) <
-    ///   2` below: the header's own break, if any, plus zero more).
-    fn fix_block_scalar_eof(&mut self, text: String, style: ScalarStyle, span: Span) -> String {
+    /// - **Content path.** `scanner.rs` only appends its own synthetic
+    ///   `'\n'` when the raw input's last line is indented at least as
+    ///   far as the scalar's own body (`self.mark.col >= indent.max(1)`);
+    ///   below that, it already agrees with PyYAML with no correction
+    ///   needed. `span.start.col()` *is* that body indent (it was
+    ///   captured at the moment `self.mark.col == indent` first held, at
+    ///   the first content line), so the raw document's own last line
+    ///   length -- not the composed `text`'s -- mirrors the same
+    ///   condition exactly; clip and keep need identical treatment here
+    ///   (`chomping != Strip` guards the same push in `scanner.rs`, and
+    ///   strip's own content can never end in `'\n'` to begin with, so
+    ///   it never reaches this branch at all -- no need to read the
+    ///   chomping indicator back out of the content here, which content
+    ///   starting with a literal `-` right after `|`/`>` would misread).
+    /// - **Empty-body path.** `scanner.rs`'s `next_is_z()` branch, taken
+    ///   before any content line is ever scanned, substitutes the
+    ///   header's *own* line break (`chomping_break`) for PyYAML's
+    ///   `line_break` (which stays `''` here: PyYAML's content loop never
+    ///   ran either) whenever there were no further, fully blank lines
+    ///   after it (`trailing_breaks.is_empty()`) -- wrongly for clip
+    ///   (unconditionally: its own match arm never even looks at
+    ///   `trailing_breaks`) and wrongly for keep only in that same empty
+    ///   case (keep's own `trailing_breaks` arm, taken whenever at least
+    ///   one more blank line followed the header, already agrees with
+    ///   PyYAML's `breaks`). `count_line_breaks(header) < 2` tells those
+    ///   apart: `header` here runs from the header to end of input (the
+    ///   scalar is the last thing in the document), so it holds exactly
+    ///   the header's own break plus one more per further blank line.
+    fn fix_block_scalar_eof(
+        &mut self,
+        text: String,
+        style: ScalarStyle,
+        span: Span,
+        before: Marker,
+    ) -> String {
         if !matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
             return text;
         }
         if !text.ends_with('\n') {
             return text;
         }
-        if self.text.ends_with('\n') || self.text.ends_with('\r') {
-            return text;
-        }
         if self.byte_offset(span.end) != self.text.len() {
             return text;
         }
-        let header = &self.text[self.byte_offset(span.start)..];
-        match block_scalar_chomping(header) {
-            Chomping::Strip => text,
-            Chomping::Clip => {
-                let mut text = text;
-                text.pop();
-                text
-            }
-            Chomping::Keep => {
-                let has_real_content = text.chars().any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r'));
-                if !has_real_content && count_line_breaks(header) >= 2 {
-                    text
-                } else {
-                    let mut text = text;
-                    text.pop();
-                    text
+
+        let span_start_offset = self.byte_offset(span.start);
+        let gap_start = self.byte_offset(before);
+        let gap = if span_start_offset > gap_start {
+            &self.text[gap_start..span_start_offset]
+        } else {
+            ""
+        };
+        let is_empty_body = !gap.contains(['|', '>']);
+
+        if is_empty_body {
+            let header = &self.text[span_start_offset..];
+            return match block_scalar_chomping(header) {
+                Chomping::Strip => text,
+                Chomping::Clip => pop_one(text),
+                Chomping::Keep => {
+                    if count_line_breaks(header) >= 2 {
+                        text
+                    } else {
+                        pop_one(text)
+                    }
                 }
-            }
+            };
+        }
+
+        if self.text.ends_with('\n') || self.text.ends_with('\r') {
+            return text;
+        }
+        let required_indent = span.start.col().max(1);
+        if last_raw_line_len(self.text) >= required_indent {
+            pop_one(text)
+        } else {
+            text
         }
     }
 
