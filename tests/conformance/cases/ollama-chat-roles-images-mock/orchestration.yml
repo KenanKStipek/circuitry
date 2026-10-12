@@ -1,0 +1,25 @@
+name: ollama-chat-roles-images-mock
+model: test-model
+effects:
+  - type: prompt
+    name: chat
+    messages:
+      - role: system
+        content: "be terse"
+      - role: user
+        content: "describe"
+      - role: assistant
+        content: "ok"
+      - role: tool
+        content: "tool-output"
+    assets:
+      - kind: image
+        ref: "assets/tiny.png"
+  - type: prompt
+    name: system_only_image
+    messages:
+      - role: system
+        content: "sys only"
+    assets:
+      - kind: image
+        ref: "assets/tiny.png"

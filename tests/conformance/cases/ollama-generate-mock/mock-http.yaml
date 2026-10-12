@@ -1,0 +1,11 @@
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"response": "  hello from ollama  ", "prompt_eval_count": 7, "eval_count": 5,
+      "done_reason": "stop"}

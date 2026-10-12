@@ -1,0 +1,18 @@
+- request:
+    method: POST
+    path: /api/chat
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"message": {"content": "chat reply one"}}'
+- request:
+    method: POST
+    path: /api/chat
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"message": {"content": "chat reply two"}}'
