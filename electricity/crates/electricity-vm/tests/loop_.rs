@@ -1624,7 +1624,10 @@ async fn two_step_if_in_a_named_chain_each_sees_the_enclosing_scope_on_every_pas
             root_path(),
             "prime",
             OnError::Fail,
-            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+            vec![
+                seed_dict_tool(root_path().push_name("seed"), "seed"),
+                loop_op_,
+            ],
         ),
         &store,
     )
@@ -1707,7 +1710,10 @@ async fn two_step_if_in_an_unnamed_chain_each_sees_the_enclosing_scope() {
             root_path(),
             "prime",
             OnError::Fail,
-            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+            vec![
+                seed_dict_tool(root_path().push_name("seed"), "seed"),
+                loop_op_,
+            ],
         ),
         &store,
     )
@@ -1784,7 +1790,10 @@ async fn two_step_if_in_a_named_while_sees_the_enclosing_scope_on_every_pass() {
             root_path(),
             "prime",
             OnError::Fail,
-            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+            vec![
+                seed_dict_tool(root_path().push_name("seed"), "seed"),
+                loop_op_,
+            ],
         ),
         &store,
     )
@@ -1859,7 +1868,10 @@ async fn two_step_if_in_a_named_tree_each_sees_the_enclosing_scope() {
             root_path(),
             "prime",
             OnError::Fail,
-            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+            vec![
+                seed_dict_tool(root_path().push_name("seed"), "seed"),
+                loop_op_,
+            ],
         ),
         &store,
     )
@@ -2072,7 +2084,11 @@ async fn with_prev_overlay_hides_a_fresh_loops_own_current_pass_iter_node() {
         vec![inner_loop],
     );
 
-    store.set_leaf(&store.root, k("outer_items"), Value::List(vec![Value::from(0_i64)]));
+    store.set_leaf(
+        &store.root,
+        k("outer_items"),
+        Value::List(vec![Value::from(0_i64)]),
+    );
     store.set_leaf(
         &store.root,
         k("inner_items"),
@@ -2175,5 +2191,3 @@ async fn with_prev_overlay_shows_a_reused_loops_own_current_pass_iter_node() {
          fix must"
     );
 }
-
-

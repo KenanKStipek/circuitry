@@ -483,7 +483,8 @@ impl Store {
     fn peek_under(&self, parent: &NodeRef, key: &Value, watermark: Option<usize>) -> Option<Slot> {
         let node = parent.borrow();
         if let Some(slot) = node.entries.get(key) {
-            if watermark.is_some_and(|n| node.entries.get_index_of(key).is_some_and(|idx| idx >= n)) {
+            if watermark.is_some_and(|n| node.entries.get_index_of(key).is_some_and(|idx| idx >= n))
+            {
                 return None;
             }
             return Some(slot.clone());
