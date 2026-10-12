@@ -1829,6 +1829,132 @@ mod tests {
         );
     }
 
+    /// `core/tool.py::ToolRuntime.execute`'s own `with concurrency_cm:`
+    /// ends before a `mode: model` `expect:` -- issue #513's own test
+    /// list, item "the tool limiter slot is free during the expect
+    /// call". Blocks inside `generate()` until released, so the probe
+    /// below can observe the slot while the call is still pending.
+    struct BlockingAdapter {
+        started: std::rc::Rc<tokio::sync::Notify>,
+        release: std::rc::Rc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for BlockingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            _call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(crate::adapter::GenerateResult {
+                text: "yes".to_string(),
+                raw: Value::None,
+                tokens_sent: None,
+                tokens_received: None,
+                finish_reason: None,
+                warnings: Vec::new(),
+                cost_usd: None,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_tool_limiter_slot_is_free_during_a_model_expects_dispatch() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("{\"ok\": true}"));
+        let mut tool = tool_op(params);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "ok?",
+                false,
+                electricity_bytecode::Escape::Html,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::with_limits(Some(1), []);
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = electricity_config::ComplexitySettings::default();
+        let dir = std::path::PathBuf::from(".");
+        let declared_prompts: indexmap::IndexMap<String, String> = indexmap::IndexMap::new();
+        let effect_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let started = std::rc::Rc::new(tokio::sync::Notify::new());
+        let release = std::rc::Rc::new(tokio::sync::Notify::new());
+        let adapter = std::rc::Rc::new(BlockingAdapter {
+            started: started.clone(),
+            release: release.clone(),
+        });
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: adapter,
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let token = CancellationToken::new();
+        let empty_ctx = Value::None;
+        let frame = Frame::root();
+
+        let run = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &empty_ctx,
+            &frame,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        );
+        let probe = async {
+            started.notified().await;
+            let guard = run_ctx.limiter.try_acquire(None);
+            assert!(
+                matches!(guard, Ok(Some(_))),
+                "the limiter slot must be free while a model expect's own dispatch is pending, got {guard:?}"
+            );
+            release.notify_one();
+        };
+        let (result, ()) = tokio::join!(run, probe);
+        result.expect("the run must still succeed once the expect call returns");
+    }
+
     #[tokio::test]
     async fn a_model_mode_expects_raised_adapter_failure_is_an_ordinary_tool_failure() {
         // `default_run_ctx`'s own default adapter is `NoopAdapter`, so

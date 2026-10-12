@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `while`, unnamed, an unreadable condition",
+  "description": "An unnamed model `while` inside a named `dynamic` (key `prime.d`), reply \"maybe\", `on_error: break`. Pins the exact `Loop <unnamed>: while-condition failed (...); on_error=break, stopping the loop` warning text, and that nothing of it reaches the run's own totals (an unnamed loop writes no node).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

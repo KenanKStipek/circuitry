@@ -1,0 +1,7 @@
+prime.lp:
+  - text: "no"
+    tokens_sent: 1
+    tokens_received: 1
+  - text: "no"
+    tokens_sent: 2
+    tokens_received: 2

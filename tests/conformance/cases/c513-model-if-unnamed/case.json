@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `if`, unnamed",
+  "description": "An unnamed `if` at the root (key `prime`), an unnamed `if` in a named `each` loop body (keys `prime.lp.iter_0`/`prime.lp.iter_1`), and an unnamed `if` at an inline `use` child's own root (key `prime.u`). Every reply carries tokens. Pins: the keying rules, no node and no events for an unnamed `if`, and the run's own totals excluding every one of them.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

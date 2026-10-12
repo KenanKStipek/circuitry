@@ -286,6 +286,38 @@ async fn a_document_level_adapter_is_refused_with_no_state_written() {
     assert!(error.contains("openai"));
 }
 
+/// Issue #513's own Interfaces §8: a document whose only call reaching
+/// the run's own default adapter is a model-mode `if` must still build
+/// the *real* adapter (`has_prompt_effects`'s own `Condition::Model`
+/// arm, lane R's `needs_real_adapter`) rather than the `_noop`
+/// placeholder a document with no prompt effects at all gets --
+/// `_noop` is never preflight-checked, so a real adapter name that
+/// fails preflight (here, `scripted` with no replies file configured)
+/// is the proof this document's own model `if` was recognized: a
+/// regression that stopped treating a model condition as needing a
+/// real adapter would make this run succeed trivially against
+/// `_noop` instead of failing preflight against `scripted`.
+#[tokio::test]
+async fn a_document_whose_only_model_call_is_an_if_builds_the_real_default_adapter() {
+    let dir = temp_dir("model-if-default-adapter");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: scripted\nmodel: test\neffects:\n  - name: gate\n    type: if\n    if:\n      mode: model\n      template: \"ok?\"\n    then: []\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok, "expected a preflight failure, got: {result:?}");
+    let error = result.error.clone().unwrap();
+    assert!(
+        error.contains("adapter:scripted") && error.contains("scripted-replies.yaml"),
+        "expected a real scripted-adapter preflight failure, got: {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_config_default_model_is_recorded_as_its_own_source() {
     let dir = temp_dir("config-model");

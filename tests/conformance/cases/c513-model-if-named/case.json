@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `if`, named",
+  "description": "A named `if` in `mode: model` (the compiler's own default when `if:` has no `mode:`), reply `\"**Yes.**\"` with `tokens_sent`/`tokens_received`. Pins: the `then` branch taken, `meta` key order (`condition_result`/`branch` before `answer`/`adapter`/`model`/`tokens_*`), `answer`/`adapter: scripted`/`model`, and the run's own `tokens_*` totals.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

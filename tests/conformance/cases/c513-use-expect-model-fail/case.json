@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #513: a `use` effect's `expect: {mode: model}`, a final failure",
+  "description": "Same shape as `c513-use-expect-model-reask`, `max_attempts: 1`, reply `\"no\"`, `on_error: fail`. Pins: `meta.error == \"expect failed: ...\"` and the run's own error, `use 'u' -> inline: expect failed: ...`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}
