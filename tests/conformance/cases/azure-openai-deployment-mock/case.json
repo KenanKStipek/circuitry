@@ -1,9 +1,11 @@
 {
   "spec_case": "issue #503 (OpenAI-compatible family, Azure OpenAI deployment routing)",
   "description": "An 'endpoint' pointed at the mock server: the URL path names the deployment (the orchestration's model:), api-version goes on the query string, and auth is the api-key header rather than Bearer.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml",
-  "fake_credentials": {"AZURE_OPENAI_API_KEY": "circuitry-test-fake-azure-key"}
+  "fake_credentials": {
+    "AZURE_OPENAI_API_KEY": "circuitry-test-fake-azure-key"
+  }
 }

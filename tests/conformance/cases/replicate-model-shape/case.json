@@ -1,7 +1,9 @@
 {
   "spec_case": "issue #503 (replicate, model must be 'owner/name')",
   "description": "model: llama with on_error: continue: generate() rejects the model string before issuing any request, with the exact ValueError text and no recorded request.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "expect": "success",
-  "fake_credentials": {"REPLICATE_API_TOKEN": "circuitry-test-fake-replicate-token"}
+  "fake_credentials": {
+    "REPLICATE_API_TOKEN": "circuitry-test-fake-replicate-token"
+  }
 }

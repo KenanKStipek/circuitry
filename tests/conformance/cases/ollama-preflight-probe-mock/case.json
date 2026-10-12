@@ -1,9 +1,7 @@
 {
   "spec_case": "issue #503 (native Ollama, check()'s own /api/tags probe)",
   "description": "Document names 'adapter: ollama' explicitly, so preflight builds and probes it: the HEAD /api/tags request is recorded first, then the prompt's own POST.",
-  "engines": [
-    "python"
-  ],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

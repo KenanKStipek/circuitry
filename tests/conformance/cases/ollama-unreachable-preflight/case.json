@@ -1,9 +1,7 @@
 {
   "spec_case": "issue #503 (native Ollama, preflight failure, unreachable host)",
   "description": "Document names 'adapter: ollama' with base_url pointed at a closed port: preflight's check() probe fails and the whole run is refused, with host:<base_url> (unmasked userinfo-wise, since there is none here) in the exact message.",
-  "engines": [
-    "python"
-  ],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "failure"
 }

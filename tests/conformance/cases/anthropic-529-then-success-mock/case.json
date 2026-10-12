@@ -1,9 +1,11 @@
 {
   "spec_case": "issue #503 (anthropic, an overloaded 5xx retried)",
   "description": "A 529 Overloaded then a 200: the 5xx is retryable, so retries_used is 1 and two requests are recorded.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml",
-  "fake_credentials": {"ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"}
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"
+  }
 }

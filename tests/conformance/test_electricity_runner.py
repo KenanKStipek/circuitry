@@ -171,6 +171,7 @@ def _run_electricity(
             home_dir,
             leftover_replies_path=leftover_replies_path,
             extra_env=metadata.get("env"),
+            fake_credentials=metadata.get("fake_credentials"),
         ),
         capture_output=True,
         text=True,

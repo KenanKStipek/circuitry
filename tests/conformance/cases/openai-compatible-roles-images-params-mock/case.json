@@ -1,7 +1,7 @@
 {
   "spec_case": "issue #503 (OpenAI-compatible family, lmstudio, roles/images/params)",
   "description": "lmstudio: a tool turn becomes a user turn 'tool: ...', an image_url data URL, and params colliding with the top-level model. The body's key order is temperature/max_tokens/stop/params, with no seed added under deterministic (unlike the openai adapter itself, the shared helper never adds one).",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

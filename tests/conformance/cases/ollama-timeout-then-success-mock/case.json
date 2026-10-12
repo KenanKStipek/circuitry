@@ -1,9 +1,7 @@
 {
   "spec_case": "issue #503 (native Ollama, --max-time timeout is retried)",
   "description": "The first response is delayed past timeout_ms, giving curl exit 28 (retryable); the second succeeds. Curl's own text never reaches the final state.",
-  "engines": [
-    "python"
-  ],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

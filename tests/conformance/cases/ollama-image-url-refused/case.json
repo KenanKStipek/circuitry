@@ -1,9 +1,7 @@
 {
   "spec_case": "issue #503 (native Ollama, a URL image asset is refused before any request)",
   "description": "An https:// image asset: ollama cannot fetch a URL image, so the exact RuntimeError text is raised before any request -- no mock server needed since nothing is ever sent.",
-  "engines": [
-    "python"
-  ],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success"
 }

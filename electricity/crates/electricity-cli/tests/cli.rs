@@ -471,9 +471,11 @@ fn run_request_with_every_new_flag_in_equals_form_also_writes_out() {
     assert!(live_state.exists());
 }
 
-/// A document naming unsupported content (here, a `prompt` effect) is
-/// refused with the preview marker before any file is written at all
-/// -- even when `--out`/`--events`/`--live-state` are all given.
+/// A document naming unsupported content (here, a `prompt` effect
+/// against `litellm`, a Circuitry-known adapter with no electricity
+/// builder) is refused with the preview marker before any file is
+/// written at all -- even when `--out`/`--events`/`--live-state` are
+/// all given.
 #[test]
 fn an_unsupported_effect_is_refused_with_no_files_written() {
     let (mut cmd, home) = command("refusal");
@@ -481,7 +483,7 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     let doc = home.path.join("doc.yml");
     fs::write(
         &doc,
-        "effects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+        "effects:\n  - name: ask\n    type: prompt\n    provider: litellm\n    template: \"hi\"\n",
     )
     .unwrap();
     let out = home.path.join("out.json");

@@ -1,9 +1,7 @@
 {
   "spec_case": "issue #503 (native Ollama, /api/generate body shape)",
   "description": "A template prompt against the config-default ollama adapter: POST /api/generate, deterministic:true plus params pin the body's key order (top-level request fields before the options slot, seed last), and the reply's surrounding whitespace plus prompt_eval_count/eval_count/done_reason.",
-  "engines": [
-    "python"
-  ],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

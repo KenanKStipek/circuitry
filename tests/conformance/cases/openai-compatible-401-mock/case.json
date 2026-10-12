@@ -1,9 +1,11 @@
 {
   "spec_case": "issue #503 (OpenAI-compatible family, groq with fake_credentials, a 401)",
   "description": "groq with fake_credentials: authorization: Bearer ... is recorded. A 401 {error: {message: Invalid API Key}} with retries configured is sent once (a 4xx is never retryable), and the exact failure text lands in meta.error's attempts repr.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml",
-  "fake_credentials": {"GROQ_API_KEY": "circuitry-test-fake-groq-key"}
+  "fake_credentials": {
+    "GROQ_API_KEY": "circuitry-test-fake-groq-key"
+  }
 }

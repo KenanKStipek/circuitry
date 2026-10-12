@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #503 (OpenAI-compatible family, Cloudflare Workers AI, preflight failure, no account configured)",
   "description": "Document names 'adapter: cloudflare-workers-ai' with neither CF_API_TOKEN nor CF_ACCOUNT_ID set: check() reports both missing plus its own account-id hint, and the whole run is refused.",
-  "engines": ["python"],
+  "engines": ["python", "electricity"],
   "expect": "failure"
 }
