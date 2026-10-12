@@ -624,7 +624,7 @@ async fn unnamed_chain_each_writes_directly_into_the_enclosing_node_each_pass() 
 }
 
 // ---------------------------------------------------------------------
-// while (CEL only)
+// while (CEL and model mode, lane G2/#513)
 // ---------------------------------------------------------------------
 
 #[tokio::test]
@@ -882,6 +882,204 @@ async fn named_while_condition_ctx_does_not_leak_iter_into_prime() {
     assert_eq!(
         get(termination, "reason"),
         Some(&Value::Str("condition_false".to_string()))
+    );
+}
+
+/// A `generate` that always answers `"yes"`, with token counts --
+/// issue #513 review finding 4: lets a model `while`'s own container-
+/// level `record_totals` hook be exercised end to end.
+struct YesAdapter;
+
+#[async_trait::async_trait(?Send)]
+impl electricity_vm::Adapter for YesAdapter {
+    fn name(&self) -> &str {
+        "yes"
+    }
+
+    async fn generate(
+        &self,
+        _model: &str,
+        _prompt: &str,
+        _options: &electricity_vm::adapter::GenerateOptions,
+        _call: &electricity_vm::adapter::CallContext<'_>,
+    ) -> Result<electricity_vm::adapter::GenerateResult, electricity_vm::adapter::AdapterError>
+    {
+        Ok(electricity_vm::adapter::GenerateResult {
+            text: "yes".to_string(),
+            raw: Value::None,
+            tokens_sent: Some(1),
+            tokens_received: Some(1),
+            finish_reason: None,
+            warnings: Vec::new(),
+            cost_usd: None,
+        })
+    }
+
+    async fn check(&self) -> electricity_vm::adapter::CheckResult {
+        electricity_vm::adapter::CheckResult {
+            ok: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// A `generate` that never resolves -- lets a cancellation test race
+/// the token against a real in-flight call deterministically.
+struct ForeverAdapter;
+
+#[async_trait::async_trait(?Send)]
+impl electricity_vm::Adapter for ForeverAdapter {
+    fn name(&self) -> &str {
+        "forever"
+    }
+
+    async fn generate(
+        &self,
+        _model: &str,
+        _prompt: &str,
+        _options: &electricity_vm::adapter::GenerateOptions,
+        _call: &electricity_vm::adapter::CallContext<'_>,
+    ) -> Result<electricity_vm::adapter::GenerateResult, electricity_vm::adapter::AdapterError>
+    {
+        std::future::pending().await
+    }
+
+    async fn check(&self) -> electricity_vm::adapter::CheckResult {
+        electricity_vm::adapter::CheckResult {
+            ok: true,
+            ..Default::default()
+        }
+    }
+}
+
+fn model_while(template: &str) -> LoopSpec {
+    LoopSpec::While(Condition::Model {
+        template: TemplateText::new(template, false, Escape::None),
+    })
+}
+
+async fn run_with_adapter(
+    root: Op,
+    store: &Store,
+    observer: &dyn RunObserver,
+    adapter: std::rc::Rc<dyn electricity_vm::Adapter>,
+    token: CancellationToken,
+) -> Result<(), VmError> {
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = adapter;
+    electricity_vm::execute_root(
+        &support::program(root),
+        store,
+        &Value::None,
+        &ctx,
+        observer,
+        &token,
+    )
+    .await
+}
+
+/// Issue #513 review finding 4: a named model `while`'s own completing
+/// pass calls `record_totals` exactly once.
+#[tokio::test]
+async fn a_named_model_while_calls_record_totals_once_on_success() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("lp");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("lp"),
+        model_while("continue?"),
+        LoopFlow::Chain,
+        None,
+        Some(1),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+    let observer = support::RecordingObserver::new();
+    run_with_adapter(
+        single(loop_op_),
+        &store,
+        &observer,
+        std::rc::Rc::new(YesAdapter),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("a model while answered 'yes' must succeed");
+    let totals = observer
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, support::Event::Totals(_)))
+        .count();
+    assert_eq!(
+        totals, 1,
+        "a named model while must call record_totals exactly once"
+    );
+}
+
+/// A cancelled named model `while` never calls `record_totals` --
+/// `meta.completed_at` stays unset on the `Cancelled` return path, so
+/// the loop container's own guard must skip the call.
+#[tokio::test]
+async fn a_cancelled_named_model_while_never_calls_record_totals() {
+    let store = Store::new();
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("lp");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "iter.index",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("lp"),
+        model_while("continue?"),
+        LoopFlow::Chain,
+        None,
+        Some(1),
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+    let token = CancellationToken::new();
+    let inner = support::RecordingObserver::new();
+    let observer = support::CancelOnStart {
+        inner,
+        token: &token,
+        target: "prime.lp",
+    };
+    let result = run_with_adapter(
+        single(loop_op_),
+        &store,
+        &observer,
+        std::rc::Rc::new(ForeverAdapter),
+        token.clone(),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(VmError::Cancelled)),
+        "expected Cancelled, got {result:?}"
+    );
+    assert!(
+        !observer
+            .inner
+            .events()
+            .iter()
+            .any(|e| matches!(e, support::Event::Totals(_))),
+        "a cancelled model while must never call record_totals"
     );
 }
 

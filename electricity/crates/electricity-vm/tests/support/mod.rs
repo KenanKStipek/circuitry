@@ -303,11 +303,9 @@ pub fn cel_if(
     }
 }
 
-/// A `mode: model` `if` -- review P2-4 on PR #454's second review:
-/// `execute_conditional`'s own `decide_and_run` routes this through
-/// `condition_model::evaluate_model_condition` now, so this always
-/// fails with that function's own `VmError::NotImplemented` (M1-G2
-/// hasn't filled in a real body yet), never panics.
+/// A `mode: model` `if` -- `execute_conditional`'s own `decide_and_run`
+/// routes this through `condition_model::evaluate_model_condition`
+/// (lane G2, #513), real since that lane landed.
 pub fn model_if(path: EffectPath, name: Option<&str>, template: &str, on_error: OnError) -> Op {
     Op {
         path,

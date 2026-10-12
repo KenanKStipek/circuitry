@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `while`, `min_iterations`",
+  "description": "A named `while`, `min_iterations: 2`, `max_iterations: 6`, replies at `prime.lp`: [\"yes\", \"no\"]. Pins: passes 0 and 1 never ask (no call, no `meta` write for those passes), 3 passes total, `condition_false` termination, `tokens_*` from the last check and `tokens_*_total` summed over both checks, and the run's own totals.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

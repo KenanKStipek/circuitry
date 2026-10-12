@@ -1,0 +1,44 @@
+name: c513-model-if-unparseable
+adapter: scripted
+model: test
+effects:
+  - type: if
+    name: continue_gate
+    on_error: continue
+    if:
+      mode: model
+      template: "continue ok?"
+    then:
+      - type: tool
+        name: then_step
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: else_step
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: skip_gate
+    on_error: skip
+    if:
+      mode: model
+      template: "skip ok?"
+    then:
+      - type: tool
+        name: skip_then
+        provider: json
+        params: {mode: stringify, input: {x: 1}}
+    else: []
+  - type: dynamic
+    name: d
+    on_error: continue
+    effects:
+      - type: if
+        name: fail_gate
+        on_error: fail
+        if:
+          mode: model
+          template: "fail ok?"
+        then: []
+        else: []

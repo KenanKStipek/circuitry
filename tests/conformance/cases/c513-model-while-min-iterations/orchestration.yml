@@ -1,0 +1,16 @@
+name: c513-model-while-min-iterations
+adapter: scripted
+model: test
+effects:
+  - type: loop
+    name: lp
+    min_iterations: 2
+    max_iterations: 6
+    while:
+      mode: model
+      template: "keep going?"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {idx: "{{iter.index}}"}}

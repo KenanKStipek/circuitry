@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `while`, token totals reset per outer pass",
+  "description": "A named model `while` inside an unnamed outer `each` (2 items). Pins: `tokens_*_total` is reset per outer pass (each pass's own single check sums only its own tokens, never carrying the previous outer pass's total forward), and replies are consumed in order at the one path `prime.lp` (the outer loop is unnamed, so it adds no `iter_N` segment).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

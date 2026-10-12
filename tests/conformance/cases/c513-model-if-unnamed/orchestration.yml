@@ -1,0 +1,46 @@
+name: c513-model-if-unnamed
+adapter: scripted
+model: test
+effects:
+  - type: if
+    if:
+      mode: model
+      template: "root ok?"
+    then:
+      - type: tool
+        name: root_then
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else: []
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[10, 20]"}
+  - type: loop
+    name: lp
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: if
+        if:
+          mode: model
+          template: "item {{item}} ok?"
+        then:
+          - type: tool
+            name: inner
+            provider: json
+            params: {mode: stringify, input: {item: "{{item}}"}}
+        else: []
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: if
+          if:
+            mode: model
+            template: "child ok?"
+          then:
+            - type: tool
+              name: child_then
+              provider: json
+              params: {mode: stringify, input: {ok: true}}
+          else: []

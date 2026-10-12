@@ -1,0 +1,12 @@
+prime.continue_gate:
+  - text: "maybe"
+    tokens_sent: 5
+    tokens_received: 1
+prime.skip_gate:
+  - text: "maybe"
+    tokens_sent: 6
+    tokens_received: 1
+prime.d.fail_gate:
+  - text: "maybe"
+    tokens_sent: 7
+    tokens_received: 1

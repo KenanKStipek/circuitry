@@ -1,0 +1,19 @@
+name: c513-use-expect-model-fail
+adapter: scripted
+model: test
+effects:
+  - type: use
+    name: u
+    on_error: fail
+    expect:
+      mode: model
+      template: "is {{value.x}} ok?"
+    outputs:
+      x:
+        path: prime.make.value
+    inline: |
+      effects:
+        - type: tool
+          name: make
+          provider: json
+          params: {mode: stringify, input: 42}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `if`, an unparseable answer",
+  "description": "Three named `if`s replying \"maybe\": `on_error: continue` (takes the else branch, logs the exact warning line, `meta.error` set, `answer: \"maybe\"`, `condition_result`/`branch` after `tokens_received`), `on_error: skip` (`value.effects == {}`), and a `fail` sibling inside a named `dynamic` with `on_error: continue`, pinning the wrapped error text (`d.fail_gate: could not parse ...`).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

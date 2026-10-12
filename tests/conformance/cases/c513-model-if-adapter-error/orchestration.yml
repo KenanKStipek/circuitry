@@ -1,0 +1,16 @@
+name: c513-model-if-adapter-error
+adapter: scripted
+model: test
+effects:
+  - type: if
+    name: gate
+    on_error: continue
+    if:
+      mode: model
+      template: "ok?"
+    then: []
+    else:
+      - type: tool
+        name: else_step
+        provider: json
+        params: {mode: stringify, input: {x: 1}}

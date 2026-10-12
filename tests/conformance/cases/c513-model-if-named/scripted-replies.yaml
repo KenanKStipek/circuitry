@@ -1,0 +1,4 @@
+prime.gate:
+  - text: "**Yes.**"
+    tokens_sent: 7
+    tokens_received: 2
