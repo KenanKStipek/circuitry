@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "A generated plan with 3 top-level effects against `max_effects: 2` fails with the exact `invalid_plan: generated plan has 3 top-level effects, exceeds max_effects (2)` text, wrapped by the enclosing chain with the reflector's own effect path.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

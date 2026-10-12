@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "A basic reflector: the planner prompt (scripted adapter) replies with a `done: false` plan naming one `tool` effect, which runs via the generated `use(inline)` child. Pins value, meta.iterations[0], the generated iter_0 node, and the inner planner's own node under plan_it.inner.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
