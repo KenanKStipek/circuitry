@@ -1,0 +1,17 @@
+name: profile-disabled-if-branch
+effects:
+  - type: if
+    name: gate
+    if: {mode: cel, expr: "true"}
+    then:
+      - type: tool
+        name: x
+        provider: json
+        params: {mode: stringify, input: {never: true}}
+      - type: tool
+        name: y
+        provider: json
+        params:
+          mode: stringify
+          input:
+            x_disabled: "{{x.meta.disabled}}"

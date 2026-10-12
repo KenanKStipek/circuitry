@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #518 (lane J2), case 3: profile-disabled-if-branch",
+  "description": "A named CEL `if` that is true, with `then: [x, y]`; `x` is disabled by the profile and `y` reads `{{x.meta.disabled}}`. Proves `value.effects[0]` carries `disabled: true` next to its `index`/`type`/`name`, and that the context rebuild after a disabled branch step exposes the skip node to the next one, the same as a produced value.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

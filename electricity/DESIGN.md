@@ -2118,11 +2118,11 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   case C26).
 - **Routing**: a band table (`runtime.complexity.routing.bands`, each `{max, model, name}`,
   with a mandatory catch-all) maps a score to a model. The reference's full precedence chain is
-  `--model` (CLI) > per-effect `model:` > profile effect override > profile routing pin > router >
+  profile effect override > per-effect `model:` > `--model` (CLI) > profile routing pin > router >
   orchestration default > config default (runtime-semantics §5.8, confirmed against
   `core/router.py`'s own module docstring); electricity has no `--model` CLI flag (Decisions, §1)
   but does support profiles (§6.11), so its chain is the remainder of the reference's own:
-  **per-effect `model:` > profile effect override > profile run-level `model:` (locked) >
+  **profile effect override > per-effect `model:` > profile run-level `model:` (locked) >
   profile routing pin > router > orchestration default > config default — by default.**
   A profile's own run-level `model:` (§6.11) doesn't occupy its own link in the reference's own
   chain at all — it is folded into the same boolean the first two layers already collapse into.

@@ -970,7 +970,10 @@ fn local_writes_of(
 
 /// `{"type": ..., "name": ...}` -- `core/loop.py::LoopRuntime.
 /// _execute_body`'s own `effect_record` (no `index`, unlike a
-/// conditional branch's own effect record).
+/// conditional branch's own effect record). A disabled op's own record
+/// additionally carries `disabled: true` (`core/loop.py:1444-1446`),
+/// always last; `count` (the caller's own `executed.len()`) includes
+/// it like every other record.
 fn body_effect_record(op: &Op) -> Value {
     let mut m = IndexMap::new();
     m.insert(key("type"), Value::from(op.python_type_name()));
@@ -981,6 +984,9 @@ fn body_effect_record(op: &Op) -> Value {
             None => Value::None,
         },
     );
+    if !op.enabled {
+        m.insert(key("disabled"), Value::Bool(true));
+    }
     Value::Dict(m)
 }
 
@@ -1795,7 +1801,11 @@ fn write_model_while_reply(
 /// `core/loop.py::LoopRuntime._collect_values` -- reads only
 /// *completed_indices* (this call's own record of which passes
 /// finished), never by scanning *node* for stale `iter_<N>` keys left
-/// over from an earlier run on a reused node.
+/// over from an earlier run on a reused node. A disabled collect target
+/// (`meta.disabled` exactly `true`, `core/loop.py:1190`; `core/
+/// disabled.py::is_disabled_node`) is left out entirely, same as a pass
+/// that failed before the target ever produced a value -- never a
+/// `None` entry standing in for it (issue #518, lane J2).
 fn collect_values(
     store: &Store,
     node: &NodeRef,
@@ -1810,11 +1820,20 @@ fn collect_values(
         let Ok(Some(effect_node)) = store.child(&iter_node, &key(collect_key)) else {
             continue;
         };
-        let value = match store.snapshot(&effect_node) {
-            Value::Dict(ref map) => map.get(&key("value")).cloned().unwrap_or(Value::None),
-            _ => Value::None,
+        let snapshot = store.snapshot(&effect_node);
+        let Value::Dict(ref map) = snapshot else {
+            continue;
         };
-        out.push(value);
+        let is_disabled = matches!(
+            map.get(&key("meta"))
+                .and_then(Value::as_dict)
+                .and_then(|m| m.get(&key("disabled"))),
+            Some(Value::Bool(true))
+        );
+        if is_disabled {
+            continue;
+        }
+        out.push(map.get(&key("value")).cloned().unwrap_or(Value::None));
     }
     out
 }
