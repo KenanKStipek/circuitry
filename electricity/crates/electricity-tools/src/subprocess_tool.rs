@@ -347,6 +347,7 @@ pub(crate) async fn run_binary(
         cwd: cwd.map(PathBuf::from),
         env,
         new_session: armed,
+        env_remove: Vec::new(),
     };
 
     let completed = match process::run_tracked(&cmd, &opts, token).await {
