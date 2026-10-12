@@ -1,0 +1,15 @@
+- request:
+    method: HEAD
+    path: /api/tags
+  response:
+    status: 200
+    reason: OK
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"response": "hello from ollama"}'

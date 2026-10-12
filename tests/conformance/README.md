@@ -52,6 +52,8 @@ cases/<name>/
 | `env` | a mapping of extra environment variables set for both engines' own subprocess (applied after the credential/`CIRCUITRY_*` filter, so it can set a name the filter would otherwise drop) — for a case that needs a controlled variable neither engine's own process otherwise sees, e.g. `env_vars`'s own `list` mode |
 | `profile` | a path relative to the case directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml` — exactly one of the two suffixes must exist. `cof run` gets `--profile <name>` (discovery finds it under the orchestration directory, the case directory); electricity gets `--profile <case_dir>/<profile>` (the absolute path) |
 | `compare_run_warnings` | bool, default `false` — also compares `expected.run_warnings.txt` against `harness.run_warning_lines(stderr)` (`cli/app.py::_print_run_warnings`'s own `Warning: ...` lines, e.g. preflight's soft warnings — distinct from `WARNING:`/`ERROR:` `logging`-module lines, which `expected.warnings.txt` already covers unconditionally) |
+| `fake_credentials` | a mapping from a `harness.CREDENTIAL_ENV_VARS` name to a synthetic value starting with `circuitry-test-fake-` (`harness.FAKE_CREDENTIAL_MARKER`) — set, for both engines' own subprocess, *after* the credential-stripping filter, so a case can give a real adapter (`openai`, `groq`, ...) a key to send without ever risking a live one; `env` still rejects any of these names |
+| `third_party_text` | a list of `{"location": "<dotted state path>", "pattern": "<regex>"}` — each listed leaf must `re.fullmatch` its own pattern in *both* the actual and the expected state (`expected.out.json` included), and is then replaced by a fixed placeholder before the exact comparison; for a case whose `meta.error` carries curl's own version-dependent stderr text (a connection-refused, or a timeout with no retry) that can't be pinned byte-for-byte |
 
 `harness.load_case` rejects an unknown `case.json` key and an `expect`/
 `engines`/`error_compare`/`known_divergence`/`electricity_preview_ok` value
@@ -172,12 +174,8 @@ number. Every request the server actually receives (method, path, query,
 headers apart from `User-Agent`, body) is recorded, in arrival order, and
 committed as `expected.http_requests.json` so both engines' own runs can be
 diffed against it through `harness.assert_recorded_http_requests`, the one
-place both pytest runners make this comparison (today only the Python
-engine actually reaches it — electricity still refuses every case that
-reaches an HTTP-family tool/adapter through the preview marker; the
-comparison runs unconditionally in both runners regardless, so a future
-lane that lands this support without matching the Python engine's own
-requests fails here immediately). See `c-http-mock-server` (the `http`
+place both pytest runners make this comparison, run unconditionally in
+both runners against both engines. See `c-http-mock-server` (the `http`
 tool) and `c-openai-compatible-mock-server` (the `lmstudio` adapter, no
 credential needed) for complete examples.
 
@@ -414,12 +412,12 @@ which point the flag is simply removed, and the case's own success
 assertion starts applying to electricity too, with no other change. Never
 use `known_divergence` for this: that key means *both* engines succeeded,
 with one documented, stated difference — not applicable when one engine
-never ran the document at all. `c-shell-path-fake`, `c-http-mock-server`
-and `c-openai-compatible-mock-server` are today's `electricity_preview_ok`
-cases (`c-scripted-prompt` ran on both engines as of lane G, issue #498 —
-the `prompt` effect itself, through the `scripted` adapter only;
-`c-openai-compatible-mock-server` still needs a real model adapter, F2's
-work).
+never ran the document at all. No case sets it today: `c-shell-path-fake`
+ran on both engines once `shell` landed, `c-scripted-prompt` once lane G
+(issue #498) landed the `prompt` effect through the `scripted` adapter,
+and `c-http-mock-server`/`c-openai-compatible-mock-server` once lane E's
+`http` tool and lane F2's (issue #503) real model adapters landed. The
+flag stays declared and validated for the next lane that needs it.
 
 ## Adding a case
 

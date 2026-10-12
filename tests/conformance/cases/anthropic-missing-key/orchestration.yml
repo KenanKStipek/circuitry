@@ -1,0 +1,7 @@
+name: anthropic-missing-key
+adapter: anthropic
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

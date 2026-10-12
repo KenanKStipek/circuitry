@@ -466,11 +466,14 @@ mod tests {
 
     #[test]
     fn unbuildable_known_adapter_names_a_python_known_rust_unbuilt_adapter() {
-        let document = doc_with_adapter("openai", vec![]);
+        // `openai` became buildable in lane F2 (issue #503); `litellm`
+        // (a Python-SDK-only adapter, out of scope for F2) stays the
+        // unbuilt example.
+        let document = doc_with_adapter("litellm", vec![]);
         let adapters = electricity_adapters::build_registry();
         assert_eq!(
             unbuildable_known_adapter(&document, &adapters),
-            Some("openai".to_string())
+            Some("litellm".to_string())
         );
     }
 

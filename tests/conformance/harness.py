@@ -53,15 +53,53 @@ MOCK_HTTP_PORT_PLACEHOLDER = "__MOCK_HTTP_PORT__"
 #: (`CIRCUITRY_CONFIG`, `CIRCUITRY_MODEL`, ... — see `config.py`'s
 #: `CONFIG_ENV_VARS`/`_apply_env_vars`), since those aren't credentials but
 #: still change `effective_settings` if set in the caller's shell.
+#:
+#: Grown in issue #503 (lane F2) to cover every real provider's own
+#: credential variable (the issue's own "Environment variables" table) —
+#: before that lane, only `openai`/`anthropic` were real adapters, so a
+#: contributor's own exported `GROQ_API_KEY` (say) could never have
+#: reached a case; now that the whole family is buildable, it could.
 CREDENTIAL_ENV_VARS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "XAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "MISTRAL_API_KEY",
+    "AI21_API_KEY",
+    "COHERE_API_KEY",
+    "HF_TOKEN",
+    "DASHSCOPE_API_KEY",
+    "NIM_API_KEY",
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_HOST",
+    "CF_API_TOKEN",
+    "CF_ACCOUNT_ID",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "REPLICATE_API_TOKEN",
+    "WATSONX_API_KEY",
+    "WATSONX_PROJECT_ID",
+    "WATSONX_REGION",
+    "WATSONX_API_VERSION",
     "CYBERDINER_TOKEN",
     "CYBERDINER_EXPO_URL",
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "NPM_TOKEN",
 )
+
+#: `case.json`'s own `fake_credentials` key (issue #503): the marker every
+#: synthetic credential value must start with, so a conformance case can
+#: never accidentally carry a real-looking one — and so a reviewer can
+#: `grep` for it to confirm a committed fixture/expected file never leaked
+#: an operator's own key.
+FAKE_CREDENTIAL_MARKER = "circuitry-test-fake-"
 
 #: Every `http`/`https`/`ftp`/`all`-proxy variable, both cases (`getproxies_
 #: environment`'s own convention, lowercase and uppercase alike) plus
@@ -127,6 +165,8 @@ _CASE_JSON_KEYS = frozenset(
         "env",
         "profile",
         "compare_run_warnings",
+        "fake_credentials",
+        "third_party_text",
     }
 )
 
@@ -178,6 +218,8 @@ def load_case(case_dir: Path) -> dict[str, Any]:
     metadata.setdefault("env", None)
     metadata.setdefault("profile", None)
     metadata.setdefault("compare_run_warnings", False)
+    metadata.setdefault("fake_credentials", {})
+    metadata.setdefault("third_party_text", [])
 
     env = metadata["env"]
     if env is not None and (
@@ -231,6 +273,40 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'compare_run_warnings' must be a bool, "
             f"got {metadata['compare_run_warnings']!r}"
+        )
+    fake_credentials = metadata["fake_credentials"]
+    if not isinstance(fake_credentials, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in fake_credentials.items()
+    ):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'fake_credentials' must be a mapping of str to str"
+        )
+    bad_names = sorted(k for k in fake_credentials if k not in CREDENTIAL_ENV_VARS)
+    if bad_names:
+        raise ValueError(
+            f"{case_dir.name}: case.json 'fake_credentials' key(s) {bad_names} are not in "
+            "CREDENTIAL_ENV_VARS -- only a real provider credential variable belongs here"
+        )
+    bad_values = sorted(
+        k for k, v in fake_credentials.items() if not v.startswith(FAKE_CREDENTIAL_MARKER)
+    )
+    if bad_values:
+        raise ValueError(
+            f"{case_dir.name}: case.json 'fake_credentials' value(s) for {bad_values} must "
+            f"start with {FAKE_CREDENTIAL_MARKER!r}"
+        )
+    third_party_text = metadata["third_party_text"]
+    if not isinstance(third_party_text, list) or not all(
+        isinstance(spec, dict) and set(spec) == {"location", "pattern"}
+        and isinstance(spec["location"], str)
+        and spec["location"]
+        and isinstance(spec["pattern"], str)
+        and spec["pattern"]
+        for spec in third_party_text
+    ):
+        raise ValueError(
+            f"{case_dir.name}: case.json 'third_party_text' must be a list of "
+            "{'location': <non-empty str>, 'pattern': <non-empty str>} mappings"
         )
     profile_rel = metadata["profile"]
     if profile_rel is not None:
@@ -315,6 +391,7 @@ def _sandboxed_env(
     *,
     leftover_replies_path: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    fake_credentials: dict[str, str] | None = None,
 ) -> dict[str, str]:
     env = {
         k: v
@@ -342,6 +419,16 @@ def _sandboxed_env(
     # by the time it gets here.
     if extra_env:
         env.update(extra_env)
+    # `case.json`'s own `fake_credentials` (issue #503): set after the
+    # credential filter above, same as `extra_env`, for both engines --
+    # `load_case` already rejected any name outside `CREDENTIAL_ENV_VARS`
+    # or any value not carrying `FAKE_CREDENTIAL_MARKER`, so this is
+    # already known-synthetic by the time it gets here. Without this, a
+    # case that needs `openai`/`anthropic`/... to actually see a key (a
+    # success case, or a 401) has no way to give it one at all, since the
+    # filter above drops every real `CREDENTIAL_ENV_VARS` name first.
+    if fake_credentials:
+        env.update(fake_credentials)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
     # variable the harness itself injects for this one subprocess, not
     # inherited from the caller's shell (electricity/docs/spec/
@@ -530,6 +617,7 @@ def run_case(
             home_dir,
             leftover_replies_path=leftover_replies_path,
             extra_env=metadata.get("env"),
+            fake_credentials=metadata.get("fake_credentials"),
         ),
         capture_output=True,
         text=True,

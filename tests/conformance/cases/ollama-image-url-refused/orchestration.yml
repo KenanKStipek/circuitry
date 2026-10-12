@@ -1,0 +1,10 @@
+name: ollama-image-url-refused
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "describe"
+    assets:
+      - kind: image
+        ref: "https://example.com/pic.png"
+    on_error: continue

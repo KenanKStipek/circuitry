@@ -1,0 +1,34 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/messages",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "anthropic-version",
+        "2023-06-01"
+      ],
+      [
+        "content-length",
+        "89"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ],
+      [
+        "x-api-key",
+        "circuitry-test-fake-anthropic-key"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"max_tokens\": 4096, \"messages\": [{\"role\": \"user\", \"content\": \"be terse\"}]}"
+  }
+]

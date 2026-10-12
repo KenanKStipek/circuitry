@@ -1,0 +1,9 @@
+{
+  "runtime": {
+    "adapters": {
+      "azure-openai": {
+        "endpoint": "http://127.0.0.1:__MOCK_HTTP_PORT__"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+name: openai-compatible-401-mock
+adapter: groq
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    retries: {max_attempts: 2, backoff_ms: 1}
+    on_error: continue

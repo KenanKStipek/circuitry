@@ -1,0 +1,8 @@
+name: ollama-generate-mock
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    deterministic: true
+    params: {temperature: 0.2, num_ctx: 4096, format: json, keep_alive: 5m, think: false}

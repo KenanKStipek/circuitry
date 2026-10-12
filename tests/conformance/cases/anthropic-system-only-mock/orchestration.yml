@@ -1,0 +1,9 @@
+name: anthropic-system-only-mock
+adapter: anthropic
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    messages:
+      - role: system
+        content: "be terse"

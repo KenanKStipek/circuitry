@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-12T10:11:27.034Z","ev":"run_start","run_id":"6822a322-f54a-4b44-bbe2-d45c36361eed","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":21986}
+{"v":1,"seq":1,"ts":"2026-10-12T10:11:27.037Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T10:11:27.038Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-12T10:11:27.038Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'groq', 'model': 'm', 'status': 'failed', 'error': 'API key not found for GROQ_API_KEY. Export GROQ_API_KEY=... in the environment.', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-12T10:11:27.038Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":5,"ts":"2026-10-12T10:11:27.038Z","ev":"run_end","ok":true}

@@ -1,0 +1,8 @@
+name: replicate-prediction-mock
+adapter: replicate
+model: "meta/meta-llama-3-70b-instruct"
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    params: {temperature: 0.5}

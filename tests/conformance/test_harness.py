@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from . import harness
-from .normalize import redact_runtime_strings
+from .normalize import apply_third_party_text, redact_runtime_strings
 
 
 def _write_case(tmp_path: Path, metadata: dict) -> Path:
@@ -234,6 +234,149 @@ def test_sandboxed_env_sets_leftover_replies_export_when_requested(tmp_path: Pat
     env = harness._sandboxed_env(case_dir, home_dir, leftover_replies_path=leftover_path)
 
     assert env[harness.LEFTOVER_REPLIES_EXPORT_ENV_VAR] == str(leftover_path)
+
+
+def test_credential_env_vars_covers_every_adapter_env_var() -> None:
+    # Issue #503: every real adapter's own credential variable (the
+    # issue's own "Environment variables" table) must be in the strip
+    # list, not just openai/anthropic.
+    for name in (
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "REPLICATE_API_TOKEN",
+        "WATSONX_API_KEY",
+        "WATSONX_PROJECT_ID",
+    ):
+        assert name in harness.CREDENTIAL_ENV_VARS
+
+
+def test_sandboxed_env_sets_fake_credentials_after_the_credential_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-leaked")
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    home_dir = tmp_path / "home"
+
+    env = harness._sandboxed_env(
+        case_dir,
+        home_dir,
+        fake_credentials={"OPENAI_API_KEY": "circuitry-test-fake-key"},
+    )
+
+    assert env["OPENAI_API_KEY"] == "circuitry-test-fake-key"
+
+
+def test_sandboxed_env_with_no_fake_credentials_leaves_the_key_stripped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-leaked")
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    home_dir = tmp_path / "home"
+
+    env = harness._sandboxed_env(case_dir, home_dir)
+
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_load_case_defaults_fake_credentials_and_third_party_text(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success"})
+    metadata = harness.load_case(case_dir)
+    assert metadata["fake_credentials"] == {}
+    assert metadata["third_party_text"] == []
+
+
+def test_load_case_accepts_well_formed_fake_credentials(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "fake_credentials": {"OPENAI_API_KEY": "circuitry-test-fake-key"},
+        },
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["fake_credentials"] == {"OPENAI_API_KEY": "circuitry-test-fake-key"}
+
+
+def test_load_case_rejects_a_fake_credentials_key_outside_credential_env_vars(
+    tmp_path: Path,
+) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "fake_credentials": {"NOT_A_CREDENTIAL": "circuitry-test-fake-x"}},
+    )
+    with pytest.raises(ValueError, match="not in"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_fake_credentials_value_without_the_marker(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "fake_credentials": {"OPENAI_API_KEY": "sk-not-fake"}},
+    )
+    with pytest.raises(ValueError, match="must start with"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_non_dict_fake_credentials(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "fake_credentials": ["x"]})
+    with pytest.raises(ValueError, match="'fake_credentials' must be a mapping"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_accepts_well_formed_third_party_text(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "third_party_text": [{"location": "meta.error", "pattern": ".*"}],
+        },
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["third_party_text"] == [{"location": "meta.error", "pattern": ".*"}]
+
+
+def test_load_case_rejects_third_party_text_missing_a_key(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "third_party_text": [{"location": "meta.error"}]},
+    )
+    with pytest.raises(ValueError, match="'third_party_text' must be a list"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_third_party_text_with_an_empty_pattern(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "third_party_text": [{"location": "meta.error", "pattern": ""}]},
+    )
+    with pytest.raises(ValueError, match="'third_party_text' must be a list"):
+        harness.load_case(case_dir)
+
+
+def test_apply_third_party_text_replaces_a_matching_leaf() -> None:
+    state = {"meta": {"error": "curl: (7) Failed to connect to host port 1: Connection refused"}}
+    specs = [{"location": "meta.error", "pattern": r"curl: \(7\).*"}]
+    result = apply_third_party_text(state, specs)
+    assert result["meta"]["error"] == "<THIRD_PARTY_TEXT>"
+    # The original is untouched -- a deep copy, not an in-place mutation.
+    assert state["meta"]["error"] != "<THIRD_PARTY_TEXT>"
+
+
+def test_apply_third_party_text_raises_when_the_pattern_does_not_fullmatch() -> None:
+    state = {"meta": {"error": "something unrelated"}}
+    specs = [{"location": "meta.error", "pattern": r"curl: \(7\).*"}]
+    with pytest.raises(AssertionError, match="does not fullmatch"):
+        apply_third_party_text(state, specs)
+
+
+def test_apply_third_party_text_indexes_a_list_segment() -> None:
+    state = {"attempts": [{"error": "curl: (7) refused"}]}
+    specs = [{"location": "attempts.0.error", "pattern": r"curl: \(7\).*"}]
+    result = apply_third_party_text(state, specs)
+    assert result["attempts"][0]["error"] == "<THIRD_PARTY_TEXT>"
 
 
 def test_load_case_rejects_malformed_known_divergence(tmp_path: Path) -> None:

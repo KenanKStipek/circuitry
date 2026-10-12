@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #503 (OpenAI-compatible family, groq, soft preflight plus the missing-key message)",
+  "description": "The same prompt naming 'provider: groq' with no GROQ_API_KEY, but on_error: skip: preflight downgrades to a soft warning and the run proceeds, leaving meta.error holding the helper's own 'API key not found' text, with no request ever sent.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "compare_run_warnings": true
+}

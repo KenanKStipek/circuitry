@@ -15,12 +15,17 @@ documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `--events` output as `cof run`. A top-level `prompts:` map and `{{> name}}`
 composition run too, in every field that reaches them (a tool's
 `prompt`/`params`/`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s
-`template`, a `prompt`'s own `template`/`messages`). A `prompt` effect's
-model is reached only through the `scripted` adapter so far; a real adapter
-(`openai`, `anthropic`, `ollama`, ...) still refuses with the preview
-message, as does everything else (the other tool providers, persistence,
-runtime plugins, complexity routing, a `reflector`'s own generated plan
-calling any of those). A document and its literal
+`template`, a `prompt`'s own `template`/`messages`). A `prompt` effect runs
+for real against a document's own top-level `adapter:`/a prompt's own
+`provider:` (native Ollama, the OpenAI-compatible family, `openai`,
+`anthropic`, `replicate`, `watsonx`, and the `scripted` adapter) with its
+preflight check run for real too -- `claude_code`, `cyberdiner`, `litellm`
+and `pi` are the only Circuitry-known adapter names with no electricity
+builder yet, and still refuse with the preview message, as does a
+`reflector`'s own generated plan naming one of them. Everything else (the
+other tool providers, persistence, runtime plugins, complexity routing) is
+also still refused with a preview message pointing at `cof run`. A document
+and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
 options, and `--dump-ir` prints the compiled IR as unstable debugging JSON.

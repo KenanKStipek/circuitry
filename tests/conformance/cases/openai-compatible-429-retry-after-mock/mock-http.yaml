@@ -1,0 +1,19 @@
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 429
+    reason: Too Many Requests
+    headers:
+      Content-Type: application/json
+      Retry-After: "0"
+    body: '{"error": {"message": "rate limited"}}'
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "hello from lmstudio"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'

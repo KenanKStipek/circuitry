@@ -1,0 +1,8 @@
+name: anthropic-529-then-success-mock
+adapter: anthropic
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    retries: {max_attempts: 2, backoff_ms: 1}

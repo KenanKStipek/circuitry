@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:cloudflare-workers-ai: not ready \u2014 missing ['env:CF_API_TOKEN', 'env:CF_ACCOUNT_ID'] \u2014 adapter 'cloudflare-workers-ai' unavailable; required by effects ['greeting'] (set CF_ACCOUNT_ID to your Cloudflare account UUID.). Re-run with --skip-preflight to bypass."
+}

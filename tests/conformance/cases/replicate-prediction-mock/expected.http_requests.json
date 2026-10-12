@@ -1,0 +1,34 @@
+[
+  {
+    "method": "POST",
+    "path": "/models/meta/meta-llama-3-70b-instruct/predictions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "authorization",
+        "Bearer circuitry-test-fake-replicate-token"
+      ],
+      [
+        "content-length",
+        "34"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ],
+      [
+        "prefer",
+        "wait=60"
+      ]
+    ],
+    "body": "{\"input\": {\"prompt\": \"say hello\"}}"
+  }
+]

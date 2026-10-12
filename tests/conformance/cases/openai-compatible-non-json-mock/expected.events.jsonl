@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-12T10:15:38.859Z","ev":"run_start","run_id":"fc886f7b-73f8-42a6-94f6-7a9f9e5839cf","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":25217}
+{"v":1,"seq":1,"ts":"2026-10-12T10:15:38.863Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T10:15:38.864Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-12T10:15:38.898Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":34,"error":"All adapter attempts failed: [{'adapter': 'lmstudio', 'model': 'm', 'status': 'failed', 'error': 'Provider returned non-JSON response: <html>\\nnot json\\n</html>', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-12T10:15:38.898Z","ev":"end","id":0,"path":"prime","ok":true,"ms":35}
+{"v":1,"seq":5,"ts":"2026-10-12T10:15:38.898Z","ev":"run_end","ok":true}

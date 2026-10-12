@@ -110,6 +110,12 @@ pub enum PyExc {
     /// `http.client.InvalidURL` (lane E, issue #485) -- a request
     /// target carrying a space or control character.
     InvalidURL,
+    /// Plain `AttributeError` (lane F2, issue #503) -- a provider
+    /// response adapter code expected to be a `dict`/`list` turned out
+    /// to be some other JSON shape (`raw.get(...)` on a non-dict body,
+    /// `block.get(...)` on a non-dict content block, ...): CPython's
+    /// own `'<type>' object has no attribute '<name>'`.
+    AttributeError,
 }
 
 impl PyExc {
@@ -143,6 +149,7 @@ impl PyExc {
             PyExc::RemoteDisconnected => "RemoteDisconnected",
             PyExc::IncompleteRead => "IncompleteRead",
             PyExc::InvalidURL => "InvalidURL",
+            PyExc::AttributeError => "AttributeError",
         }
     }
 }

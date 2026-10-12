@@ -334,7 +334,10 @@ async fn an_inner_refusal_is_recorded_on_the_reflector_node_and_returned_unwrapp
     let mut inner_prompt = plan_prompt("propose_steps");
     if let NodeKind::Leaf(leaf) = &mut inner_prompt.kind {
         if let LeafKind::Prompt(prompt_op) = leaf.as_mut() {
-            prompt_op.provider = Some("openai".to_string());
+            // `litellm` has no electricity builder yet (lane F2, #504) --
+            // still an unbuildable, Circuitry-known adapter name, unlike
+            // `openai`, which F2 made real.
+            prompt_op.provider = Some("litellm".to_string());
         }
     }
     let leaf = reflector_leaf_with_inner(
