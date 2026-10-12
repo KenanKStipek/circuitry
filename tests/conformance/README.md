@@ -174,12 +174,8 @@ number. Every request the server actually receives (method, path, query,
 headers apart from `User-Agent`, body) is recorded, in arrival order, and
 committed as `expected.http_requests.json` so both engines' own runs can be
 diffed against it through `harness.assert_recorded_http_requests`, the one
-place both pytest runners make this comparison (today only the Python
-engine actually reaches it — electricity still refuses every case that
-reaches an HTTP-family tool/adapter through the preview marker; the
-comparison runs unconditionally in both runners regardless, so a future
-lane that lands this support without matching the Python engine's own
-requests fails here immediately). See `c-http-mock-server` (the `http`
+place both pytest runners make this comparison, run unconditionally in
+both runners against both engines. See `c-http-mock-server` (the `http`
 tool) and `c-openai-compatible-mock-server` (the `lmstudio` adapter, no
 credential needed) for complete examples.
 
@@ -416,12 +412,12 @@ which point the flag is simply removed, and the case's own success
 assertion starts applying to electricity too, with no other change. Never
 use `known_divergence` for this: that key means *both* engines succeeded,
 with one documented, stated difference — not applicable when one engine
-never ran the document at all. `c-shell-path-fake`, `c-http-mock-server`
-and `c-openai-compatible-mock-server` are today's `electricity_preview_ok`
-cases (`c-scripted-prompt` ran on both engines as of lane G, issue #498 —
-the `prompt` effect itself, through the `scripted` adapter only;
-`c-openai-compatible-mock-server` still needs a real model adapter, F2's
-work).
+never ran the document at all. No case sets it today: `c-shell-path-fake`
+ran on both engines once `shell` landed, `c-scripted-prompt` once lane G
+(issue #498) landed the `prompt` effect through the `scripted` adapter,
+and `c-http-mock-server`/`c-openai-compatible-mock-server` once lane E's
+`http` tool and lane F2's (issue #503) real model adapters landed. The
+flag stays declared and validated for the next lane that needs it.
 
 ## Adding a case
 

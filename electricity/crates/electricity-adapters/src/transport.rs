@@ -163,9 +163,23 @@ fn default_port(scheme: &str) -> u16 {
     if scheme == "https" { 443 } else { 80 }
 }
 
+/// A URL for use in electricity's own refusal text -- never the raw
+/// value, which can carry userinfo or a credential-looking query
+/// parameter from a misconfigured `base_url`/proxy: the same two
+/// maskers [`crate::curl_text::curl_failure_message`] itself applies
+/// to a successful request's own failure text, applied here too since
+/// these errors happen *before* a [`CurlOutcome`] exists at all and
+/// so never reach that function.
+fn redact_url_for_error(url: &str) -> String {
+    crate::curl_text::strip_url_userinfo(&crate::curl_text::mask_credential_query_params(url))
+}
+
 fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     let (scheme, rest) = url.split_once("://").ok_or_else(|| {
-        TransportFailure::Validation(format!("electricity: unsupported URL: {url}"))
+        TransportFailure::Validation(format!(
+            "electricity: unsupported URL: {}",
+            redact_url_for_error(url)
+        ))
     })?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
@@ -211,7 +225,8 @@ fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     };
     if host.is_empty() {
         return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported URL: {url}"
+            "electricity: unsupported URL: {}",
+            redact_url_for_error(url)
         )));
     }
     Ok(ParsedUrl {
@@ -293,9 +308,21 @@ fn resolve_curl_proxy_from(
     let Some(value) = curl_proxy_value(scheme, host, env) else {
         return Ok(None);
     };
-    if !value.starts_with("http://") {
+    // curl's own convention: a proxy value with no `scheme://` prefix
+    // (`http_proxy=proxy.corp:3128`) defaults to `http://`, same as a
+    // value that spells it out.
+    let value = if value.contains("://") {
+        value
+    } else {
+        format!("http://{value}")
+    };
+    let proxy_scheme = value
+        .split_once("://")
+        .map(|(scheme, _)| scheme.to_ascii_lowercase())
+        .unwrap_or_default();
+    if proxy_scheme != "http" {
         return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported proxy scheme in '{value}'; only http:// proxies are \
+            "electricity: unsupported proxy scheme '{proxy_scheme}'; only http:// proxies are \
              supported"
         )));
     }
@@ -673,6 +700,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_url_userinfo_becomes_a_basic_auth_header_like_curl() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = stream.read(&mut buf).unwrap();
+            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            text
+        });
+        let url = format!("http://user:pass@{addr}/x");
+        run_curl(&url, &[], None, 5).await.unwrap();
+        let request_text = handle.join().unwrap();
+        let lower = request_text.to_ascii_lowercase();
+        assert!(lower.contains("authorization: basic dxnlcjpwyxnz"));
+    }
+
+    #[tokio::test]
+    async fn request_url_userinfo_never_overrides_an_explicit_authorization_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = stream.read(&mut buf).unwrap();
+            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            text
+        });
+        let url = format!("http://user:pass@{addr}/x");
+        run_curl(
+            &url,
+            &[("Authorization".to_string(), "Bearer t".to_string())],
+            None,
+            5,
+        )
+        .await
+        .unwrap();
+        let request_text = handle.join().unwrap();
+        let lower = request_text.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer t"));
+        assert!(!lower.contains("basic"));
+    }
+
+    #[tokio::test]
     async fn a_connection_refused_maps_to_exit_7_and_is_retryable() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -701,6 +776,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_reset_mid_body_maps_to_exit_56() {
+        // No `Content-Length`: a chunked body with no `Content-Length`
+        // header is the one shape that reaches `SendError::
+        // RemoteDisconnected` during the body phase (`classify_body_
+        // phase_error`'s own `content_length: None` branch) -- a
+        // `Content-Length`-framed short body (below) is `IncompleteRead`
+        // (exit 18) instead, a different curl exit this test must not
+        // collide with.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -708,13 +790,13 @@ mod tests {
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
             let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n12345",
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nHe",
             );
         });
         let url = format!("http://{addr}/x");
         let outcome = run_curl(&url, &[], None, 5).await.unwrap();
-        assert_eq!(outcome.returncode, 18);
-        assert!(!is_retryable_exit(18));
+        assert_eq!(outcome.returncode, 56);
+        assert!(is_retryable_exit(56));
     }
 
     #[tokio::test]
@@ -913,6 +995,72 @@ mod tests {
                 assert!(text.contains("unsupported proxy scheme"));
             }
             other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_http_proxy_scheme_refusal_never_names_the_credential() {
+        let env = vec![(
+            "all_proxy".to_string(),
+            "socks5://user:s3cr3t@proxy:1080".to_string(),
+        )];
+        let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
+        match err {
+            TransportFailure::Validation(text) => {
+                assert!(text.contains("unsupported proxy scheme 'socks5'"));
+                assert!(!text.contains("s3cr3t"));
+                assert!(!text.contains("user"));
+                assert!(!text.contains("proxy:1080"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_scheme_less_proxy_value_defaults_to_http_like_curl() {
+        let env = vec![("http_proxy".to_string(), "proxy.corp:3128".to_string())];
+        let target = resolve_curl_proxy_from("http", "example.com", &env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.host, "proxy.corp");
+        assert_eq!(target.port, 3128);
+    }
+
+    #[test]
+    fn an_unsupported_url_scheme_refusal_never_names_the_credential() {
+        match parse_url("gopher://user:s3cr3t@example.com/path?api_key=sk-test") {
+            Err(TransportFailure::Validation(text)) => {
+                assert!(text.contains("unsupported URL scheme 'gopher'"));
+                assert!(!text.contains("s3cr3t"));
+                assert!(!text.contains("sk-test"));
+            }
+            other => panic!("expected a Validation error, got {}", matches_label(&other)),
+        }
+    }
+
+    #[test]
+    fn an_unsupported_url_refusal_masks_userinfo_and_credential_query_params() {
+        match parse_url("not-a-url?api_key=sk-test") {
+            Err(TransportFailure::Validation(text)) => {
+                assert!(!text.contains("sk-test"));
+                assert!(text.contains("unsupported URL"));
+            }
+            other => panic!("expected a Validation error, got {}", matches_label(&other)),
+        }
+        match parse_url("https://user:s3cr3t@/path") {
+            Err(TransportFailure::Validation(text)) => {
+                assert!(!text.contains("s3cr3t"));
+                assert!(!text.contains("user"));
+            }
+            other => panic!("expected a Validation error, got {}", matches_label(&other)),
+        }
+    }
+
+    fn matches_label(result: &Result<ParsedUrl, TransportFailure>) -> &'static str {
+        match result {
+            Ok(_) => "Ok",
+            Err(TransportFailure::Validation(_)) => "Validation",
+            Err(TransportFailure::InvalidUtf8(_)) => "InvalidUtf8",
         }
     }
 

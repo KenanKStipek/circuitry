@@ -135,7 +135,7 @@ fn percent_decode_plus(value: &str) -> String {
 /// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
 /// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
 /// encoding).
-fn mask_credential_query_params(url: &str) -> String {
+pub(crate) fn mask_credential_query_params(url: &str) -> String {
     let Some(query_start) = url.find('?') else {
         return url.to_string();
     };
@@ -168,7 +168,7 @@ fn mask_credential_query_params(url: &str) -> String {
 /// `curl_support.py::_URL_USERINFO_RE` -- `://user[:pass]@` becomes
 /// `://`, wherever it occurs in the text (hints included), never
 /// requiring the whole string to be a URL.
-fn strip_url_userinfo(text: &str) -> String {
+pub(crate) fn strip_url_userinfo(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     loop {
