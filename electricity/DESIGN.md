@@ -2079,13 +2079,27 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   banker's-rounding behavior exactly (e.g. via a decimal- or scaled-integer-based
   round-half-to-even implementation), not an `(x * 1e6).round() / 1e6` float-multiply shortcut,
   which disagrees with Python's `round()` on tie cases and on values floating-point
-  representation error nudges differently. The default weights (`prompt_size: 0.28,
+  representation error nudges differently. Summation (`weight_total`, the matched keyword
+  weights) is CPython 3.11's own naive, left-to-right `sum()` — the generator's pinned
+  interpreter version. CPython 3.12 switched `sum()` to Neumaier (compensated) summation for
+  floats, which can disagree with the naive sum electricity reproduces by one ULP before the
+  `round(x, 6)` above absorbs it; this is a documented, accepted divergence against 3.12+, not
+  something electricity chases. **Two default-weight tables exist, and the runtime uses the
+  config one, not the scorer's.** `core/complexity.py`'s own scorer defaults (`prompt_size: 0.28,
   state_references: 0.18, prompt_type: 0.14, output_schema: 0.16, output_size: 0.10,
-  structural_position: 0.08, keywords: 0.06`) and the ~20-phrase keyword-weight table
-  (whole-word, case-insensitive match; matched weights sum and clamp to 1.0) are ported
-  verbatim, byte-for-byte including every phrase and weight, not re-derived from the general
-  idea of "keyword matching" — both tables are a runtime-overridable config shape
-  (`runtime.complexity.scoring.weights`/`keyword_weights`) as well as a compiled-in default.
+  structural_position: 0.08, keywords: 0.06`) apply only to a direct library call with
+  `weights=None`; `_score_and_route` always passes the full, different, config table
+  (`cli/complexity_config.py`'s own `1.0, 1.5, 0.75, 1.25, 1.0, 0.5, 1.0`, Σ = 7.0) instead, so
+  that is the table a running orchestration actually scores against. Both tables ship in
+  `electricity-complexity`, and the differential corpus (§12) covers both. The 23-phrase
+  keyword-weight table (whole-word, case-insensitive match; matched weights sum and clamp to
+  1.0) is ported verbatim, byte-for-byte including every phrase and weight, not re-derived from
+  the general idea of "keyword matching" — both tables are a runtime-overridable config shape
+  (`runtime.complexity.scoring.weights`/`keywords`, the latter *not* `keyword_weights` — that
+  spelling is the scorer function's own keyword argument, never the config key) as well as a
+  compiled-in default. An unconfigured or empty `runtime.complexity.scoring.keywords` means "use
+  the scorer's own default table", not "no keywords" — only a non-empty configured table
+  replaces the defaults wholesale.
   Size-based signals use the reference's own saturating curve `v / (v + k)` (bounded, monotone,
   never exceeding 1.0) with its own fixed half-point constant per signal (e.g. 800 tokens for
   `prompt_size`, a flat 4-characters-per-token estimate rather than a real tokenizer, so the
@@ -2096,7 +2110,7 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   `meta.complexity` **only when scoring is enabled** — the key is entirely absent, not `null`,
   when off, so toggling the feature must not otherwise change a single byte of state (conformance
   case C26).
-- **Routing**: a band table (`runtime.complexity.routing.bands`, each `{name, model, threshold}`,
+- **Routing**: a band table (`runtime.complexity.routing.bands`, each `{max, model, name}`,
   with a mandatory catch-all) maps a score to a model. The reference's full precedence chain is
   `--model` (CLI) > per-effect `model:` > profile effect override > profile routing pin > router >
   orchestration default > config default (runtime-semantics §5.8, confirmed against
@@ -2702,7 +2716,7 @@ half-run.
 | **I** | `use`: path and inline, interface checks, the three output modes, cycle detection, child observability. | A |
 | **J1** | Profile loading and validation, as a library with a golden corpus. | A |
 | **J2** | Applying profiles: precedence, per-effect IR overrides, disabled effects. | H, I, K2, R |
-| **K1** | The complexity scorer, as a library with a differential corpus. | A |
+| **K1** | The complexity scorer, as a library with a differential corpus. | A, G (`electricity-pyre`) |
 | **K2** | Wiring scoring and routing into prompts. | G, K1 |
 | **L1** | `reflector`. | G, I |
 | **L2** | Decomposition, `validate_yaml`, the synced planner document. | G, I, K2 |

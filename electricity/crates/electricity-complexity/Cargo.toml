@@ -1,0 +1,18 @@
+[package]
+name = "electricity-complexity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A pure-library port of core/complexity.py and core/router.py (electricity M1 lane K1, issue #505): no wiring, no model calls, no config reads of its own -- the caller passes the inputs."
+
+[dependencies]
+electricity-value = { path = "../electricity-value" }
+electricity-config = { path = "../electricity-config" }
+electricity-pyre = { path = "../electricity-pyre" }
+fancy-regex = "0.14"
+
+[dev-dependencies]
+electricity-json = { path = "../electricity-json" }
+chrono = "0.4"
