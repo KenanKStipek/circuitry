@@ -2,7 +2,7 @@
 //! predictions API (`Prefer: wait=N` for a synchronous-feeling call),
 //! over [`crate::transport`].
 
-use crate::config::cfg_str_or;
+use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -78,20 +78,25 @@ pub fn interpret_outcome(
         py_class: PyExc::AttributeError,
     })?;
 
-    let status = match dict.get(&Value::Str("status".to_string())) {
-        Some(Value::Str(s)) => Some(s.as_str()),
-        _ => None,
-    };
+    // `raw.get("status")` -- any JSON value, not necessarily a string
+    // (Python's tuple-membership check and `!r`/`{}` formatting both work
+    // on any type; a non-string `status` must not collapse into `None`
+    // the way matching only `Value::Str` would).
+    let status_value = dict
+        .get(&Value::Str("status".to_string()))
+        .cloned()
+        .unwrap_or(Value::None);
+    let status_str = status_value.as_str();
     if !matches!(
-        status,
+        status_str,
         Some("succeeded") | Some("processing") | Some("starting")
     ) {
         let error_value = dict.get(&Value::Str("error".to_string()));
+        // `err = raw.get("error") or status` then `f"{err}"` -- Python's
+        // plain `str()`, not `repr()`.
         let shown = match error_value {
             Some(v) if crate::config::value_is_truthy(v) => v.py_str(),
-            _ => status
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "None".to_string()),
+            _ => status_value.py_str(),
         };
         return Err(AdapterError {
             message: format!("Replicate prediction failed: {shown}"),
@@ -99,18 +104,21 @@ pub fn interpret_outcome(
             py_class: PyExc::RuntimeError,
         });
     }
-    if status != Some("succeeded") {
-        let pred_id = match dict.get(&Value::Str("id".to_string())) {
-            Some(Value::Str(s)) => s.clone(),
-            _ => "?".to_string(),
-        };
+    if status_str != Some("succeeded") {
+        // `raw.get("id", "?")` -- the default only applies when the key is
+        // absent; a present-but-non-string `id` (e.g. `null`) reprs as
+        // that value, not `'?'`.
+        let pred_id_value = dict
+            .get(&Value::Str("id".to_string()))
+            .cloned()
+            .unwrap_or_else(|| Value::Str("?".to_string()));
         return Err(AdapterError {
             message: format!(
                 "Replicate prediction {} did not complete within wait={wait}s \
                  (status={}). Re-issue with a longer timeout or poll \
                  /v1/predictions/{{id}}.",
-                Value::Str(pred_id).py_repr(),
-                Value::Str(status.unwrap_or_default().to_string()).py_repr(),
+                pred_id_value.py_repr(),
+                status_value.py_repr(),
             ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
@@ -191,11 +199,13 @@ impl Adapter for ReplicateAdapter {
         let mut payload = Dict::new();
         payload.insert(Value::Str("input".to_string()), Value::Dict(input));
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), electricity_json::WriteMode::COMPACT)
                 .map_err(|e| AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 })?;
 
         let headers = vec![
@@ -228,7 +238,7 @@ impl Adapter for ReplicateAdapter {
 /// `adapters/factory.py::_build_replicate`.
 pub fn build_replicate(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(ReplicateAdapter {
-        base_url: cfg_str_or(cfg, "base_url", "https://api.replicate.com/v1"),
+        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "https://api.replicate.com/v1")?,
         default_model: cfg_str_or(cfg, "default_model", "meta/meta-llama-3-70b-instruct"),
     }))
 }
@@ -241,5 +251,17 @@ mod tests {
     fn build_replicate_defaults_base_url_and_model() {
         let adapter = build_replicate(&Value::None).unwrap();
         assert_eq!(adapter.name(), "replicate");
+    }
+
+    #[test]
+    fn build_replicate_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let err = match build_replicate(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_replicate to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 }

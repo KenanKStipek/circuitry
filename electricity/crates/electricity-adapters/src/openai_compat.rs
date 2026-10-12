@@ -6,7 +6,7 @@
 //! `nvidia-nim`, `openrouter`, `perplexity`, `qwen-dashscope`, `tgi`,
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
-use crate::config::{cfg_get, cfg_str_or};
+use crate::config::{cfg_get, cfg_str_or, cfg_str_or_rstrip_target};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -324,11 +324,13 @@ pub async fn chat_completion(
     for (key, value) in sampling_fields(options, "max_tokens") {
         payload.insert(key, value);
     }
+    // `json.dumps(payload)` raises Python's own `TypeError` for a value it
+    // can't serialize, uncaught -- never `RuntimeError`.
     let body = electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
         AdapterError {
             message: e.to_string(),
             retry: RetryInfo::not_retryable(),
-            py_class: PyExc::RuntimeError,
+            py_class: PyExc::TypeError,
         }
     })?;
 
@@ -508,7 +510,7 @@ pub fn build_ai21(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "ai21",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.ai21.com/studio/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.ai21.com/studio/v1")?,
             "AI21_API_KEY",
             cfg_str_or(cfg, "default_model", "jamba-large"),
         ),
@@ -519,7 +521,7 @@ pub fn build_cohere(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "cohere",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.cohere.com"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.cohere.com")?,
             "COHERE_API_KEY",
             cfg_str_or(cfg, "default_model", "command-r-plus"),
         )
@@ -531,7 +533,7 @@ pub fn build_deepseek(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "deepseek",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.deepseek.com/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.deepseek.com/v1")?,
             "DEEPSEEK_API_KEY",
             cfg_str_or(cfg, "default_model", "deepseek-chat"),
         ),
@@ -542,7 +544,7 @@ pub fn build_fireworks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "fireworks",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.fireworks.ai/inference/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.fireworks.ai/inference/v1")?,
             "FIREWORKS_API_KEY",
             cfg_str_or(
                 cfg,
@@ -572,7 +574,7 @@ pub fn build_groq(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "groq",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.groq.com/openai/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.groq.com/openai/v1")?,
             "GROQ_API_KEY",
             cfg_str_or(cfg, "default_model", "llama-3.3-70b-versatile"),
         ),
@@ -583,7 +585,7 @@ pub fn build_huggingface_inference(cfg: &Value) -> Result<Box<dyn Adapter>, Adap
     Ok(simple_adapter(
         "huggingface-inference",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://router.huggingface.co/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://router.huggingface.co/v1")?,
             "HF_TOKEN",
             cfg_str_or(cfg, "default_model", "meta-llama/Llama-3.3-70B-Instruct"),
         ),
@@ -594,7 +596,7 @@ pub fn build_llamacpp(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "llamacpp",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "http://localhost:8080/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:8080/v1")?,
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -605,7 +607,7 @@ pub fn build_lmstudio(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "lmstudio",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "http://localhost:1234/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:1234/v1")?,
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -616,7 +618,7 @@ pub fn build_mistral(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "mistral",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.mistral.ai/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.mistral.ai/v1")?,
             "MISTRAL_API_KEY",
             cfg_str_or(cfg, "default_model", "mistral-large-latest"),
         ),
@@ -632,7 +634,7 @@ pub fn build_nvidia_nim(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "nvidia-nim",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://integrate.api.nvidia.com/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://integrate.api.nvidia.com/v1")?,
             api_key_env,
             cfg_str_or(cfg, "default_model", "meta/llama-3.3-70b-instruct"),
         ),
@@ -643,7 +645,7 @@ pub fn build_openrouter(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "openrouter",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://openrouter.ai/api/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://openrouter.ai/api/v1")?,
             "OPENROUTER_API_KEY",
             cfg_str_or(cfg, "default_model", "openai/gpt-4o-mini"),
         ),
@@ -654,7 +656,7 @@ pub fn build_perplexity(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "perplexity",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.perplexity.ai"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.perplexity.ai")?,
             "PERPLEXITY_API_KEY",
             cfg_str_or(cfg, "default_model", "sonar"),
         ),
@@ -685,7 +687,7 @@ pub fn build_tgi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "tgi",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "http://localhost:3000/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:3000/v1")?,
             api_key_env,
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -696,7 +698,7 @@ pub fn build_together(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "together",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.together.xyz/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.together.xyz/v1")?,
             "TOGETHER_API_KEY",
             cfg_str_or(
                 cfg,
@@ -711,7 +713,7 @@ pub fn build_vllm(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "vllm",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "http://localhost:8000/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:8000/v1")?,
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -722,7 +724,7 @@ pub fn build_xai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "xai",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(cfg, "base_url", "https://api.x.ai/v1"),
+            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.x.ai/v1")?,
             "XAI_API_KEY",
             cfg_str_or(cfg, "default_model", "grok-2-latest"),
         ),
@@ -773,9 +775,9 @@ fn azure_openai_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 pub fn build_azure_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let endpoint = cfg_str_or(cfg, "endpoint", "");
+    let endpoint = cfg_str_or_rstrip_target(cfg, "endpoint", "")?;
     let endpoint = if endpoint.is_empty() {
-        let fallback = cfg_str_or(cfg, "base_url", "");
+        let fallback = cfg_str_or_rstrip_target(cfg, "base_url", "")?;
         if fallback.is_empty() {
             std::env::var("AZURE_OPENAI_ENDPOINT").unwrap_or_default()
         } else {
@@ -839,7 +841,7 @@ fn cloudflare_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 pub fn build_cloudflare_workers_ai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let explicit_base_url = cfg_str_or(cfg, "base_url", "");
+    let explicit_base_url = cfg_str_or_rstrip_target(cfg, "base_url", "")?;
     let account_id = {
         let configured = cfg_str_or(cfg, "account_id", "");
         if configured.is_empty() {
@@ -913,7 +915,7 @@ fn databricks_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 pub fn build_databricks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let base_url = databricks_resolve_base_url(&cfg_str_or(cfg, "base_url", ""));
+    let base_url = databricks_resolve_base_url(&cfg_str_or_rstrip_target(cfg, "base_url", "")?);
     let openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
         "DATABRICKS_TOKEN",
@@ -1026,5 +1028,70 @@ mod tests {
         dict_insert(&mut cfg, "api_key_env", Value::Str(String::new()));
         let adapter = build_nvidia_nim(&Value::Dict(cfg)).unwrap();
         assert_eq!(adapter.name(), "nvidia-nim");
+    }
+
+    #[test]
+    fn build_mistral_fails_like_python_for_a_non_string_base_url() {
+        // Issue #515: a truthy non-string `base_url` must not silently
+        // fall back to the provider's default URL -- every OpenAI-
+        // compatible provider shares the one `_openai_compat.py::
+        // chat_completion` call that raises `AttributeError: '<type>'
+        // object has no attribute 'rstrip'` on it.
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "base_url", Value::Bool(true));
+        let err = match build_mistral(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_mistral to fail"),
+        };
+        assert_eq!(err.message, "'bool' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn build_azure_openai_fails_like_python_for_a_non_string_endpoint() {
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "endpoint", Value::from(5i64));
+        let err = match build_azure_openai(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_azure_openai to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn build_azure_openai_fails_like_python_for_a_non_string_base_url_fallback() {
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "base_url", Value::from(5i64));
+        let err = match build_azure_openai(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_azure_openai to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn build_cloudflare_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "base_url", Value::from(5i64));
+        let err = match build_cloudflare_workers_ai(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_cloudflare_workers_ai to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn build_databricks_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "base_url", Value::from(5i64));
+        let err = match build_databricks(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_databricks to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 }

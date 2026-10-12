@@ -72,6 +72,18 @@ def _mask_credential_query_params(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(query=new_query))
 
 
+def redact_host_url(url: str) -> str:
+    """Mask a URL for a preflight ``host:{url}`` requirement text.
+
+    Applies the same two masks :func:`curl_failure_message` already applies
+    to a request URL — userinfo (``user:pass@``) stripped, then any
+    credential-like query parameter masked — so a configured ``base_url``
+    carrying a secret never reaches ``missing``, ``cof doctor``, or anything
+    else that prints a preflight check's text.
+    """
+    return _strip_url_userinfo(_mask_credential_query_params(url))
+
+
 def _mask_secrets(text: str, secrets: Iterable[str]) -> str:
     for secret in secrets:
         if secret:

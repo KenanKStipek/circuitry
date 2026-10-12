@@ -4,8 +4,10 @@
 //! which Ollama is *not* routed through (ruling 1: this adapter talks
 //! Ollama's own wire format, never the `/v1` compatibility shim).
 
-use crate::config::cfg_str_or;
-use crate::curl_text::{classify_curl_outcome, curl_failure_message, parse_error_body};
+use crate::config::cfg_str_or_rstrip_target;
+use crate::curl_text::{
+    classify_curl_outcome, curl_failure_message, parse_error_body, redact_host_url,
+};
 use crate::transport::{CurlOutcome, TransportFailure, run_curl};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
@@ -338,11 +340,13 @@ impl Adapter for OllamaAdapter {
         let (endpoint, payload) = build_request(model, prompt, options)?;
         let url = format!("{}{endpoint}", self.base_url.trim_end_matches('/'));
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
                 AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 }
             })?;
         let headers = vec![("Content-Type".to_string(), "application/json".to_string())];
@@ -364,7 +368,7 @@ impl Adapter for OllamaAdapter {
         } else {
             CheckResult {
                 ok: false,
-                missing: vec![format!("host:{}", self.base_url)],
+                missing: vec![format!("host:{}", redact_host_url(&self.base_url))],
                 message: None,
             }
         }
@@ -378,7 +382,7 @@ impl Adapter for OllamaAdapter {
 /// `adapters/factory.py::_build_ollama`.
 pub fn build_ollama(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OllamaAdapter {
-        base_url: cfg_str_or(cfg, "base_url", "http://localhost:11434"),
+        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:11434")?,
     }))
 }
 
@@ -574,6 +578,22 @@ mod tests {
         assert_eq!(adapter.name(), "ollama");
     }
 
+    #[test]
+    fn build_ollama_fails_like_python_for_a_non_string_base_url() {
+        // Issue #515: `runtime.adapters.ollama.base_url: 5` must not
+        // silently fall back to the default URL -- Python keeps the int
+        // and then raises `AttributeError: 'int' object has no attribute
+        // 'rstrip'` the moment `self.base_url.rstrip("/")` runs.
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "base_url", Value::from(5i64));
+        let err = match build_ollama(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_ollama to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
     fn spawn_ollama_server_body(body: &'static str) -> std::net::SocketAddr {
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -681,6 +701,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_raises_type_error_for_an_unserializable_params_value() {
+        // Issue #515 finding 4: `json.dumps(payload)` raises Python's own
+        // `TypeError` for a value it can't serialize (bytes, a date, ...),
+        // uncaught -- never `RuntimeError`.
+        let mut params = Dict::new();
+        dict_insert(&mut params, "weird", Value::Bytes(vec![1, 2, 3]));
+        let options = GenerateOptions {
+            params: Value::Dict(params),
+            ..GenerateOptions::default()
+        };
+        let adapter = OllamaAdapter {
+            base_url: "http://127.0.0.1:1".to_string(),
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate("m", "hi", &options, &call_ctx(&path, &token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.py_class, PyExc::TypeError);
+    }
+
+    #[tokio::test]
     async fn check_reports_missing_host_for_a_closed_port() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -691,6 +734,20 @@ mod tests {
         let result = adapter.check().await;
         assert!(!result.ok);
         assert_eq!(result.missing, vec![format!("host:http://{addr}")]);
+    }
+
+    #[tokio::test]
+    async fn check_masks_userinfo_in_the_missing_host_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let adapter = OllamaAdapter {
+            base_url: format!("http://user:secret@{addr}"),
+        };
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert_eq!(result.missing, vec![format!("host:http://{addr}")]);
+        assert!(!result.missing.iter().any(|m| m.contains("secret")));
     }
 
     #[tokio::test]

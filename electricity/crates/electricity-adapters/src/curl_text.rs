@@ -192,6 +192,16 @@ pub(crate) fn strip_url_userinfo(text: &str) -> String {
     out
 }
 
+/// `curl_support.py::redact_host_url` -- masks a URL for a preflight
+/// `host:{url}` requirement text: userinfo stripped, then any
+/// credential-like query parameter masked, the same two masks
+/// [`curl_failure_message`] already applies to a request URL. Shared
+/// by every `check()` that reports `host:{base_url}` -- `ollama`'s own
+/// (`ollama.rs`) and `cyberdiner`'s.
+pub fn redact_host_url(url: &str) -> String {
+    strip_url_userinfo(&mask_credential_query_params(url))
+}
+
 /// `curl_support.py::curl_failure_message` -- renders a curl failure
 /// without ever including the request body/headers. *secrets* are the
 /// raw credential values this request sent; masked out of *stdout*/
@@ -324,6 +334,30 @@ mod tests {
         assert_eq!(
             strip_url_userinfo(text),
             "connect to http://127.0.0.1:1 failed"
+        );
+    }
+
+    #[test]
+    fn redact_host_url_strips_userinfo_for_a_preflight_host_text() {
+        assert_eq!(
+            redact_host_url("http://user:canarypw@example.test:11434"),
+            "http://example.test:11434"
+        );
+    }
+
+    #[test]
+    fn redact_host_url_masks_a_credential_query_param() {
+        assert_eq!(
+            redact_host_url("https://example.test/rpc?api_key=canarypw"),
+            "https://example.test/rpc?api_key=%2A%2A%2A"
+        );
+    }
+
+    #[test]
+    fn redact_host_url_leaves_a_plain_url_untouched() {
+        assert_eq!(
+            redact_host_url("http://localhost:11434"),
+            "http://localhost:11434"
         );
     }
 

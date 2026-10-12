@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from ..core.cancellation import run_tracked
-from ..curl_support import curl_failure_message, parse_error_body, run_curl
+from ..curl_support import curl_failure_message, parse_error_body, redact_host_url, run_curl
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import (
@@ -237,7 +237,7 @@ class OllamaAdapter:
                     ],
                 )
                 if proc.returncode != 0:
-                    missing.append(f"host:{self.base_url}")
+                    missing.append(f"host:{redact_host_url(self.base_url)}")
             except Exception:
-                missing.append(f"host:{self.base_url}")
+                missing.append(f"host:{redact_host_url(self.base_url)}")
         return CheckResult(ok=not missing, missing=missing)

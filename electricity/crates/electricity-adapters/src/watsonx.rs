@@ -3,7 +3,7 @@
 //! [`crate::transport`]. Rust tests only (the IAM URL is hard-coded in
 //! the reference); no conformance case (issue #503's own ruling).
 
-use crate::config::cfg_str_or;
+use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -12,7 +12,8 @@ use electricity_vm::adapter::{
     Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateResult, PyExc,
 };
 use electricity_vm::retry::RetryInfo;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// `adapters/watsonx.py::_TOKEN_TTL_BUFFER_SECONDS`.
@@ -40,30 +41,36 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
     }
 }
 
-/// `adapters/watsonx.py::_TOKEN_CACHE` -- module-level in Python,
-/// scoped to [`WatsonXAdapter`] here instead (every instance's own
-/// cache; a Rust adapter is rebuilt fresh per call anyway, same as
-/// every other non-default adapter in this crate -- see
-/// `electricity_vm::adapter::AdapterRegistry`'s own doc comment -- so
-/// this still matches Python's own effective behaviour of "a token
-/// survives exactly as long as the process", not "until the next
-/// adapter instance replaces it").
-#[derive(Default)]
-struct TokenCache {
-    entry: Mutex<Option<(String, Instant)>>,
-}
+/// `adapters/watsonx.py::_TOKEN_CACHE` -- process-wide, keyed by API
+/// key, exactly like Python's own module-level dict. A Rust
+/// [`WatsonXAdapter`] is rebuilt fresh for every call
+/// (`electricity_vm::adapter::AdapterRegistry`'s own doc comment), so
+/// a cache scoped to the instance (the prior shape here) never hits
+/// a second time -- every call pays its own IAM exchange, where
+/// Python's one process-wide dict makes one IAM exchange per API key
+/// for the life of the process. This static makes the two match.
+static TOKEN_CACHE: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
+
+struct TokenCache;
 
 impl TokenCache {
-    fn get(&self) -> Option<String> {
-        let guard = self.entry.lock().unwrap();
-        match &*guard {
+    fn cache() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+        TOKEN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    fn get(&self, api_key: &str) -> Option<String> {
+        let guard = Self::cache().lock().unwrap();
+        match guard.get(api_key) {
             Some((token, expires_at)) if *expires_at > Instant::now() => Some(token.clone()),
             _ => None,
         }
     }
 
-    fn set(&self, token: String, expires_at: Instant) {
-        *self.entry.lock().unwrap() = Some((token, expires_at));
+    fn set(&self, api_key: &str, token: String, expires_at: Instant) {
+        Self::cache()
+            .lock()
+            .unwrap()
+            .insert(api_key.to_string(), (token, expires_at));
     }
 }
 
@@ -118,7 +125,10 @@ async fn exchange_iam_token(
     match token {
         Some(Value::Str(s)) if !s.is_empty() => Ok((s.clone(), expires_in.max(0) as u64)),
         _ => Err(AdapterError {
-            message: format!("watsonx IAM response missing access_token: {raw:?}"),
+            message: format!(
+                "watsonx IAM response missing access_token: {}",
+                raw.py_str()
+            ),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         }),
@@ -131,12 +141,16 @@ async fn get_token(
     api_key: &str,
     timeout_seconds: u32,
 ) -> Result<String, AdapterError> {
-    if let Some(token) = cache.get() {
+    if let Some(token) = cache.get(api_key) {
         return Ok(token);
     }
     let (token, expires_in) = exchange_iam_token(iam_url, api_key, timeout_seconds).await?;
     let ttl = expires_in.saturating_sub(TOKEN_TTL_BUFFER_SECONDS).max(60);
-    cache.set(token.clone(), Instant::now() + Duration::from_secs(ttl));
+    cache.set(
+        api_key,
+        token.clone(),
+        Instant::now() + Duration::from_secs(ttl),
+    );
     Ok(token)
 }
 
@@ -233,11 +247,13 @@ impl Adapter for WatsonXAdapter {
         );
         payload.insert(Value::Str("project_id".to_string()), Value::Str(project_id));
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), electricity_json::WriteMode::COMPACT)
                 .map_err(|e| AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 })?;
 
         let headers = vec![
@@ -334,11 +350,11 @@ impl Adapter for WatsonXAdapter {
 /// `adapters/factory.py::_build_watsonx`.
 pub fn build_watsonx(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(WatsonXAdapter {
-        base_url: cfg_str_or(cfg, "base_url", ""),
+        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "")?,
         default_model: cfg_str_or(cfg, "default_model", "meta-llama/llama-3-3-70b-instruct"),
         api_version: cfg_str_or(cfg, "api_version", "2024-03-14"),
         iam_url: "https://iam.cloud.ibm.com/identity/token".to_string(),
-        token_cache: TokenCache::default(),
+        token_cache: TokenCache,
     }))
 }
 
@@ -349,6 +365,15 @@ mod tests {
     use electricity_value::CancellationToken;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    /// `WATSONX_API_KEY`/`WATSONX_PROJECT_ID`/`WATSONX_API_VERSION` are
+    /// process environment, shared by every test in this module; `cargo
+    /// test` runs them concurrently by default, so two tests setting and
+    /// then removing the same variable race each other without this.
+    fn env_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
 
     fn spawn_server(response: String) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -369,8 +394,28 @@ mod tests {
         )
     }
 
+    /// Accepts *count* connections, serving *response* each time, then
+    /// stops -- a further connection attempt gets connection-refused,
+    /// which is exactly how a test proves "no further request happened"
+    /// without a request counter.
+    fn spawn_server_n(response: String, count: usize) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..count {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 65536];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        addr
+    }
+
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_exchanges_the_iam_token_then_calls_generation() {
+        let _guard = env_guard().lock().unwrap();
         unsafe {
             std::env::set_var("WATSONX_API_KEY", "circuitry-test-fake-key");
             std::env::set_var("WATSONX_PROJECT_ID", "proj");
@@ -387,7 +432,7 @@ mod tests {
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
             iam_url: format!("http://{iam_addr}/identity/token"),
-            token_cache: TokenCache::default(),
+            token_cache: TokenCache,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -411,22 +456,113 @@ mod tests {
 
     #[tokio::test]
     async fn the_token_is_cached_across_calls() {
-        let cache = TokenCache::default();
-        assert_eq!(cache.get(), None);
-        cache.set("tok".to_string(), Instant::now() + Duration::from_secs(60));
-        assert_eq!(cache.get(), Some("tok".to_string()));
+        let cache = TokenCache;
+        let key = "circuitry-test-cache-key-1";
+        assert_eq!(cache.get(key), None);
+        cache.set(
+            key,
+            "tok".to_string(),
+            Instant::now() + Duration::from_secs(60),
+        );
+        assert_eq!(cache.get(key), Some("tok".to_string()));
     }
 
     #[tokio::test]
     async fn an_expired_token_is_not_reused() {
-        let cache = TokenCache::default();
-        cache.set("tok".to_string(), Instant::now() - Duration::from_secs(1));
-        assert_eq!(cache.get(), None);
+        let cache = TokenCache;
+        let key = "circuitry-test-cache-key-2";
+        cache.set(
+            key,
+            "tok".to_string(),
+            Instant::now() - Duration::from_secs(1),
+        );
+        assert_eq!(cache.get(key), None);
+    }
+
+    #[tokio::test]
+    async fn the_cache_is_process_wide_keyed_by_api_key_not_scoped_to_one_adapter_instance() {
+        // N3 (issue #515): a Rust adapter is rebuilt fresh for every call
+        // (`AdapterRegistry::build`), so a cache scoped to the instance
+        // never hits a second time -- it must be process-wide, exactly
+        // like Python's own module-level dict, for the request sequence
+        // to match (one IAM exchange per API key, not one per call).
+        let key = "circuitry-test-cache-key-process-wide";
+        let first = TokenCache;
+        first.set(
+            key,
+            "shared-tok".to_string(),
+            Instant::now() + Duration::from_secs(60),
+        );
+        let second = TokenCache;
+        assert_eq!(second.get(key), Some("shared-tok".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn two_calls_with_the_same_api_key_share_one_iam_exchange() {
+        // N3 (issue #515): the IAM listener below accepts exactly one
+        // connection -- a second IAM request would get connection-refused,
+        // which is how this proves the second `generate()` call reused the
+        // cached token rather than exchanging it again, even though each
+        // call below builds its own fresh `WatsonXAdapter` (every
+        // non-default adapter is rebuilt per call in this crate).
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("WATSONX_API_KEY", "circuitry-test-shared-key");
+            std::env::set_var("WATSONX_PROJECT_ID", "proj");
+            std::env::remove_var("WATSONX_API_VERSION");
+        }
+        let iam_addr = spawn_server_n(
+            json_response(r#"{"access_token": "shared-tok", "expires_in": 3600}"#),
+            1,
+        );
+        let gen_addr = spawn_server_n(
+            json_response(r#"{"results": [{"generated_text": "hi"}]}"#),
+            2,
+        );
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+        };
+
+        for _ in 0..2 {
+            let adapter = WatsonXAdapter {
+                base_url: format!("http://{gen_addr}"),
+                default_model: "m".to_string(),
+                api_version: "2024-03-14".to_string(),
+                iam_url: format!("http://{iam_addr}/identity/token"),
+                token_cache: TokenCache,
+            };
+            adapter
+                .generate("m", "hi", &GenerateOptions::default(), &call)
+                .await
+                .unwrap();
+        }
+
+        unsafe {
+            std::env::remove_var("WATSONX_API_KEY");
+            std::env::remove_var("WATSONX_PROJECT_ID");
+        }
     }
 
     #[test]
     fn build_watsonx_defaults_the_default_model_and_api_version() {
         let adapter = build_watsonx(&Value::None).unwrap();
         assert_eq!(adapter.name(), "watsonx");
+    }
+
+    #[test]
+    fn build_watsonx_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let err = match build_watsonx(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_watsonx to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 }

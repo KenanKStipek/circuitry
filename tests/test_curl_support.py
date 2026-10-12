@@ -23,6 +23,7 @@ from circuitry.curl_support import (
     _curl_supports_retry_after_header,
     curl_failure_message,
     extract_retry_after,
+    redact_host_url,
     run_curl,
 )
 
@@ -59,6 +60,27 @@ def test_url_userinfo_in_hint_is_also_stripped() -> None:
         hint="Ollama at http://user:canarypw@example.test:11434 is not reachable.",
     )
     assert "canarypw" not in message
+
+
+def test_redact_host_url_strips_userinfo_for_a_preflight_host_text() -> None:
+    """Shared by ollama/cyberdiner/comfyui/surrealdb `check()` -- a
+    `runtime.adapters.<name>.base_url`/`expo_url`/`url` carrying
+    `user:pass@` must not reach a `host:{url}` preflight requirement."""
+    assert (
+        redact_host_url("http://user:canarypw@example.test:11434")
+        == "http://example.test:11434"
+    )
+
+
+def test_redact_host_url_masks_a_credential_query_param() -> None:
+    assert (
+        redact_host_url("https://example.test/rpc?api_key=canarypw")
+        == "https://example.test/rpc?api_key=%2A%2A%2A"
+    )
+
+
+def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
+    assert redact_host_url("http://localhost:11434") == "http://localhost:11434"
 
 
 def test_secret_split_by_truncation_is_still_masked() -> None:

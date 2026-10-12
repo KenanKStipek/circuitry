@@ -1143,6 +1143,40 @@
           "retry_after": null
         }
       }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"status\": \"processing\", \"id\": null}",
+      "stderr": "",
+      "model": "meta/llama",
+      "wait": 60,
+      "result": {
+        "ok": false,
+        "class": "RuntimeError",
+        "message": "Replicate prediction None did not complete within wait=60s (status='processing'). Re-issue with a longer timeout or poll /v1/predictions/{id}.",
+        "retry": {
+          "retryable": false,
+          "status": null,
+          "retry_after": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"status\": null}",
+      "stderr": "",
+      "model": "meta/llama",
+      "wait": 60,
+      "result": {
+        "ok": false,
+        "class": "RuntimeError",
+        "message": "Replicate prediction failed: None",
+        "retry": {
+          "retryable": false,
+          "status": null,
+          "retry_after": null
+        }
+      }
     }
   ]
 }

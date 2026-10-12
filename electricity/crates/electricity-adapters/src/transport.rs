@@ -430,7 +430,21 @@ fn send_error_outcome(err: SendError) -> CurlOutcome {
 /// "after the response began" exits (56/18), never 52 (issue #503's
 /// own table: 52 is "closed before any response", only ever reachable
 /// as the outer [`SendError`] above, never through this path).
-fn body_error_outcome(err: SendError) -> CurlOutcome {
+///
+/// *partial_body* ([`http_client::RawResponse::partial_body`]) is
+/// never empty on this path unless the connection genuinely dropped
+/// before a single byte of the body arrived -- real curl keeps
+/// writing to stdout as bytes arrive, so whatever it received before
+/// the connection died is still there when it exits nonzero (issue
+/// #515 finding 4: the prior version of this function always
+/// discarded it, matching `http_client`'s own urllib-parity clearing
+/// of [`http_client::RawResponse::body`] instead -- correct for the
+/// `http` *tool*, wrong for a curl-shelling adapter). A partial
+/// multi-byte UTF-8 sequence cut off mid-codepoint is decoded lossily
+/// here rather than raised as its own failure: it is only ever used
+/// as an error message's own *detail* text (`curl_text::
+/// parse_error_body`), never parsed as the success path's JSON.
+fn body_error_outcome(err: SendError, partial_body: &[u8]) -> CurlOutcome {
     let (code, text) = match err {
         SendError::IncompleteRead { read, expected } => (
             18,
@@ -443,7 +457,7 @@ fn body_error_outcome(err: SendError) -> CurlOutcome {
     };
     CurlOutcome {
         returncode: code,
-        stdout: String::new(),
+        stdout: translate_universal_newlines(&String::from_utf8_lossy(partial_body)),
         stderr: format!("curl: ({code}) {text}"),
         status: None,
         retry_after: None,
@@ -565,7 +579,7 @@ pub async fn run_curl(
                 .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
                 .map(|(_, value)| value.clone());
             if let Some(err) = response.body_error {
-                let mut outcome = body_error_outcome(err);
+                let mut outcome = body_error_outcome(err, &response.partial_body);
                 outcome.retry_after = retry_after;
                 return Ok(outcome);
             }
@@ -852,6 +866,11 @@ mod tests {
         let url = format!("http://{addr}/x");
         let outcome = run_curl(&url, &[], None, 5).await.unwrap();
         assert_eq!(outcome.returncode, 18);
+        // Issue #515 finding 4: real curl keeps whatever it already wrote
+        // to stdout before the connection died -- this must not come back
+        // empty the way `http_client`'s own urllib-parity clearing (for
+        // the `http` tool) would otherwise make it.
+        assert_eq!(outcome.stdout, "12345");
     }
 
     #[tokio::test]

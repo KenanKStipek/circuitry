@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #515 (ollama check() redacts userinfo in the host: preflight text, both engines)",
+  "description": "base_url carries user:pass@ -- preflight's check() probe fails and the whole run is refused, with host:<base_url> in the message with the userinfo stripped out, identically in both engines.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

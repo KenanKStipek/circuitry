@@ -4,7 +4,7 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::cfg_str_or;
+use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
 use crate::transport::{TransportFailure, run_curl};
@@ -187,11 +187,13 @@ impl Adapter for OpenAiAdapter {
                 .or_insert(Value::from(DETERMINISTIC_SEED));
         }
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
                 AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 }
             })?;
 
@@ -228,7 +230,7 @@ impl Adapter for OpenAiAdapter {
 /// `adapters/factory.py::_build_openai`.
 pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OpenAiAdapter {
-        base_url: cfg_str_or(cfg, "base_url", "https://api.openai.com/v1"),
+        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "https://api.openai.com/v1")?,
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
     }))
 }
@@ -278,5 +280,17 @@ mod tests {
     fn build_openai_defaults_base_url_and_model() {
         let adapter = build_openai(&Value::None).unwrap();
         assert_eq!(adapter.name(), "openai");
+    }
+
+    #[test]
+    fn build_openai_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let err = match build_openai(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_openai to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 }

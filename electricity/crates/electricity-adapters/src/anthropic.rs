@@ -2,7 +2,7 @@
 //! API, over [`crate::transport`]: system-turn hoisting, image blocks
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
-use crate::config::cfg_str_or;
+use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -364,11 +364,13 @@ impl Adapter for AnthropicAdapter {
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         let payload = build_request_body(model, prompt, self.max_tokens, options);
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
                 AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 }
             })?;
 
@@ -420,7 +422,7 @@ pub fn build_anthropic(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
         py_class: e.py_class,
     })?;
     Ok(Box::new(AnthropicAdapter {
-        base_url: cfg_str_or(cfg, "base_url", "https://api.anthropic.com"),
+        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "https://api.anthropic.com")?,
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
     }))
@@ -539,6 +541,18 @@ mod tests {
     fn build_anthropic_defaults_max_tokens_to_4096() {
         let adapter = build_anthropic(&Value::None).unwrap();
         assert_eq!(adapter.name(), "anthropic");
+    }
+
+    #[test]
+    fn build_anthropic_fails_like_python_for_a_non_string_base_url() {
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let err = match build_anthropic(&Value::Dict(cfg)) {
+            Err(err) => err,
+            Ok(_) => panic!("expected build_anthropic to fail"),
+        };
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
     #[test]

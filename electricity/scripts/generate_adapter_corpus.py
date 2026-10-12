@@ -671,6 +671,13 @@ def _replicate_outcome_cases() -> list[dict[str, Any]]:
         (0, '{"status": "processing", "id": "abc123"}', ""),
         (0, '{"status": "failed", "error": "boom"}', ""),
         (22, '{"detail": "unauthorized"}', "curl: (22) The requested URL returned error: 401"),
+        # Issue #515 finding 4: a non-string `id` reprs as Python shows it
+        # (`None`, not the Rust port's old `'?'`).
+        (0, '{"status": "processing", "id": null}', ""),
+        # A non-string `status` with no `error` key -- `err = raw.get("error")
+        # or status` falls through to `status` itself (`None`), formatted
+        # with plain `str()`.
+        (0, '{"status": null}', ""),
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
