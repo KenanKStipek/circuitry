@@ -113,8 +113,15 @@ pub struct PromptOp {
     pub deterministic: bool,
     pub inputs: Option<ParamNode>,
     pub assets: Vec<AssetRef>,
-    /// Default attempts 1 / backoff 1000ms.
-    pub retries: RetryPolicy,
+    /// `None` unless `retries:` was a *non-empty* mapping (Python's `if
+    /// retries_raw and isinstance(retries_raw, dict)`, `core/compiler.py:
+    /// 1582-1589`) -- `retries: {}` is `None` too, so `runtime.
+    /// default_prompt_retries` applies (issue #498, lane G). Unlike
+    /// `ToolOp`/`UseOp::retries`, which default to `RetryPolicy::default()`
+    /// right here because a tool/`use` effect always has *some* retry
+    /// policy, a prompt's own run-time default can come from `runtime:`
+    /// instead, so the "absent" state has to survive compilation.
+    pub retries: Option<RetryPolicy>,
     pub description: Option<String>,
     pub group: Option<String>,
 }
