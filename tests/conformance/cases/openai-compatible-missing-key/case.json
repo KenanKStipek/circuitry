@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #503 (OpenAI-compatible family, groq, preflight failure, no GROQ_API_KEY)",
+  "description": "A prompt naming 'provider: groq' with no GROQ_API_KEY in the sandboxed environment: preflight's check() reports the missing key and the whole run is refused.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

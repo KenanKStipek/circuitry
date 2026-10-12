@@ -1,0 +1,26 @@
+[
+  {
+    "method": "POST",
+    "path": "/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "346"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"collide\", \"messages\": [{\"role\": \"system\", \"content\": \"be terse\"}, {\"role\": \"user\", \"content\": \"describe\"}, {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"tool: tool-output\"}, {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,iVBORw0KGgoAAAAAAAAAAA==\"}}]}], \"temperature\": 0.3, \"max_tokens\": 50, \"stop\": [\"END\"]}"
+  }
+]

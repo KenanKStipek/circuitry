@@ -261,6 +261,133 @@ def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]
     return normalize(redact_runtime_strings(value, replacements))
 
 
+#: `case.json`'s own `third_party_text` key (issue #503's own harness
+#: addition) -- a fixed placeholder, distinct from every other one in
+#: this module, for a leaf whose exact text is curl's own (version-
+#: dependent) wording rather than Circuitry's: a connection-refused or a
+#: timeout failure's own `meta.error`, recorded only by *shape* (a regex
+#: `third_party_text` names), never by exact value.
+THIRD_PARTY_TEXT_PLACEHOLDER = "<THIRD_PARTY_TEXT>"
+
+
+def _resolve_container(root: Any, segments: Sequence[str]) -> Any:
+    node = root
+    for segment in segments:
+        node = node[int(segment)] if isinstance(node, list) else node[segment]
+    return node
+
+
+def apply_third_party_text(state: Any, specs: Sequence[dict[str, str]]) -> Any:
+    """A deep copy of *state* with every `third_party_text` leaf
+    (`case.json`'s own `[{"location": ..., "pattern": ...}]`, issue
+    #503) replaced by `THIRD_PARTY_TEXT_PLACEHOLDER`, after checking it
+    `re.fullmatch`es its own `pattern` first -- a location whose value
+    doesn't match is a real divergence (or a stale fixture), never
+    silently accepted. Call this on *both* the actual and the expected
+    state, independently, before `assert_states_equal`: each side's own
+    leaf has to satisfy the pattern on its own, and the placeholder then
+    makes the two sides compare equal there regardless of curl's own
+    (version-dependent) wording. Dotted `location`, same convention as
+    `apply_known_divergence`: a segment that parses as a non-negative
+    integer indexes a list, otherwise it's a dict key.
+    """
+    root = copy.deepcopy(state)
+    for spec in specs:
+        location = spec["location"]
+        pattern = spec["pattern"]
+        segments = location.split(".")
+        node = _resolve_container(root, segments[:-1])
+        last = segments[-1]
+        if isinstance(node, list):
+            index = int(last)
+            value = node[index]
+        else:
+            if last not in node:
+                raise KeyError(f"third_party_text location {location!r} does not exist in state")
+            value = node[last]
+        if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+            raise AssertionError(
+                f"third_party_text location {location!r} does not fullmatch pattern "
+                f"{pattern!r}: {value!r}"
+            )
+        if isinstance(node, list):
+            node[int(last)] = THIRD_PARTY_TEXT_PLACEHOLDER
+        else:
+            node[last] = THIRD_PARTY_TEXT_PLACEHOLDER
+    return root
+
+
+def prepare_for_comparison(
+    value: Any,
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]] = (),
+) -> Any:
+    """`normalize_for_comparison` then, when *third_party_text* is
+    non-empty, `apply_third_party_text` -- the one call both pytest
+    runners make wherever a case might carry a `third_party_text` spec,
+    so the two steps are never applied out of order or only partially.
+    """
+    normalized = normalize_for_comparison(value, replacements)
+    if not third_party_text:
+        return normalized
+    return apply_third_party_text(normalized, third_party_text)
+
+
+def _redact_third_party_patterns(value: Any, patterns: Sequence[str]) -> Any:
+    """Like `redact_runtime_strings`, but a regex *search*-and-replace
+    (never a `fullmatch`) for each of *patterns*, applied to every string
+    leaf -- an `--events` line's own `error` field (`cli/events.py`'s own
+    500-character truncation, electricity/src/events.rs's own matching
+    cap) can cut a `third_party_text` match off *after* the span a
+    pattern actually covers while still containing that whole span
+    intact, which a `fullmatch` (state's own rule, `apply_third_party_
+    text`) would wrongly reject outright. A pattern that doesn't occur in
+    a given string is simply a no-op there (`re.sub` with no match).
+    """
+    if isinstance(value, dict):
+        return {k: _redact_third_party_patterns(v, patterns) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_third_party_patterns(v, patterns) for v in value]
+    if isinstance(value, str):
+        for pattern in patterns:
+            value = re.sub(pattern, THIRD_PARTY_TEXT_PLACEHOLDER, value)
+        return value
+    return value
+
+
+def redact_events_text(
+    text: str,
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]] = (),
+) -> str:
+    """`redact_runtime_strings` (and, when *third_party_text* is given,
+    `_redact_third_party_patterns`) applied to each `--events` JSONL
+    line's own parsed object, then re-serialized in the exact wire format
+    (`separators=(",", ":")`, `ensure_ascii=True`) `_assert_compact_wire_
+    format` itself checks for -- issue #503's own harness addition: a
+    failed prompt dispatch's own `end` event embeds the full failure
+    message (`cli/events.py`'s own event record), which, for a mock-HTTP-
+    backed adapter case, carries the mock server's ephemeral port the
+    same way a captured `base_url`/recorded-request host does, and can
+    carry the same curl-version-dependent text a case's own
+    `third_party_text` spec already masks in state. Applied both before a
+    case's `expected.events.jsonl` is ever written (`scripts/generate-
+    conformance-cases.py`) and at comparison time (both pytest runners),
+    so the two can never drift -- the same convention `normalize_for_
+    comparison`'s own state redaction already follows.
+    """
+    patterns = [spec["pattern"] for spec in third_party_text]
+    lines = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parsed = redact_runtime_strings(json.loads(line), replacements)
+        if patterns:
+            parsed = _redact_third_party_patterns(parsed, patterns)
+        lines.append(json.dumps(parsed, separators=(",", ":"), ensure_ascii=True))
+    return "".join(f"{line}\n" for line in lines)
+
+
 def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
     """A recorded HTTP request's own ``headers`` -- either a mapping (a
     freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list

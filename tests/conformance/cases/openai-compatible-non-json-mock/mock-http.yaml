@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: text/html
+    body_base64: PGh0bWw+DQpub3QganNvbg0KPC9odG1sPg==

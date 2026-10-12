@@ -1,0 +1,14 @@
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    close_without_response: true
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"response": "hello after retry"}'

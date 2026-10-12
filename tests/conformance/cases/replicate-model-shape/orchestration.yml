@@ -1,0 +1,8 @@
+name: replicate-model-shape
+adapter: replicate
+model: llama
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    on_error: continue

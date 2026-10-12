@@ -129,3 +129,9 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "process
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
+# A self-signed certificate for `http_client_send.rs`'s own TLS-
+# certificate-rejection test (issue #503's own seam: `ConnectKind::
+# TlsCertificate`) -- the same `ring` crypto backend the workspace's
+# own `rustls`/`tokio-rustls` dependencies above already use, so this
+# adds no second backend to the dependency tree.
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }

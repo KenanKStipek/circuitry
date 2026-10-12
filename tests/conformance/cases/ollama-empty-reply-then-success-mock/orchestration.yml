@@ -1,0 +1,7 @@
+name: ollama-empty-reply-then-success-mock
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    retries: {max_attempts: 2, backoff_ms: 1}

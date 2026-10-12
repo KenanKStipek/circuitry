@@ -348,7 +348,7 @@ async fn a_proxied_https_request_sends_proxy_authorization_on_the_connect_line_o
     .unwrap_err();
     // A failed tunnel is a retryable, wrapped `Connect` shape, not
     // `Other` (issue #485 review finding 7).
-    assert!(matches!(err, SendError::Connect(_)));
+    assert!(matches!(err, SendError::Connect { .. }));
     let tunnel_request = tunnel_rx.recv().unwrap();
     assert!(tunnel_request.starts_with("CONNECT origin.example:443 HTTP/1.1"));
     assert!(tunnel_request.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
@@ -405,7 +405,10 @@ async fn connection_refused_is_a_connect_error() {
     .await
     .unwrap_err();
     match err {
-        SendError::Connect(text) => assert!(text.contains("Errno")),
+        SendError::Connect { text, kind } => {
+            assert!(text.contains("Errno"));
+            assert_eq!(kind, http_client::ConnectKind::Refused);
+        }
         other => panic!("expected Connect, got {other:?}"),
     }
 }
@@ -441,8 +444,58 @@ async fn a_tls_handshake_that_never_responds_is_a_connect_timeout() {
     .await
     .unwrap_err();
     match err {
-        SendError::Connect(text) => assert_eq!(text, "timed out"),
+        SendError::Connect { text, kind } => {
+            assert_eq!(text, "timed out");
+            assert_eq!(kind, http_client::ConnectKind::Timeout);
+        }
         other => panic!("expected Connect(\"timed out\"), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_rejected_self_signed_certificate_is_a_connect_error_with_the_certificate_kind() {
+    // Issue #503's own seam (`ConnectKind`): `build_client` only ever
+    // trusts the system's own native roots, so a self-signed
+    // certificate always fails verification here -- curl's own exit
+    // 60, never retried, distinct from a plain handshake failure
+    // (exit 35, retried).
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let cert_der = certified.cert.der().clone();
+    let key_der = rustls_pki_types::PrivateKeyDer::try_from(certified.key_pair.serialize_der())
+        .unwrap()
+        .clone_key();
+    let server_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let _ = acceptor.accept(stream).await;
+        }
+    });
+    let client = http_client::build_client().unwrap();
+    let https_target = ConnectTarget {
+        scheme: Scheme::Https,
+        host: "localhost".to_string(),
+        port: local_addr.port(),
+        proxy: None,
+    };
+    let err = http_client::send(
+        &client,
+        &https_target,
+        &get_request(),
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap_err();
+    match err {
+        SendError::Connect { kind, .. } => {
+            assert_eq!(kind, http_client::ConnectKind::TlsCertificate)
+        }
+        other => panic!("expected Connect, got {other:?}"),
     }
 }
 

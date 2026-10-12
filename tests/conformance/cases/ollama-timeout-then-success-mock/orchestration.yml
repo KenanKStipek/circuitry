@@ -1,0 +1,8 @@
+name: ollama-timeout-then-success-mock
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    timeout_ms: 500
+    retries: {max_attempts: 2, backoff_ms: 1}

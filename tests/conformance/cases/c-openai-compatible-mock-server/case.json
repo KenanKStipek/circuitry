@@ -4,6 +4,5 @@
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
-  "electricity_preview_ok": true,
   "mock_http_fixture": "mock-http.yaml"
 }

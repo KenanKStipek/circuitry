@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:ollama: not ready \u2014 missing ['host:http://127.0.0.1:1'] \u2014 adapter 'ollama' unavailable; required by effects ['greeting']. Re-run with --skip-preflight to bypass."
+}

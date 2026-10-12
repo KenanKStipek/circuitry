@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #503 (openai, preflight failure, no OPENAI_API_KEY)",
+  "description": "Document names 'adapter: openai' with no OPENAI_API_KEY in the sandboxed environment: preflight's check() reports the missing key and the whole run is refused. Added after a review finding on PR #504: once `openai` became buildable, `document-adapter-preflight-not-ready` had to move to `litellm` (settled, see that case's own description), losing this lane's own coverage of `openai`'s own missing-key preflight failure -- this case restores it, mirroring `anthropic-missing-key`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-12T09:58:56.320Z","ev":"run_start","run_id":"d1efefe3-78ae-44ef-b9d4-e8ec811edd2d","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":10679}
+{"v":1,"seq":1,"ts":"2026-10-12T09:58:56.324Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T09:58:56.324Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-12T09:58:56.439Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":115,"error":"All adapter attempts failed: [{'adapter': 'groq', 'model': 'm', 'status': 'failed', 'error': \"OpenAI-compatible request failed (curl exit 22) model='m' url=http://127.0.0.1:<MOCK_PORT>/chat/completions: Invalid API Key\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-12T09:58:56.440Z","ev":"end","id":0,"path":"prime","ok":true,"ms":116}
+{"v":1,"seq":5,"ts":"2026-10-12T09:58:56.440Z","ev":"run_end","ok":true}

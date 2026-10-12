@@ -1,0 +1,7 @@
+name: azure-openai-deployment-mock
+adapter: azure-openai
+model: gpt-deploy
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

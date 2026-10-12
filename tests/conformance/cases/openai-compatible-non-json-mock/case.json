@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #503 (OpenAI-compatible family, a non-JSON 200 success body)",
+  "description": "A 200 text/html body with CRLF line endings: 'Provider returned non-JSON response: ...', the excerpt showing curl's stdout after universal-newline translation, not retried (not an AdapterCallError at all).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}
