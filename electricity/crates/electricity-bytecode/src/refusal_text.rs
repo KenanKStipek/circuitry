@@ -22,11 +22,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The stable substring every preview refusal carries (issue #476):
 /// matched in lockstep by the conformance harness's own
-/// `PREVIEW_MESSAGE_MARKER`, osp's e2e test, and this crate's and
-/// `electricity` (lib)'s own tests. Every refusal message below, and
-/// `electricity::format_config_refusal`, builds its text around this
-/// one constant so the marker can only ever change in one place per
-/// language.
+/// `PREVIEW_MESSAGE_MARKER`, osp's e2e test, and this crate's,
+/// `electricity` (lib)'s and `electricity-tools`' own tests. Every
+/// refusal message below, `electricity::format_config_refusal`, and
+/// `electricity_tools::fs::preview_marker_codec_error` build their
+/// text around this one constant, so the marker can only ever change
+/// in one place per language.
 pub const PREVIEW_MARKER: &str = "is a preview and can't run this orchestration";
 
 /// `electricity_bytecode::RefusalReason` -> the human-readable half of

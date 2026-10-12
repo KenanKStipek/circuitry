@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "osp: a terminal UI that watches a Circuitry orchestration run on cof or electricity (preview, milestone O-0: no run logic yet)"
+description = "osp: a preview terminal UI that watches and launches a Circuitry orchestration run on cof or electricity"
 
 [[bin]]
 name = "osp"

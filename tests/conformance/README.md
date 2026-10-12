@@ -390,8 +390,8 @@ and expects success now actually runs and is diffed against the same
 skipped. A *failure* case may still legitimately skip for electricity if
 its document uses content this preview genuinely doesn't support yet: the
 binary refuses those up front with a message containing the preview marker
-(`is a preview and can't run this orchestration`, `electricity/crates/
-electricity-cli`), and the runner treats that refusal as an expected skip
+(`is a preview and can't run this orchestration`,
+`electricity_bytecode::PREVIEW_MARKER`), and the runner treats that refusal as an expected skip
 rather than a failure. The same refusal on a case that expects *success*
 is never skipped — it fails the test, since a success case electricity
 wrongly refuses is a real regression.
