@@ -105,15 +105,33 @@ pub struct Node {
     /// see a *later* sibling's own skeleton node (created, not yet
     /// rendered -- `exec::tool::execute_tool` `ensure_dict`s an effect's
     /// own node before rendering its params) the instant that sibling
-    /// starts, something cof's own frozen copy never exposes. Exact as
-    /// long as nothing ever `shift_remove`s a key from the specific
-    /// node this watermark counts against -- checked for every
-    /// `shift_remove` call site in this crate: every one operates on an
-    /// effect's own nested `meta` dict (`exec::tool`/`exec::use_`'s own
-    /// `pop_leaf`, `exec::loop_`'s own `failed_passes` pop), never on a
-    /// `prime`/loop-name node directly -- the only kind [`exec::
-    /// loop_::step_overlay`]/[`exec::loop_::with_prev_overlay`] ever
-    /// watermark or hide a key on.
+    /// starts, something cof's own frozen copy never exposes. Exact
+    /// under two invariants this count alone can't re-check on every
+    /// read, so both are checked once, elsewhere, instead:
+    ///
+    /// 1. Nothing ever `shift_remove`s a key from the specific node a
+    ///    watermark counts against -- checked for every `shift_remove`
+    ///    call site in this crate: every one operates on an effect's
+    ///    own nested `meta` dict (`exec::tool`/`exec::use_`'s own
+    ///    `pop_leaf`, `exec::loop_`'s own `failed_passes` pop), never on
+    ///    a `prime`/loop-name node directly -- the only kind [`exec::
+    ///    loop_::step_overlay`]/[`exec::loop_::with_prev_overlay`] ever
+    ///    watermark or hide a key on. A `shift_remove` there would shift
+    ///    every later key's own index down by one, silently exposing
+    ///    whatever key the watermark's own count next lands on instead
+    ///    of the one actually meant.
+    /// 2. The node a watermark counts against only ever *grows* new
+    ///    top-level keys from here on -- never itself becomes an
+    ///    overlay with a `fallback`/`hidden`/`watermark` of its own,
+    ///    whose growth this type's own index-based count can't see
+    ///    through. True because every [`Store`] write-path method
+    ///    (`ensure_dict`/`set_leaf`/`alias`/`merge`) only ever takes a
+    ///    real, `Store`-created node as *parent* -- each one
+    ///    `debug_assert!`s `parent`'s own `fallback` is `None` on entry
+    ///    -- and a real node's `fallback`/`hidden`/`watermark` are
+    ///    always `None` for its whole lifetime (only `exec::loop_`'s own
+    ///    `plain_overlay`/`with_prev_overlay`/`step_overlay` ever build
+    ///    one of those, and never write into it afterward).
     watermark: Option<usize>,
 }
 
@@ -319,6 +337,11 @@ impl Store {
     /// and the key's insertion-order position -- Python descends into
     /// *any* dict, not only ones it created through `ensure_dict` itself.
     pub fn ensure_dict(&self, parent: &NodeRef, key: Value) -> Result<NodeRef, StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::ensure_dict: parent is one of exec::loop_'s detached overlay nodes, not a \
+             real Store-created one -- see Node's own doc comment"
+        );
         let mut parent_map = parent.borrow_mut();
         if let Some(Slot::Node(existing)) = parent_map.get(&key) {
             return Ok(Rc::clone(existing));
@@ -373,6 +396,11 @@ impl Store {
     /// separate registry entry to go stale, unlike an address-keyed side
     /// table would leave behind.
     pub fn set_leaf(&self, parent: &NodeRef, key: Value, value: Value) {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::set_leaf: parent is one of exec::loop_'s detached overlay nodes, not a \
+             real Store-created one -- see Node's own doc comment"
+        );
         parent.borrow_mut().insert(key, Slot::Value(value));
     }
 
@@ -395,6 +423,11 @@ impl Store {
         alias_key: Value,
         target_key: &Value,
     ) -> Result<NodeRef, StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::alias: parent is one of exec::loop_'s detached overlay nodes, not a real \
+             Store-created one -- see Node's own doc comment"
+        );
         let target = self.child(parent, target_key)?.ok_or_else(|| {
             StoreError(format!(
                 "electricity_vm::Store::alias: no such key {} to alias to",
@@ -442,6 +475,11 @@ impl Store {
     /// -- branches are applied to *parent* in ascending index order, so
     /// each later merge overwrites whatever an earlier one wrote.
     pub fn merge(&self, parent: &NodeRef, branches: Vec<NodeRef>) -> Result<(), StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::merge: parent is one of exec::loop_'s detached overlay nodes, not a real \
+             Store-created one -- see Node's own doc comment"
+        );
         for branch in branches {
             let entries = std::mem::take(&mut branch.borrow_mut().entries);
             for (key, slot) in entries {
@@ -1041,6 +1079,90 @@ mod tests {
                 assert_eq!(d.get(&key("value")), Some(&Value::Str("done".to_string())))
             }
             other => panic!("expected last's own full content, got {other:?}"),
+        }
+    }
+
+    /// Issue #501's third review (P1 -- "the watermark has no test"):
+    /// `peek`/`snapshot`/`Node::flat_entries` must all agree a
+    /// watermarked overlay hides a key its own `fallback` gains *after*
+    /// the watermark was taken.
+    #[test]
+    fn watermark_hides_a_key_added_to_the_fallback_after_it_was_taken() {
+        let store = Store::new();
+        let real = store.ensure_dict(&store.root, key("prime")).unwrap();
+        store.ensure_dict(&real, key("a")).unwrap();
+
+        let watermark = real.borrow().len();
+        let overlay = node_with_fallback_watermarked(IndexMap::new(), Rc::clone(&real), watermark);
+
+        // A key added to `real` *after* the watermark was taken.
+        let later = store.ensure_dict(&real, key("b")).unwrap();
+        store.set_leaf(&later, key("v"), Value::Int(9.into()));
+
+        assert!(
+            store.peek(&overlay, &key("b")).is_none(),
+            "peek must hide a key fallback gained after the watermark"
+        );
+        assert!(
+            !overlay.borrow().flat_entries().contains_key(&key("b")),
+            "flat_entries must hide it too"
+        );
+        let Value::Dict(ref snapshot) = store.snapshot(&overlay) else {
+            panic!("expected a dict");
+        };
+        assert!(
+            !snapshot.contains_key(&key("b")),
+            "snapshot must hide it too, got {snapshot:?}"
+        );
+        // `a` -- present before the watermark was taken -- must still
+        // be visible through all three, unaffected.
+        assert!(store.peek(&overlay, &key("a")).is_some());
+        assert!(overlay.borrow().flat_entries().contains_key(&key("a")));
+        assert!(snapshot.contains_key(&key("a")));
+    }
+
+    /// The watermark counts *fallback*'s own direct entries, never
+    /// descends into an existing child -- a write inside a child that
+    /// already existed when the watermark was taken must stay visible
+    /// through all three readers, exactly as a key `fallback` already
+    /// had would.
+    #[test]
+    fn watermark_still_sees_a_write_inside_an_already_present_child() {
+        let store = Store::new();
+        let real = store.ensure_dict(&store.root, key("prime")).unwrap();
+        let existing_child = store.ensure_dict(&real, key("a")).unwrap();
+        store.set_leaf(&existing_child, key("v"), Value::Int(1.into()));
+
+        let watermark = real.borrow().len();
+        let overlay = node_with_fallback_watermarked(IndexMap::new(), Rc::clone(&real), watermark);
+
+        // A write *inside* `a` -- not a new top-level key on `real` --
+        // after the watermark was taken.
+        store.set_leaf(&existing_child, key("v"), Value::Int(2.into()));
+
+        match store.peek(&overlay, &key("a")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(&n, &existing_child)),
+            other => panic!("expected the existing child, got {other:?}"),
+        }
+        assert_eq!(
+            get_value(&existing_child, &key("v")),
+            Some(Value::Int(2.into()))
+        );
+
+        let flat = overlay.borrow().flat_entries();
+        match flat.get(&key("a")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(n, &existing_child)),
+            other => panic!("flat_entries expected the existing child, got {other:?}"),
+        }
+
+        let Value::Dict(ref snapshot) = store.snapshot(&overlay) else {
+            panic!("expected a dict");
+        };
+        match snapshot.get(&key("a")) {
+            Some(Value::Dict(a)) => {
+                assert_eq!(a.get(&key("v")), Some(&Value::Int(2.into())))
+            }
+            other => panic!("snapshot expected a's own materialized dict, got {other:?}"),
         }
     }
 
