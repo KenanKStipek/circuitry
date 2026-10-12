@@ -1,18 +1,18 @@
 //! `cli/complexity_config.py`'s own `runtime.complexity` validation --
-//! the block's shape and defaults only (what [`resolve_complexity_settings`]
-//! needs to raise the identical [`ConfigError`] text Circuitry's own
-//! `ComplexityConfigError` would for a malformed block, and what
-//! [`crate::effective_settings`] needs to record `sources` for). Scoring,
-//! routing and decomposition *behaviour* -- picking a model, splitting an
-//! effect -- are out of scope for M0-H (no prompt effects run at all), so
-//! only [`RoutingSettings`]'s own shape is kept beyond validation: issue
-//! #431's lane D still has to decide whether a run's `model` was pinned
-//! above the router or resolved from its catch-all band
-//! (`_apply_router_precedence`), which [`crate::effective_settings`] needs.
+//! the block's shape and defaults, plus (since issue #505's K1 lane)
+//! the *resolved* `scoring.weights`/`keywords` tables
+//! `electricity-complexity::runtime_tables` reads directly. Scoring,
+//! routing and decomposition *behaviour* -- picking a model, splitting
+//! an effect -- stay out of this crate itself: `RoutingSettings`'s own
+//! shape (`band_for`/`band_named`) and `ScoringSettings`'s own
+//! `weights`/`keywords` are read by `electricity-complexity` and
+//! `electricity-vm` (K2), never consulted here.
 
 use crate::config::ConfigError;
 use crate::util::{as_dict, get, py_format_g, type_name};
+use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
+use indexmap::IndexMap;
 
 pub const SCORE_MIN: f64 = 0.0;
 pub const SCORE_MAX: f64 = 100.0;
@@ -43,14 +43,61 @@ const SIGNAL_NAMES: [&str; 7] = [
     "keywords",
 ];
 
+/// `cli/complexity_config.py::_DEFAULT_WEIGHT_VALUES` -- the config
+/// surface's own default weight table (distinct from
+/// `core/complexity.py::DEFAULT_WEIGHTS`, the scorer's own 0.28/0.18/...
+/// table used only by a direct library call with `weights=None`;
+/// `_score_and_route` always passes this config table instead, issue
+/// #505's own ruling). `SIGNAL_NAMES` order.
+const DEFAULT_WEIGHT_VALUES: [(&str, f64); 7] = [
+    ("prompt_size", 1.0),
+    ("state_references", 1.5),
+    ("prompt_type", 0.75),
+    ("output_schema", 1.25),
+    ("output_size", 1.0),
+    ("structural_position", 0.5),
+    ("keywords", 1.0),
+];
+
+fn default_weights() -> IndexMap<String, f64> {
+    DEFAULT_WEIGHT_VALUES
+        .iter()
+        .map(|(name, value)| (name.to_string(), *value))
+        .collect()
+}
+
 const DEFAULT_THRESHOLD: f64 = 80.0;
 const DEFAULT_MAX_DEPTH: i64 = 2;
 const DEFAULT_MAX_CHUNKS: i64 = 8;
 const DEFAULT_ON_FAILURE: &str = "route_up";
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScoringSettings {
     pub enabled: bool,
+    /// Resolved `scoring.weights`: the config table
+    /// (`_DEFAULT_WEIGHT_VALUES`) with each configured value overlaid,
+    /// `SIGNAL_NAMES` order -- `electricity-complexity`'s own
+    /// `runtime_tables` reads this directly (`_score_and_route`'s own
+    /// `dict(settings.scoring.weights)`).
+    pub weights: IndexMap<String, f64>,
+    /// Resolved `scoring.keywords`, keys already `py_strip`ped --
+    /// empty when unconfigured, meaning "use the scorer's own default
+    /// table" (`runtime_tables` is where that `or None` happens, not
+    /// here). A key that collides with an earlier one after stripping
+    /// keeps its first position and takes the later value, the same
+    /// as a plain Python dict assignment to an existing key -- which
+    /// is exactly what `IndexMap::insert` already does.
+    pub keywords: IndexMap<String, f64>,
+}
+
+impl Default for ScoringSettings {
+    fn default() -> Self {
+        ScoringSettings {
+            enabled: false,
+            weights: default_weights(),
+            keywords: IndexMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -243,8 +290,11 @@ fn as_int(value: &Value, path: &str, minimum: i64) -> Result<i64, ConfigError> {
     Ok(number)
 }
 
+/// `str.strip()`, via [`py_strip`] -- covers `\x1c`-`\x1f`, where
+/// `str::trim` does not (issue #505's K1: every call site switches
+/// here together, including band `model`/`name` and `on_failure`).
 fn as_non_empty_str(value: &Value, path: &str) -> Result<String, ConfigError> {
-    match value.as_str().map(str::trim) {
+    match value.as_str().map(py_strip) {
         Some(s) if !s.is_empty() => Ok(s.to_string()),
         _ => Err(ConfigError(format!(
             "{path} must be a non-empty string; found {}.",
@@ -253,12 +303,15 @@ fn as_non_empty_str(value: &Value, path: &str) -> Result<String, ConfigError> {
     }
 }
 
-/// `scoring.weights` -- validated for its own sake
-/// ([`ScoringSettings`] does not carry the resolved weights: M0-H never
-/// scores a prompt, so nothing downstream reads them), exactly the way
-/// `_parse_scoring` validates them before building a `ScoringSettings`
-/// Circuitry's own callers *do* read.
-fn validate_weights(raw: &Value, path: &str) -> Result<(), ConfigError> {
+/// `scoring.weights`: `cli/complexity_config.py::_parse_scoring`'s own
+/// loop -- validates each entry against [`SIGNAL_NAMES`] and overlays
+/// it onto *base* (seeded with [`default_weights`] by the caller), in
+/// the raw block's own iteration order.
+fn resolve_weights(
+    raw: &Value,
+    path: &str,
+    base: &mut IndexMap<String, f64>,
+) -> Result<(), ConfigError> {
     let block = as_mapping(raw, path)?;
     for (name, value) in block {
         // `as_mapping` already guarantees every key is a `Value::Str`.
@@ -272,22 +325,28 @@ fn validate_weights(raw: &Value, path: &str) -> Result<(), ConfigError> {
                 valid.join(", ")
             )));
         }
-        as_number(value, &format!("{path}.{name}"))?;
+        let number = as_number(value, &format!("{path}.{name}"))?;
+        base.insert(name.to_string(), number);
     }
     Ok(())
 }
 
-/// `scoring.keywords` -- validated for its own sake, same rationale as
-/// [`validate_weights`]. Unlike weights, any non-empty string key is
-/// accepted (there is no fixed vocabulary); `as_mapping` already
-/// requires a string key, so the only further check per entry is that
-/// it is non-empty.
-fn validate_keywords(raw: &Value, path: &str) -> Result<(), ConfigError> {
+/// `scoring.keywords`: unlike weights, any non-empty string key is
+/// accepted (there is no fixed vocabulary). A key that collides with
+/// an earlier one after stripping keeps its first position and takes
+/// the later value -- `IndexMap::insert`'s own behaviour for an
+/// existing key, matching a plain Python dict assignment to one.
+fn resolve_keywords(
+    raw: &Value,
+    path: &str,
+    base: &mut IndexMap<String, f64>,
+) -> Result<(), ConfigError> {
     let block = as_mapping(raw, path)?;
     for (name, value) in block {
         let name = name.as_str().expect("as_mapping guarantees string keys");
-        as_non_empty_str(&Value::Str(name.to_string()), &format!("{path} key"))?;
-        as_number(value, &format!("{path}.{name}"))?;
+        let keyword = as_non_empty_str(&Value::Str(name.to_string()), &format!("{path} key"))?;
+        let number = as_number(value, &format!("{path}.{name}"))?;
+        base.insert(keyword, number);
     }
     Ok(())
 }
@@ -296,15 +355,20 @@ fn parse_scoring(raw: &Value, path: &str) -> Result<ScoringSettings, ConfigError
     let block = as_mapping(raw, path)?;
     reject_unknown_keys(block, &SCORING_KEYS, path)?;
 
-    if let Some(weights) = get(block, "weights").filter(|v| !matches!(v, Value::None)) {
-        validate_weights(weights, &format!("{path}.weights"))?;
+    let mut weights = default_weights();
+    if let Some(raw_weights) = get(block, "weights").filter(|v| !matches!(v, Value::None)) {
+        resolve_weights(raw_weights, &format!("{path}.weights"), &mut weights)?;
     }
-    if let Some(keywords) = get(block, "keywords").filter(|v| !matches!(v, Value::None)) {
-        validate_keywords(keywords, &format!("{path}.keywords"))?;
+
+    let mut keywords = IndexMap::new();
+    if let Some(raw_keywords) = get(block, "keywords").filter(|v| !matches!(v, Value::None)) {
+        resolve_keywords(raw_keywords, &format!("{path}.keywords"), &mut keywords)?;
     }
 
     Ok(ScoringSettings {
         enabled: as_bool(block, "enabled", path, false)?,
+        weights,
+        keywords,
     })
 }
 
@@ -654,5 +718,51 @@ mod tests {
         assert_eq!(settings.routing.bands.len(), 2);
         assert_eq!(settings.routing.band_for(10.0).unwrap().model, "gpt-3.5");
         assert_eq!(settings.routing.band_for(99.0).unwrap().model, "gpt-4");
+    }
+
+    #[test]
+    fn scoring_settings_default_matches_the_config_table() {
+        let settings = ScoringSettings::default();
+        assert_eq!(settings.weights.get("prompt_size"), Some(&1.0));
+        assert_eq!(settings.weights.get("state_references"), Some(&1.5));
+        assert_eq!(settings.weights.get("prompt_type"), Some(&0.75));
+        assert_eq!(settings.weights.get("output_schema"), Some(&1.25));
+        assert_eq!(settings.weights.get("output_size"), Some(&1.0));
+        assert_eq!(settings.weights.get("structural_position"), Some(&0.5));
+        assert_eq!(settings.weights.get("keywords"), Some(&1.0));
+        assert_eq!(settings.weights.len(), 7);
+        assert!(settings.keywords.is_empty());
+    }
+
+    #[test]
+    fn scoring_weights_overlay_a_partial_table_onto_the_defaults() {
+        let mut weights = Dict::new();
+        weights.insert(Value::Str("prompt_size".to_string()), Value::from(9i64));
+        let mut scoring = Dict::new();
+        scoring.insert(Value::Str("weights".to_string()), Value::Dict(weights));
+        let settings = parse_scoring(&Value::Dict(scoring), "runtime.complexity.scoring").unwrap();
+        // `float(value)`: an int overlay becomes a float.
+        assert_eq!(settings.weights.get("prompt_size"), Some(&9.0));
+        // Every other signal keeps the config's own default.
+        assert_eq!(settings.weights.get("state_references"), Some(&1.5));
+    }
+
+    #[test]
+    fn scoring_keywords_strip_keys_and_a_collision_after_stripping_keeps_first_position_last_value()
+    {
+        let mut keywords = Dict::new();
+        keywords.insert(Value::Str("  analyze  ".to_string()), Value::from(1i64));
+        keywords.insert(Value::Str("compare".to_string()), Value::from(2i64));
+        keywords.insert(Value::Str("analyze".to_string()), Value::from(3i64));
+        let mut scoring = Dict::new();
+        scoring.insert(Value::Str("keywords".to_string()), Value::Dict(keywords));
+        let settings = parse_scoring(&Value::Dict(scoring), "runtime.complexity.scoring").unwrap();
+        assert_eq!(settings.keywords.get("analyze"), Some(&3.0));
+        // First position (from "  analyze  ") is kept, not pushed to the
+        // end by the later "analyze" insert.
+        assert_eq!(
+            settings.keywords.keys().collect::<Vec<_>>(),
+            vec!["analyze", "compare"]
+        );
     }
 }

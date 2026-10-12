@@ -469,6 +469,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "electricity-complexity"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "electricity-config",
+ "electricity-json",
+ "electricity-pyre",
+ "electricity-value",
+ "fancy-regex",
+]
+
+[[package]]
 name = "electricity-config"
 version = "0.1.0"
 dependencies = [

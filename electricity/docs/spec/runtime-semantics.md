@@ -1261,7 +1261,7 @@ absent (not `null`) when off, so toggling the feature leaves every other
 byte of state identical.
 
 **Routing**: a band table (`runtime.complexity.routing.bands`, each
-`{name, model, threshold}` with a mandatory catch-all) maps a score to a
+`{max, model, name}` with a mandatory catch-all) maps a score to a
 model. **Precedence** (`core/router.py` module docstring, confirmed):
 `--model` (CLI) > per-effect `model:` > profile effect `model` override >
 profile effect `routing` pin > **router** > orchestration default > config
