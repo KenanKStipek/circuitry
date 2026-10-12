@@ -53,11 +53,16 @@ fn number_pairs(dict: &Dict) -> Vec<(String, f64)> {
         .collect()
 }
 
+// Any two `NaN`s compare equal here regardless of payload/sign bit --
+// same reasoning as `tests/corpus.rs`'s own `bit_exact_eq`: an
+// architecture-default `NaN` (from an invalid op with no `NaN` input
+// operand) has a CPU-defined sign, not one this crate's code or the
+// golden corpus's own `NaN` literal ever records.
 fn bit_exact_pairs(a: &[(String, f64)], b: &[(String, f64)]) -> bool {
     a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|((ka, va), (kb, vb))| ka == kb && va.to_bits() == vb.to_bits())
+        && a.iter().zip(b).all(|((ka, va), (kb, vb))| {
+            ka == kb && ((va.is_nan() && vb.is_nan()) || va.to_bits() == vb.to_bits())
+        })
 }
 
 #[test]

@@ -20,16 +20,33 @@ fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
 }
 
 /// Deep structural equality by IEEE-754 *bit pattern* for floats (so
-/// `-0.0 != 0.0` and `NaN == NaN`), exact string/key-order equality
-/// otherwise -- never [`Value`]'s own `PartialEq`, which is Python's
-/// dict-key equality (`NaN != NaN`, the numeric tower), the opposite of
-/// what this corpus pins.
+/// `-0.0 != 0.0`), except that any two `NaN`s compare equal regardless
+/// of payload or sign bit -- exact string/key-order equality otherwise
+/// -- never [`Value`]'s own `PartialEq`, which is Python's dict-key
+/// equality (`NaN != NaN`, the numeric tower), the opposite of what
+/// this corpus pins.
+///
+/// The `NaN` carve-out is load-bearing, not cosmetic: an "invalid
+/// operation" result with no `NaN` input operand (`0.0 * f64::
+/// INFINITY`, reached whenever a `normalized` signal is `0.0` and its
+/// `weight` is `+inf`) gets its sign bit from the CPU's own
+/// architecture-defined default `NaN` -- negative on x86-64, positive
+/// on AArch64 -- not from this crate's own code, and `json.dumps`'s
+/// `NaN` literal (what the golden corpus actually carries) never
+/// records which sign Python's own identical computation produced
+/// either (its encoder collapses every `NaN` to the one bare token).
+/// Comparing those bits exactly made this replay pass on one CPU
+/// architecture and fail on another for a value no observer of the
+/// wire format -- Python's own JSON writer included -- could ever
+/// tell apart.
 fn bit_exact_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::None, Value::None) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Int(x), Value::Int(y)) => x.to_bigint() == y.to_bigint(),
-        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Float(x), Value::Float(y)) => {
+            (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits()
+        }
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Bytes(x), Value::Bytes(y)) => x == y,
         (Value::List(x), Value::List(y)) => {
@@ -65,6 +82,19 @@ fn build_input<'a>(input: &'a Value) -> ScoreInput<'a> {
 
 fn py_exc_name(err: &ScoreError) -> &'static str {
     err.py_class.name()
+}
+
+#[test]
+fn bit_exact_eq_treats_any_two_nans_as_equal_but_still_distinguishes_signed_zero() {
+    assert!(bit_exact_eq(
+        &Value::Float(f64::NAN),
+        &Value::Float(-f64::NAN)
+    ));
+    assert!(bit_exact_eq(
+        &Value::Float(0.0 * f64::INFINITY),
+        &Value::Float(f64::NAN)
+    ));
+    assert!(!bit_exact_eq(&Value::Float(0.0), &Value::Float(-0.0)));
 }
 
 #[test]
