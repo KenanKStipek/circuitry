@@ -2,7 +2,7 @@
 """Generate electricity-yaml's `dump` golden corpus from real PyYAML.
 
 Every case is `yaml.dump(value, default_flow_style=False, sort_keys=...)`
-over a synthetic value (nothing copied from private orchestrations). Every
+over a synthetic value written for this corpus. Every
 case defaults to `sort_keys=True` (reflector's own call); the mapping-key-
 order cases alone (`key_order_cases`, below) are each recorded *twice* --
 once `sort_keys=True`, once `sort_keys=False` -- since that is the one knob
