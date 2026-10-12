@@ -1,0 +1,22 @@
+name: c513-tool-expect-model-reask
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1]"}
+  - type: loop
+    name: lp
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: fetch
+        provider: json
+        params: {mode: parse, input: "{\"ok\": true}"}
+        retries: {max_attempts: 3}
+        expect:
+          mode: model
+          template: |
+            Is the fetched result acceptable, given everything we already
+            asked for in the request, and is it truly fine to proceed?

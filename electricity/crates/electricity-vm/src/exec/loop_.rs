@@ -1,16 +1,11 @@
 //! `loop` effect execution (`core/loop.py::LoopRuntime.execute`) --
-//! lane H (issue #461). Routed from [`crate::exec::execute_op`] once
+//! lane H (issue #461), model-mode `while:` filled in by lane G2
+//! (issue #513). Routed from [`crate::exec::execute_op`] once
 //! [`electricity_bytecode::refusal::Supported::loop_`] is `true`.
 //!
-//! Model-mode `while:` conditions are out of scope here (lane G2):
-//! [`LoopSpec::While`] carrying [`Condition::Model`] is refused before
-//! a real run ever reaches this file (`Supported::model_condition`),
-//! so [`evaluate_while_condition`]'s `Condition::Model` arm has no real
-//! caller yet -- wired so G2's own PR only has to fill
-//! [`super::condition_model::evaluate_model_condition`]'s body, never
-//! this file. `--resume` (C21/C22) and the interactive progress line
-//! are both out of scope too (M2-G; electricity's non-TTY stdout never
-//! prints one) -- every pass here always starts at index 0.
+//! `--resume` (C21/C22) and the interactive progress line are both
+//! out of scope (M2-G; electricity's non-TTY stdout never prints one)
+//! -- every pass here always starts at index 0.
 
 use super::{CtxChain, CtxSource, execute_op, key, normalize_labels, store_err, wrap_effect_error};
 use crate::exec::dynamic::now_iso;
@@ -247,6 +242,14 @@ pub(crate) async fn execute_loop(
     }
 
     if is_named {
+        // Issue #513's totals hook: every named loop counts (any mode,
+        // so CEL adds 0) -- reached here only when `meta.completed_at`
+        // is actually set, since the one path that leaves it `None`
+        // (`VmError::Cancelled`) already returned above, before this
+        // point.
+        if let Some(m) = &meta {
+            observer.record_totals(&store.snapshot(m));
+        }
         let error_for_complete = meta.as_ref().and_then(|m| node_error(store, m));
         let completed = meta
             .as_ref()
@@ -1412,9 +1415,8 @@ async fn run_each_tree<'a>(
     Ok(())
 }
 
-/// `core/loop.py::LoopRuntime.execute`'s own `while` branch (CEL
-/// conditions only in this build -- see this file's own module doc
-/// comment).
+/// `core/loop.py::LoopRuntime.execute`'s own `while` branch -- CEL or
+/// model mode (lane G2/#513), via a `Condition::Model` arm below.
 #[allow(clippy::too_many_arguments)]
 async fn run_while<'a>(
     op: &'a Op,
@@ -1442,6 +1444,14 @@ async fn run_while<'a>(
     let mut iteration_count: u32 = 0;
     let mut last_writes: IndexMap<Value, Slot> = IndexMap::new();
     let mut prev_writes: Option<IndexMap<Value, Slot>> = None;
+    // `_model_tokens_sent_total`/`_model_tokens_received_total`
+    // (`core/loop.py::LoopRuntime.__init__`'s own doc comment) --
+    // local to this one `run_while` call, so a fresh `execute_loop`
+    // invocation (every outer pass of an enclosing loop) starts them
+    // over, same as Python's own reset at the top of `execute()`.
+    // `None` until the first check whose own count isn't `None`.
+    let mut tokens_sent_total: Option<i64> = None;
+    let mut tokens_received_total: Option<i64> = None;
 
     if let Some(m) = meta {
         store.set_leaf(
@@ -1487,39 +1497,95 @@ async fn run_while<'a>(
                     &last_writes,
                 ))]
             };
-            match evaluate_while_condition(
-                cond,
-                &cond_chain,
-                store,
-                &op.path,
-                frame,
-                run_ctx,
-                token,
-            )
-            .await
-            {
-                Ok(b) => b,
-                Err(e) if e.is_fatal() => return Err(e),
-                Err(e) => match on_error {
-                    OnError::Fail => {
-                        state.termination_reason = "error".to_string();
-                        state.iteration_count = iteration_count;
-                        return Err(e);
+            match cond {
+                Condition::Cel { expr, strict } => {
+                    match evaluate_while_condition(expr, *strict, &cond_chain, store) {
+                        Ok(b) => b,
+                        Err(e) => match on_error {
+                            OnError::Fail => {
+                                state.termination_reason = "error".to_string();
+                                state.iteration_count = iteration_count;
+                                return Err(e);
+                            }
+                            OnError::Break | OnError::Continue => {
+                                log::warn!(
+                                    "Loop {}: while-condition failed ({e}); on_error={}, stopping the loop",
+                                    name_or_unnamed_repr(loop_name),
+                                    on_error_str(on_error)
+                                );
+                                state.termination_reason = "condition_error".to_string();
+                                if let Some(m) = meta {
+                                    store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                                }
+                                break;
+                            }
+                            OnError::Skip => unreachable!("a loop's own on_error is never skip"),
+                        },
                     }
-                    OnError::Break | OnError::Continue => {
-                        log::warn!(
-                            "Loop {}: while-condition failed ({e}); on_error={}, stopping the loop",
-                            name_or_unnamed_repr(loop_name),
-                            on_error_str(on_error)
+                }
+                // `condition_model::evaluate_model_condition` -- issue
+                // #513. Written after every check, success or failure,
+                // for a named loop only (`write_model_while_reply`'s
+                // own doc comment) -- unlike a model `if`, there is no
+                // "write after the decision" ordering quirk here: the
+                // 7 keys land in the same place regardless of outcome.
+                Condition::Model { template } => {
+                    let ctx = super::live_ctx(&cond_chain, store);
+                    let effect_path = frame.effect_path(&op.path);
+                    let outcome = super::condition_model::evaluate_model_condition(
+                        super::condition_model::ConditionKind::While,
+                        template,
+                        &ctx,
+                        &effect_path,
+                        run_ctx,
+                        token,
+                    )
+                    .await?;
+                    if let Some(ts) = outcome.generated.as_ref().and_then(|g| g.tokens_sent) {
+                        tokens_sent_total = Some(tokens_sent_total.unwrap_or(0) + ts);
+                    }
+                    if let Some(tr) = outcome.generated.as_ref().and_then(|g| g.tokens_received) {
+                        tokens_received_total = Some(tokens_received_total.unwrap_or(0) + tr);
+                    }
+                    if let Some(m) = meta {
+                        write_model_while_reply(
+                            store,
+                            m,
+                            run_ctx,
+                            outcome.generated.as_ref(),
+                            tokens_sent_total,
+                            tokens_received_total,
                         );
-                        state.termination_reason = "condition_error".to_string();
-                        if let Some(m) = meta {
-                            store.set_leaf(m, key("error"), Value::Str(e.to_string()));
-                        }
-                        break;
                     }
-                    OnError::Skip => unreachable!("a loop's own on_error is never skip"),
-                },
+                    match outcome.verdict {
+                        Ok(b) => b,
+                        Err(text) => {
+                            let e = VmError::Message(text);
+                            match on_error {
+                                OnError::Fail => {
+                                    state.termination_reason = "error".to_string();
+                                    state.iteration_count = iteration_count;
+                                    return Err(e);
+                                }
+                                OnError::Break | OnError::Continue => {
+                                    log::warn!(
+                                        "Loop {}: while-condition failed ({e}); on_error={}, stopping the loop",
+                                        name_or_unnamed_repr(loop_name),
+                                        on_error_str(on_error)
+                                    );
+                                    state.termination_reason = "condition_error".to_string();
+                                    if let Some(m) = meta {
+                                        store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                                    }
+                                    break;
+                                }
+                                OnError::Skip => {
+                                    unreachable!("a loop's own on_error is never skip")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         };
 
@@ -1629,41 +1695,89 @@ async fn run_while<'a>(
     Ok(())
 }
 
-/// Renders *template*/evaluates *expr* and reports the boolean verdict
-/// -- `Condition::Cel` is the only variant any real run reaches in this
-/// build (see this file's own module doc comment); `Condition::Model`
-/// is wired to lane G2's own stub so its PR only has to fill that stub's
-/// body.
-async fn evaluate_while_condition(
-    cond: &Condition,
+/// Evaluates a CEL `while`-condition and reports the boolean verdict.
+/// `run_while`'s own outer `match cond` calls this only for
+/// `Condition::Cel` -- a `Condition::Model` check is handled directly
+/// there instead, since it needs to write this loop's own `meta`
+/// (`write_model_while_reply`) after every check, something this
+/// CEL-only helper has no occasion to do.
+///
+/// Issue #463: *state* is only the subtrees *expr* actually reads,
+/// walked live, not a whole-tree `live_ctx` snapshot of *cond_chain*
+/// -- see `live_scope::build_cel_state`'s own doc comment for why
+/// this is exactly `evaluate_condition`'s own internal narrowing,
+/// just performed before the snapshot rather than after it.
+fn evaluate_while_condition(
+    expr: &str,
+    strict: bool,
     cond_chain: &CtxChain,
     store: &Store,
-    path: &electricity_bytecode::EffectPath,
-    frame: &Frame,
-    run_ctx: &RunContext<'_>,
-    token: &CancellationToken,
 ) -> Result<bool, VmError> {
-    match cond {
-        // Issue #463: `state` is only the subtrees *expr* actually
-        // reads, walked live, not a whole-tree `live_ctx` snapshot of
-        // *cond_chain* -- see `live_scope::build_cel_state`'s own doc
-        // comment for why this is exactly `evaluate_condition`'s own
-        // internal narrowing, just performed before the snapshot
-        // rather than after it.
-        Condition::Cel { expr, strict } => {
-            let state = super::live_scope::build_cel_state(cond_chain, store, expr);
-            electricity_cel::evaluate_condition(expr, &state, *strict)
-                .map_err(|e| VmError::Message(e.to_string()))
-        }
-        Condition::Model { template } => {
-            let ctx = super::live_ctx(cond_chain, store);
-            super::condition_model::evaluate_model_condition(
-                template, &ctx, path, frame, run_ctx, token,
-            )
-            .await
-            .map(|outcome| outcome.passed)
-        }
-    }
+    let state = super::live_scope::build_cel_state(cond_chain, store, expr);
+    electricity_cel::evaluate_condition(expr, &state, strict)
+        .map_err(|e| VmError::Message(e.to_string()))
+}
+
+/// `meta["answer"]` through `meta["tokens_received_total"]`, in that
+/// order -- the 7 keys a named model-mode `while`'s own
+/// `_evaluate_model` writes after *every* check, success or failure
+/// (issue #513 Scope §2) -- unlike a model `if`, there is no
+/// write-order quirk tied to the verdict: these always land right
+/// after `mode`/`progress`. *generated* is `None` for a render
+/// failure or an adapter failure (`answer`/`tokens_sent`/
+/// `tokens_received` are `null` then, but the `_total` fields keep
+/// whatever they already summed from earlier checks); *tokens_sent_
+/// total*/*tokens_received_total* are the running sums [`run_while`]
+/// keeps across this call's own checks.
+fn write_model_while_reply(
+    store: &Store,
+    meta: &NodeRef,
+    run_ctx: &RunContext<'_>,
+    generated: Option<&crate::adapter::GenerateResult>,
+    tokens_sent_total: Option<i64>,
+    tokens_received_total: Option<i64>,
+) {
+    store.set_leaf(
+        meta,
+        key("answer"),
+        generated
+            .map(|g| Value::Str(g.text.clone()))
+            .unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("adapter"),
+        Value::Str(run_ctx.default_adapter.name().to_string()),
+    );
+    store.set_leaf(meta, key("model"), Value::Str(run_ctx.model.to_string()));
+    store.set_leaf(
+        meta,
+        key("tokens_sent"),
+        generated
+            .and_then(|g| g.tokens_sent)
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("tokens_received"),
+        generated
+            .and_then(|g| g.tokens_received)
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("tokens_sent_total"),
+        tokens_sent_total.map(Value::from).unwrap_or(Value::None),
+    );
+    store.set_leaf(
+        meta,
+        key("tokens_received_total"),
+        tokens_received_total
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
 }
 
 /// `core/loop.py::LoopRuntime._collect_values` -- reads only

@@ -1,0 +1,23 @@
+name: c513-model-while-nested-reset
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    each: {in: "prime.seed.value", as: "outer_item"}
+    body:
+      - type: loop
+        name: lp
+        min_iterations: 1
+        max_iterations: 3
+        while:
+          mode: model
+          template: "continue for {{outer_item}}?"
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: {outer: "{{outer_item}}"}}

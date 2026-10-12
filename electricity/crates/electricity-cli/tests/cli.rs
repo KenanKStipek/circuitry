@@ -515,27 +515,25 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     assert!(!live_state.exists());
 }
 
-/// A `loop`'s own `while:` in `mode: model` -- the compiler's own
-/// default (`while_config.get("mode") or "model"`) whenever `mode:` is
-/// absent, though cof's own schema requires the key explicitly, so
-/// every real document spells it out -- is refused the same way as any
-/// other unsupported content, even though `loop_` itself is supported
-/// (lane H, #461): the walker recurses into a supported container's own
-/// condition and refuses `RefusalReason::ModelCondition` before the run
-/// ever starts (`model_condition` stays `false` until lane G2 lands).
-/// A real document-level, CLI-driven companion of `electricity-bytecode`'s
-/// own hand-built-`Op` unit test,
-/// `a_while_loops_model_mode_condition_is_refused_even_once_loop_is_supported`.
+/// A document naming the `validate_yaml` provider (not yet ported to
+/// electricity) is refused the same way as any other unsupported
+/// content, with no file written at all. This probe used to name a
+/// `loop`'s own `while:` in `mode: model` before lane G2 (#513) landed;
+/// a model-mode condition is runnable now, so it was swapped for a
+/// provider that is still refused, keeping the "refused, nothing
+/// written" assertion covered.
 #[test]
-fn a_model_mode_while_condition_is_refused_with_no_files_written() {
-    let (mut cmd, home) = command("while-model-mode");
+fn a_validate_yaml_provider_is_refused_with_no_files_written() {
+    // `validate_yaml` (lane L2, issue #448) is still refused -- the
+    // model-mode/`reflector` effect types this probe used to name
+    // (issue #513 lane G2, issue #506 lane L1) are both runnable now.
+    let (mut cmd, home) = command("validate-yaml");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(
         &doc,
-        "effects:\n  - name: poll\n    type: loop\n    while: {mode: model, template: \"done?\"}\n    \
-         body:\n      - name: step\n        type: tool\n        provider: json\n        \
-         params: {mode: stringify, input: {x: 1}}\n",
+        "effects:\n  - name: step\n    type: tool\n    provider: validate_yaml\n    \
+         params: {text: 'a: 1'}\n",
     )
     .unwrap();
     let out = home.path.join("out.json");

@@ -992,63 +992,65 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                         }
                                                     }
                                                 }
-                                                // Review P2-4 on PR #454's second review: wired to
-                                                // `condition_model::evaluate_model_expect` now, so
-                                                // lane G2's own PR only ever fills that module's
-                                                // stub bodies, never this file -- unreachable in any
-                                                // real run today (`Supported::model_expect` stays
-                                                // `false` until G2 flips it, and the refusal walker
-                                                // refuses a model-mode `expect:` before any run
-                                                // starts), but a real call site instead of a panic
-                                                // if that ever changed without the matching wiring.
+                                                // `condition_model::evaluate_model_expect` --
+                                                // issue #513. *timeout_seconds* is this tool's
+                                                // own resolved timeout (`resolve_timeout_seconds`
+                                                // above), never the run adapter budget (that's
+                                                // only for `if`/`while`/a `use` expect). A
+                                                // `Raised` error (a render or adapter failure)
+                                                // is always retried here, same as every other
+                                                // dispatch failure this provider's own retry
+                                                // loop already handles -- only `Fatal` (a
+                                                // cancellation) returns early.
                                                 ExpectCondition::Model { template } => {
+                                                    let meta_snapshot = store.snapshot(&meta_node);
                                                     let state = ctx.whole();
                                                     match super::condition_model::evaluate_model_expect(
                                                         template,
                                                         &value_for_expect,
+                                                        &meta_snapshot,
                                                         &state,
                                                         &effect_path,
-                                                        frame,
+                                                        timeout_seconds,
                                                         run_ctx,
                                                         token,
                                                     )
                                                     .await
                                                     {
                                                         Ok(outcome) => {
-                                                            let mut expect_meta = IndexMap::new();
-                                                            expect_meta.insert(
-                                                                Value::from("mode"),
-                                                                Value::from("model"),
-                                                            );
-                                                            expect_meta.insert(
-                                                                Value::from("template"),
-                                                                Value::from(
-                                                                    template.source.as_str(),
-                                                                ),
-                                                            );
-                                                            expect_meta.insert(
-                                                                Value::from("result"),
-                                                                Value::Bool(outcome.passed),
-                                                            );
+                                                            let summary =
+                                                                super::condition_model::expect_model_summary(
+                                                                    &template.source,
+                                                                );
                                                             set_leaf(
                                                                 store,
                                                                 &meta_node,
                                                                 "expect",
-                                                                Value::Dict(expect_meta),
+                                                                outcome.meta,
                                                             );
                                                             if !outcome.passed {
                                                                 expect_failed = true;
                                                                 failure = Some(
                                                                     electricity_tools::ToolError::message(
-                                                                        format!(
-                                                                            "expect failed: {}",
-                                                                            template.source
-                                                                        ),
+                                                                        format!("expect failed: {summary}"),
                                                                     ),
                                                                 );
                                                             }
                                                         }
-                                                        Err(err) => return Err(err),
+                                                        Err(super::condition_model::ExpectCallError::Fatal(e)) => {
+                                                            return Err(e);
+                                                        }
+                                                        Err(super::condition_model::ExpectCallError::Raised {
+                                                            message,
+                                                            py_class,
+                                                        }) => {
+                                                            expect_failed = true;
+                                                            failure = Some(electricity_tools::ToolError {
+                                                                py_class,
+                                                                message,
+                                                                cause: electricity_tools::ErrorCause::None,
+                                                            });
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1840,17 +1842,144 @@ mod tests {
         );
     }
 
+    /// `core/tool.py::ToolRuntime.execute`'s own `with concurrency_cm:`
+    /// ends before a `mode: model` `expect:` -- issue #513's own test
+    /// list, item "the tool limiter slot is free during the expect
+    /// call". Blocks inside `generate()` until released, so the probe
+    /// below can observe the slot while the call is still pending.
+    struct BlockingAdapter {
+        started: std::rc::Rc<tokio::sync::Notify>,
+        release: std::rc::Rc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for BlockingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            _call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(crate::adapter::GenerateResult {
+                text: "yes".to_string(),
+                raw: Value::None,
+                tokens_sent: None,
+                tokens_received: None,
+                finish_reason: None,
+                warnings: Vec::new(),
+                cost_usd: None,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn a_model_mode_expect_reaches_condition_models_own_stub_not_a_panic() {
-        // Review P2-4 on PR #454's second review: this call site used
-        // to `unreachable!()` for `ExpectCondition::Model` -- wired
-        // now to `condition_model::evaluate_model_expect`, so lane
-        // G2's own PR only ever fills that module's stub bodies. This
-        // path is refused before any real run starts
-        // (`Supported::model_expect` stays `false` until G2 flips it),
-        // reachable only through a direct call like this one -- the
-        // actual probe is that it returns that function's own M1-G2
-        // stub error instead of panicking.
+    async fn the_tool_limiter_slot_is_free_during_a_model_expects_dispatch() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("{\"ok\": true}"));
+        let mut tool = tool_op(params);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "ok?",
+                false,
+                electricity_bytecode::Escape::Html,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::with_limits(Some(1), []);
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = electricity_config::ComplexitySettings::default();
+        let dir = std::path::PathBuf::from(".");
+        let declared_prompts: indexmap::IndexMap<String, String> = indexmap::IndexMap::new();
+        let effect_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let started = std::rc::Rc::new(tokio::sync::Notify::new());
+        let release = std::rc::Rc::new(tokio::sync::Notify::new());
+        let adapter = std::rc::Rc::new(BlockingAdapter {
+            started: started.clone(),
+            release: release.clone(),
+        });
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: adapter,
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let token = CancellationToken::new();
+        let empty_ctx = Value::None;
+        let frame = Frame::root();
+
+        let run = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &empty_ctx,
+            &frame,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        );
+        let probe = async {
+            started.notified().await;
+            let guard = run_ctx.limiter.try_acquire(None);
+            assert!(
+                matches!(guard, Ok(Some(_))),
+                "the limiter slot must be free while a model expect's own dispatch is pending, got {guard:?}"
+            );
+            release.notify_one();
+        };
+        let (result, ()) = tokio::join!(run, probe);
+        result.expect("the run must still succeed once the expect call returns");
+    }
+
+    #[tokio::test]
+    async fn a_model_mode_expects_raised_adapter_failure_is_an_ordinary_tool_failure() {
+        // `default_run_ctx`'s own default adapter is `NoopAdapter`, so
+        // the model expect's own call always fails the same way a real
+        // run's own unconfigured adapter would -- this probes that
+        // `ExpectCondition::Model` reaches `condition_model::
+        // evaluate_model_expect` for real (issue #513), never
+        // `unreachable!()`, and that a `Raised` failure becomes an
+        // ordinary tool failure, its own message (not an `expect
+        // failed: ...` summary -- that's only for a false/unparseable
+        // answer, never a raised one), with `meta.expect` left absent
+        // (popped at attempt start, never written again on this path).
         let mut params = IndexMap::new();
         params.insert(Value::from("mode"), template("parse"));
         params.insert(Value::from("input"), template("2"));
@@ -1889,8 +2018,143 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            matches!(err, VmError::NotImplemented(ref msg) if msg.contains("M1-G2")),
-            "expected condition_model::evaluate_model_expect's own M1-G2 stub error, got: {err:?}"
+            matches!(
+                err,
+                VmError::Raised { ref message, .. }
+                    if message == "_noop adapter: no real adapter is configured for this run"
+            ),
+            "expected the noop adapter's own failure, got: {err:?}"
+        );
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("expect")), None);
+    }
+
+    /// Captures the *timeout_seconds* a tool's own model `expect:`
+    /// dispatches with, replying `"yes"` so the attempt succeeds.
+    #[derive(Default)]
+    struct TimeoutCapturingAdapter {
+        seen: std::cell::Cell<Option<u32>>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl crate::adapter::Adapter for TimeoutCapturingAdapter {
+        fn name(&self) -> &str {
+            "fake"
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &crate::adapter::GenerateOptions,
+            call: &crate::adapter::CallContext<'_>,
+        ) -> Result<crate::adapter::GenerateResult, crate::adapter::AdapterError> {
+            self.seen.set(Some(call.timeout_seconds));
+            Ok(crate::adapter::GenerateResult {
+                text: "yes".to_string(),
+                raw: Value::None,
+                tokens_sent: Some(1),
+                tokens_received: Some(1),
+                finish_reason: None,
+                warnings: Vec::new(),
+                cost_usd: None,
+            })
+        }
+
+        async fn check(&self) -> crate::adapter::CheckResult {
+            crate::adapter::CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Issue #513 review finding 4: a tool's own model `expect:` must
+    /// dispatch with [`resolve_timeout_seconds`]'s own result (this
+    /// tool's `timeout_ms: 5000` resolves to 5s) -- never `run_ctx.
+    /// adapter_timeout_seconds` (120 here), which is only for `if`/
+    /// `while`/a `use` expect instead (that's `use_.rs`'s own call
+    /// site, pinned by its own sibling test).
+    #[tokio::test]
+    async fn a_tools_model_expect_dispatches_with_the_tools_own_resolved_timeout() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("parse"));
+        params.insert(Value::from("input"), template("{\"ok\": true}"));
+        let mut tool = tool_op(params);
+        tool.timeout_ms = Some(5000);
+        tool.expect = Some(ExpectCondition::Model {
+            template: electricity_bytecode::TemplateText::new(
+                "ok?",
+                false,
+                electricity_bytecode::Escape::Html,
+            ),
+        });
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let adapters = crate::adapter::AdapterRegistry::new();
+        let complexity = electricity_config::ComplexitySettings::default();
+        let dir = std::path::PathBuf::from(".");
+        let declared_prompts: indexmap::IndexMap<String, String> = indexmap::IndexMap::new();
+        let effect_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let adapter = std::rc::Rc::new(TimeoutCapturingAdapter::default());
+        let run_ctx = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "fake",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: adapter.clone(),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 0,
+            orchestration_dir: dir.as_path(),
+            declared_prompts: &declared_prompts,
+            effect_names: &effect_names,
+            display_depth: 0,
+            supported: electricity_bytecode::Supported::m0(&[]),
+        };
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .expect("a model expect answered 'yes' must succeed");
+
+        assert_eq!(
+            adapter.seen.get(),
+            Some(5),
+            "a tool's own model expect must dispatch with its own resolved timeout, \
+             never run_ctx.adapter_timeout_seconds"
         );
     }
 

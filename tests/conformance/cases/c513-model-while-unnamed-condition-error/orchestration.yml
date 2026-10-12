@@ -1,0 +1,17 @@
+name: c513-model-while-unnamed-condition-error
+adapter: scripted
+model: test
+effects:
+  - type: dynamic
+    name: d
+    effects:
+      - type: loop
+        on_error: break
+        while:
+          mode: model
+          template: "continue?"
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: {x: 1}}

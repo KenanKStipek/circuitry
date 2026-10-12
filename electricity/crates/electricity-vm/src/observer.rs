@@ -133,8 +133,9 @@ pub trait RunObserver {
     /// fields no M0/M1 effect type before `prompt` ever set).
     /// `exec::prompt::execute_prompt` calls this immediately before
     /// `effect_complete`, on every pass (success or failure) that
-    /// reaches a `meta` write at all; G2/L call it the same way for
-    /// their own effect types once they land. Default no-op, like every
+    /// reaches a `meta` write at all; `exec::conditional`/`exec::loop_`
+    /// call it the same way for a named model `if`/loop's own
+    /// completing pass (lane G2, #513). Default no-op, like every
     /// other hook here -- only `electricity` (lib)'s own `Observer`
     /// implements it for real.
     fn record_totals(&self, _meta: &Value) {}

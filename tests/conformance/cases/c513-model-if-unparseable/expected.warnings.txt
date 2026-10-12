@@ -1,0 +1,2 @@
+WARNING: Conditional 'continue_gate': condition failed (could not parse a yes/no answer from 'maybe'); on_error=continue, taking the else branch
+WARNING: Dynamic 'd': d.fail_gate: could not parse a yes/no answer from 'maybe'; on_error=continue, continuing with the next effect

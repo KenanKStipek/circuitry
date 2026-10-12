@@ -1,0 +1,16 @@
+prime:
+  - text: "yes"
+    tokens_sent: 1
+    tokens_received: 1
+prime.lp.iter_0:
+  - text: "yes"
+    tokens_sent: 2
+    tokens_received: 2
+prime.lp.iter_1:
+  - text: "no"
+    tokens_sent: 3
+    tokens_received: 3
+prime.u:
+  - text: "yes"
+    tokens_sent: 4
+    tokens_received: 4

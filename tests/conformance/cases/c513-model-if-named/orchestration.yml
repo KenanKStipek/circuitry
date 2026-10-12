@@ -1,0 +1,19 @@
+name: c513-model-if-named
+adapter: scripted
+model: test
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: model
+      template: "should we proceed?"
+    then:
+      - type: tool
+        name: then_step
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: else_step
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

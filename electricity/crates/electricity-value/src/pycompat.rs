@@ -154,6 +154,28 @@ impl PyExc {
     }
 }
 
+impl PyExc {
+    /// `True` for every variant that is a `ValueError` subclass in
+    /// Python (issue #513 review finding 1): `core/use.py`'s own
+    /// `except (ValueError, RecursionError)` split decides
+    /// not-retried this way, via `isinstance`, so every subclass
+    /// counts, not just the bare class. `RecursionError` itself is a
+    /// `RuntimeError` subclass, never a `ValueError` one, so a caller
+    /// that needs Python's full not-retried set still checks it
+    /// separately.
+    pub fn is_value_error_class(self) -> bool {
+        matches!(
+            self,
+            PyExc::ValueError
+                | PyExc::TemplateError
+                | PyExc::AnswerParseError
+                | PyExc::SchemaValidationError
+                | PyExc::AllowlistError
+                | PyExc::UnicodeDecodeError
+        )
+    }
+}
+
 impl fmt::Display for PyExc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())

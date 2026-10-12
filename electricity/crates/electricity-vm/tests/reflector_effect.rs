@@ -420,29 +420,28 @@ async fn an_oversized_plan_fails_with_the_exact_invalid_plan_text() {
 }
 
 #[tokio::test]
-async fn a_generated_model_mode_if_is_refused_and_never_absorbed() {
+async fn a_generated_prompt_with_an_unbuildable_provider_is_refused_and_never_absorbed() {
     // Issue #506's own "Rust-only tests" list: a generated plan with a
-    // model-mode `if` (`mode: model` -- `Supported::current` before G2
-    // flips `model_condition`) is a mid-run `VmError::Refused`,
+    // `prompt` effect naming a provider this build has never built
+    // (`provider: litellm` -- Circuitry-known, `electricity_vm::
+    // adapter_names::ADAPTER_NAMES`, but absent from `electricity_
+    // adapters::build_registry()`, issue #498 ruling 4's own
+    // `is_unbuildable` check) is a mid-run `VmError::Refused`,
     // recorded on both the generated `use` node and this reflector's
     // own node (orchestrator ruling R1 on PR #462), and returned
     // unwrapped so an enclosing `on_error: continue` never absorbs it
     // (this test's own chain `dynamic` -- built by `run_reflector`'s
     // own `chain_dynamic` helper with `OnError::Fail` -- fails the
-    // whole run exactly because of that).
+    // whole run exactly because of that). Not a model-mode `if`
+    // anymore (issue #513, lane G2, flipped `Supported::
+    // model_condition` to `true`, so that construct no longer stays
+    // refused): this one does, since G2 never touches adapter
+    // buildability.
     let plan_reply = "done: false\neffects:\n  \
-        - type: if\n    \
+        - type: prompt\n    \
           name: check\n    \
-          if:\n      \
-            mode: model\n      \
-            template: 'go?'\n    \
-          then:\n      \
-            - type: tool\n        \
-              name: inner_tool\n        \
-              provider: json\n        \
-              params:\n          \
-                mode: parse\n          \
-                input: '{\"ok\": true}'\n";
+          provider: litellm\n    \
+          template: 'go?'\n";
     let leaf = reflector_leaf(
         "plan_it",
         "propose_steps",
@@ -483,6 +482,50 @@ async fn a_generated_model_mode_if_is_refused_and_never_absorbed() {
         "the generated use node's own meta.error must be set too"
     );
     assert!(get(use_meta, "completed_at").is_some());
+}
+
+#[tokio::test]
+async fn a_generated_model_mode_if_now_runs() {
+    // Issue #513, lane G2: once `Supported::model_condition` is
+    // `true`, a generated plan's own model-mode `if` is no longer a
+    // refusal (the construct the test above used to probe before G2
+    // landed) -- it runs, through the same default adapter the
+    // planner's own prompt used, consuming the next queued reply.
+    let plan_reply = "done: false\neffects:\n  \
+        - type: if\n    \
+          name: check\n    \
+          if:\n      \
+            mode: model\n      \
+            template: 'go?'\n    \
+          then:\n      \
+            - type: tool\n        \
+              name: inner_tool\n        \
+              provider: json\n        \
+              params:\n          \
+                mode: parse\n          \
+                input: '{\"ok\": true}'\n    \
+          else: []\n";
+    let leaf = reflector_leaf(
+        "plan_it",
+        "propose_steps",
+        1,
+        "generated",
+        true,
+        "plan it",
+        8,
+    );
+    let (store, _observer, result) = run_reflector(leaf, vec![plan_reply, "yes"]).await;
+    result.expect("a model-mode if inside a generated plan must now run, not refuse");
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let refl = as_dict(get(prime, "plan_it").unwrap());
+    assert_eq!(get(refl, "value"), Some(&Value::Bool(true)));
+
+    let generated = as_dict(get(refl, "generated").unwrap());
+    let iter0 = as_dict(get(generated, "iter_0").unwrap());
+    let use_meta = as_dict(get(iter0, "meta").unwrap());
+    assert_eq!(get(use_meta, "error"), Some(&Value::None));
 }
 
 #[tokio::test]

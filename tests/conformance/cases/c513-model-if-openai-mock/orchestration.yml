@@ -1,0 +1,34 @@
+name: c513-model-if-openai-mock
+adapter: lmstudio
+model: m
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "{\"text\": \"<&'>\"}"}
+  - type: if
+    name: gate
+    if:
+      mode: model
+      template: "proceed with {{prime.seed.value.text}}?"
+    then: []
+    else: []
+  - type: loop
+    name: lp
+    min_iterations: 1
+    max_iterations: 2
+    while:
+      mode: model
+      template: "continue, pass {{iter.count}}?"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {x: 1}}
+  - type: tool
+    name: fetch
+    provider: json
+    params: {mode: parse, input: "{\"status\": \"ok\"}"}
+    expect:
+      mode: model
+      template: "{{value.status}} via {{meta.provider}}?"

@@ -313,11 +313,14 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
 /// build's own `Supported` -- this predicate still matters for it,
 /// now for a different reason: catching an *unbuildable* default
 /// adapter before a `prompt` ever dispatches to it (this module's own
-/// up-front refusal, below). `model_condition`/`model_expect` stay
-/// `false` (G2), so an `if`/`while`/`expect:` in `mode: model` still
-/// refuses outright regardless. This predicate's own unit tests
-/// exercise it directly, against a hand-built `Op`, rather than
-/// through a real run.
+/// up-front refusal, below). Lane G2 (#513) flips `Supported::
+/// model_condition`/`model_expect` to `true`, so a model-mode
+/// `if`/`while`/`expect:` no longer refuses outright either -- this
+/// predicate already matched `Condition::Model`/`ExpectCondition::
+/// Model` from the start (lane R, #495), so it needed no change of
+/// its own once G2 landed. This predicate's own unit tests exercise
+/// it directly, against a hand-built `Op`, rather than through a real
+/// run.
 fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
     use electricity_bytecode::{Condition, ExpectCondition, LeafKind, LoopSpec, NodeKind, Region};
 

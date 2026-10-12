@@ -1,0 +1,5 @@
+prime.lp.iter_0.fetch:
+  - error:
+      kind: unauthorized
+  - text: "maybe"
+  - text: "yes"

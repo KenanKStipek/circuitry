@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #513: model-mode `if`, an adapter error",
+  "description": "A scripted `error: {kind: server_error}` reply under `on_error: continue`. Pins: one call only (conditions are never retried), `answer`/`tokens_*` left `null`, and the exact `meta.error` text (`scripted adapter: server_error at 'prime.gate'`).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
