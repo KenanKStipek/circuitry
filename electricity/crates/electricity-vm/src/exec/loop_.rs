@@ -14,7 +14,11 @@
 
 use super::{CtxChain, CtxSource, execute_op, key, normalize_labels, store_err, wrap_effect_error};
 use crate::exec::dynamic::now_iso;
-use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use crate::{
+    CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
+    node_from_entries, node_with_fallback, node_with_fallback_hiding,
+    node_with_fallback_watermarked,
+};
 use electricity_bytecode::{
     Condition, LoopFlow, LoopId, LoopSpec, OnError, Op, PathSegment, Region,
 };
@@ -23,7 +27,6 @@ use electricity_value::Value;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use indexmap::IndexMap;
-use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Instant;
@@ -631,16 +634,22 @@ fn index_overlay(as_name: Option<&str>, item: Option<&Value>, idx: u32) -> Index
 
 /// Every entry of *chain*'s own top-level map, [`Slot`]s rather than
 /// resolved values -- the same flattening `exec::conditional`'s own
-/// `chain_slots` does (duplicated here rather than shared: this lane
-/// never edits `exec/conditional.rs`, a different lane's finalized
-/// file).
+/// `chain_slots` does (duplicated here, same reason as before: a tiny
+/// function, not worth a module boundary). Flattens through
+/// [`crate::store::Node::flat_entries`], not a plain `.iter()`/Deref
+/// read of a node's own direct entries -- *chain*'s own `Live` entry
+/// can itself be one of this module's own overlay nodes
+/// ([`plain_overlay`]'s rare multi-entry/`Frozen` fallback path is the
+/// only caller left after #484; issue #501 review finding 1 found the
+/// same direct-entry bug here, in the slow path a loop-inside-a-
+/// `dynamic`-inside-a-loop body takes).
 fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
     let mut merged: IndexMap<Value, Slot> = IndexMap::new();
     for source in chain {
         match source {
             CtxSource::Live(node) => {
-                for (k, v) in node.borrow().iter() {
-                    merged.insert(k.clone(), v.clone());
+                for (k, v) in node.borrow().flat_entries() {
+                    merged.insert(k, v);
                 }
             }
             CtxSource::Frozen(Value::Dict(map)) => {
@@ -657,10 +666,13 @@ fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
 /// *slot*'s own top-level map as [`Slot`]s, or an empty one -- the same
 /// `dict_slots` helper `exec::conditional::build_overlay` uses for its
 /// own `ctx.get("prime")` read, duplicated here for the same reason as
-/// [`chain_slots`].
+/// [`chain_slots`]. Also [`fallback_for`]'s own wrap of a `Slot::Value`
+/// dict leaf that isn't a tracked node -- never one that could itself
+/// carry a [`crate::store::Node::fallback`], so [`flat_entries`] is just
+/// as correct there as the plain clone it replaces.
 fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
     match slot {
-        Some(Slot::Node(node)) => node.borrow().clone(),
+        Some(Slot::Node(node)) => node.borrow().flat_entries(),
         Some(Slot::Value(Value::Dict(map))) => map
             .iter()
             .map(|(k, v)| (k.clone(), Slot::Value(v.clone())))
@@ -669,15 +681,110 @@ fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
     }
 }
 
+/// *outer*'s own [`Slot`] at *key* as a fallback [`NodeRef`] for a
+/// fresh overlay at that same key, or `None` if *outer* doesn't carry
+/// one -- [`Store::peek`], so this already follows *outer*'s own
+/// fallback chain exactly like any other reader, rather than only ever
+/// seeing its direct entries the way [`chain_slots`]/[`dict_slots`] do.
+/// A [`Slot::Value`] dict leaf (never promoted to a tracked
+/// [`Slot::Node`]) is wrapped in a fresh, fallback-less node, the same
+/// shape [`dict_slots`]'s own second arm already gives it.
+fn fallback_for(store: &Store, outer: &NodeRef, key: &Value) -> Option<NodeRef> {
+    match store.peek(outer, key) {
+        Some(Slot::Node(node)) => Some(node),
+        Some(other) => Some(node_from_entries(dict_slots(Some(&other)))),
+        None => None,
+    }
+}
+
+/// *entries* alone if *fallback* is `None`, or *entries* overlaid on
+/// *fallback* ([`node_with_fallback`]) otherwise -- the one-line
+/// branch [`plain_overlay`]/[`with_prev_overlay`]/[`step_overlay`]
+/// all share once they've resolved whatever they're layering on top
+/// of (an `Option<NodeRef>`, [`fallback_for`]'s own return, or
+/// [`build_pass_chain`]'s own single live entry).
+fn layered(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef {
+    match fallback {
+        Some(f) => node_with_fallback(entries, f),
+        None => node_from_entries(entries),
+    }
+}
+
+/// [`layered`], plus a single *hidden* key *fallback* must never expose
+/// through the result -- [`with_prev_overlay`]'s own use, to keep the
+/// current pass's not-yet-created `iter_<idx>` invisible through its
+/// own `prime.<loop_name>` overlay (issue #501 review finding 2). A
+/// no-op key if *fallback* is `None`: nothing to hide anything from.
+fn layered_hiding(
+    entries: IndexMap<Value, Slot>,
+    fallback: Option<NodeRef>,
+    hidden: Value,
+) -> NodeRef {
+    match fallback {
+        Some(f) => node_with_fallback_hiding(entries, f, hidden),
+        None => node_from_entries(entries),
+    }
+}
+
+/// [`layered`], plus [`crate::store::Node::watermark`] -- *fallback*'s
+/// own direct-entry count right now, so a key it gains afterward (a
+/// later sibling step's own skeleton node, `exec::tool::execute_tool`
+/// `ensure_dict`s one before it ever renders its own params) stays
+/// invisible through the result -- [`step_overlay`]'s own use (issue
+/// #501's second review). A no-op if *fallback* is `None`.
+fn layered_watermarked(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef {
+    match fallback {
+        Some(f) => {
+            let watermark = f.borrow().len();
+            node_with_fallback_watermarked(entries, f, watermark)
+        }
+        None => node_from_entries(entries),
+    }
+}
+
+/// *chain*'s own single [`CtxSource::Live`] entry, if that's all it
+/// has -- [`build_pass_chain`]'s own output, and so [`with_prev_overlay`]/
+/// [`step_overlay`]'s own *chain*/*pass_chain* argument, is always
+/// shaped exactly this way; [`plain_overlay`]'s own *chain* argument
+/// (an enclosing scope's, e.g. a tree dispatch's one-time `Frozen`
+/// snapshot alongside a `Live` entry, DESIGN.md §5.5) is the one
+/// caller that can't assume it.
+fn single_live(chain: &CtxChain) -> Option<&NodeRef> {
+    match chain.as_slice() {
+        [CtxSource::Live(node)] => Some(node),
+        _ => None,
+    }
+}
+
 /// `{**chain, **local}`, no `prime` mirror -- [`index_overlay`]'s own
 /// landing spot. A detached [`NodeRef`], pushed as a [`CtxSource::Live`]
 /// entry.
+///
+/// Issue #484 finding 2 (tree `each`'s own, separate growth): *chain*
+/// is the loop's own *outer_chain* -- the enclosing scope, unchanged
+/// across every single pass -- so the common case (*chain* is one
+/// `Live` entry, true for a loop anywhere but inside a tree dispatch's
+/// own `Frozen`-snapshotted branch) layers *local* on top of it
+/// directly ([`layered`]) instead of flattening it fresh via
+/// [`chain_slots`] every pass: *chain*'s own node can carry an
+/// unrelated, large plain [`Value::List`]/[`Value::Dict`] leaf (the
+/// `each` loop's own collection itself, read once by [`execute_loop`]
+/// but still sitting in scope for the body to reference) that
+/// [`chain_slots`]'s own `Slot::clone` would deep-copy in full on
+/// every single call -- the real source of tree `each`'s own
+/// super-linear growth, measured and explained in this issue's own PR
+/// body (chain `each` paid the same cost, on top of the `prev`-overlay
+/// one this file's own [`with_prev_overlay`] fixes separately). The
+/// rare multi-entry/`Frozen` case keeps the old, eager behaviour.
 fn plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+    if let Some(base) = single_live(chain) {
+        return node_with_fallback(local.clone(), Rc::clone(base));
+    }
     let mut top = chain_slots(chain);
     for (k, v) in local {
         top.insert(k.clone(), v.clone());
     }
-    Rc::new(RefCell::new(top))
+    node_from_entries(top)
 }
 
 /// `core/loop.py::LoopRuntime._with_prev` -- overlays
@@ -685,35 +792,109 @@ fn plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
 /// keeping every other key already in `prime`/`prime.<loop_name>`
 /// untouched. Chain flow only, named loops only, never called before
 /// the first completed pass (see [`execute_loop`]'s callers).
-fn with_prev_overlay(chain: &CtxChain, loop_name: &str, prev: &IndexMap<Value, Slot>) -> NodeRef {
-    let mut top = chain_slots(chain);
+///
+/// Issue #484: the loop's own real node (two [`Store::peek`] hops down
+/// from *chain*'s own entry: `prime`, then this loop's own name) --
+/// almost always a tracked [`Slot::Node`], since [`execute_loop`]
+/// always `ensure_dict`s it before the first pass ever runs -- already
+/// carries every earlier pass's own `iter_<N>`. Flattening *chain* (or
+/// even just that one real node) into a brand new top-level map the
+/// old way, as this function used to with [`chain_slots`]/
+/// [`dict_slots`], clones that whole, ever-growing key set on every
+/// pass: O(N) for pass N, O(N²) over a loop of N passes. Layering
+/// *prev* as a fresh, one-entry overlay with the real node as its own
+/// [`crate::store::Node::fallback`] instead ([`fallback_for`]/
+/// [`layered`], all the way up through `prime` and *chain*'s own top
+/// level) makes this function O(1) regardless of pass count: nothing
+/// here ever holds more than *prev* and the handful of sibling keys a
+/// real orchestration keeps at the `prime`/`prime.<loop_name>` level,
+/// and [`Store::peek`]/[`Store::snapshot`] -- the two readers
+/// [`exec::live_scope`]'s lazy template/CEL resolution and
+/// [`super::live_ctx`]'s full materialization alike end up calling
+/// against the result -- already know to fall through for every key
+/// this function doesn't itself carry (store.rs's own `Node`/`peek`/
+/// `snapshot` doc comments).
+///
+/// *idx* -- the pass about to run -- is hidden from `own`'s own
+/// fallback ([`layered_hiding`]) **only if it doesn't already exist
+/// there**: `core/loop.py::LoopRuntime._with_prev`'s own `dict(
+/// own_node)` copy runs *before* `store.child(iter_<idx>)` creates
+/// this pass's own node, so it freezes the real loop node's key SET
+/// as of that exact moment -- genuinely absent (the common case: a
+/// loop running for the first time) stays absent all pass, even
+/// though `own_fallback` below is a live `NodeRef` that will
+/// eventually gain that key once [`execute_loop`]'s own caller
+/// `ensure_dict`s it right after this returns. But a **reused** real
+/// loop node (a named loop inside an unnamed outer loop, or
+/// `--state`-resumed persisted state, issue #501's second review's
+/// own P0) can already carry `iter_<idx>` from an *earlier* run
+/// through this same node -- `dict(own_node)`'s own copy, taken at
+/// *this* run's pass start, includes it right along with every other
+/// key already there, same as any other already-present key. Checked
+/// with one extra [`Store::peek`] (O(1), paid once per pass, not per
+/// read) rather than unconditionally hiding it.
+fn with_prev_overlay(
+    store: &Store,
+    chain: &CtxChain,
+    loop_name: &str,
+    prev: &IndexMap<Value, Slot>,
+    idx: u32,
+) -> NodeRef {
     let prime_key = key("prime");
-    let mut prime = dict_slots(top.get(&prime_key));
     let loop_key = key(loop_name);
-    let mut own = dict_slots(prime.get(&loop_key));
-    own.insert(key("prev"), Slot::Node(Rc::new(RefCell::new(prev.clone()))));
-    prime.insert(loop_key, Slot::Node(Rc::new(RefCell::new(own))));
-    top.insert(prime_key, Slot::Node(Rc::new(RefCell::new(prime))));
-    Rc::new(RefCell::new(top))
+    let iter_key = key(&format!("iter_{idx}"));
+
+    let base = single_live(chain).expect(
+        "with_prev_overlay is only ever called with build_pass_chain's own \
+         single-Live base chain",
+    );
+    let prime_fallback = fallback_for(store, base, &prime_key);
+    let own_fallback = prime_fallback
+        .as_ref()
+        .and_then(|prime| fallback_for(store, prime, &loop_key));
+
+    let mut own_entries = IndexMap::new();
+    own_entries.insert(key("prev"), Slot::Node(node_from_entries(prev.clone())));
+    let iter_already_exists = own_fallback
+        .as_ref()
+        .is_some_and(|f| store.peek(f, &iter_key).is_some());
+    let own = if iter_already_exists {
+        layered(own_entries, own_fallback)
+    } else {
+        layered_hiding(own_entries, own_fallback, iter_key)
+    };
+
+    let mut prime_entries = IndexMap::new();
+    prime_entries.insert(loop_key, Slot::Node(own));
+    let prime_overlay = layered(prime_entries, prime_fallback);
+
+    let mut top_entries = IndexMap::new();
+    top_entries.insert(prime_key, Slot::Node(prime_overlay));
+    layered(top_entries, Some(Rc::clone(base)))
 }
 
 /// A pass's own starting ctx chain: the top-level-only *local* overlay
 /// ([`index_overlay`]), with `prime.<loop_name>.prev` layered on top
 /// when *prev* carries a previous completed pass's writes
-/// ([`with_prev_overlay`]).
+/// ([`with_prev_overlay`]). *prev*'s third tuple element is the pass
+/// about to run, forwarded to [`with_prev_overlay`] to hide that
+/// pass's own not-yet-created `iter_<idx>`.
 fn build_pass_chain(
+    store: &Store,
     outer_chain: &CtxChain,
     local: &IndexMap<Value, Slot>,
-    prev: Option<(&str, &IndexMap<Value, Slot>)>,
+    prev: Option<(&str, &IndexMap<Value, Slot>, u32)>,
 ) -> CtxChain {
     let plain = plain_overlay(outer_chain, local);
     let base: CtxChain = vec![CtxSource::Live(plain)];
     match prev {
-        Some((loop_name, prev_writes)) => {
+        Some((loop_name, prev_writes, idx)) => {
             vec![CtxSource::Live(with_prev_overlay(
+                store,
                 &base,
                 loop_name,
                 prev_writes,
+                idx,
             ))]
         }
         None => base,
@@ -726,21 +907,39 @@ fn build_pass_chain(
 /// *pass_chain* (never from the previous step's own overlay) after
 /// every single step. Same shape as `exec::conditional::build_overlay`,
 /// duplicated here for the same reason as [`chain_slots`].
-fn step_overlay(pass_chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
-    let base = chain_slots(pass_chain);
+///
+/// Issue #484: *pass_chain* is always [`build_pass_chain`]'s own
+/// single-`Live`-entry output (or, for a `step_chain` rebuilt after an
+/// earlier step this same pass, this function's own previous result --
+/// still single-entry), so this layers *local* straight onto it
+/// ([`fallback_for`]/[`layered_watermarked`]) rather than flattening it
+/// fresh via [`chain_slots`]/[`dict_slots`] -- the same
+/// per-pass-and-per-step saving [`plain_overlay`]'s own doc comment
+/// explains, except this one was already guaranteed safe for every
+/// caller (no `Frozen`-chain case ever reaches here).
+///
+/// Issue #501's second review: `prime_fallback` gets
+/// [`crate::store::Node::watermark`]ed to its own entry count *before*
+/// *local*'s own step ever ran -- `core/scope.py::scope_ctx`'s own
+/// `prime = dict(ctx.get("prime") or {})` takes that exact one-time
+/// snapshot of `prime`'s key SET after *every* step, not only a named
+/// loop's own `_with_prev`. Without it, a *later* sibling step (not the
+/// first in its own scope -- the first step still runs against
+/// *pass_chain* directly, unwatermarked, matching cof's own live-shared
+/// `ctx["prime"]` there too) could see a sibling that starts *after*
+/// this overlay was built the instant that sibling's own node is
+/// `ensure_dict`-ed, before it has even rendered its own params --
+/// something cof's frozen copy never exposes.
+fn step_overlay(store: &Store, pass_chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+    let base = single_live(pass_chain)
+        .expect("step_overlay is only ever called with a single-Live pass/step chain");
     let prime_key = key("prime");
-    let parent_prime = dict_slots(base.get(&prime_key));
+    let prime_fallback = fallback_for(store, base, &prime_key);
+    let prime_overlay = layered_watermarked(local.clone(), prime_fallback);
 
-    let mut top = base;
-    for (k, v) in local {
-        top.insert(k.clone(), v.clone());
-    }
-    let mut prime = parent_prime;
-    for (k, v) in local {
-        prime.insert(k.clone(), v.clone());
-    }
-    top.insert(prime_key, Slot::Node(Rc::new(RefCell::new(prime))));
-    Rc::new(RefCell::new(top))
+    let mut top_entries = local.clone();
+    top_entries.insert(prime_key, Slot::Node(prime_overlay));
+    layered(top_entries, Some(Rc::clone(base)))
 }
 
 /// `core.scope.local_writes` -- *node*'s own top-level keys since
@@ -822,7 +1021,7 @@ async fn execute_body<'a>(
                 step_chain = if local.is_empty() {
                     pass_chain.clone()
                 } else {
-                    vec![CtxSource::Live(step_overlay(pass_chain, &local))]
+                    vec![CtxSource::Live(step_overlay(store, pass_chain, &local))]
                 };
             }
             Err(e) if e.is_fatal() => return Err(e),
@@ -893,11 +1092,13 @@ async fn run_each_chain<'a>(
 
         let local = index_overlay(Some(as_name), Some(item), idx);
         let prev_arg = if is_named {
-            prev_writes.as_ref().map(|p| (loop_name.expect("named"), p))
+            prev_writes
+                .as_ref()
+                .map(|p| (loop_name.expect("named"), p, idx))
         } else {
             None
         };
-        let pass_chain = build_pass_chain(outer_chain, &local, prev_arg);
+        let pass_chain = build_pass_chain(store, outer_chain, &local, prev_arg);
         let pass_write_node: NodeRef = if is_named {
             store
                 .ensure_dict(write_parent, key(&format!("iter_{idx}")))
@@ -1071,7 +1272,7 @@ async fn run_each_tree<'a>(
                     return (idx, Err(VmError::Cancelled));
                 }
                 let local = index_overlay(Some(as_name), Some(item), idx);
-                let pass_chain = build_pass_chain(outer_chain, &local, None);
+                let pass_chain = build_pass_chain(store, outer_chain, &local, None);
                 let pass_write_node: NodeRef = if is_named {
                     match store.ensure_dict(branch_root, key(&format!("iter_{idx}"))) {
                         Ok(n) => n,
@@ -1272,7 +1473,11 @@ async fn run_while<'a>(
             let cond_chain: CtxChain = if last_writes.is_empty() {
                 cond_base
             } else {
-                vec![CtxSource::Live(step_overlay(&cond_base, &last_writes))]
+                vec![CtxSource::Live(step_overlay(
+                    store,
+                    &cond_base,
+                    &last_writes,
+                ))]
             };
             match evaluate_while_condition(
                 cond,
@@ -1321,11 +1526,13 @@ async fn run_while<'a>(
 
         let local = index_overlay(None, None, iteration_count);
         let prev_arg = if is_named {
-            prev_writes.as_ref().map(|p| (loop_name.expect("named"), p))
+            prev_writes
+                .as_ref()
+                .map(|p| (loop_name.expect("named"), p, iteration_count))
         } else {
             None
         };
-        let pass_chain = build_pass_chain(outer_chain, &local, prev_arg);
+        let pass_chain = build_pass_chain(store, outer_chain, &local, prev_arg);
         let pass_write_node: NodeRef = if is_named {
             store
                 .ensure_dict(write_parent, key(&format!("iter_{iteration_count}")))
@@ -1517,4 +1724,414 @@ pub fn loop_progress(done: u32, total: Option<u32>, elapsed_s: f64) -> Value {
         },
     );
     Value::Dict(m)
+}
+
+/// Issue #484's own REQUIRED differential test: for a representative
+/// set of loop-shaped store trees, the *old* ctx-overlay construction
+/// (this module's own `old_*` helpers below -- a direct port of this
+/// file's own `with_prev_overlay`/`plain_overlay`/`step_overlay` from
+/// before this issue's fix, eagerly flattening/cloning every level
+/// instead of layering a [`crate::store::Node::fallback`]) and the
+/// *new* one (this file's own, current `with_prev_overlay`/
+/// `plain_overlay`/`step_overlay`/`build_pass_chain`) must resolve
+/// every path identically: a full [`Store::snapshot`] of the built
+/// chain, and a battery of individual dotted-path reads covering
+/// `prev`, `last`, a specific `iter_<N>`, a sibling under `prime`, the
+/// outer scope's own `input`, and the pass-local `item`/`iter`
+/// bindings. Covers chain `each`/`while` (mechanically identical here:
+/// both just call `with_prev_overlay` with this pass's own `prev`),
+/// two named loops chained one's own ctx construction on top of the
+/// other's (the multi-level-fallback shape a loop nested inside
+/// another loop's body builds), a step overlay within a pass, and a
+/// loop running against a `use` child's own, separate `Store` (the
+/// mechanism is store-instance-independent, but kept as its own case
+/// for the issue's own required test list).
+#[cfg(test)]
+mod prev_overlay_differential_tests {
+    use super::*;
+
+    fn k(s: &str) -> Value {
+        Value::Str(s.to_string())
+    }
+
+    fn old_chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
+        let mut merged: IndexMap<Value, Slot> = IndexMap::new();
+        for source in chain {
+            match source {
+                CtxSource::Live(node) => {
+                    for (key, slot) in node.borrow().entries().iter() {
+                        merged.insert(key.clone(), slot.clone());
+                    }
+                }
+                CtxSource::Frozen(Value::Dict(map)) => {
+                    for (key, value) in map {
+                        merged.insert(key.clone(), Slot::Value(value.clone()));
+                    }
+                }
+                CtxSource::Frozen(_) => {}
+            }
+        }
+        merged
+    }
+
+    fn old_dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
+        match slot {
+            Some(Slot::Node(node)) => node.borrow().entries().clone(),
+            Some(Slot::Value(Value::Dict(map))) => map
+                .iter()
+                .map(|(key, value)| (key.clone(), Slot::Value(value.clone())))
+                .collect(),
+            _ => IndexMap::new(),
+        }
+    }
+
+    fn old_plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+        let mut top = old_chain_slots(chain);
+        for (key, value) in local {
+            top.insert(key.clone(), value.clone());
+        }
+        node_from_entries(top)
+    }
+
+    fn old_with_prev_overlay(
+        chain: &CtxChain,
+        loop_name: &str,
+        prev: &IndexMap<Value, Slot>,
+    ) -> NodeRef {
+        let mut top = old_chain_slots(chain);
+        let prime_key = key("prime");
+        let mut prime = old_dict_slots(top.get(&prime_key));
+        let loop_key = key(loop_name);
+        let mut own = old_dict_slots(prime.get(&loop_key));
+        own.insert(key("prev"), Slot::Node(node_from_entries(prev.clone())));
+        prime.insert(loop_key, Slot::Node(node_from_entries(own)));
+        top.insert(prime_key, Slot::Node(node_from_entries(prime)));
+        node_from_entries(top)
+    }
+
+    fn old_build_pass_chain(
+        outer_chain: &CtxChain,
+        local: &IndexMap<Value, Slot>,
+        prev: Option<(&str, &IndexMap<Value, Slot>)>,
+    ) -> CtxChain {
+        let plain = old_plain_overlay(outer_chain, local);
+        let base: CtxChain = vec![CtxSource::Live(plain)];
+        match prev {
+            Some((loop_name, prev_writes)) => {
+                vec![CtxSource::Live(old_with_prev_overlay(
+                    &base,
+                    loop_name,
+                    prev_writes,
+                ))]
+            }
+            None => base,
+        }
+    }
+
+    fn old_step_overlay(pass_chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
+        let base = old_chain_slots(pass_chain);
+        let prime_key = key("prime");
+        let parent_prime = old_dict_slots(base.get(&prime_key));
+
+        let mut top = base;
+        for (key, value) in local {
+            top.insert(key.clone(), value.clone());
+        }
+        let mut prime = parent_prime;
+        for (key, value) in local {
+            prime.insert(key.clone(), value.clone());
+        }
+        top.insert(prime_key, Slot::Node(node_from_entries(prime)));
+        node_from_entries(top)
+    }
+
+    /// A loop-shaped store: `prime.shots.iter_0`/`iter_1` (two finished
+    /// passes), `prime.shots.meta`, a sibling `prime.other`, and a
+    /// top-level `input` -- `prev`/`last`/an outer scope's own key/a
+    /// sibling's own key are all exercised against the same store.
+    fn loop_shaped_store() -> Store {
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, k("prime")).unwrap();
+        let shots = store.ensure_dict(&prime, k("shots")).unwrap();
+        let iter0 = store.ensure_dict(&shots, k("iter_0")).unwrap();
+        store.set_leaf(&iter0, k("echo"), Value::from("zero"));
+        let iter1 = store.ensure_dict(&shots, k("iter_1")).unwrap();
+        store.set_leaf(&iter1, k("echo"), Value::from("one"));
+        store.alias(&shots, k("last"), &k("iter_1")).unwrap();
+        let meta = store.ensure_dict(&shots, k("meta")).unwrap();
+        store.set_leaf(&meta, k("mode"), Value::from("each"));
+
+        let other = store.ensure_dict(&prime, k("other")).unwrap();
+        store.set_leaf(&other, k("value"), Value::from("sibling"));
+
+        store.set_leaf(&store.root, k("input"), Value::from("hi"));
+        store
+    }
+
+    fn prev_writes(value: &str) -> IndexMap<Value, Slot> {
+        let mut m = IndexMap::new();
+        m.insert(k("echo"), Slot::Value(Value::from(value)));
+        m
+    }
+
+    fn outer_chain(store: &Store) -> CtxChain {
+        vec![CtxSource::Live(Rc::clone(&store.root))]
+    }
+
+    fn local_overlay(idx: i64) -> IndexMap<Value, Slot> {
+        let mut local = IndexMap::new();
+        local.insert(k("item"), Slot::Value(Value::from(idx)));
+        local.insert(k("_loop_index"), Slot::Value(Value::from(idx)));
+        let mut iter_map = IndexMap::new();
+        iter_map.insert(k("index"), Value::from(idx));
+        local.insert(k("iter"), Slot::Value(Value::Dict(iter_map)));
+        local
+    }
+
+    fn walk<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        let mut current = value;
+        for part in path.split('.') {
+            match current {
+                Value::Dict(d) => current = d.get(&k(part))?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn chain_node(chain: &CtxChain) -> NodeRef {
+        match chain
+            .last()
+            .expect("a built pass/step chain is never empty")
+        {
+            CtxSource::Live(node) => Rc::clone(node),
+            CtxSource::Frozen(_) => unreachable!("this test never builds a Frozen chain"),
+        }
+    }
+
+    /// Every probe path this module's own cases care about: `prev`/
+    /// `last`/a specific `iter_<N>`/`meta` under the loop's own node,
+    /// a sibling under `prime`, the outer scope's own `input`, and the
+    /// pass-local `item`/`iter` bindings.
+    const PROBE_PATHS: &[&str] = &[
+        "prime.shots.prev.echo",
+        "prime.shots.last.echo",
+        "prime.shots.iter_0.echo",
+        "prime.shots.meta.mode",
+        "prime.other.value",
+        "input",
+        "item",
+        "iter.index",
+    ];
+
+    fn assert_same_chain(store: &Store, old: &CtxChain, new: &CtxChain, case: &str) {
+        let old_snapshot = store.snapshot(&chain_node(old));
+        let new_snapshot = store.snapshot(&chain_node(new));
+        assert_eq!(
+            old_snapshot, new_snapshot,
+            "{case}: whole-chain snapshot diverged"
+        );
+        for path in PROBE_PATHS {
+            assert_eq!(
+                walk(&old_snapshot, path),
+                walk(&new_snapshot, path),
+                "{case}: path {path:?} diverged"
+            );
+        }
+    }
+
+    #[test]
+    fn chain_each_or_while_pass_with_prev() {
+        let store = loop_shaped_store();
+        let outer = outer_chain(&store);
+        let local = local_overlay(2);
+        let prev = prev_writes("one-stringified");
+
+        let old = old_build_pass_chain(&outer, &local, Some(("shots", &prev)));
+        let new = build_pass_chain(&store, &outer, &local, Some(("shots", &prev, 2)));
+
+        assert_same_chain(&store, &old, &new, "chain each/while, prev present");
+    }
+
+    #[test]
+    fn chain_each_or_while_first_pass_has_no_prev() {
+        let store = loop_shaped_store();
+        let outer = outer_chain(&store);
+        let local = local_overlay(0);
+
+        let old = old_build_pass_chain(&outer, &local, None);
+        let new = build_pass_chain(&store, &outer, &local, None);
+
+        assert_same_chain(
+            &store,
+            &old,
+            &new,
+            "chain each/while, first pass (no prev yet)",
+        );
+    }
+
+    #[test]
+    fn step_overlay_within_a_pass() {
+        let store = loop_shaped_store();
+        let outer = outer_chain(&store);
+        let local = local_overlay(2);
+        let prev = prev_writes("one-stringified");
+
+        let old_pass = old_build_pass_chain(&outer, &local, Some(("shots", &prev)));
+        let new_pass = build_pass_chain(&store, &outer, &local, Some(("shots", &prev, 2)));
+
+        let mut step_local = IndexMap::new();
+        step_local.insert(k("first_step"), Slot::Value(Value::from("done")));
+
+        let old_step: CtxChain = vec![CtxSource::Live(old_step_overlay(&old_pass, &step_local))];
+        let new_step: CtxChain = vec![CtxSource::Live(step_overlay(
+            &store,
+            &new_pass,
+            &step_local,
+        ))];
+
+        assert_same_chain(
+            &store,
+            &old_step,
+            &new_step,
+            "step overlay after one body step",
+        );
+
+        let old_snapshot = store.snapshot(&chain_node(&old_step));
+        let new_snapshot = store.snapshot(&chain_node(&new_step));
+        for path in ["first_step", "prime.first_step"] {
+            assert_eq!(
+                walk(&old_snapshot, path),
+                walk(&new_snapshot, path),
+                "step overlay: path {path:?} diverged"
+            );
+        }
+    }
+
+    /// Two named loops, chained: the second's own ctx construction
+    /// (`with_prev_overlay`) built directly on top of the first's own
+    /// result -- the multi-level-fallback shape a loop nested inside
+    /// another loop's body (or two independent named loops in the same
+    /// scope) builds. Both loops' own `prev` must stay independently
+    /// visible, and both loops' own `iter_<N>`/`meta` through either
+    /// one's own overlay.
+    #[test]
+    fn two_named_loops_chained_each_with_its_own_independent_prev() {
+        let store = loop_shaped_store();
+        let prime = store.ensure_dict(&store.root, k("prime")).unwrap();
+        let widgets = store.ensure_dict(&prime, k("widgets")).unwrap();
+        let w_iter0 = store.ensure_dict(&widgets, k("iter_0")).unwrap();
+        store.set_leaf(&w_iter0, k("ping"), Value::from("w0"));
+
+        let outer = outer_chain(&store);
+        let shots_local = local_overlay(2);
+        let shots_prev = prev_writes("one-stringified");
+        let widgets_local = local_overlay(1);
+        let widgets_prev = {
+            let mut m = IndexMap::new();
+            m.insert(k("ping"), Slot::Value(Value::from("w0-stringified")));
+            m
+        };
+
+        let old_shots = old_build_pass_chain(&outer, &shots_local, Some(("shots", &shots_prev)));
+        let old_both =
+            old_build_pass_chain(&old_shots, &widgets_local, Some(("widgets", &widgets_prev)));
+
+        let new_shots = build_pass_chain(
+            &store,
+            &outer,
+            &shots_local,
+            Some(("shots", &shots_prev, 2)),
+        );
+        let new_both = build_pass_chain(
+            &store,
+            &new_shots,
+            &widgets_local,
+            Some(("widgets", &widgets_prev, 1)),
+        );
+
+        let old_snapshot = store.snapshot(&chain_node(&old_both));
+        let new_snapshot = store.snapshot(&chain_node(&new_both));
+        assert_eq!(
+            old_snapshot, new_snapshot,
+            "two chained named loops: whole-chain snapshot diverged"
+        );
+        for path in [
+            "prime.shots.prev.echo",
+            "prime.shots.iter_0.echo",
+            "prime.widgets.prev.ping",
+            "prime.widgets.iter_0.ping",
+            "prime.other.value",
+            "input",
+            "item",
+            "iter.index",
+        ] {
+            assert_eq!(
+                walk(&old_snapshot, path),
+                walk(&new_snapshot, path),
+                "two chained named loops: path {path:?} diverged"
+            );
+        }
+    }
+
+    /// A loop running against a `use` child's own, separate `Store`
+    /// (`exec::use_::execute_use`'s own `child_store`, a fresh,
+    /// independent tree -- never *store*'s own) -- proves the fix is
+    /// store-instance-independent, the same shape a loop inside a
+    /// `use` child's own body actually runs against.
+    #[test]
+    fn loop_inside_a_use_childs_own_store() {
+        let child_store = loop_shaped_store();
+        let outer = outer_chain(&child_store);
+        let local = local_overlay(2);
+        let prev = prev_writes("one-stringified");
+
+        let old = old_build_pass_chain(&outer, &local, Some(("shots", &prev)));
+        let new = build_pass_chain(&child_store, &outer, &local, Some(("shots", &prev, 2)));
+
+        assert_same_chain(
+            &child_store,
+            &old,
+            &new,
+            "loop inside a use child's own store",
+        );
+    }
+
+    /// Issue #501's second review, finding on `Store::snapshot`: a
+    /// shadowed key (`shots`, shadowed by `with_prev_overlay`'s own
+    /// `prime` overlay once `prev` exists) must keep its own natural
+    /// position -- here, before `other`, exactly as `loop_shaped_store`
+    /// built it -- not move to the end. `Value: PartialEq`'s own
+    /// `py_eq` ignores dict key order (same as Python's `==`), so this
+    /// checks the actual [`IndexMap`] key order directly rather than
+    /// `assert_eq!`ing two [`Value`]s.
+    #[test]
+    fn snapshot_keeps_a_shadowed_keys_own_position_not_the_end() {
+        let store = loop_shaped_store();
+        let outer = outer_chain(&store);
+        let local = local_overlay(2);
+        let prev = prev_writes("one-stringified");
+        let pass_chain = build_pass_chain(&store, &outer, &local, Some(("shots", &prev, 2)));
+
+        let snapshot = store.snapshot(&chain_node(&pass_chain));
+        let prime_dict = match walk(&snapshot, "prime") {
+            Some(Value::Dict(d)) => d,
+            other => panic!("expected prime to be a dict, got {other:?}"),
+        };
+        let order: Vec<&str> = prime_dict
+            .keys()
+            .map(|key| match key {
+                Value::Str(s) => s.as_str(),
+                _ => panic!("expected string keys"),
+            })
+            .collect();
+        let shots_pos = order.iter().position(|k| *k == "shots").unwrap();
+        let other_pos = order.iter().position(|k| *k == "other").unwrap();
+        assert!(
+            shots_pos < other_pos,
+            "shots (built before other in loop_shaped_store) must still \
+             sort before other once shots has grown a prev overlay, not \
+             move to the end: order was {order:?}"
+        );
+    }
 }

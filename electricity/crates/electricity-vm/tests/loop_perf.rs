@@ -1,4 +1,4 @@
-//! Lane H (#461), #442's own "Interpreter cost" item, #463: a
+//! Lane H (#461), #442's own "Interpreter cost" item, #463, #484: a
 //! regression guard for the context a render/condition-eval builds
 //! inside a loop -- originally pinned against `exec::live_ctx`'s own
 //! per-render whole-subtree copy (chain-flow `each`, the case that
@@ -8,9 +8,23 @@
 //! directly (`exec::live_scope`'s own module doc comment has the fix:
 //! a tool render / `if`/`while` condition resolves `ctx`/`state` from
 //! the live store, a dotted segment at a time, instead of snapshotting
-//! the whole thing first). Both loop shapes now grow close to linearly;
-//! the ratio ceilings below stay well above that to tolerate machine
-//! noise, not because either shape is still quadratic.
+//! the whole thing first).
+//!
+//! #463 left two more super-linear costs in place, both in
+//! `exec::loop_` itself rather than in a render/condition-eval:
+//! chain-flow `each`/`while`'s own `prime.<loop_name>.prev` overlay
+//! (`with_prev_overlay`, a pass-N clone of the loop's own real node's
+//! *whole*, ever-growing top-level map) and, in every loop flow alike,
+//! `plain_overlay`/`step_overlay` flattening the *enclosing* scope's
+//! own top-level map fresh on every pass/step (deep-cloning any plain
+//! `Value::List`/`Value::Dict` leaf sitting there, the `each` loop's
+//! own collection among them). Issue #484 fixed both by layering an
+//! overlay's own few keys on a [`crate::store::Node::fallback`]
+//! instead of flattening/cloning -- see `exec::loop_`'s own doc
+//! comments on `with_prev_overlay`/`plain_overlay`/`step_overlay`.
+//! Every loop shape now grows close to linearly; the ratio ceilings
+//! below stay above that to tolerate machine noise, not because any
+//! shape is still super-linear.
 
 mod support;
 
@@ -135,21 +149,30 @@ async fn run_each_chain_of(
 /// this workflow's existing `--release` steps for `electricity-yaml`/
 /// `electricity-cel`).
 ///
-/// Measured on the development machine, release, before this lane's
-/// own fix (`cargo test --release ... -- --ignored`, one core's worth
-/// of real work, no other load): 250 passes ≈ 0.67s, 1000 passes (4x
-/// the passes) ≈ 12.2s (≈18x the time) -- the quadratic shape #463
-/// tracked (`live_ctx`'s own `Store::snapshot` re-copying the whole
-/// accumulated state on every render). After this lane's own fix
-/// (`exec::live_scope`): 250 passes ≈ 9ms, 1000 passes ≈ 63ms, ≈7x --
-/// close to the 4x a truly linear cost would give, the rest being
-/// this test's own fixed per-pass bookkeeping (two tool leaves, retry/
-/// observer/meta writes) rather than anything #463 was ever about.
+/// Measured on the development machine, release, before #463's own fix
+/// (`cargo test --release ... -- --ignored`, one core's worth of real
+/// work, no other load): 250 passes ≈ 0.67s, 1000 passes (4x the
+/// passes) ≈ 12.2s (≈18x the time) -- the quadratic shape #463 tracked
+/// (`live_ctx`'s own `Store::snapshot` re-copying the whole
+/// accumulated state on every render). After #463's own fix
+/// (`exec::live_scope`), but before issue #484's own fix below: 250
+/// passes ≈ 9ms, 1000 passes ≈ 63ms, ≈7x -- still well above the ≈4x a
+/// truly linear cost would give, because every pass still rebuilt the
+/// `prime.<loop_name>.prev` overlay by cloning the loop's own real
+/// node's *whole* top-level map (every earlier pass's own `iter_<K>`,
+/// `exec::loop_::with_prev_overlay`'s own doc comment) -- an O(N) cost
+/// pass N paid regardless of #463's own fix, since it never touched
+/// this overlay at all. After #484's own fix (`with_prev_overlay`
+/// layering `prev` on a fallback node instead of a copy, *and*
+/// `plain_overlay`/`step_overlay` doing the same for the outer scope's
+/// own, unrelated top-level leaves -- this file's own module doc
+/// comment has the measurements): 250 passes ≈ 10ms, 1000 passes ≈
+/// 20-25ms, ≈2-3x -- at or under the ≈4x a truly linear cost gives.
 /// Only the growth *ratio* is asserted, not a wall-clock ceiling (a
 /// fixed-seconds ceiling is exactly what flakes on a loaded or slower
-/// CI runner): 15x gives several times today's own measured ≈7x
-/// headroom for machine noise while still catching a regression back
-/// toward the old quadratic shape (≈18x) or worse.
+/// CI runner): 8x (tightened from a pre-#484 15x) gives several times
+/// today's own measured ≈2-3x headroom for machine noise while still
+/// catching a regression back toward either superlinear shape.
 #[tokio::test]
 #[ignore]
 async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
@@ -161,22 +184,29 @@ async fn chain_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() 
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
-            ratio < 15.0,
+            ratio < 8.0,
             "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
-             expected well under a 15x blow-up (this lane's own fix measures ≈7x)"
+             expected under issue #484's own 8x ceiling for a truly linear cost"
         );
     }
 }
 
 /// Same guard, tree flow with bounded concurrency: isolated per-pass
-/// stores merged once at the end, so the per-render re-copy cost comes
-/// from the *other* ancestors in the chain, not from sibling passes --
-/// kept as its own test since #461's own test plan calls for both
-/// shapes explicitly. Measured, after this lane's own fix: 250 passes
-/// ≈ 6ms, 1000 passes ≈ 41ms, ≈7x -- already cheap before this lane
-/// (no accumulated sibling-pass re-copy; each pass's own isolated
-/// store starts empty and is merged once, at the end), essentially
-/// unchanged by it.
+/// stores merged once at the end, so there is no `prime.<loop_name>.
+/// prev` overlay at all (tree passes run in parallel; `cof check`
+/// rejects a `prev` reference in a tree body) -- but issue #484 found
+/// a *second*, independent super-linear cost here anyway: every pass's
+/// own `plain_overlay` (and, within a pass, every body step's own
+/// `step_overlay`) flattened the *enclosing* scope's own top-level map
+/// fresh, which deep-clones any plain `Value::List`/`Value::Dict` leaf
+/// sitting there -- the `each` loop's own collection itself among
+/// them -- on every single pass/step, regardless of loop flow.
+/// Measured, before #484's own fix: 250 passes ≈ 10-15ms, 1000 passes ≈
+/// 50-80ms, ≈5-8x. After (`plain_overlay`/`step_overlay` layering on a
+/// fallback instead of flattening, exactly like `with_prev_overlay`'s
+/// own fix for chain `each`'s `prev` overlay): 250 passes ≈ 5-10ms,
+/// 1000 passes ≈ 18-30ms, ≈2-4x -- at or under the ≈4x a truly linear
+/// cost gives, same as chain `each` above.
 #[tokio::test]
 #[ignore]
 async fn tree_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
@@ -188,9 +218,9 @@ async fn tree_each_loop_of_a_thousand_passes_stays_within_a_generous_ceiling() {
     if small.as_millis() > 0 {
         let ratio = large.as_secs_f64() / small.as_secs_f64();
         assert!(
-            ratio < 15.0,
+            ratio < 8.0,
             "1000 passes took {ratio:.1}x as long as 250 passes ({small:?} -> {large:?}); \
-             expected well under a 15x blow-up (this lane's own fix measures ≈7x)"
+             expected under issue #484's own 8x ceiling for a truly linear cost"
         );
     }
 }

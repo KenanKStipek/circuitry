@@ -32,14 +32,250 @@ pub enum Slot {
     Node(NodeRef),
 }
 
-/// A single mutable state node -- `Rc<RefCell<IndexMap<Value, Slot>>>`.
-/// Shared so that two different paths can reference the identical live
-/// node (`Rc::ptr_eq`), not a deep copy of it.
-pub type NodeRef = Rc<RefCell<IndexMap<Value, Slot>>>;
+/// A node's own top-level map, plus an optional *fallback* node consulted
+/// for any key *entries* doesn't itself carry (issue #484). Every node
+/// [`Store`] itself creates (`ensure_dict`/`new_node`/`parallel_branches`)
+/// has `fallback: None` -- only three `exec::loop_` builders
+/// (`crate::exec::loop_`, not re-exported outside this crate) --
+/// `plain_overlay`, `with_prev_overlay` and `step_overlay` -- build one
+/// with `Some`, layering a pass's or step's own top-level overlay (and,
+/// for `with_prev_overlay`, the detached `prime.<loop_name>` node a
+/// chain-flow `each`/`while` pass's own ctx overlays) on top of the
+/// loop's real, already-tracked node: *entries* carries only that
+/// handful of local keys, so a fresh overlay never re-walks the real
+/// node's ever-growing `iter_<N>` key set, and every other key --
+/// `iter_<N>`, `meta`, an outer loop's own already-layered overlay one
+/// level up -- still reaches the real node through *fallback*.
+/// [`Node`] derefs to its own *entries* so every existing `.borrow()`/
+/// `.borrow_mut()` call site that only ever reads/writes a node known to
+/// never carry a *fallback* (every [`Store`] write-path method --
+/// `ensure_dict`/`child`/`alias`/`merge` -- only ever takes one of
+/// those as *parent*; every `#[cfg(test)]`-only direct-entry helper in
+/// this crate only ever builds its own nodes through `Store`) keeps
+/// compiling unchanged. A reader that *can* reach one of the three
+/// overlay builders' nodes -- anything fed a [`CtxChain`]/`CtxSource::
+/// Live` entry -- must resolve through [`Store::peek`]/[`Store::
+/// snapshot`] (an O(1)/recursive fallback walk) or [`Node::flat_entries`]
+/// (an eager, recursive flatten: still correct, just back to paying
+/// *fallback*'s own depth in clones, the pre-#484 cost `exec::
+/// loop_::chain_slots`/`dict_slots` and `exec::conditional::
+/// chain_slots`/`dict_slots` already pay once per `if`-branch-step/rare
+/// multi-entry-chain call, never per pass) -- plain `.iter()`/`.get()`/
+/// Deref on such a node silently drops every key *fallback* alone
+/// carries (issue #501 review finding 1: `exec::conditional`'s
+/// `chain_slots`/`dict_slots` did exactly that for a release, losing an
+/// `if`'s enclosing scope from its second branch step on inside any
+/// loop body). [`Store::saved`] never sees an overlay node at all: it
+/// only ever recurses into a [`Slot::Node`] reachable from
+/// [`Store::root`](Store), and no overlay node is ever attached to the
+/// real tree.
+#[derive(Debug, Clone)]
+pub struct Node {
+    entries: IndexMap<Value, Slot>,
+    fallback: Option<NodeRef>,
+    /// A single *fallback* key this overlay must never expose, even once
+    /// *fallback* -- a real, still-mutating tracked node -- comes to
+    /// carry it later in the same pass (issue #501 review finding 2).
+    /// [`exec::loop_::with_prev_overlay`] sets this to the current
+    /// pass's own `iter_<idx>` key: that key doesn't exist in the real
+    /// loop node yet when the overlay is built (`execute_loop`'s own
+    /// `store.ensure_dict(write_parent, iter_<idx>)` runs straight
+    /// after), but *fallback* is a live `NodeRef` to that same real
+    /// node, so once a later step in *this* pass does create it, every
+    /// reader of the overlay would otherwise see it immediately --
+    /// something `core/loop.py::LoopRuntime._with_prev`'s own one-time
+    /// `dict(own_node)` copy (taken before `iter_<idx>` exists) never
+    /// does: Python's shallow copy freezes the *set* of keys as of that
+    /// moment, even though a nested value already in that set (`meta`,
+    /// an *earlier* `iter_<K>`) keeps aliasing its live dict and so
+    /// still reflects any further mutation. `None` -- every other
+    /// overlay builder, and *fallback* itself one level further down --
+    /// never needs one.
+    hidden: Option<Value>,
+    /// *fallback*'s own direct-entry count, frozen at the moment this
+    /// overlay was built -- any key *fallback* gains at or after that
+    /// position (issue #501's second review) is invisible through this
+    /// overlay, exactly as if it didn't exist. `core/scope.py::
+    /// scope_ctx`'s own `prime = dict(ctx.get("prime") or {})` takes
+    /// this same one-time snapshot of `prime`'s own key SET after every
+    /// body step (not just a loop's own `_with_prev`, [`Node::hidden`]'s
+    /// one key) -- [`exec::loop_::step_overlay`]'s own `prime_fallback`
+    /// is a live `NodeRef` reused across every later step/pass instead,
+    /// so a step that isn't the first in its own scope could otherwise
+    /// see a *later* sibling's own skeleton node (created, not yet
+    /// rendered -- `exec::tool::execute_tool` `ensure_dict`s an effect's
+    /// own node before rendering its params) the instant that sibling
+    /// starts, something cof's own frozen copy never exposes. Exact
+    /// under two invariants this count alone can't re-check on every
+    /// read, so both are checked once, elsewhere, instead:
+    ///
+    /// 1. Nothing ever `shift_remove`s a key from the specific node a
+    ///    watermark counts against -- checked for every `shift_remove`
+    ///    call site in this crate: every one operates on an effect's
+    ///    own nested `meta` dict (`exec::tool`/`exec::use_`'s own
+    ///    `pop_leaf`, `exec::loop_`'s own `failed_passes` pop), never on
+    ///    a `prime`/loop-name node directly -- the only kind [`exec::
+    ///    loop_::step_overlay`]/[`exec::loop_::with_prev_overlay`] ever
+    ///    watermark or hide a key on. A `shift_remove` there would shift
+    ///    every later key's own index down by one, silently exposing
+    ///    whatever key the watermark's own count next lands on instead
+    ///    of the one actually meant.
+    /// 2. The node a watermark counts against only ever *grows* new
+    ///    top-level keys from here on -- never itself becomes an
+    ///    overlay with a `fallback`/`hidden`/`watermark` of its own,
+    ///    whose growth this type's own index-based count can't see
+    ///    through. True because every [`Store`] write-path method
+    ///    (`ensure_dict`/`set_leaf`/`alias`/`merge`) only ever takes a
+    ///    real, `Store`-created node as *parent* -- each one
+    ///    `debug_assert!`s `parent`'s own `fallback` is `None` on entry
+    ///    -- and a real node's `fallback`/`hidden`/`watermark` are
+    ///    always `None` for its whole lifetime (only `exec::loop_`'s own
+    ///    `plain_overlay`/`with_prev_overlay`/`step_overlay` ever build
+    ///    one of those, and never write into it afterward).
+    watermark: Option<usize>,
+}
 
-/// A fresh, empty node.
+impl Node {
+    /// *self*'s own top-level map, with no [`Node::fallback`] applied.
+    /// Correct only when the caller already knows *self* never carries a
+    /// *fallback* (every [`Store`]-created node) -- see this struct's
+    /// own doc comment. Reaching into a node fed from a [`CtxChain`]
+    /// instead needs [`Node::flat_entries`].
+    pub fn entries(&self) -> &IndexMap<Value, Slot> {
+        &self.entries
+    }
+
+    /// *self*'s own entries layered on top of *fallback*'s own
+    /// [`Node::flat_entries`] (recursively, so a chain of overlays still
+    /// flattens to one map, and [`Node::hidden`]/[`Node::watermark`] are
+    /// respected at every hop), or just *self*'s own entries if
+    /// *fallback* is `None` -- an eager version of the lazy walk
+    /// [`Store::peek`]/[`Store::snapshot`] do one key/one whole subtree
+    /// at a time, for a caller (`exec::loop_`/`exec::conditional`'s own
+    /// `chain_slots`/`dict_slots`) that needs every key as a plain,
+    /// detached [`IndexMap`] up front rather than a further live
+    /// [`NodeRef`] to keep reading lazily. *Not* O(1): this walks the
+    /// whole fallback chain and clones every key it carries, same as
+    /// the pre-#484 shape of the two callers above -- correct for them
+    /// precisely because neither is on an O(1)-per-pass path (unlike
+    /// `exec::loop_`'s own `plain_overlay`/`with_prev_overlay`/
+    /// `step_overlay`, which layer directly via [`Store::peek`]-backed
+    /// fallback resolution and never call this).
+    pub fn flat_entries(&self) -> IndexMap<Value, Slot> {
+        self.flat_entries_under(None)
+    }
+
+    /// [`Node::flat_entries`]'s own recursion, carrying *watermark* --
+    /// the caller one level up's own [`Node::watermark`] field, if any,
+    /// constraining *this* node's own direct entries (not *its*
+    /// `fallback`'s, which only ever answers to *this* node's own
+    /// `watermark` field instead, checked when recursing below).
+    fn flat_entries_under(&self, watermark: Option<usize>) -> IndexMap<Value, Slot> {
+        let mut merged = match &self.fallback {
+            Some(fallback) => {
+                let mut m = fallback.borrow().flat_entries_under(self.watermark);
+                if let Some(hidden) = &self.hidden {
+                    m.shift_remove(hidden);
+                }
+                m
+            }
+            None => IndexMap::with_capacity(self.entries.len()),
+        };
+        for (k, v) in self.entries.iter() {
+            merged.insert(k.clone(), v.clone());
+        }
+        if let Some(n) = watermark {
+            for (k, _) in self.entries.iter().skip(n) {
+                merged.shift_remove(k);
+            }
+        }
+        merged
+    }
+}
+
+impl std::ops::Deref for Node {
+    type Target = IndexMap<Value, Slot>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for Node {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+/// A single mutable state node -- `Rc<RefCell<Node>>`. Shared so that two
+/// different paths can reference the identical live node (`Rc::ptr_eq`),
+/// not a deep copy of it.
+pub type NodeRef = Rc<RefCell<Node>>;
+
+/// A fresh, empty node with no fallback.
 pub fn new_node() -> NodeRef {
-    Rc::new(RefCell::new(IndexMap::new()))
+    Rc::new(RefCell::new(Node {
+        entries: IndexMap::new(),
+        fallback: None,
+        hidden: None,
+        watermark: None,
+    }))
+}
+
+/// A fresh node carrying *entries*, with no fallback -- the plain,
+/// detached-overlay shape every ctx-chain builder in `exec::loop_`/
+/// `exec::conditional`/`exec::live_scope` already wraps a freshly merged
+/// map in.
+pub fn node_from_entries(entries: IndexMap<Value, Slot>) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: None,
+        hidden: None,
+        watermark: None,
+    }))
+}
+
+/// A fresh node carrying *entries*, falling back to *fallback* for any
+/// key *entries* doesn't have -- see [`Node`]'s own doc comment.
+pub fn node_with_fallback(entries: IndexMap<Value, Slot>, fallback: NodeRef) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: Some(fallback),
+        hidden: None,
+        watermark: None,
+    }))
+}
+
+/// [`node_with_fallback`], plus [`Node::hidden`] -- a single key
+/// *fallback* must never expose through this overlay, even once
+/// *fallback* itself comes to carry it (issue #501 review finding 2).
+pub fn node_with_fallback_hiding(
+    entries: IndexMap<Value, Slot>,
+    fallback: NodeRef,
+    hidden: Value,
+) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: Some(fallback),
+        hidden: Some(hidden),
+        watermark: None,
+    }))
+}
+
+/// [`node_with_fallback`], plus [`Node::watermark`] -- *fallback*'s own
+/// direct-entry count as of right now, so any key it gains afterward
+/// stays invisible through this overlay (issue #501's second review:
+/// `exec::loop_::step_overlay`'s own use).
+pub fn node_with_fallback_watermarked(
+    entries: IndexMap<Value, Slot>,
+    fallback: NodeRef,
+    watermark: usize,
+) -> NodeRef {
+    Rc::new(RefCell::new(Node {
+        entries,
+        fallback: Some(fallback),
+        hidden: None,
+        watermark: Some(watermark),
+    }))
 }
 
 /// [`Store`]'s own operations' error.
@@ -101,6 +337,11 @@ impl Store {
     /// and the key's insertion-order position -- Python descends into
     /// *any* dict, not only ones it created through `ensure_dict` itself.
     pub fn ensure_dict(&self, parent: &NodeRef, key: Value) -> Result<NodeRef, StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::ensure_dict: parent is one of exec::loop_'s detached overlay nodes, not a \
+             real Store-created one -- see Node's own doc comment"
+        );
         let mut parent_map = parent.borrow_mut();
         if let Some(Slot::Node(existing)) = parent_map.get(&key) {
             return Ok(Rc::clone(existing));
@@ -113,7 +354,7 @@ impl Store {
             .into_iter()
             .map(|(k, v)| (k, Slot::Value(v)))
             .collect();
-        let child = Rc::new(RefCell::new(converted));
+        let child = node_from_entries(converted);
         // `insert` on an already-present key overwrites the value
         // without moving the key's position (`IndexMap`'s own contract),
         // and inserts at the end for a key that wasn't there yet -- the
@@ -155,6 +396,11 @@ impl Store {
     /// separate registry entry to go stale, unlike an address-keyed side
     /// table would leave behind.
     pub fn set_leaf(&self, parent: &NodeRef, key: Value, value: Value) {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::set_leaf: parent is one of exec::loop_'s detached overlay nodes, not a \
+             real Store-created one -- see Node's own doc comment"
+        );
         parent.borrow_mut().insert(key, Slot::Value(value));
     }
 
@@ -177,6 +423,11 @@ impl Store {
         alias_key: Value,
         target_key: &Value,
     ) -> Result<NodeRef, StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::alias: parent is one of exec::loop_'s detached overlay nodes, not a real \
+             Store-created one -- see Node's own doc comment"
+        );
         let target = self.child(parent, target_key)?.ok_or_else(|| {
             StoreError(format!(
                 "electricity_vm::Store::alias: no such key {} to alias to",
@@ -224,8 +475,13 @@ impl Store {
     /// -- branches are applied to *parent* in ascending index order, so
     /// each later merge overwrites whatever an earlier one wrote.
     pub fn merge(&self, parent: &NodeRef, branches: Vec<NodeRef>) -> Result<(), StoreError> {
+        debug_assert!(
+            parent.borrow().fallback.is_none(),
+            "Store::merge: parent is one of exec::loop_'s detached overlay nodes, not a real \
+             Store-created one -- see Node's own doc comment"
+        );
         for branch in branches {
-            let entries = std::mem::take(&mut *branch.borrow_mut());
+            let entries = std::mem::take(&mut branch.borrow_mut().entries);
             for (key, slot) in entries {
                 parent.borrow_mut().insert(key, slot);
             }
@@ -245,8 +501,39 @@ impl Store {
     /// an `Rc` bump for a [`Slot::Node`], or whatever that one leaf's own
     /// size is for a [`Slot::Value`], never anything *else* under
     /// *parent*.
+    ///
+    /// Falls through to *parent*'s own [`Node::fallback`], if any and if
+    /// *key* isn't one of *parent*'s own entries -- another O(1)
+    /// [`RefCell::borrow`], never a walk of anything *fallback* doesn't
+    /// itself also have to fall through for. Short-circuits to `None`
+    /// without ever touching *fallback* if *key* is *parent*'s own
+    /// [`Node::hidden`] key instead; same if *key* is one of
+    /// *fallback*'s own direct entries but only reached its position at
+    /// or after *parent*'s own [`Node::watermark`] -- a key *fallback*
+    /// (real, still-mutating) gained *after* *parent* was built.
     pub fn peek(&self, parent: &NodeRef, key: &Value) -> Option<Slot> {
-        parent.borrow().get(key).cloned()
+        self.peek_under(parent, key, None)
+    }
+
+    /// [`Store::peek`]'s own recursion, carrying *watermark* -- the
+    /// caller one level up's own [`Node::watermark`], if any,
+    /// constraining *this* node's own direct entries.
+    fn peek_under(&self, parent: &NodeRef, key: &Value, watermark: Option<usize>) -> Option<Slot> {
+        let node = parent.borrow();
+        if let Some(slot) = node.entries.get(key) {
+            if watermark.is_some_and(|n| node.entries.get_index_of(key).is_some_and(|idx| idx >= n))
+            {
+                return None;
+            }
+            return Some(slot.clone());
+        }
+        if node.hidden.as_ref() == Some(key) {
+            return None;
+        }
+        let fallback = node.fallback.clone();
+        let next_watermark = node.watermark;
+        drop(node);
+        fallback.and_then(|f| self.peek_under(&f, key, next_watermark))
     }
 
     /// An owned [`Value`] snapshot of *node* -- recursively resolving
@@ -263,19 +550,99 @@ impl Store {
     /// `core/saved_state.py`/`cli/runtime_shim.py`/`mcp/server.py` only
     /// ever call `compact_last_aliases` -- [`Store::saved`], below -- on
     /// a value about to be serialized, never on a live ctx).
+    ///
+    /// A node with a [`Node::fallback`] (the `prime.<loop_name>` overlay
+    /// [`exec::loop_::with_prev_overlay`] builds, issue #484) starts from
+    /// *fallback*'s own full snapshot -- recursively, so a chain of
+    /// overlays still resolves to one flat dict -- then layers *node*'s
+    /// own entries (here, just `prev`) on top, the same "later entry
+    /// wins its whole key, in whichever position it first appears"
+    /// [`IndexMap::insert`] already gives every other merge in this
+    /// crate -- *including* a key some enclosing overlay shadows (issue
+    /// #501's second review, finding 2: a placeholder at that key's own
+    /// *natural* position, the same one Python's `{**d, k: v}`/`prime[
+    /// name] = own` would have left it at, holds that position until
+    /// whichever shallower hop actually owns the key overwrites it --
+    /// `IndexMap::insert` on an *already-present* key overwrites the
+    /// value without moving it, so the final position is the first,
+    /// deepest place this key was ever seen, never wherever the
+    /// shallowest hop happened to insert it after skipping every deeper
+    /// one). A key some overlay *does* shadow (finding 3 on the first
+    /// review: without the skip half of this, a key `with_prev_
+    /// overlay`'s three stacked overlays all happen to leave untouched
+    /// -- the common case, since each only ever adds `prev`/the loop
+    /// name/`prime` -- would still get resolved once per overlay hop on
+    /// the way down, including a full, recursive [`Slot::Node`] subtree
+    /// resolve for a container value, only to be discarded the moment a
+    /// shallower hop's own entry for that same key overwrites it) has
+    /// its *value* resolved once, at the hop that actually owns it, but
+    /// a placeholder [`Value::None`] reserves its *position* at every
+    /// shadowed hop below that: [`Self::snapshot_shadowed`]'s own
+    /// *shadow* accumulates every enclosing overlay's own entries on the
+    /// way down, so a key any of them will supply anyway is skipped
+    /// (value-wise) at every hop below, the same "later entry wins" rule
+    /// applied before paying for the value instead of after, without
+    /// also reordering it the way plain omission would. [`Node::hidden`]
+    /// is skipped entirely -- no placeholder, no later owner to overwrite
+    /// it -- unconditionally (finding 2 on the first review) -- see its
+    /// own doc comment.
     pub fn snapshot(&self, node: &NodeRef) -> Value {
         #[cfg(test)]
         self.snapshot_calls.set(self.snapshot_calls.get() + 1);
+        Value::Dict(self.snapshot_shadowed(node, &[], None))
+    }
+
+    /// [`Store::snapshot`]'s own recursion, carrying *shadow* -- every
+    /// enclosing overlay's own entries, outermost first -- down through
+    /// *node*'s own [`Node::fallback`] chain -- and *watermark*, the
+    /// caller one level up's own [`Node::watermark`], if any,
+    /// constraining *node*'s own direct entries the same way
+    /// [`Node::hidden`] does: skipped entirely, no placeholder, since a
+    /// watermarked-away key is a brand new one nothing deeper could
+    /// already be shadowing. Never touches [`Store::snapshot_calls`]:
+    /// that counter tracks how many *whole subtrees* a caller asked this
+    /// crate to materialize, not how many internal hops doing so took.
+    fn snapshot_shadowed(
+        &self,
+        node: &NodeRef,
+        shadow: &[&IndexMap<Value, Slot>],
+        watermark: Option<usize>,
+    ) -> IndexMap<Value, Value> {
         let map = node.borrow();
-        let mut result = IndexMap::with_capacity(map.len());
-        for (key, slot) in map.iter() {
+        let mut result = match &map.fallback {
+            Some(fallback) => {
+                let mut next_shadow = shadow.to_vec();
+                next_shadow.push(&map.entries);
+                let mut resolved = self.snapshot_shadowed(fallback, &next_shadow, map.watermark);
+                if let Some(hidden) = &map.hidden {
+                    resolved.shift_remove(hidden);
+                }
+                resolved
+            }
+            None => IndexMap::with_capacity(map.entries.len()),
+        };
+        for (idx, (key, slot)) in map.entries.iter().enumerate() {
+            if watermark.is_some_and(|n| idx >= n) {
+                continue;
+            }
+            if shadow.iter().any(|s| s.contains_key(key)) {
+                // Reserve *key*'s own position (its first, deepest
+                // appearance) with a placeholder rather than skipping it
+                // outright -- the shallower hop that actually owns this
+                // key still runs this same loop at its own level and
+                // overwrites the placeholder in place, never appending a
+                // fresh entry at the end the way an outright `continue`
+                // (pre-this-fix) would.
+                result.entry(key.clone()).or_insert(Value::None);
+                continue;
+            }
             let value = match slot {
                 Slot::Value(v) => v.clone(),
-                Slot::Node(child) => self.snapshot(child),
+                Slot::Node(child) => Value::Dict(self.snapshot_shadowed(child, &[], None)),
             };
             result.insert(key.clone(), value);
         }
-        Value::Dict(result)
+        result
     }
 
     /// *node*'s saved form -- the one `--out`/`--live-state` actually
@@ -712,6 +1079,90 @@ mod tests {
                 assert_eq!(d.get(&key("value")), Some(&Value::Str("done".to_string())))
             }
             other => panic!("expected last's own full content, got {other:?}"),
+        }
+    }
+
+    /// Issue #501's third review (P1 -- "the watermark has no test"):
+    /// `peek`/`snapshot`/`Node::flat_entries` must all agree a
+    /// watermarked overlay hides a key its own `fallback` gains *after*
+    /// the watermark was taken.
+    #[test]
+    fn watermark_hides_a_key_added_to_the_fallback_after_it_was_taken() {
+        let store = Store::new();
+        let real = store.ensure_dict(&store.root, key("prime")).unwrap();
+        store.ensure_dict(&real, key("a")).unwrap();
+
+        let watermark = real.borrow().len();
+        let overlay = node_with_fallback_watermarked(IndexMap::new(), Rc::clone(&real), watermark);
+
+        // A key added to `real` *after* the watermark was taken.
+        let later = store.ensure_dict(&real, key("b")).unwrap();
+        store.set_leaf(&later, key("v"), Value::Int(9.into()));
+
+        assert!(
+            store.peek(&overlay, &key("b")).is_none(),
+            "peek must hide a key fallback gained after the watermark"
+        );
+        assert!(
+            !overlay.borrow().flat_entries().contains_key(&key("b")),
+            "flat_entries must hide it too"
+        );
+        let Value::Dict(ref snapshot) = store.snapshot(&overlay) else {
+            panic!("expected a dict");
+        };
+        assert!(
+            !snapshot.contains_key(&key("b")),
+            "snapshot must hide it too, got {snapshot:?}"
+        );
+        // `a` -- present before the watermark was taken -- must still
+        // be visible through all three, unaffected.
+        assert!(store.peek(&overlay, &key("a")).is_some());
+        assert!(overlay.borrow().flat_entries().contains_key(&key("a")));
+        assert!(snapshot.contains_key(&key("a")));
+    }
+
+    /// The watermark counts *fallback*'s own direct entries, never
+    /// descends into an existing child -- a write inside a child that
+    /// already existed when the watermark was taken must stay visible
+    /// through all three readers, exactly as a key `fallback` already
+    /// had would.
+    #[test]
+    fn watermark_still_sees_a_write_inside_an_already_present_child() {
+        let store = Store::new();
+        let real = store.ensure_dict(&store.root, key("prime")).unwrap();
+        let existing_child = store.ensure_dict(&real, key("a")).unwrap();
+        store.set_leaf(&existing_child, key("v"), Value::Int(1.into()));
+
+        let watermark = real.borrow().len();
+        let overlay = node_with_fallback_watermarked(IndexMap::new(), Rc::clone(&real), watermark);
+
+        // A write *inside* `a` -- not a new top-level key on `real` --
+        // after the watermark was taken.
+        store.set_leaf(&existing_child, key("v"), Value::Int(2.into()));
+
+        match store.peek(&overlay, &key("a")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(&n, &existing_child)),
+            other => panic!("expected the existing child, got {other:?}"),
+        }
+        assert_eq!(
+            get_value(&existing_child, &key("v")),
+            Some(Value::Int(2.into()))
+        );
+
+        let flat = overlay.borrow().flat_entries();
+        match flat.get(&key("a")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(n, &existing_child)),
+            other => panic!("flat_entries expected the existing child, got {other:?}"),
+        }
+
+        let Value::Dict(ref snapshot) = store.snapshot(&overlay) else {
+            panic!("expected a dict");
+        };
+        match snapshot.get(&key("a")) {
+            Some(Value::Dict(a)) => {
+                assert_eq!(a.get(&key("v")), Some(&Value::Int(2.into())))
+            }
+            other => panic!("snapshot expected a's own materialized dict, got {other:?}"),
         }
     }
 

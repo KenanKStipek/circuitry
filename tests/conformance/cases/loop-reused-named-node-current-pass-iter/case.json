@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #501's second review (P0, reused loop node)",
+  "description": "A named loop (`inner`) nested inside an unnamed outer loop reuses the exact same real node across outer passes. The second inner pass (`iter_1`)'s own `y` step reads its own current-pass `prime.inner.iter_1.x.value.v`, self-referentially, through the loop's `prev` overlay: absent on the outer loop's first pass (inner's own node is fresh), but present -- already carried from the first outer pass's own run -- on the second.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
