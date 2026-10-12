@@ -2193,9 +2193,14 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   `meta.decomposition.{decomposed, outcome, reason, score, threshold, depth, max_depth, plan?,
   chunk_count?, yaml?, result_path?, fallback_model?, error?}` — present only when actually
   triggered, absent otherwise, the same all-or-nothing-key rule as scoring.
-- **The reflector effect's own planning prompt** runs with decomposition/scoring/routing forced
-  off for itself specifically (its prompt is deliberately huge and would otherwise trigger the
-  very feature it's generating); this is the one documented exception, reproduced exactly.
+- **The reflector effect's own planning prompt** runs with nothing forced off for itself:
+  `ReflectorRuntime`'s own inner `DynamicRuntime`/generated `UseRuntime` both get the same
+  `runtime_config` the reflector itself received, unchanged, so scoring, routing and decomposition
+  all apply to the planning prompt exactly as they would to any other one. The only thing that
+  changes is `self.depth`: neither is given a `depth=` keyword, so both reset to 0 regardless of
+  how deep the reflector itself is nested — not a forced-off special case, just Python's own
+  default for a runtime built without one (issue #516, M1-K2; corrects an earlier draft of this
+  bullet, which had this backwards).
 
 ---
 

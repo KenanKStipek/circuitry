@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #516 (M1-K2): runtime.complexity present with scoring.enabled: false",
+  "description": "No meta.complexity key anywhere when scoring is off (DESIGN C26).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,7 @@
+name: complexity-routing-model-lock-respect-explicit-false
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

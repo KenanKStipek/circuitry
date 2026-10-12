@@ -20,6 +20,7 @@
 
 pub mod adapter;
 pub mod adapter_names;
+pub mod complexity;
 pub mod compose;
 pub mod exec;
 pub mod frame;
@@ -141,11 +142,6 @@ pub struct RunContext<'a> {
     /// `{{> name}}`'s own "not a declared prompt" vs "a declared prompt
     /// that hasn't run yet" distinction. Lane P.
     pub effect_names: &'a BTreeSet<String>,
-    /// `core/prompt.py`'s own container-nesting display depth
-    /// (`structure.depth`), threaded alongside the store path rather
-    /// than derived from it -- see electricity/docs/spec/vm-lanes.md's
-    /// M1 table, §4 finding 3. Lane K1.
-    pub display_depth: u32,
     /// This run's own capability set -- `electricity` (lib)'s run wiring
     /// builds it once, from `electricity_bytecode::refusal::Supported::
     /// current(...)` with the `test-tools` cargo feature's own extras,
@@ -496,7 +492,6 @@ mod tests {
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         };
         execute_root(

@@ -1,0 +1,16 @@
+{
+  "runtime": {
+    "complexity": {
+      "scoring": {"enabled": true},
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {"model": "model-big"}
+        ]
+      }
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}

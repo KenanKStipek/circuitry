@@ -519,7 +519,6 @@ pub fn run_ctx<'a>(
         orchestration_dir: dir.as_path(),
         declared_prompts,
         effect_names,
-        display_depth: 0,
         supported: electricity_bytecode::Supported::m0(&[]),
     }
 }

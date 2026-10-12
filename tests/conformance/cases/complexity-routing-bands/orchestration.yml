@@ -1,0 +1,10 @@
+name: complexity-routing-bands
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: short_one
+    template: "hi"
+  - type: prompt
+    name: long_one
+    template: "Please analyze and critique this thoroughly, cross-reference every claim, and justify your conclusion with a detailed chain of thought."

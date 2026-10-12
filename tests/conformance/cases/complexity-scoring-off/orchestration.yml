@@ -1,0 +1,7 @@
+name: complexity-scoring-off
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi there"

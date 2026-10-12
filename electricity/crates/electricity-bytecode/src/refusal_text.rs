@@ -50,9 +50,8 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::DocumentAdapter(adapter) => format!(
             "a document that names adapter {adapter:?}, and electricity does not run preflight checks yet"
         ),
-        RefusalReason::ComplexityEnabled => {
-            "a run whose effective config enables complexity scoring, routing or decomposition"
-                .to_string()
+        RefusalReason::DecompositionEnabled => {
+            "a run whose effective config enables complexity decomposition".to_string()
         }
         RefusalReason::UnsupportedAdapter(name) => format!(
             "a prompt effect naming adapter {name:?}, which this build of electricity has no builder for"

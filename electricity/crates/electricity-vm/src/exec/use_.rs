@@ -703,7 +703,15 @@ async fn attempt_once<R: ParamsCtx>(
     // actually namespaces every effect the child runs under this
     // node; `Frame::push_use` only ever extends the cycle-detection
     // stack, never the path prefix.
-    let child_frame = frame.nested(&op.path).push_use(loaded.identity.clone());
+    // Issue #516 §4(c): the child document's own root `dynamic` is one
+    // display level deeper than the `use` effect that spawned it,
+    // whatever ambient depth *this* frame already carries.
+    let child_frame = frame
+        .nested(&op.path)
+        .with_display_depth(crate::complexity::depth::use_child_root(
+            frame.display_depth(),
+        ))
+        .push_use(loaded.identity.clone());
 
     let child_program = electricity_compiler::compile_document(&loaded.document, &loaded.origin)
         .map_err(|e| not_retried(e.0))?;
@@ -816,7 +824,7 @@ async fn attempt_once<R: ParamsCtx>(
     // `Supported` value the parent run was already checked against).
     if let Some(refusal) = electricity_bytecode::first_unsupported(
         &child_program,
-        run_ctx.complexity.enabled(),
+        run_ctx.complexity.decomposition.enabled,
         &run_ctx.supported,
     ) {
         return Err(AttemptProblem::Fatal(VmError::Refused {
@@ -852,7 +860,6 @@ async fn attempt_once<R: ParamsCtx>(
         orchestration_dir: &document_dir,
         declared_prompts: &child_program.prompts,
         effect_names: &child_program.effect_names,
-        display_depth: run_ctx.display_depth + 1,
         supported: run_ctx.supported,
     };
 
@@ -1607,7 +1614,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             orchestration_dir,
             declared_prompts: &declared_prompts,
             effect_names: &effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         };
         let frame = Frame::root();
@@ -1697,7 +1703,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             orchestration_dir: dir.as_path(),
             declared_prompts,
             effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         }
     }

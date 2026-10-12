@@ -1,0 +1,4 @@
+prime.ask_template:
+  - text: "a plain answer"
+prime.ask_messages:
+  - text: '{"answer": "ok"}'

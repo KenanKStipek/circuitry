@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #516 (M1-K2): the same locked profile, with routing.respect_explicit: false",
+  "description": "The router wins despite the run-level lock: model_reason: \"router\", model becomes the scored band's model.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "config": "config.json",
+  "expect": "success"
+}

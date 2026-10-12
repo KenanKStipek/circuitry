@@ -1378,7 +1378,8 @@ pub async fn run_orchestration_with_config(
     // after every check error above and before any file is written --
     // no state is written for a refusal at all (this function's own
     // doc comment).
-    if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
+    if let Some(refusal) = first_unsupported(&program, complexity.decomposition.enabled, &supported)
+    {
         return RunResult {
             ok: false,
             out_path: None,
@@ -1400,7 +1401,7 @@ pub async fn run_orchestration_with_config(
     if let Some(refusal) = electricity_compiler::use_children::first_refused_child(
         &loaded.document,
         Some(&req.orchestration_path),
-        complexity.enabled(),
+        complexity.decomposition.enabled,
         &supported,
     ) {
         return RunResult {
@@ -1668,7 +1669,6 @@ pub async fn run_orchestration_with_config(
         orchestration_dir,
         declared_prompts: &program.prompts,
         effect_names: &program.effect_names,
-        display_depth: 0,
         supported,
     };
 
