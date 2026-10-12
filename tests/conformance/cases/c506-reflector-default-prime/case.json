@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "The default REFLECTOR_PRIME_V1 (no `prime_template:` override), pinning the planner's own `meta.prompt_sent` byte-for-byte -- the goal and the `{context}` JSON (`{\"adapter\":..., \"model\":..., \"plugins\":[]}`) rendered against the default prime, review finding 2 on PR #510's first review.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

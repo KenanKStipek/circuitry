@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "The generated child's own effect fails (a `json` tool given unparseable input): `generated_exec_failed: use 'iter_0' -> inline: prime.check: ...` plus `meta.child_errors` on the generated use node, compared exact (review finding 2 on PR #510's first review).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

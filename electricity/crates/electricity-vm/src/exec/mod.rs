@@ -85,6 +85,37 @@ pub(crate) fn store_err(err: StoreError) -> VmError {
     VmError::Message(err.to_string())
 }
 
+/// *meta*'s own `completed_at`, Python-truthy -- `cli/runtime_shim.py::
+/// _TotalsAccumulator.observe`'s own `meta.get("completed_at")` guard,
+/// decided here, by every container, from whichever `Store`/`NodeRef`
+/// it already has in scope at its own [`crate::RunObserver::
+/// effect_complete`] call, and carried through that hook's own
+/// *completed_at_is_truthy* parameter from there on (orchestrator fix,
+/// issue #506 lane L1's review round 2: `electricity` (lib)'s own
+/// `Observer::effect_complete` used to re-derive this by walking the
+/// *run's* own root store, segment by segment, from *path* alone --
+/// which can never see a node still isolated in its own `use` child's
+/// or tree branch's own `Store` at the exact moment its own
+/// `effect_complete` fires, so it silently guessed `true` there
+/// regardless, over-counting `effects_run` for a successful `reflector`
+/// -- the one effect type whose own success never writes a
+/// `completed_at` at all, issue #506's own bug-compatible rule --
+/// inside either container shape). Every other site this crate ever
+/// calls `effect_complete` from already writes a real `completed_at`
+/// timestamp immediately beforehand on every exit path that reaches
+/// that call at all, so this reads back `true` there every time; a
+/// cancellation a container's own `except`-shaped guard lets fall
+/// through to its own unconditional `effect_complete` call without
+/// ever refreshing `completed_at` (`exec::conditional`'s own named
+/// `if`) reads back `false` here instead of the old walk's own
+/// store-local lucky guess.
+pub(crate) fn completed_at_is_truthy(store: &Store, meta: &NodeRef) -> bool {
+    match store.peek(meta, &key("completed_at")) {
+        Some(crate::Slot::Value(v)) => v.as_str().is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
+}
+
 /// `dict(self.defn.labels) if self.defn.labels else None`
 /// (`core/dynamic.py`/`core/conditional.py`) -- an absent *or* empty
 /// `labels:` both read back as `meta.labels: null`, since an empty dict
@@ -356,7 +387,13 @@ pub(crate) fn execute_op<'a>(
                 let effect_path = frame.effect_path(&op.path);
                 let instance = observer.effect_start(&effect_path);
                 disabled::write_disabled_node(store, parent, op)?;
-                observer.effect_complete(&effect_path, instance, None);
+                // `write_disabled_node` is a stub that always errors
+                // (never reached by any build that compiles a real
+                // document, this function's own doc comment) -- `?`
+                // above already propagates before this ever runs, so
+                // there is no real node to peek `completed_at` off of;
+                // `true` is this call's own dead-but-type-correct value.
+                observer.effect_complete(&effect_path, instance, None, true);
             }
             return Ok(());
         }

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "Three silent stops the issue's test plan calls out: a prose reply, a mapping with no `effects`/`steps`/`plan` key, and a `prompt_type: json` plan step (plan text is always `\"\"`) -- each a success with `stop: true` and nothing generated.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

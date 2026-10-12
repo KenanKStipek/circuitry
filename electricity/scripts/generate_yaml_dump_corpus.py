@@ -2,10 +2,14 @@
 """Generate electricity-yaml's `dump` golden corpus from real PyYAML.
 
 Every case is `yaml.dump(value, default_flow_style=False, sort_keys=...)`
-over a synthetic value (nothing copied from private orchestrations), with
-both `sort_keys` settings recorded for every case so the one corpus serves
-both reflector's own `sort_keys=True` call and M1-L2's `safe_dump(sort_keys
-=False)`.
+over a synthetic value (nothing copied from private orchestrations). Every
+case defaults to `sort_keys=True` (reflector's own call); the mapping-key-
+order cases alone (`key_order_cases`, below) are each recorded *twice* --
+once `sort_keys=True`, once `sort_keys=False` -- since that is the one knob
+ordering can actually depend on, so the one corpus serves M1-L2's
+`safe_dump(sort_keys=False)` too without doubling every other case for a
+knob that can't change their output (review finding 7 on PR #510's first
+review: an earlier draft of this docstring overstated this).
 
 Must be run with Python 3.11 and the pinned `PyYAML==6.0.3`
 (`generator-constraints.txt`): PyYAML's own emitter output -- the exact

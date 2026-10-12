@@ -141,9 +141,36 @@ fn reflector_leaf(
     prime_template: &str,
     max_effects: u32,
 ) -> Op {
+    reflector_leaf_with_inner(
+        name,
+        plan_from_step,
+        max_iterations,
+        generated_key,
+        stop_on_done,
+        prime_template,
+        max_effects,
+        plan_prompt(plan_from_step),
+    )
+}
+
+/// [`reflector_leaf`], with *inner_prompt* (normally [`plan_prompt`])
+/// given by the caller instead -- lets a test build a plan step with
+/// non-default fields (e.g. `provider:`) without duplicating every
+/// other `ReflectorOp` field.
+#[allow(clippy::too_many_arguments)]
+fn reflector_leaf_with_inner(
+    name: &str,
+    plan_from_step: &str,
+    max_iterations: u32,
+    generated_key: &str,
+    stop_on_done: bool,
+    prime_template: &str,
+    max_effects: u32,
+    inner_prompt: Op,
+) -> Op {
     let op = ReflectorOp {
         inner: Box::new(Region::Block {
-            ops: vec![plan_prompt(plan_from_step)],
+            ops: vec![inner_prompt],
             overlay: false,
         }),
         plan_from_step: plan_from_step.to_string(),
@@ -294,6 +321,65 @@ async fn done_true_with_stop_on_done_never_runs_the_generated_plan() {
 }
 
 #[tokio::test]
+async fn an_inner_refusal_is_recorded_on_the_reflector_node_and_returned_unwrapped() {
+    // Review finding 1 on PR #510's first review: a `VmError::Refused`
+    // from the inner planner's own dispatch (an unbuildable
+    // `adapter:`, `exec::prompt`'s own `is_unbuildable` check) used to
+    // take the same no-record branch as `VmError::Cancelled` --
+    // skipping the iteration record, `meta.error`, `completed_at`,
+    // `value: false` and `effect_complete`'s own error text entirely.
+    // Orchestrator ruling R1 on PR #462 requires it recorded like an
+    // ordinary failure, with the bare `Refused` value still returned
+    // unwrapped so no enclosing `on_error: continue` ever absorbs it.
+    let mut inner_prompt = plan_prompt("propose_steps");
+    if let NodeKind::Leaf(leaf) = &mut inner_prompt.kind {
+        if let LeafKind::Prompt(prompt_op) = leaf.as_mut() {
+            prompt_op.provider = Some("openai".to_string());
+        }
+    }
+    let leaf = reflector_leaf_with_inner(
+        "plan_it",
+        "propose_steps",
+        1,
+        "generated",
+        true,
+        "plan it",
+        8,
+        inner_prompt,
+    );
+    let (store, _observer, result) = run_reflector(leaf, vec![]).await;
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, VmError::Refused { .. }),
+        "expected VmError::Refused, got {err:?}"
+    );
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let refl = as_dict(get(prime, "plan_it").unwrap());
+    assert_eq!(get(refl, "value"), Some(&Value::Bool(false)));
+
+    let meta = as_dict(get(refl, "meta").unwrap());
+    let error_text = match get(meta, "error").unwrap() {
+        Value::Str(s) => s.clone(),
+        other => panic!("expected a string error, got {other:?}"),
+    };
+    assert!(
+        error_text.starts_with("inner_failed: "),
+        "got {error_text:?}"
+    );
+    assert!(get(meta, "completed_at").is_some());
+
+    let iterations = match get(meta, "iterations").unwrap() {
+        Value::List(items) => items,
+        other => panic!("expected a list, got {other:?}"),
+    };
+    assert_eq!(iterations.len(), 1);
+    let rec = as_dict(&iterations[0]);
+    assert_eq!(get(rec, "error"), Some(&Value::Str(error_text)));
+}
+
+#[tokio::test]
 async fn an_oversized_plan_fails_with_the_exact_invalid_plan_text() {
     let plan_reply = "done: false\neffects:\n  \
         - {type: tool, name: a, provider: json}\n  \
@@ -328,4 +414,182 @@ async fn an_oversized_plan_fails_with_the_exact_invalid_plan_text() {
         ))
     );
     assert!(get(meta, "completed_at").is_some());
+}
+
+#[tokio::test]
+async fn a_generated_model_mode_if_is_refused_and_never_absorbed() {
+    // Issue #506's own "Rust-only tests" list: a generated plan with a
+    // model-mode `if` (`mode: model` -- `Supported::current` before G2
+    // flips `model_condition`) is a mid-run `VmError::Refused`,
+    // recorded on both the generated `use` node and this reflector's
+    // own node (orchestrator ruling R1 on PR #462), and returned
+    // unwrapped so an enclosing `on_error: continue` never absorbs it
+    // (this test's own chain `dynamic` -- built by `run_reflector`'s
+    // own `chain_dynamic` helper with `OnError::Fail` -- fails the
+    // whole run exactly because of that).
+    let plan_reply = "done: false\neffects:\n  \
+        - type: if\n    \
+          name: check\n    \
+          if:\n      \
+            mode: model\n      \
+            template: 'go?'\n    \
+          then:\n      \
+            - type: tool\n        \
+              name: inner_tool\n        \
+              provider: json\n        \
+              params:\n          \
+                mode: parse\n          \
+                input: '{\"ok\": true}'\n";
+    let leaf = reflector_leaf(
+        "plan_it",
+        "propose_steps",
+        1,
+        "generated",
+        true,
+        "plan it",
+        8,
+    );
+    let (store, _observer, result) = run_reflector(leaf, vec![plan_reply]).await;
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, VmError::Refused { .. }),
+        "expected VmError::Refused, got {err:?}"
+    );
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let refl = as_dict(get(prime, "plan_it").unwrap());
+    assert_eq!(get(refl, "value"), Some(&Value::Bool(false)));
+
+    let meta = as_dict(get(refl, "meta").unwrap());
+    let error_text = match get(meta, "error").unwrap() {
+        Value::Str(s) => s.clone(),
+        other => panic!("expected a string error, got {other:?}"),
+    };
+    assert!(
+        error_text.starts_with("generated_exec_failed: "),
+        "got {error_text:?}"
+    );
+    assert!(get(meta, "completed_at").is_some());
+
+    let generated = as_dict(get(refl, "generated").unwrap());
+    let iter0 = as_dict(get(generated, "iter_0").unwrap());
+    let use_meta = as_dict(get(iter0, "meta").unwrap());
+    assert!(
+        get(use_meta, "error").is_some(),
+        "the generated use node's own meta.error must be set too"
+    );
+    assert!(get(use_meta, "completed_at").is_some());
+}
+
+#[tokio::test]
+async fn cancellation_during_the_planner_leaves_no_record() {
+    // Issue #506's own "Rust-only tests" list, and this module's own
+    // doc comment on "Fatal errors": a `VmError::Cancelled` observed
+    // while the inner planner is running propagates with no value/meta
+    // write at all -- not even the iteration record that was in
+    // flight -- balanced only by this effect's own `effect_complete`.
+    let leaf = reflector_leaf(
+        "plan_it",
+        "propose_steps",
+        1,
+        "generated",
+        true,
+        "plan it",
+        8,
+    );
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    let adapters = registry_with_scripted();
+    ctx.default_adapter = Rc::new(FakeAdapter::new("scripted", Vec::new()));
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    ctx.supported = electricity_bytecode::Supported::current(&[]);
+
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let inner = RecordingObserver::new();
+    let observer = support::CancelOnStart {
+        inner,
+        token: &token,
+        target: "prime.plan_it.inner.propose_steps",
+    };
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), VmError::Cancelled);
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let refl = as_dict(get(prime, "plan_it").unwrap());
+    // No `value`/`meta.iterations` write at all for the reflector's own
+    // node -- only whatever `store.ensure_dict`'s own initial
+    // `setdefault`-shaped writes left behind at the very top of
+    // `execute_reflector`, before the loop ever starts.
+    assert_eq!(get(refl, "value"), Some(&Value::None));
+    let meta = as_dict(get(refl, "meta").unwrap());
+    assert_eq!(
+        get(meta, "iterations"),
+        Some(&Value::List(Vec::new())),
+        "no iteration record for the cancelled pass"
+    );
+    assert!(get(meta, "error").is_none());
+    assert!(get(meta, "completed_at").is_none());
+
+    assert!(
+        observer
+            .inner
+            .events()
+            .iter()
+            .any(|e| matches!(e, Event::Complete(p, None) if p == "prime.plan_it")),
+        "effect_complete must still fire, balanced, for the reflector's own start"
+    );
+}
+
+#[tokio::test]
+async fn a_generated_use_ref_gives_lane_is_own_compile_error_text() {
+    // Issue #506's own "Rust-only tests" list, and the "Settled
+    // questions" section's own "use: ref: in a generated plan" entry:
+    // a documented divergence (Python resolves the curation library;
+    // electricity never does, lane I's own compile-time rejection, M1
+    // gate seam). The generated child's own compile error reaches
+    // `generated_exec_failed:` like any other `Inline orchestration
+    // validation failed:` text -- never a `VmError::Refused`.
+    let plan_reply = "done: false\neffects:\n  \
+        - type: use\n    \
+          name: child\n    \
+          ref: something\n";
+    let leaf = reflector_leaf(
+        "plan_it",
+        "propose_steps",
+        1,
+        "generated",
+        true,
+        "plan it",
+        8,
+    );
+    let (store, _observer, result) = run_reflector(leaf, vec![plan_reply]).await;
+    let err = result.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.starts_with("prime.plan_it: generated_exec_failed: use 'iter_0' -> inline: "),
+        "got {text:?}"
+    );
+    assert!(
+        text.contains("library refs ('ref:') are not supported by electricity"),
+        "got {text:?}"
+    );
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let refl = as_dict(get(prime, "plan_it").unwrap());
+    assert_eq!(get(refl, "value"), Some(&Value::Bool(false)));
 }

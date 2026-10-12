@@ -1,0 +1,13 @@
+name: c506-reflector-default-prime
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: plan_it
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

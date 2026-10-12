@@ -36,14 +36,18 @@
 //! [`VmError::Cancelled`] propagates with *no* record at all -- not
 //! even the iteration that was in flight -- from wherever it's first
 //! observed (the inner dynamic or the generated child), balanced only
-//! by this effect's own `effect_complete`. A [`VmError::Refused`] a
-//! generated child's own fresh compile turns up (orchestrator ruling R1
-//! on PR #462) *is* recorded -- the iteration record, `meta.error`,
-//! `completed_at`, `value: false` and `effect_complete`'s own error
-//! text, exactly like an ordinary failure -- but the bare, unwrapped
-//! `Refused` value is what this effect actually returns, never folded
-//! into the usual `RuntimeError(rec.error)` wrap, so no enclosing
-//! `on_error: continue` can ever absorb it.
+//! by this effect's own `effect_complete`. A [`VmError::Refused`]
+//! either the inner planner's own dispatch (an unbuildable `adapter:`)
+//! or a generated child's own fresh compile turns up (orchestrator
+//! ruling R1 on PR #462) *is* recorded on this effect's own node
+//! either way -- the iteration record, `meta.error`, `completed_at`,
+//! `value: false` and `effect_complete`'s own error text, exactly like
+//! an ordinary failure -- but the bare, unwrapped `Refused` value is
+//! what this effect actually returns, never folded into the usual
+//! `RuntimeError(rec.error)` wrap, so no enclosing `on_error: continue`
+//! can ever absorb it (review finding 1 on PR #510's first review: the
+//! inner-planner case used to skip every one of those writes, taking
+//! the same no-record branch as `VmError::Cancelled`).
 
 use super::live_scope::LiveRoot;
 use super::use_::{clean_yaml_fences, execute_use_with_ctx};
@@ -94,12 +98,15 @@ pub(crate) async fn execute_reflector(
     let iterations = std::cmp::max(1, reflector.max_iterations);
 
     for i in 0..iterations {
-        if token.is_set() {
-            observer.effect_complete(&effect_path, instance, None);
-            observer.write();
-            return Err(VmError::Cancelled);
-        }
-
+        // No cancellation check of this loop's own -- the issue's own
+        // Rust design ("Paths, --resume, loops and finally:") adds
+        // none beyond what the containers this calls already respect
+        // (review finding 5 on PR #510's first review: a check here,
+        // between iterations, would suppress the inner dynamic's own
+        // start/end pair for a signal that lands in that exact window,
+        // where Python's own `_run_iteration` has no such check either
+        // and lets the inner `DynamicRuntime.execute`'s own chain check
+        // observe it instead, balanced).
         let rec = match run_iteration(
             i, op, reflector, store, &node, parent, frame, run_ctx, observer, token,
         )
@@ -110,7 +117,12 @@ pub(crate) async fn execute_reflector(
                 // Only ever `VmError::Cancelled` here -- see this
                 // module's own doc comment on "Fatal errors": no
                 // value/meta write at all, the start is still balanced.
-                observer.effect_complete(&effect_path, instance, None);
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    None,
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Err(e);
             }
@@ -123,7 +135,12 @@ pub(crate) async fn execute_reflector(
             store.set_leaf(&node, key("value"), Value::Bool(false));
             store.set_leaf(&meta_node, key("error"), Value::Str(error_text.clone()));
             store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
-            observer.effect_complete(&effect_path, instance, Some(&error_text));
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                Some(&error_text),
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             observer.write();
             return match rec.fatal {
                 Some(fatal) => Err(fatal),
@@ -133,14 +150,24 @@ pub(crate) async fn execute_reflector(
 
         if rec.stop {
             store.set_leaf(&node, key("value"), Value::Bool(true));
-            observer.effect_complete(&effect_path, instance, None);
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                None,
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             observer.write();
             return Ok(());
         }
     }
 
     store.set_leaf(&node, key("value"), Value::Bool(true));
-    observer.effect_complete(&effect_path, instance, None);
+    observer.effect_complete(
+        &effect_path,
+        instance,
+        None,
+        super::completed_at_is_truthy(store, &meta_node),
+    );
     observer.write();
     Ok(())
 }
@@ -214,7 +241,27 @@ async fn run_iteration(
     .await;
     match inner_result {
         Ok(()) => {}
-        Err(e) if e.is_fatal() => return Err(e),
+        Err(VmError::Cancelled) => return Err(VmError::Cancelled),
+        // A `VmError::Refused` the inner planner's own dispatch finds
+        // (an unbuildable `adapter:`, `exec::prompt::execute_prompt`'s
+        // own up-front `RefusalReason::UnsupportedAdapter` check) is
+        // fatal for *control* only (`VmError::is_fatal`'s own doc
+        // comment, orchestrator ruling R1 on PR #462) -- recorded here
+        // exactly like an ordinary `inner_failed:` (the iteration
+        // record, `meta.error`, `completed_at`, `value: false` and
+        // `effect_complete`'s own error text, this module's own doc
+        // comment on "Fatal errors"), with `IterationRecord::fatal` set
+        // so [`execute_reflector`] still re-raises the bare, unwrapped
+        // `Refused` afterward rather than folding it into the usual
+        // `RuntimeError(rec.error)` wrap -- review finding 1 on PR
+        // #510's first review: this branch used to fall into the same
+        // arm as `Cancelled` below, skipping every one of those writes
+        // and `effect_complete` itself.
+        Err(e @ VmError::Refused { .. }) => {
+            rec.error = Some(format!("inner_failed: {e}"));
+            rec.fatal = Some(e);
+            return Ok(rec);
+        }
         Err(e) => {
             rec.error = Some(format!("inner_failed: {e}"));
             return Ok(rec);
@@ -724,6 +771,28 @@ mod corpus_tests {
         }
     }
 
+    /// Writes *obj* (a JSON object) into *node* as a real tracked
+    /// `Store` tree -- every nested object becomes its own
+    /// [`Store::ensure_dict`] node (so a later [`Store::peek`] sees
+    /// `Slot::Node`, matching what [`best_effort_goal`]/
+    /// [`best_effort_context`] expect for a container), every other
+    /// value a plain leaf. A `set_leaf` of the whole object at once
+    /// (`Value::Dict`) would instead read back as `Slot::Value`, which
+    /// those two functions treat as absent.
+    fn populate_tree(store: &Store, node: &NodeRef, obj: &serde_json::Value) {
+        let serde_json::Value::Object(map) = obj else {
+            return;
+        };
+        for (k, v) in map {
+            if v.is_object() {
+                let child = store.ensure_dict(node, Value::Str(k.clone())).unwrap();
+                populate_tree(store, &child, v);
+            } else {
+                store.set_leaf(node, Value::Str(k.clone()), json_to_value(v));
+            }
+        }
+    }
+
     #[test]
     fn matches_circuitrys_own_reflector_helpers() {
         let data = include_str!("../../tests/golden/reflector_corpus.json");
@@ -812,6 +881,18 @@ mod corpus_tests {
                     if got != expected {
                         failures.push(format!(
                             "case {i} (context): expected {expected:?}, got {got:?}"
+                        ));
+                    }
+                }
+                "goal" => {
+                    let store = Store::new();
+                    let prime_node = store.ensure_dict(&store.root, key("prime")).unwrap();
+                    populate_tree(&store, &prime_node, &case["prime"]);
+                    let expected = case["goal"].as_str().unwrap();
+                    let got = best_effort_goal(&store);
+                    if got != expected {
+                        failures.push(format!(
+                            "case {i} (goal): expected {expected:?}, got {got:?}"
                         ));
                     }
                 }

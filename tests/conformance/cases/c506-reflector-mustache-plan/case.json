@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "Mustache in a generated plan: `{{goal.value}}` (resolves against the `prime` node, `&`/`'`/`<` HTML-escaped by the inline render) and `{{prime.goal.value}}` (renders empty -- the narrow parent-only context). Pins the generated prompt's own `prompt_sent` and `meta.orchestration_sha256` (review finding 2 on PR #510's first review).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

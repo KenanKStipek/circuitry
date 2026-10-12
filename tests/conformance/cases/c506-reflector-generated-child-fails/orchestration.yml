@@ -1,0 +1,14 @@
+name: c506-reflector-generated-child-fails
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

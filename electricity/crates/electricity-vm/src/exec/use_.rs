@@ -1182,7 +1182,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     if run_ctx.dry_run {
         set_leaf(store, &meta_node, "completed_at", now_iso());
         set_leaf(store, &meta_node, "dry_run", Value::Bool(true));
-        observer.effect_complete(&effect_path, instance, None);
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            None,
+            super::completed_at_is_truthy(store, &meta_node),
+        );
         observer.write();
         return Ok(());
     }
@@ -1244,7 +1249,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         Value::from(i64::from(attempt_index)),
                     );
                 }
-                observer.effect_complete(&effect_path, instance, None);
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    None,
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Ok(());
             }
@@ -1261,7 +1271,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         Value::from(i64::from(attempt_index)),
                     );
                 }
-                observer.effect_complete(&effect_path, instance, Some(&text));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&text),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Err(refused);
             }
@@ -1314,7 +1329,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         return match op.on_error {
             OnError::Fail => {
                 let wrapped = format!("use '{name}' -> {label}: {message}");
-                observer.effect_complete(&effect_path, instance, Some(&message));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&message),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 Err(VmError::Raised {
                     py_class: PyExc::RuntimeError,
@@ -1325,7 +1345,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             }
             OnError::Skip | OnError::Continue => {
                 set_leaf(store, &effect_node, "value", Value::None);
-                observer.effect_complete(&effect_path, instance, Some(&message));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&message),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 Ok(())
             }
@@ -1373,11 +1398,18 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.effect_start(path)
     }
 
-    fn effect_complete(&self, path: &EffectPath, instance: InstanceId, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        instance: InstanceId,
+        error: Option<&str>,
+        completed_at_is_truthy: bool,
+    ) {
         if *path == self.root_path {
             return;
         }
-        self.parent.effect_complete(path, instance, error);
+        self.parent
+            .effect_complete(path, instance, error, completed_at_is_truthy);
     }
 
     // A child loop's `dispatch` must carry the same absolute path its

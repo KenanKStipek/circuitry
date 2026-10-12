@@ -1,0 +1,15 @@
+prime.wrapper.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: a
+          provider: json
+        - type: tool
+          name: b
+          provider: json
+        - type: tool
+          name: c
+          provider: json
+    tokens_sent: 10
+    tokens_received: 20

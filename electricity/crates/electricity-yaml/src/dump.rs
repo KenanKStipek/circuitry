@@ -201,6 +201,16 @@ fn sorted_keys(dict: &electricity_value::Dict, sort_keys: bool) -> Vec<Value> {
 /// `"- "`, landing the cursor on *indent* by construction -- see
 /// [`emit_sequence`]'s own doc comment) with no flag to tell those
 /// apart.
+/// **Known gap, documented in DESIGN.md's own divergence table (issue
+/// #506's lane L1, review finding 8 on PR #510's first review):**
+/// PyYAML's own `check_simple_key` switches a block-mapping key to the
+/// explicit `? key\n: value` form once that key's own emitted length
+/// reaches 128 characters or it spans more than one line -- this
+/// function always writes the plain `key:` form below, whatever the
+/// key's own length or shape. Only reachable through
+/// `meta.orchestration_sha256`/the literal re-dumped text a reflector
+/// (or M1-L2) ever feeds back into a Mustache render, never the
+/// *parsed* value a key maps to.
 fn emit_mapping(
     out: &mut String,
     dict: &electricity_value::Dict,

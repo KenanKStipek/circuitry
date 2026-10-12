@@ -1,0 +1,18 @@
+{"v":1,"seq":0,"ts":"2026-10-12T17:28:52.354Z","ev":"run_start","run_id":"dd4c5649-f7e8-48ab-9bbb-1274a46e6e21","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":86272}
+{"v":1,"seq":1,"ts":"2026-10-12T17:28:52.358Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T17:28:52.358Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-10-12T17:28:52.361Z","ev":"start","id":2,"path":"prime.child.goal"}
+{"v":1,"seq":4,"ts":"2026-10-12T17:28:52.361Z","ev":"end","id":2,"path":"prime.child.goal","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-12T17:28:52.361Z","ev":"start","id":3,"path":"prime.child.plan_it"}
+{"v":1,"seq":6,"ts":"2026-10-12T17:28:52.361Z","ev":"start","id":4,"path":"prime.child.plan_it.inner"}
+{"v":1,"seq":7,"ts":"2026-10-12T17:28:52.362Z","ev":"start","id":5,"path":"prime.child.plan_it.inner.propose_steps"}
+{"v":1,"seq":8,"ts":"2026-10-12T17:28:52.362Z","ev":"end","id":5,"path":"prime.child.plan_it.inner.propose_steps","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-12T17:28:52.362Z","ev":"end","id":4,"path":"prime.child.plan_it.inner","ok":true,"ms":1}
+{"v":1,"seq":10,"ts":"2026-10-12T17:28:52.363Z","ev":"start","id":6,"path":"prime.child.plan_it.generated.iter_0"}
+{"v":1,"seq":11,"ts":"2026-10-12T17:28:52.365Z","ev":"start","id":7,"path":"prime.child.plan_it.generated.iter_0.check"}
+{"v":1,"seq":12,"ts":"2026-10-12T17:28:52.372Z","ev":"end","id":7,"path":"prime.child.plan_it.generated.iter_0.check","ok":true,"ms":7}
+{"v":1,"seq":13,"ts":"2026-10-12T17:28:52.372Z","ev":"end","id":6,"path":"prime.child.plan_it.generated.iter_0","ok":true,"ms":9}
+{"v":1,"seq":14,"ts":"2026-10-12T17:28:52.372Z","ev":"end","id":3,"path":"prime.child.plan_it","ok":true,"ms":11}
+{"v":1,"seq":15,"ts":"2026-10-12T17:28:52.372Z","ev":"end","id":1,"path":"prime.child","ok":true,"ms":14}
+{"v":1,"seq":16,"ts":"2026-10-12T17:28:52.372Z","ev":"end","id":0,"path":"prime","ok":true,"ms":14}
+{"v":1,"seq":17,"ts":"2026-10-12T17:28:52.372Z","ev":"run_end","ok":true}

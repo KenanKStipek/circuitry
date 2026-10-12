@@ -1,0 +1,13 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: prompt
+          name: echo
+          template: "goal is {{goal.value}}; nested is '{{prime.goal.value}}'"
+    tokens_sent: 10
+    tokens_received: 20
+prime.plan_it.generated.iter_0.echo:
+  - text: "ok"
+    tokens_sent: 1
+    tokens_received: 2

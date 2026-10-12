@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "A reflector running inside an inline `use` child -- orchestrator finding on PR #510's first review: `last_run.totals.effects_run` used to over-count a successful reflector here, since the reflector's own node lives in the child's own isolated store, invisible to a root-store walk at the moment its own effect_complete fires.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

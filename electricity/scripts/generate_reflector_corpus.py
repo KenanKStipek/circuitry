@@ -3,8 +3,8 @@
 `reflector` effect, issue #506) from Circuitry's own real
 `core/reflector.py` functions.
 
-Four of that module's own helpers are pure enough to call directly
-against synthetic input, with no `Store`/run context needed:
+These helpers are pure enough to call directly against synthetic input,
+with no real `Store` needed:
 
 - `_clean_yaml_fences`/`_extract_done_flag`: fences, `---`, every
   `str.splitlines()` separator, `steps`/`plan` dict/list, a bare list,
@@ -13,12 +13,14 @@ against synthetic input, with no `Store`/run context needed:
   fields, lone braces -- records the rendered text plus whether the
   `.format()` call itself raised (`fell_back`), independent of the
   function's own `logger.warning` side effect.
-- the redact/`json.dumps`/truncate transform `_best_effort_context`
-  wraps around a `Store` this script has none of: `_context_from_settings`
-  below is that same transform's own body, called directly against a
-  synthetic `effective_settings` dict (missing keys, non-ASCII,
-  secrets, more than 2000 code points) -- not `_best_effort_context`
-  itself, which needs a live `Store`.
+- `_best_effort_context`/`_best_effort_goal`, called directly (review
+  finding 7 on PR #510's first review: an earlier draft of this script
+  re-implemented `_best_effort_context`'s own redact/`json.dumps`/
+  truncate body instead of calling it) -- both only ever read
+  `_run_root_state(store)`, and that function's own `getattr(store,
+  "true_root_state", None)` check is satisfied by a bare
+  `types.SimpleNamespace(true_root_state={...})`, with no real `Store`
+  construction needed at all.
 
 Must be run with Python 3.11 and the pinned dependencies
 (`generator-constraints.txt`): PyYAML's own `safe_load`/`dump` output,
@@ -32,10 +34,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from circuitry.cli.redaction import redact
 from circuitry.core.reflector import (
-    _CONTEXT_MAX_CHARS,
+    _best_effort_context,
+    _best_effort_goal,
     _clean_yaml_fences,
     _extract_done_flag,
     _render_reflector_prime,
@@ -83,8 +86,13 @@ def clean_fences_cases() -> list[dict]:
     texts = [
         "```yaml\neffects: []\n---\n```",
         "effects:\n  - type: tool\n```\n",
+        "a\x0bb",
         "a\x0cb",
         "a\rb",
+        "a\r\nb",
+        "a\x1cb",
+        "a\x1db",
+        "a\x1eb",
         "a\u2028b",
         "a\x85b",
         "a\u2029b",
@@ -190,31 +198,18 @@ def prime_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
-# _best_effort_context's own redact/json.dumps/truncate transform
+# _best_effort_context, called directly against a SimpleNamespace
 # ---------------------------------------------------------------------
 
 
-def _context_from_settings(effective_settings: dict) -> str:
-    """`_best_effort_context`'s own body, given *effective_settings*
-    directly instead of reading it off a live `Store` -- see this
-    module's own doc comment.
-    """
-    summary = {
-        "model": effective_settings.get("model"),
-        "adapter": effective_settings.get("adapter"),
-        "plugins": effective_settings.get("plugins"),
-    }
-    text = json.dumps(redact(summary), indent=2, sort_keys=True)
-    if len(text) > _CONTEXT_MAX_CHARS:
-        text = text[:_CONTEXT_MAX_CHARS].rstrip() + "\n... (truncated)"
-    return text
-
-
 def context_case(effective_settings: dict) -> dict:
+    store = SimpleNamespace(
+        true_root_state={"runtime": {"effective_settings": effective_settings}}
+    )
     return {
         "kind": "context",
         "effective_settings": effective_settings,
-        "context": _context_from_settings(effective_settings),
+        "context": _best_effort_context(store),
     }
 
 
@@ -224,20 +219,56 @@ def context_cases() -> list[dict]:
         context_case({"model": "gpt-4", "adapter": "openai", "plugins": ["json", "shell"]}),
         context_case({"model": None, "adapter": None, "plugins": None}),
         context_case({"model": "caf\u00e9-\U0001f600", "adapter": "openai", "plugins": []}),
+        # A secret-shaped *value* inside one of the three fields
+        # `_best_effort_context`'s own summary keeps (`model`/`adapter`/
+        # `plugins`) -- review finding 7 on PR #510's first review: an
+        # earlier draft put `api_key` as a sibling top-level key, which
+        # the summary-building step drops before redaction ever runs,
+        # so it never actually exercised `redact()` at all.
         context_case(
             {
-                "model": "gpt-4",
+                "model": "sk-" + "a" * 32,
                 "adapter": "openai",
                 "plugins": ["json"],
-                "api_key": "sk-should-be-redacted",
             }
         ),
         context_case({"model": "m" * 3000, "adapter": "a", "plugins": []}),
     ]
 
 
+# ---------------------------------------------------------------------
+# _best_effort_goal, called directly against a SimpleNamespace
+# ---------------------------------------------------------------------
+
+
+def goal_case(prime: dict) -> dict:
+    store = SimpleNamespace(true_root_state={"prime": prime})
+    return {
+        "kind": "goal",
+        "prime": prime,
+        "goal": _best_effort_goal(store),
+    }
+
+
+def goal_cases() -> list[dict]:
+    return [
+        goal_case({}),
+        goal_case({"goal": {"value": "  Summarize the project.  "}}),
+        goal_case({"goal": {"value": ""}}),
+        goal_case({"goal": {"value": "   "}}),
+        goal_case({"goal": {"value": 5}}),
+        goal_case({"goal": "not a dict"}),
+    ]
+
+
 def build_corpus() -> list[dict]:
-    return clean_fences_cases() + extract_done_cases() + prime_cases() + context_cases()
+    return (
+        clean_fences_cases()
+        + extract_done_cases()
+        + prime_cases()
+        + context_cases()
+        + goal_cases()
+    )
 
 
 def render(cases: list[dict]) -> str:
