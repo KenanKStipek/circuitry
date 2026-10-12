@@ -1,0 +1,14 @@
+{
+  "spec_case": "issue #503 (native Ollama, soft preflight plus the exit-7 hint)",
+  "description": "A prompt naming 'provider: ollama' with on_error: skip, against an unreachable host: preflight downgrades to a soft warning and the run proceeds, leaving meta.error holding the exit-7 failure text and hint; curl's own stderr clause there is matched by pattern (third_party_text), not byte-for-byte.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "compare_run_warnings": true,
+  "third_party_text": [
+    {
+      "location": "prime.greeting.meta.error",
+      "pattern": "All\\ adapter\\ attempts\\ failed:\\ \\[\\{'adapter':\\ 'ollama',\\ 'model':\\ 'test\\-model',\\ 'status':\\ 'failed',\\ 'error':\\ \"ollama\\ request\\ failed\\ \\(curl\\ exit\\ 7\\)\\ model='test\\-model'\\ url=http://127\\.0\\.0\\.1:1/api/generate:\\ .*?\\ Ollama\\ at\\ http://127\\.0\\.0\\.1:1\\ is\\ not\\ reachable\\.\\ Start\\ it\\ \\(`ollama\\ serve`\\),\\ or\\ set\\ `runtime\\.adapters\\.ollama\\.base_url`\\ in\\ your\\ config\\.\\ Run\\ `cof\\ doctor`\\ to\\ verify\\ connectivity\\.\",\\ 'tokens_sent':\\ None,\\ 'tokens_received':\\ None\\}\\]"
+    }
+  ]
+}

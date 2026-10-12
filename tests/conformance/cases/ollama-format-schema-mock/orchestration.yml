@@ -1,0 +1,18 @@
+name: ollama-format-schema-mock
+model: test-model
+effects:
+  - type: prompt
+    name: extract
+    template: "extract the fields"
+    prompt_type: json
+    schema:
+      type: object
+      properties:
+        name: {type: string}
+      required: [name]
+    params:
+      format:
+        type: object
+        properties:
+          name: {type: string}
+        required: [name]

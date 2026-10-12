@@ -1,0 +1,1 @@
+Warning: adapter 'ollama' unavailable; effects ['greeting'] will skip (missing ['host:http://127.0.0.1:1'])

@@ -1,0 +1,8 @@
+name: ollama-unreachable-soft-warning
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    provider: ollama
+    template: "say hello"
+    on_error: skip
