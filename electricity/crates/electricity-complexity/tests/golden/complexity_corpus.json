@@ -15877,6 +15877,131 @@
       }
     },
     {
+      "description": "structural_position depth nan raises",
+      "input": {
+        "rendered_prompt": "x",
+        "structure": {
+          "depth": NaN
+        }
+      },
+      "error": {
+        "class": "ValueError",
+        "message": "cannot convert float NaN to integer"
+      }
+    },
+    {
+      "description": "structural_position depth inf raises",
+      "input": {
+        "rendered_prompt": "x",
+        "structure": {
+          "depth": Infinity
+        }
+      },
+      "error": {
+        "class": "OverflowError",
+        "message": "cannot convert float infinity to integer"
+      }
+    },
+    {
+      "description": "structural_position loop_depth nan raises",
+      "input": {
+        "rendered_prompt": "x",
+        "structure": {
+          "loop_depth": NaN
+        }
+      },
+      "error": {
+        "class": "ValueError",
+        "message": "cannot convert float NaN to integer"
+      }
+    },
+    {
+      "description": "structural_position loop_depth inf raises",
+      "input": {
+        "rendered_prompt": "x",
+        "structure": {
+          "loop_depth": Infinity
+        }
+      },
+      "error": {
+        "class": "OverflowError",
+        "message": "cannot convert float infinity to integer"
+      }
+    },
+    {
+      "description": "structural_position depth negative infinity treated as zero",
+      "input": {
+        "rendered_prompt": "x",
+        "structure": {
+          "depth": -Infinity
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 3.534944,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 1.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 1.0,
+              "normalized": 0.001248,
+              "weight": 0.28,
+              "contribution": 0.034944,
+              "note": "~1 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.18,
+              "contribution": 0.0,
+              "note": "0 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.14,
+              "contribution": 3.5,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.16,
+              "contribution": 0.0,
+              "note": "no schema declared"
+            },
+            "output_size": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.1,
+              "contribution": 0.0,
+              "note": "no declared output limit"
+            },
+            "structural_position": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.08,
+              "contribution": 0.0,
+              "note": "depth 0"
+            },
+            "keywords": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.06,
+              "contribution": 0.0,
+              "note": "no keyword matches"
+            }
+          },
+          "warnings": [
+            "structure.depth: -inf is negative; treated as 0."
+          ]
+        },
+        "estimated_signals": []
+      }
+    },
+    {
       "description": "keyword 'analyze' + ''",
       "input": {
         "rendered_prompt": "please analyz this"
@@ -22497,6 +22622,397 @@
         "estimated_signals": [
           "prompt_size"
         ]
+      }
+    },
+    {
+      "description": "runtime-shaped case 0 (mapping form, proven equal to PromptDefinition)",
+      "input": {
+        "definition": {
+          "template": "please analyze and refactor {{topic}}",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": {
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          },
+          "params": {
+            "max_tokens": 256
+          },
+          "description": "optimize the plan"
+        },
+        "rendered_prompt": "please analyze and refactor the plan, case 0",
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keyword_weights": null,
+        "structure": {
+          "depth": 0
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 21.303081,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 7.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 11.0,
+              "normalized": 0.013564,
+              "weight": 1.0,
+              "contribution": 0.193771,
+              "note": "~11 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 1.0,
+              "normalized": 0.2,
+              "weight": 1.5,
+              "contribution": 4.285714,
+              "note": "1 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.75,
+              "contribution": 2.678571,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 1.0,
+              "normalized": 0.245455,
+              "weight": 1.25,
+              "contribution": 4.383125,
+              "note": "schema depth 2, 1 field(s)"
+            },
+            "output_size": {
+              "raw": 256.0,
+              "normalized": 0.333333,
+              "weight": 1.0,
+              "contribution": 4.7619,
+              "note": "~256 tokens declared (max_tokens)"
+            },
+            "structural_position": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.5,
+              "contribution": 0.0,
+              "note": "depth 0"
+            },
+            "keywords": {
+              "raw": 2.0,
+              "normalized": 0.35,
+              "weight": 1.0,
+              "contribution": 5.0,
+              "note": "matched analyze, plan"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
+      }
+    },
+    {
+      "description": "runtime-shaped case 1 (mapping form, proven equal to PromptDefinition)",
+      "input": {
+        "definition": {
+          "template": "please analyze and refactor {{topic}}",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": {
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          },
+          "params": {
+            "max_tokens": 256
+          },
+          "description": "optimize the plan"
+        },
+        "rendered_prompt": "please analyze and refactor the plan, case 1",
+        "weights": {
+          "prompt_size": 2.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 0.0
+        },
+        "keyword_weights": null,
+        "structure": {
+          "depth": 1
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 17.38971,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 7.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 11.0,
+              "normalized": 0.013564,
+              "weight": 2.0,
+              "contribution": 0.387543,
+              "note": "~11 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 1.0,
+              "normalized": 0.2,
+              "weight": 1.5,
+              "contribution": 4.285714,
+              "note": "1 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.75,
+              "contribution": 2.678571,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 1.0,
+              "normalized": 0.245455,
+              "weight": 1.25,
+              "contribution": 4.383125,
+              "note": "schema depth 2, 1 field(s)"
+            },
+            "output_size": {
+              "raw": 256.0,
+              "normalized": 0.333333,
+              "weight": 1.0,
+              "contribution": 4.7619,
+              "note": "~256 tokens declared (max_tokens)"
+            },
+            "structural_position": {
+              "raw": 1.0,
+              "normalized": 0.125,
+              "weight": 0.5,
+              "contribution": 0.892857,
+              "note": "depth 1"
+            },
+            "keywords": {
+              "raw": 2.0,
+              "normalized": 0.35,
+              "weight": 0.0,
+              "contribution": 0.0,
+              "note": "matched analyze, plan"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
+      }
+    },
+    {
+      "description": "runtime-shaped case 2 (mapping form, proven equal to PromptDefinition)",
+      "input": {
+        "definition": {
+          "template": "please analyze and refactor {{topic}}",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": {
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          },
+          "params": {
+            "max_tokens": 256
+          },
+          "description": "optimize the plan"
+        },
+        "rendered_prompt": "please analyze and refactor the plan, case 2",
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keyword_weights": {
+          "refactor": 0.6,
+          "optimize": 0.4
+        },
+        "structure": {
+          "depth": 3
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 32.374509,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 7.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 11.0,
+              "normalized": 0.013564,
+              "weight": 1.0,
+              "contribution": 0.193771,
+              "note": "~11 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 1.0,
+              "normalized": 0.2,
+              "weight": 1.5,
+              "contribution": 4.285714,
+              "note": "1 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.75,
+              "contribution": 2.678571,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 1.0,
+              "normalized": 0.245455,
+              "weight": 1.25,
+              "contribution": 4.383125,
+              "note": "schema depth 2, 1 field(s)"
+            },
+            "output_size": {
+              "raw": 256.0,
+              "normalized": 0.333333,
+              "weight": 1.0,
+              "contribution": 4.7619,
+              "note": "~256 tokens declared (max_tokens)"
+            },
+            "structural_position": {
+              "raw": 3.0,
+              "normalized": 0.25,
+              "weight": 0.5,
+              "contribution": 1.785714,
+              "note": "depth 3"
+            },
+            "keywords": {
+              "raw": 2.0,
+              "normalized": 1.0,
+              "weight": 1.0,
+              "contribution": 14.285714,
+              "note": "matched optimize, refactor"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
+      }
+    },
+    {
+      "description": "runtime-shaped case 3 (mapping form, proven equal to PromptDefinition)",
+      "input": {
+        "definition": {
+          "template": "please analyze and refactor {{topic}}",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": {
+            "properties": {
+              "a": {
+                "type": "string"
+              }
+            }
+          },
+          "params": {
+            "max_tokens": 256
+          },
+          "description": "optimize the plan"
+        },
+        "rendered_prompt": "please analyze and refactor the plan, case 3",
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 3.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keyword_weights": null,
+        "structure": {
+          "depth": 2
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 25.087574,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 9.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 11.0,
+              "normalized": 0.013564,
+              "weight": 1.0,
+              "contribution": 0.150711,
+              "note": "~11 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 1.0,
+              "normalized": 0.2,
+              "weight": 1.5,
+              "contribution": 3.333333,
+              "note": "1 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.75,
+              "contribution": 2.083333,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 1.0,
+              "normalized": 0.245455,
+              "weight": 1.25,
+              "contribution": 3.409097,
+              "note": "schema depth 2, 1 field(s)"
+            },
+            "output_size": {
+              "raw": 256.0,
+              "normalized": 0.333333,
+              "weight": 3.0,
+              "contribution": 11.1111,
+              "note": "~256 tokens declared (max_tokens)"
+            },
+            "structural_position": {
+              "raw": 2.0,
+              "normalized": 0.2,
+              "weight": 0.5,
+              "contribution": 1.111111,
+              "note": "depth 2"
+            },
+            "keywords": {
+              "raw": 2.0,
+              "normalized": 0.35,
+              "weight": 1.0,
+              "contribution": 3.888889,
+              "note": "matched analyze, plan"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
       }
     },
     {
@@ -44237,6 +44753,724 @@
           "prompt_size"
         ]
       }
+    }
+  ],
+  "settings_cases": [
+    {
+      "description": "settings absent block resolves to defaults",
+      "raw": null,
+      "expected": {
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keywords": {}
+      }
+    },
+    {
+      "description": "settings empty scoring block",
+      "raw": {
+        "scoring": {}
+      },
+      "expected": {
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keywords": {}
+      }
+    },
+    {
+      "description": "settings partial weights overlay, int becomes float",
+      "raw": {
+        "scoring": {
+          "weights": {
+            "prompt_size": 9
+          }
+        }
+      },
+      "expected": {
+        "weights": {
+          "prompt_size": 9.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keywords": {}
+      }
+    },
+    {
+      "description": "settings weights unknown signal raises",
+      "raw": {
+        "scoring": {
+          "weights": {
+            "bogus": 1.0
+          }
+        }
+      },
+      "error": "runtime.complexity.scoring.weights: unknown signal 'bogus'. Valid signals: keywords, output_schema, output_size, prompt_size, prompt_type, state_references, structural_position."
+    },
+    {
+      "description": "settings weights not a mapping raises",
+      "raw": {
+        "scoring": {
+          "weights": "nope"
+        }
+      },
+      "error": "runtime.complexity.scoring.weights must be an object; found a string."
+    },
+    {
+      "description": "settings keywords not a mapping raises",
+      "raw": {
+        "scoring": {
+          "keywords": "nope"
+        }
+      },
+      "error": "runtime.complexity.scoring.keywords must be an object; found a string."
+    },
+    {
+      "description": "settings keywords strip collision keeps first position, last value",
+      "raw": {
+        "scoring": {
+          "keywords": {
+            "  analyze  ": 1,
+            "compare": 2,
+            "analyze": 3
+          }
+        }
+      },
+      "expected": {
+        "weights": {
+          "prompt_size": 1.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 1.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keywords": {
+          "analyze": 3.0,
+          "compare": 2.0
+        }
+      }
+    },
+    {
+      "description": "settings unknown top-level key raises",
+      "raw": {
+        "bogus": true
+      },
+      "error": "runtime.complexity: unknown key 'bogus'. Valid keys: decomposition, routing, scoring."
+    },
+    {
+      "description": "settings full block, enabled, weights and keywords",
+      "raw": {
+        "scoring": {
+          "enabled": true,
+          "weights": {
+            "prompt_size": 2.0,
+            "output_size": 0
+          },
+          "keywords": {
+            "refactor": 0.6,
+            " Optimize ": 0.4
+          }
+        }
+      },
+      "expected": {
+        "weights": {
+          "prompt_size": 2.0,
+          "state_references": 1.5,
+          "prompt_type": 0.75,
+          "output_schema": 1.25,
+          "output_size": 0.0,
+          "structural_position": 0.5,
+          "keywords": 1.0
+        },
+        "keywords": {
+          "refactor": 0.6,
+          "Optimize": 0.4
+        }
+      }
+    }
+  ],
+  "router_cases": [
+    {
+      "description": "route boundary score=0.0",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 0.0,
+      "explicit": false,
+      "expected": {
+        "model": "small",
+        "max": 30.0,
+        "name": "low"
+      }
+    },
+    {
+      "description": "route boundary score=29.9",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 29.9,
+      "explicit": false,
+      "expected": {
+        "model": "small",
+        "max": 30.0,
+        "name": "low"
+      }
+    },
+    {
+      "description": "route boundary score=30.0",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 30.0,
+      "explicit": false,
+      "expected": {
+        "model": "small",
+        "max": 30.0,
+        "name": "low"
+      }
+    },
+    {
+      "description": "route boundary score=30.1",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 30.1,
+      "explicit": false,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route boundary score=69.9",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 69.9,
+      "explicit": false,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route boundary score=70.0",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 70.0,
+      "explicit": false,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route boundary score=70.1",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 70.1,
+      "explicit": false,
+      "expected": {
+        "model": "big",
+        "max": null,
+        "name": null
+      }
+    },
+    {
+      "description": "route boundary score=99.9",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 99.9,
+      "explicit": false,
+      "expected": {
+        "model": "big",
+        "max": null,
+        "name": null
+      }
+    },
+    {
+      "description": "route boundary score=100.0",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 100.0,
+      "explicit": false,
+      "expected": {
+        "model": "big",
+        "max": null,
+        "name": null
+      }
+    },
+    {
+      "description": "route catch-all only",
+      "bands": [
+        {
+          "model": "only",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 50.0,
+      "explicit": false,
+      "expected": {
+        "model": "only",
+        "max": null,
+        "name": null
+      }
+    },
+    {
+      "description": "route empty model band defers",
+      "bands": [
+        {
+          "model": "",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 10.0,
+      "explicit": false,
+      "expected": null
+    },
+    {
+      "description": "route enabled=True explicit=True respect_explicit=True",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 50.0,
+      "explicit": true,
+      "expected": null
+    },
+    {
+      "description": "route enabled=True explicit=True respect_explicit=False",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": false,
+      "score": 50.0,
+      "explicit": true,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route enabled=True explicit=False respect_explicit=True",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": true,
+      "score": 50.0,
+      "explicit": false,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route enabled=True explicit=False respect_explicit=False",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": true,
+      "respect_explicit": false,
+      "score": 50.0,
+      "explicit": false,
+      "expected": {
+        "model": "medium",
+        "max": 70.0,
+        "name": "mid"
+      }
+    },
+    {
+      "description": "route enabled=False explicit=True respect_explicit=True",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": false,
+      "respect_explicit": true,
+      "score": 50.0,
+      "explicit": true,
+      "expected": null
+    },
+    {
+      "description": "route enabled=False explicit=True respect_explicit=False",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": false,
+      "respect_explicit": false,
+      "score": 50.0,
+      "explicit": true,
+      "expected": null
+    },
+    {
+      "description": "route enabled=False explicit=False respect_explicit=True",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": false,
+      "respect_explicit": true,
+      "score": 50.0,
+      "explicit": false,
+      "expected": null
+    },
+    {
+      "description": "route enabled=False explicit=False respect_explicit=False",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "medium",
+          "max": 70.0,
+          "name": "mid"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "enabled": false,
+      "respect_explicit": false,
+      "score": 50.0,
+      "explicit": false,
+      "expected": null
+    }
+  ],
+  "band_named_cases": [
+    {
+      "description": "band_named hit",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "name": "low",
+      "expected": {
+        "model": "small",
+        "max": 30.0,
+        "name": "low"
+      }
+    },
+    {
+      "description": "band_named miss",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "name": "nonexistent",
+      "expected": null
+    },
+    {
+      "description": "band_named lookup by empty string never matches an unnamed band",
+      "bands": [
+        {
+          "model": "small",
+          "max": 30.0,
+          "name": "low"
+        },
+        {
+          "model": "big",
+          "max": null,
+          "name": null
+        }
+      ],
+      "name": "",
+      "expected": null
     }
   ]
 }

@@ -26,14 +26,19 @@
 //!   effect's nesting depth as the runtime displays it, not the length
 //!   of some internal path); `loop_depth`/`reflector_generated` default
 //!   to the top-level case until a later lane plumbs them through.
-//! - **`Err` means "no score", never "the effect fails".** The one way
-//!   [`score`] can fail is [`ScoreError`] (today only ever
-//!   `PyExc::OverflowError`, from a configured number too large to
-//!   convert to `f64` -- see this crate's own `as_number`). The
-//!   reference's `_score_and_route` catches *any* exception from
-//!   `score()` and logs a warning rather than letting it interrupt the
-//!   prompt; K2's own `score_and_route` must do the same with this
-//!   crate's `Err`: record no `meta.complexity`, dispatch anyway.
+//! - **`Err` means "no score", never "the effect fails".** [`score`]'s
+//!   failure type is [`ScoreError`], carrying a `PyExc` naming which
+//!   Python exception class the reference would have raised for the
+//!   same input: `PyExc::OverflowError` for a configured number too
+//!   large to convert to `f64` (this crate's own `as_number`), or
+//!   `PyExc::RuntimeError` for a `fancy-regex` translate/compile/match
+//!   failure the reference's own `re` module never hits for a
+//!   `re.escape` output (`keywords.rs`'s keyword-pattern path,
+//!   `tags.rs`'s state-reference scan). The reference's
+//!   `_score_and_route` catches *any* exception from `score()` and
+//!   logs a warning rather than letting it interrupt the prompt; K2's
+//!   own `score_and_route` must do the same with this crate's `Err`:
+//!   record no `meta.complexity`, dispatch anyway.
 //!
 //! # Documented divergences from CPython (inherited, not introduced here)
 //!
@@ -63,7 +68,7 @@ mod tags;
 pub use router::{RouteDecision, route_model};
 
 use electricity_config::ScoringSettings;
-use electricity_value::pycompat::{PyExc, py_strip};
+use electricity_value::pycompat::{PyExc, py_int, py_strip};
 use electricity_value::{Dict, Value};
 use std::sync::OnceLock;
 
@@ -71,6 +76,21 @@ use std::sync::OnceLock;
 pub const MIN_SCORE: f64 = 0.0;
 /// Highest possible score (`core/complexity.py::MAX_SCORE`).
 pub const MAX_SCORE: f64 = 100.0;
+
+/// `type(x).__name__` -- the *unqualified* class name Python's own
+/// `__name__` attribute gives, unlike [`Value::type_name`] (shared
+/// across crates for other purposes, e.g. a comparison-type error),
+/// which spells a date/datetime's own name as `"datetime.date"`/
+/// `"datetime.datetime"` -- the module-qualified form `__name__` never
+/// produces. Every `score()` "expected X, got {type}" warning reaches
+/// here through this, not `Value::type_name` directly.
+fn py_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Date(_) => "date",
+        Value::DateTime(..) => "datetime",
+        other => other.type_name(),
+    }
+}
 
 /// Signals in report order (`core/complexity.py::SIGNAL_NAMES`) -- the
 /// only vocabulary a `weights` mapping may name.
@@ -198,6 +218,16 @@ impl StructureContext {
     /// = {"depth": 10**400}` raises there too). A non-`Result` signature
     /// could only reproduce this by silently not raising, which would be
     /// the actual divergence; this one is documented and literal.
+    ///
+    /// The same holds for `int(number)` itself, past the `_as_number`
+    /// step: a finite, non-negative `depth`/`loop_depth` goes through
+    /// [`py_int`] (not a saturating cast), which raises `ValueError` for
+    /// `NaN` and `OverflowError` for `+inf` with CPython's own message
+    /// text -- `-inf` never reaches it, having already failed the
+    /// `number < 0` check just like any other negative value. A finite
+    /// float too large for `i64` saturates rather than keeping Python's
+    /// exact arbitrary-precision integer -- [`py_int`]'s own documented
+    /// divergence, inherited here rather than re-litigated.
     pub fn from_value(
         value: Option<&Value>,
     ) -> Result<(StructureContext, Vec<String>), ScoreError> {
@@ -209,7 +239,7 @@ impl StructureContext {
                 StructureContext::default(),
                 vec![format!(
                     "structure: expected a mapping or StructureContext, got {}; treated as top-level.",
-                    value.type_name()
+                    py_type_name(value)
                 )],
             ));
         };
@@ -229,7 +259,19 @@ impl StructureContext {
                     ));
                     Ok(0)
                 }
-                Some(n) => Ok(n as u64),
+                // Python's own `int(number)` here (not a saturating cast):
+                // raises `ValueError`/`OverflowError` for NaN/+inf (`n < 0.0`
+                // above already took -inf) rather than silently producing 0
+                // or `u64::MAX`. `py_int` is the one shared implementation of
+                // that coercion, divergence (a finite float beyond `i64`'s
+                // range saturates rather than keeping Python's exact
+                // arbitrary-precision integer) and all.
+                Some(_) => py_int(&repr_value)
+                    .map(|i| i as u64)
+                    .map_err(|e| ScoreError {
+                        py_class: e.py_class,
+                        message: e.message,
+                    }),
                 None => {
                     let falsy_default = matches!(&repr_value, Value::None)
                         || matches!(&repr_value, Value::Int(i) if i.is_zero())
@@ -521,7 +563,7 @@ fn template_text(dict: Option<&Dict>, warnings: &mut Vec<String>) -> String {
         Some(other) => {
             warnings.push(format!(
                 "template: expected a string, got {}; ignored.",
-                other.type_name()
+                py_type_name(other)
             ));
         }
         None => {}
@@ -540,7 +582,7 @@ fn schema_of<'a>(dict: Option<&'a Dict>, warnings: &mut Vec<String>) -> Option<&
         other => {
             warnings.push(format!(
                 "schema: expected a mapping, got {}; ignored.",
-                other.type_name()
+                py_type_name(other)
             ));
             None
         }
@@ -573,7 +615,7 @@ fn prompt_type(dict: Option<&Dict>, warnings: &mut Vec<String>) -> (String, f64)
         other => {
             warnings.push(format!(
                 "prompt_type: expected a string, got {}; treated as 'text'.",
-                other.type_name()
+                py_type_name(other)
             ));
             ("text".to_string(), text_normal())
         }
@@ -611,7 +653,7 @@ fn resolve_weights(
     let Value::Dict(dict) = weights_value else {
         warnings.push(format!(
             "weights: expected a mapping, got {}; used defaults.",
-            weights_value.type_name()
+            py_type_name(weights_value)
         ));
         return Ok(resolved);
     };
@@ -892,7 +934,7 @@ pub fn score(input: &ScoreInput<'_>) -> Result<ComplexityScore, ScoreError> {
         if is_scalar(v) {
             warnings.push(format!(
                 "definition: expected a mapping or definition object, got {}; every signal read as empty.",
-                v.type_name()
+                py_type_name(v)
             ));
             effective_definition = None;
         }
@@ -915,7 +957,7 @@ pub fn score(input: &ScoreInput<'_>) -> Result<ComplexityScore, ScoreError> {
         Some(other) => {
             warnings.push(format!(
                 "keyword_weights: expected a mapping, got {}; used defaults.",
-                other.type_name()
+                py_type_name(other)
             ));
             default_table
         }
@@ -1034,6 +1076,47 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("expected a mapping or definition object"))
         );
+    }
+
+    #[test]
+    fn a_date_weights_warns_with_pythons_own_unqualified_class_name() {
+        // `type(x).__name__` on a `datetime.date` is `"date"`, not
+        // `Value::type_name`'s module-qualified `"datetime.date"`.
+        let weights = Value::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+        let input = ScoreInput {
+            rendered_prompt: Some("x"),
+            weights: Some(&weights),
+            ..Default::default()
+        };
+        let result = score(&input).unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("got date;")));
+        assert!(!result.warnings.iter().any(|w| w.contains("datetime.date")));
+    }
+
+    #[test]
+    fn a_nan_depth_raises_value_error() {
+        let structure = Value::Dict(dict_of(vec![("depth", Value::from(f64::NAN))]));
+        let input = ScoreInput {
+            rendered_prompt: Some("x"),
+            structure: Some(&structure),
+            ..Default::default()
+        };
+        let err = score(&input).unwrap_err();
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert_eq!(err.message, "cannot convert float NaN to integer");
+    }
+
+    #[test]
+    fn an_infinite_depth_raises_overflow_error() {
+        let structure = Value::Dict(dict_of(vec![("depth", Value::from(f64::INFINITY))]));
+        let input = ScoreInput {
+            rendered_prompt: Some("x"),
+            structure: Some(&structure),
+            ..Default::default()
+        };
+        let err = score(&input).unwrap_err();
+        assert_eq!(err.py_class, PyExc::OverflowError);
+        assert_eq!(err.message, "cannot convert float infinity to integer");
     }
 
     #[test]

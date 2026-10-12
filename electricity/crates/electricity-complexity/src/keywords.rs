@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// `_KEYWORD_SUFFIXES`).
 const KEYWORD_SUFFIXES: &str = "(?:e|es|s|ed|ing|ion|ions)?";
 
-/// CPython 3.11's `re.escape`: `()[]{}?*+-|^$\.&~#` plus space and
+/// CPython 3.11's `re.escape`: `()[]{}?*+-|^$\.&~#\\` plus space and
 /// `\t\n\r\v\f`, verbatim -- non-ASCII is never escaped.
 pub fn py_re_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -45,6 +45,7 @@ pub fn py_re_escape(s: &str) -> String {
                 | '&'
                 | '~'
                 | '#'
+                | '\\'
                 | ' '
                 | '\t'
                 | '\n'
@@ -165,6 +166,24 @@ pub fn match_keywords(haystack: &str, table: &Dict) -> Result<Vec<(String, f64)>
         if py_strip(phrase).is_empty() {
             continue;
         }
+        // `weight = _as_number(raw_weight)` runs before the stem search
+        // in Python (`core/complexity.py:661-663`), so a weight that
+        // can't convert (an `OverflowError`-raising huge int) fails the
+        // same way whether or not the haystack happens to contain this
+        // phrase's stem -- the fast path below must not short-circuit
+        // past it.
+        //
+        // `weight is None or weight <= 0: continue` -- written as the
+        // same double negative Python uses, not as `w > 0.0`: a `NaN`
+        // weight fails `<= 0` (any comparison with `NaN` is `False`),
+        // so Python's own check *keeps* a `NaN` weight rather than
+        // skipping it, where `w > 0.0` would wrongly skip it too
+        // (`NaN > 0.0` is also `False`).
+        let weight = match as_number(weight_value)? {
+            None => continue,
+            Some(w) if w <= 0.0 => continue,
+            Some(w) => w,
+        };
         // The regex can only match if its stem literally occurs
         // somewhere in the haystack (every suffix only *extends* the
         // stem, never shortens it) -- a plain substring check first
@@ -176,17 +195,6 @@ pub fn match_keywords(haystack: &str, table: &Dict) -> Result<Vec<(String, f64)>
         if !lowered.contains(&keyword_stem(phrase)) {
             continue;
         }
-        // `weight is None or weight <= 0: continue` (`core/complexity.py:
-        // 663`) -- written as the same double negative Python uses, not
-        // as `w > 0.0`: a `NaN` weight fails `<= 0` (any comparison with
-        // `NaN` is `False`), so Python's own check *keeps* a `NaN`
-        // weight rather than skipping it, where `w > 0.0` would wrongly
-        // skip it too (`NaN > 0.0` is also `False`).
-        let weight = match as_number(weight_value)? {
-            None => continue,
-            Some(w) if w <= 0.0 => continue,
-            Some(w) => w,
-        };
         let re = compiled_keyword_pattern(phrase, haystack_len)?;
         let found = re.is_match(&lowered).map_err(|e| {
             ScoreError::runtime_error(format!("keyword match for {phrase:?} failed: {e}"))
@@ -202,6 +210,7 @@ pub fn match_keywords(haystack: &str, table: &Dict) -> Result<Vec<(String, f64)>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_value::IntValue;
 
     #[test]
     fn re_escape_matches_cpython_3_11s_special_set() {
@@ -222,6 +231,7 @@ mod tests {
         assert_eq!(py_re_escape("&"), "\\&");
         assert_eq!(py_re_escape("~"), "\\~");
         assert_eq!(py_re_escape("#"), "\\#");
+        assert_eq!(py_re_escape("\\"), "\\\\");
         assert_eq!(py_re_escape(" "), "\\ ");
         assert_eq!(py_re_escape("\t"), "\\\t");
         assert_eq!(py_re_escape("\n"), "\\\n");
@@ -236,7 +246,7 @@ mod tests {
     fn every_special_character_still_translates_and_compiles() {
         for phrase in [
             "c++", "a-b", "a.b", "a&b", "a~b", "a#b", "a b", "a\tb", "(a)", "[a]", "{a}", "a?b",
-            "a*b", "a+b", "a|b", "a^b", "a$b",
+            "a*b", "a+b", "a|b", "a^b", "a$b", "a\\d", "\\",
         ] {
             compiled_keyword_pattern(phrase, 100)
                 .unwrap_or_else(|e| panic!("phrase {phrase:?} failed: {e:?}"));
@@ -255,6 +265,22 @@ mod tests {
         let haystack = "a".repeat(1024 * 1024);
         let table = sample_table();
         assert_eq!(match_keywords(&haystack, &table).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn an_overflowing_weight_errors_even_when_the_stem_is_absent() {
+        // Python computes `_as_number(raw_weight)` before searching the
+        // haystack (`core/complexity.py:661-663`), so an overflowing
+        // weight raises regardless of whether this phrase's stem even
+        // occurs in the haystack -- the fast-path substring check must
+        // not run first.
+        let mut table = Dict::new();
+        table.insert(
+            Value::Str("nowhere".to_string()),
+            Value::Int(IntValue::parse_decimal(&"1".repeat(400)).unwrap()),
+        );
+        let err = match_keywords("this haystack has none of that stem", &table).unwrap_err();
+        assert_eq!(err.py_class, crate::PyExc::OverflowError);
     }
 
     #[test]

@@ -31,12 +31,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from circuitry.cli.complexity_config import (
+    ComplexityBand,
+    ComplexityConfigError,
+    RoutingSettings,
+    band_named,
+    parse_complexity_settings,
+)
+from circuitry.core.compiler import _compile_prompt
 from circuitry.core.complexity import (
     DEFAULT_KEYWORD_WEIGHTS,
     SIGNAL_NAMES,
     score,
 )
 from circuitry.core.prompt import _complexity_meta
+from circuitry.core.router import route_model
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -325,6 +334,11 @@ def family_structural_position() -> list[dict[str, Any]]:
     cases.append(run_case("structural_position depth is false", rendered_prompt="x", structure={"depth": False}))
     cases.append(run_case("structural_position depth is zero", rendered_prompt="x", structure={"depth": 0}))
     cases.append(run_case("structural_position depth float truncation", rendered_prompt="x", structure={"depth": 3.9}))
+    cases.append(run_case("structural_position depth nan raises", rendered_prompt="x", structure={"depth": float("nan")}))
+    cases.append(run_case("structural_position depth inf raises", rendered_prompt="x", structure={"depth": float("inf")}))
+    cases.append(run_case("structural_position loop_depth nan raises", rendered_prompt="x", structure={"loop_depth": float("nan")}))
+    cases.append(run_case("structural_position loop_depth inf raises", rendered_prompt="x", structure={"loop_depth": float("inf")}))
+    cases.append(run_case("structural_position depth negative infinity treated as zero", rendered_prompt="x", structure={"depth": float("-inf")}))
     return cases
 
 
@@ -529,6 +543,266 @@ def family_seeded_random(count: int) -> list[dict[str, Any]]:
     return cases
 
 
+def family_runtime_shaped() -> list[dict[str, Any]]:
+    """Family 10: exactly what `_score_and_route` passes to `score()`.
+
+    Each case resolves a synthetic `runtime.complexity.scoring` block with
+    `parse_complexity_settings`, then calls `score()` the way
+    `core/prompt.py::PromptRuntime._score_and_route` does: `dict(weights)`,
+    `dict(keywords) or None`, `structure={"depth": n}`, rendered mode.
+
+    Each case also scores the identical inputs a second time with a real
+    compiled `PromptDefinition` (built through `circuitry.core.compiler`
+    from synthetic YAML) in place of the mapping `score()` otherwise
+    receives, and asserts the two calls agree -- the proof that K2's
+    mapping form (the only form a Rust caller can build) is equivalent to
+    the object form the real runtime passes. A mismatch fails generation
+    outright rather than silently recording only one form.
+    """
+    scoring_blocks = [
+        {"enabled": True},
+        {"enabled": True, "weights": {"prompt_size": 2.0, "keywords": 0.0}},
+        {"enabled": True, "keywords": {"refactor": 0.6, "optimize": 0.4}},
+        {"enabled": True, "weights": {"output_size": 3.0}, "keywords": {}},
+    ]
+    depths = [0, 1, 3, 2]
+    effect = {
+        "name": "p",
+        "template": "please analyze and refactor {{topic}}",
+        "prompt_type": "text",
+        "schema": {"properties": {"a": {"type": "string"}}},
+        "params": {"max_tokens": 256},
+        "description": "optimize the plan",
+    }
+
+    cases = []
+    for i, (scoring_block, depth) in enumerate(zip(scoring_blocks, depths, strict=True)):
+        settings = parse_complexity_settings({"scoring": scoring_block})
+        weights = dict(settings.scoring.weights)
+        keyword_weights = dict(settings.scoring.keywords) or None
+        structure = {"depth": depth}
+        rendered_prompt = f"please analyze and refactor the plan, case {i}"
+
+        compiled = _compile_prompt(dict(effect), effect_path="effects.p")
+        mapping_definition = {
+            "template": compiled.template,
+            "messages": None
+            if compiled.messages is None
+            else [{"role": m.role, "content": m.content} for m in compiled.messages],
+            "prompt_type": compiled.prompt_type,
+            "schema": compiled.schema,
+            "params": compiled.params,
+            "description": compiled.description,
+        }
+
+        kwargs = {
+            "rendered_prompt": rendered_prompt,
+            "weights": weights,
+            "keyword_weights": keyword_weights,
+            "structure": structure,
+        }
+        from_object = _complexity_meta(score(definition=compiled, **kwargs))
+        from_mapping = _complexity_meta(score(definition=mapping_definition, **kwargs))
+        assert from_object == from_mapping, (
+            f"runtime-shaped case {i}: PromptDefinition and mapping forms diverged: "
+            f"{from_object!r} != {from_mapping!r}"
+        )
+
+        cases.append(
+            run_case(
+                f"runtime-shaped case {i} (mapping form, proven equal to PromptDefinition)",
+                definition=mapping_definition,
+                rendered_prompt=rendered_prompt,
+                weights=weights,
+                keyword_weights=keyword_weights,
+                structure=structure,
+            )
+        )
+    return cases
+
+
+def run_settings_case(description: str, raw: Any) -> dict[str, Any]:
+    try:
+        settings = parse_complexity_settings(raw)
+    except ComplexityConfigError as exc:
+        return {"description": description, "raw": raw, "error": str(exc)}
+    return {
+        "description": description,
+        "raw": raw,
+        "expected": {
+            "weights": dict(settings.scoring.weights),
+            "keywords": dict(settings.scoring.keywords),
+        },
+    }
+
+
+def family_settings() -> list[dict[str, Any]]:
+    """Family 13: `runtime.complexity` -> resolved `scoring.weights`/
+    `keywords` -- overlay onto the config defaults, int to float, and the
+    strip-collision rule (last value wins, first position kept).
+    """
+    cases = [run_settings_case("settings absent block resolves to defaults", None)]
+    cases.append(run_settings_case("settings empty scoring block", {"scoring": {}}))
+    cases.append(
+        run_settings_case(
+            "settings partial weights overlay, int becomes float",
+            {"scoring": {"weights": {"prompt_size": 9}}},
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings weights unknown signal raises",
+            {"scoring": {"weights": {"bogus": 1.0}}},
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings weights not a mapping raises",
+            {"scoring": {"weights": "nope"}},
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings keywords not a mapping raises",
+            {"scoring": {"keywords": "nope"}},
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings keywords strip collision keeps first position, last value",
+            {
+                "scoring": {
+                    "keywords": {
+                        "  analyze  ": 1,
+                        "compare": 2,
+                        "analyze": 3,
+                    }
+                }
+            },
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings unknown top-level key raises",
+            {"bogus": True},
+        )
+    )
+    cases.append(
+        run_settings_case(
+            "settings full block, enabled, weights and keywords",
+            {
+                "scoring": {
+                    "enabled": True,
+                    "weights": {"prompt_size": 2.0, "output_size": 0},
+                    "keywords": {"refactor": 0.6, " Optimize ": 0.4},
+                }
+            },
+        )
+    )
+    return cases
+
+
+def _band(model: str, max_: float | None, name: str | None) -> dict[str, Any]:
+    return {"model": model, "max": max_, "name": name}
+
+
+def run_route_case(
+    description: str,
+    *,
+    bands: list[dict[str, Any]],
+    score_value: float,
+    enabled: bool = True,
+    respect_explicit: bool = True,
+    explicit: bool = False,
+) -> dict[str, Any]:
+    settings = RoutingSettings(
+        enabled=enabled,
+        bands=tuple(ComplexityBand(model=b["model"], max=b["max"], name=b["name"]) for b in bands),
+        respect_explicit=respect_explicit,
+    )
+    decision = route_model(score=score_value, settings=settings, explicit=explicit)
+    return {
+        "description": description,
+        "bands": bands,
+        "enabled": enabled,
+        "respect_explicit": respect_explicit,
+        "score": score_value,
+        "explicit": explicit,
+        "expected": None
+        if decision is None
+        else {"model": decision.band.model, "max": decision.band.max, "name": decision.band.name},
+    }
+
+
+def family_router() -> list[dict[str, Any]]:
+    """Family 14 (route_model half): band tables x scores at, just below
+    and just above each `max`; a catch-all-only table; `enabled` x
+    `explicit` x `respect_explicit`.
+    """
+    bands_three = [
+        _band("small", 30.0, "low"),
+        _band("medium", 70.0, "mid"),
+        _band("big", None, None),
+    ]
+    cases = [
+        run_route_case(f"route boundary score={s}", bands=bands_three, score_value=s)
+        for s in [0.0, 29.9, 30.0, 30.1, 69.9, 70.0, 70.1, 99.9, 100.0]
+    ]
+    cases.append(
+        run_route_case("route catch-all only", bands=[_band("only", None, None)], score_value=50.0)
+    )
+    cases.append(
+        run_route_case(
+            "route empty model band defers",
+            bands=[_band("", None, None)],
+            score_value=10.0,
+        )
+    )
+    cases.extend(
+        run_route_case(
+            f"route enabled={enabled} explicit={explicit} "
+            f"respect_explicit={respect_explicit}",
+            bands=bands_three,
+            enabled=enabled,
+            respect_explicit=respect_explicit,
+            score_value=50.0,
+            explicit=explicit,
+        )
+        for enabled in [True, False]
+        for explicit in [True, False]
+        for respect_explicit in [True, False]
+    )
+    return cases
+
+
+def run_band_named_case(description: str, *, bands: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    complexity_bands = tuple(ComplexityBand(model=b["model"], max=b["max"], name=b["name"]) for b in bands)
+    found = band_named(name, complexity_bands)
+    return {
+        "description": description,
+        "bands": bands,
+        "name": name,
+        "expected": None if found is None else {"model": found.model, "max": found.max, "name": found.name},
+    }
+
+
+def family_band_named() -> list[dict[str, Any]]:
+    """Family 14 (band_named half): hits, misses and unnamed bands."""
+    bands_named = [
+        _band("small", 30.0, "low"),
+        _band("big", None, None),
+    ]
+    return [
+        run_band_named_case("band_named hit", bands=bands_named, name="low"),
+        run_band_named_case("band_named miss", bands=bands_named, name="nonexistent"),
+        run_band_named_case(
+            "band_named lookup by empty string never matches an unnamed band",
+            bands=bands_named,
+            name="",
+        ),
+    ]
+
+
 def build_cases() -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     cases.extend(family_prompt_size())
@@ -540,6 +814,7 @@ def build_cases() -> list[dict[str, Any]]:
     cases.extend(family_keywords())
     cases.extend(family_weights())
     cases.extend(family_definition_shape())
+    cases.extend(family_runtime_shaped())
     cases.extend(family_rounding_stress())
     cases.extend(family_seeded_random(300))
     return cases
@@ -547,7 +822,16 @@ def build_cases() -> list[dict[str, Any]]:
 
 def main() -> int:
     cases = build_cases()
-    data = (json.dumps({"score_cases": cases}, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    settings_cases = family_settings()
+    router_cases = family_router()
+    band_named_cases = family_band_named()
+    corpus = {
+        "score_cases": cases,
+        "settings_cases": settings_cases,
+        "router_cases": router_cases,
+        "band_named_cases": band_named_cases,
+    }
+    data = (json.dumps(corpus, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     if "--check" in sys.argv[1:]:
         current = OUTPUT.read_bytes() if OUTPUT.exists() else b""
@@ -556,7 +840,8 @@ def main() -> int:
             return 1
         return 0
     OUTPUT.write_bytes(data)
-    print(f"wrote {len(cases)} case(s) to {OUTPUT}")
+    total = len(cases) + len(settings_cases) + len(router_cases) + len(band_named_cases)
+    print(f"wrote {total} case(s) to {OUTPUT}")
     return 0
 
 

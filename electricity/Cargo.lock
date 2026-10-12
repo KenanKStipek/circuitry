@@ -472,6 +472,7 @@ dependencies = [
 name = "electricity-complexity"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "electricity-config",
  "electricity-json",
  "electricity-pyre",
