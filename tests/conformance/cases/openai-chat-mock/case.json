@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #503 (openai, max_completion_tokens, seed after params, string usage coercion)",
+  "description": "fake_credentials, deterministic: true, and params.max_tokens colliding with openai's own max_completion_tokens key: seed: 0 is appended after params, and usage counts given as strings are coerced by int().",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {"OPENAI_API_KEY": "circuitry-test-fake-openai-key"}
+}

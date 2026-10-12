@@ -1,0 +1,9 @@
+name: openai-chat-mock
+adapter: openai
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    deterministic: true
+    params: {max_tokens: 50}

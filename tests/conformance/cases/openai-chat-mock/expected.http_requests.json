@@ -1,0 +1,30 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "authorization",
+        "Bearer circuitry-test-fake-openai-key"
+      ],
+      [
+        "content-length",
+        "130"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"say hello\"}], \"temperature\": 0.0, \"max_completion_tokens\": 50, \"seed\": 0}"
+  }
+]

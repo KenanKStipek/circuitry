@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #503 (replicate, Prefer: wait, list output join, ignored-options warning)",
+  "description": "Prefer: wait=60, the body {input: {prompt: ...}}, a list output joined, and the ignored-options warning plus its WARNING: line.",
+  "engines": ["python"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {"REPLICATE_API_TOKEN": "circuitry-test-fake-replicate-token"}
+}
