@@ -78,8 +78,11 @@ fn push_warning(
     warning: String,
     observer: &dyn RunObserver,
 ) {
-    log::warn!("prompt {name:?}: {warning}");
-    observer.warning(&format!("prompt {name:?}: {warning}"));
+    // `logger.warning("prompt %r: %s", name, w)` -- Python's `%r` is
+    // `repr(name)`, never Rust's own `{:?}` (double-quoted) Debug form.
+    let name_repr = Value::Str(name.to_string()).py_repr();
+    log::warn!("prompt {name_repr}: {warning}");
+    observer.warning(&format!("prompt {name_repr}: {warning}"));
     let mut current = warnings_list(store, meta_node);
     current.push(Value::Str(warning));
     set_leaf(store, meta_node, "warnings", Value::List(current));
