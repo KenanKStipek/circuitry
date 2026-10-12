@@ -1555,10 +1555,15 @@ mod tests {
 
     #[tokio::test]
     async fn run_agent_cli_decode_failure_is_not_wrapped_as_a_cli_failure() {
+        // Octal `\377`, not hex `\xff`: POSIX `printf` guarantees octal
+        // escapes everywhere, but dash's (Debian/Ubuntu `/bin/sh`) builtin
+        // `printf` writes `\xff` as four literal characters, where bash's
+        // (macOS's default `/bin/sh`) interprets it as one raw byte --
+        // this must produce the same invalid UTF-8 byte on every CI runner.
         let cmd = vec![
             "sh".to_string(),
             "-c".to_string(),
-            "printf '\\xff'".to_string(),
+            "printf '\\377'".to_string(),
         ];
         let err = run_agent_cli(&cmd, &[], 5.0, Vec::new(), None, &token())
             .await
