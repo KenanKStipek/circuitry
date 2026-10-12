@@ -13,10 +13,26 @@
 //! grandchild in the *same* process group (a non-interactive `sh -c`
 //! never does its own job-control pgrp separation) -- exactly the
 //! shape `core/cancellation.py::kill_process_group`'s own grandchild
-//! case needs. Every duration here is unique across this file (and
-//! distinct from every other test file's own sleep durations in this
-//! crate) so `pgrep -f` can never match a sibling test's still-running
-//! child when tests run in parallel.
+//! case needs.
+//!
+//! [`unique_sleep_secs`] derives every `sleep` duration used as a
+//! marker from this test *process*'s own pid plus a per-call counter,
+//! so two concurrent runs of this file -- two checkouts, or a CI
+//! retry racing a still-finishing previous run -- can never pick the
+//! same number and therefore can never see, signal or wait on each
+//! other's processes via `pgrep -f`/`pkill -f` (issue #491).
+//!
+//! The shell step's own child gets `setsid()` (its own session, not
+//! merely its own process group -- see `electricity-tools::process`),
+//! so it and its background grandchild are **not** members of this
+//! test's own `electricity` child's process group: [`TestChild::drop`]
+//! below, which `SIGKILL`s only that group, can never reach them. A
+//! panicking assertion that skips a test's normal cancellation
+//! assertions would otherwise leave them running, re-parented to
+//! init, where every later run (including from another checkout)
+//! would see them and misread its own "must be gone" assertion.
+//! [`SleepGuard`] is the fix: a `Drop` guard, scoped to this run's own
+//! unique marker, that `pkill -f`s it unconditionally.
 
 #![cfg(unix)]
 
@@ -24,7 +40,8 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_electricity"))
@@ -73,12 +90,12 @@ impl TestChild {
     }
 
     fn wait_timeout(&mut self, timeout: Duration) -> Option<std::process::ExitStatus> {
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = Instant::now() + timeout;
         loop {
             if let Ok(Some(status)) = self.child.try_wait() {
                 return Some(status);
             }
-            if std::time::Instant::now() >= deadline {
+            if Instant::now() >= deadline {
                 return None;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -95,12 +112,92 @@ impl Drop for TestChild {
     }
 }
 
-fn pgrep_matches(pattern: &str) -> bool {
+/// A process-wide counter, combined with this test *process*'s own
+/// pid, so every call across every test in this file -- even ones
+/// running concurrently on separate threads, as `cargo test` does by
+/// default -- gets a number no other call, in this process or any
+/// other, will ever produce. The counter never exceeds 3 digits in
+/// practice (this file has five tests), so multiplying the pid by
+/// 1000 leaves every process's own range disjoint from every other
+/// process's.
+static MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn unique_sleep_secs() -> u64 {
+    let n = MARKER_COUNTER.fetch_add(1, Ordering::SeqCst);
+    (std::process::id() as u64) * 1_000 + n
+}
+
+/// A `pgrep -f`/`pkill -f` pattern that matches this exact marker and
+/// nothing else: a plain `"sleep {sleep_secs}"` substring would also
+/// match any other marker whose digits happen to start with this
+/// one's (e.g. marker `500` inside marker `5001`). The trailing
+/// alternation anchors the match to either a following space (the
+/// `sh -c "sleep N & sleep N"` foreground occurrence) or end of the
+/// command line (the backgrounded occurrence, or a bare `sleep N`).
+fn sleep_pattern(sleep_secs: u64) -> String {
+    format!("sleep {sleep_secs}( |$)")
+}
+
+fn pgrep_count(pattern: &str) -> usize {
     Command::new("pgrep")
         .args(["-f", pattern])
         .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn pgrep_matches(pattern: &str) -> bool {
+    pgrep_count(pattern) > 0
+}
+
+/// Polls `pgrep -f` for *pattern* until at least *min_count* processes
+/// match, up to *timeout* -- rather than asserting once, right after
+/// `--live-state` first appears, which can run well before the shell
+/// step has actually forked anything under load (issue #491).
+fn wait_for_pgrep_count(pattern: &str, min_count: usize, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let count = pgrep_count(pattern);
+        if count >= min_count {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "pattern {pattern:?} matched only {count} process(es), \
+                 wanted at least {min_count}, within {timeout:?}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Kills every process still matching this run's own unique marker,
+/// unconditionally, when the test that owns it ends -- including by a
+/// panicking assertion. The shell step's child is its own session
+/// (`setsid`), so [`TestChild::drop`]'s process-group `SIGKILL` on the
+/// *electricity* process never reaches it or its grandchild; only a
+/// marker-scoped `pkill -f` does.
+struct SleepGuard {
+    pattern: String,
+}
+
+impl SleepGuard {
+    fn new(sleep_secs: u64) -> Self {
+        SleepGuard {
+            pattern: sleep_pattern(sleep_secs),
+        }
+    }
+}
+
+impl Drop for SleepGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("pkill").args(["-f", &self.pattern]).status();
+    }
 }
 
 fn live_state_path(home: &TempHome) -> PathBuf {
@@ -124,19 +221,22 @@ fn spawn(home: &TempHome, config: &Path, doc: &Path, extra_args: &[&str]) -> Tes
 
 /// Mirrors `signals.rs`'s own readiness probe: `--live-state`'s first
 /// write happens well after signal handlers are armed but before any
-/// effect dispatches.
+/// effect dispatches. Firm evidence `electricity` itself is running --
+/// not that the shell step has forked anything yet; callers that care
+/// about the shell step's own child/grandchild still need
+/// [`wait_for_pgrep_count`] after this.
 fn wait_until_running(home: &TempHome) {
     let path = live_state_path(home);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !path.exists() {
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             panic!("electricity never wrote --live-state within 10s");
         }
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
-fn shell_sleep_doc(sleep_secs: u32) -> String {
+fn shell_sleep_doc(sleep_secs: u64) -> String {
     format!(
         "effects:\n\
          \x20 - name: s\n\
@@ -150,17 +250,22 @@ fn shell_sleep_doc(sleep_secs: u32) -> String {
     )
 }
 
-fn signal_test(tag: &str, sleep_secs: u32, signum: i32, want_exit: i32) {
+fn signal_test(tag: &str, signum: i32, want_exit: i32) {
+    let sleep_secs = unique_sleep_secs();
+    let _cleanup = SleepGuard::new(sleep_secs);
+    let pattern = sleep_pattern(sleep_secs);
+
     let home = TempHome::new(tag);
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", &shell_sleep_doc(sleep_secs));
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
     wait_until_running(&home);
-    assert!(
-        pgrep_matches(&format!("sleep {sleep_secs}")),
-        "the shell step's own child (and grandchild) must be running before the signal"
-    );
+    // `sh` itself plus both the foreground and backgrounded `sleep N`
+    // it forks all carry `sleep N` in their own command line (verified
+    // against macOS's own `pgrep`/`pkill`), so 3 is "both the child
+    // and the grandchild are up", not just one of them.
+    wait_for_pgrep_count(&pattern, 3, Duration::from_secs(10));
     child.send(signum);
     let status = child
         .wait_timeout(Duration::from_secs(10))
@@ -168,42 +273,48 @@ fn signal_test(tag: &str, sleep_secs: u32, signum: i32, want_exit: i32) {
     assert_eq!(status.code(), Some(want_exit));
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        !pgrep_matches(&format!("sleep {sleep_secs}")),
+        !pgrep_matches(&pattern),
         "both the tracked child and its grandchild must be gone after cancellation"
     );
 }
 
 #[test]
 fn sigint_during_a_shell_steps_grandchild_kills_both_exit_130() {
-    signal_test("sigint", 8491, libc::SIGINT, 130);
+    signal_test("sigint", libc::SIGINT, 130);
 }
 
 #[test]
 fn sigterm_during_a_shell_steps_grandchild_kills_both_exit_143() {
-    signal_test("sigterm", 8492, libc::SIGTERM, 143);
+    signal_test("sigterm", libc::SIGTERM, 143);
 }
 
 #[test]
 fn sighup_during_a_shell_steps_grandchild_kills_both_exit_129() {
-    signal_test("sighup", 8493, libc::SIGHUP, 129);
+    signal_test("sighup", libc::SIGHUP, 129);
 }
 
 #[test]
 fn a_shell_timeout_kills_a_grandchild_too() {
+    let sleep_secs = unique_sleep_secs();
+    let _cleanup = SleepGuard::new(sleep_secs);
+    let pattern = sleep_pattern(sleep_secs);
+
     let home = TempHome::new("timeout");
     let config = home.write("config.json", "{}");
     let doc = home.write(
         "doc.yml",
-        "effects:\n\
-         \x20 - name: s\n\
-         \x20   type: tool\n\
-         \x20   provider: shell\n\
-         \x20   timeout_ms: 500\n\
-         \x20   on_error: continue\n\
-         \x20   params:\n\
-         \x20     command: sh\n\
-         \x20     allowed_commands: [sh]\n\
-         \x20     args: [\"-c\", \"sleep 8494 & sleep 8494\"]\n",
+        &format!(
+            "effects:\n\
+             \x20 - name: s\n\
+             \x20   type: tool\n\
+             \x20   provider: shell\n\
+             \x20   timeout_ms: 500\n\
+             \x20   on_error: continue\n\
+             \x20   params:\n\
+             \x20     command: sh\n\
+             \x20     allowed_commands: [sh]\n\
+             \x20     args: [\"-c\", \"sleep {sleep_secs} & sleep {sleep_secs}\"]\n"
+        ),
     );
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
@@ -213,38 +324,45 @@ fn a_shell_timeout_kills_a_grandchild_too() {
     assert!(status.success(), "on_error: continue must still exit 0");
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        !pgrep_matches("sleep 8494"),
+        !pgrep_matches(&pattern),
         "a timed-out shell step must not leak the grandchild it forked"
     );
 }
 
 #[test]
 fn a_finally_shell_step_still_spawns_after_the_run_is_cancelled() {
+    let sleep_secs = unique_sleep_secs();
+    let _cleanup = SleepGuard::new(sleep_secs);
+    let pattern = sleep_pattern(sleep_secs);
+
     let home = TempHome::new("finally-spawns");
     let config = home.write("config.json", "{}");
     let doc = home.write(
         "doc.yml",
-        "effects:\n\
-         \x20 - name: s\n\
-         \x20   type: tool\n\
-         \x20   provider: shell\n\
-         \x20   timeout_ms: 30000\n\
-         \x20   params:\n\
-         \x20     command: sleep\n\
-         \x20     allowed_commands: [sleep]\n\
-         \x20     args: [\"30\"]\n\
-         finally:\n\
-         \x20 - name: cleanup\n\
-         \x20   type: tool\n\
-         \x20   provider: shell\n\
-         \x20   params:\n\
-         \x20     command: echo\n\
-         \x20     allowed_commands: [echo]\n\
-         \x20     args: [\"cleaned up\"]\n",
+        &format!(
+            "effects:\n\
+             \x20 - name: s\n\
+             \x20   type: tool\n\
+             \x20   provider: shell\n\
+             \x20   timeout_ms: 30000\n\
+             \x20   params:\n\
+             \x20     command: sleep\n\
+             \x20     allowed_commands: [sleep]\n\
+             \x20     args: [\"{sleep_secs}\"]\n\
+             finally:\n\
+             \x20 - name: cleanup\n\
+             \x20   type: tool\n\
+             \x20   provider: shell\n\
+             \x20   params:\n\
+             \x20     command: echo\n\
+             \x20     allowed_commands: [echo]\n\
+             \x20     args: [\"cleaned up\"]\n"
+        ),
     );
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
     wait_until_running(&home);
+    wait_for_pgrep_count(&pattern, 1, Duration::from_secs(10));
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
