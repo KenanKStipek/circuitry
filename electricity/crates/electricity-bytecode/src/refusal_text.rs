@@ -20,6 +20,15 @@ use crate::refusal::{Refusal, RefusalReason};
 /// why it is always identical to `electricity` (lib)'s own `VERSION`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The stable substring every preview refusal carries (issue #476):
+/// matched in lockstep by the conformance harness's own
+/// `PREVIEW_MESSAGE_MARKER`, osp's e2e test, and this crate's and
+/// `electricity` (lib)'s own tests. Every refusal message below, and
+/// `electricity::format_config_refusal`, builds its text around this
+/// one constant so the marker can only ever change in one place per
+/// language.
+pub const PREVIEW_MARKER: &str = "is a preview and can't run this orchestration";
+
 /// `electricity_bytecode::RefusalReason` -> the human-readable half of
 /// the refusal message [`format_refusal`] builds (issue #431's gate
 /// lane: "the refusal message keeps the existing preview marker phrase
@@ -55,7 +64,7 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
 /// marker" skip rule keeps working), the effect path, and the reason.
 pub fn format_refusal(refusal: &Refusal) -> String {
     format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: {} is {}; use `cof run` instead",
+        "electricity {VERSION} {PREVIEW_MARKER}: {} is {}; use `cof run` instead",
         refusal.path,
         refusal_reason_text(&refusal.reason)
     )
@@ -72,7 +81,7 @@ pub fn format_refusal(refusal: &Refusal) -> String {
 /// same child.
 pub fn format_refused_child(child_label: &str, refusal: &Refusal) -> String {
     format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: use child {child_label}: {} is {}; use `cof run` instead",
+        "electricity {VERSION} {PREVIEW_MARKER}: use child {child_label}: {} is {}; use `cof run` instead",
         refusal.path,
         refusal_reason_text(&refusal.reason)
     )
@@ -90,9 +99,7 @@ mod tests {
             reason: RefusalReason::Loop,
         };
         let text = format_refusal(&refusal);
-        assert!(text.starts_with(&format!(
-            "electricity {VERSION} is a preview and cannot run orchestrations yet: "
-        )));
+        assert!(text.starts_with(&format!("electricity {VERSION} {PREVIEW_MARKER}: ")));
         assert!(text.contains("prime.step is a loop effect"));
         assert!(text.ends_with("use `cof run` instead"));
     }

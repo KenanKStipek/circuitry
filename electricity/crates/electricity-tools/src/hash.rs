@@ -407,7 +407,7 @@ mod tests {
         .unwrap_err();
         assert!(
             err.message
-                .contains("is a preview and cannot run orchestrations yet")
+                .contains("is a preview and can't run this orchestration")
         );
     }
 

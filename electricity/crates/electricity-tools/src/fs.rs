@@ -527,7 +527,7 @@ pub(crate) fn preview_marker_codec_error(name: &str) -> ToolError {
     ToolError {
         py_class: PyExc::LookupError,
         message: format!(
-            "electricity {} is a preview and cannot run orchestrations yet: the '{name}' codec is not supported; use `cof run` instead",
+            "electricity {} is a preview and can't run this orchestration: the '{name}' codec is not supported; use `cof run` instead",
             env!("CARGO_PKG_VERSION")
         ),
         cause: crate::ErrorCause::None,
@@ -1350,7 +1350,7 @@ mod tests {
         assert_eq!(err.py_class, PyExc::LookupError);
         assert!(
             err.message
-                .contains("is a preview and cannot run orchestrations yet")
+                .contains("is a preview and can't run this orchestration")
         );
         assert!(err.message.contains("'utf-16'"));
         assert!(!path.exists());
@@ -1372,7 +1372,7 @@ mod tests {
         assert_eq!(err.py_class, PyExc::LookupError);
         assert!(
             err.message
-                .contains("is a preview and cannot run orchestrations yet")
+                .contains("is a preview and can't run this orchestration")
         );
     }
 
