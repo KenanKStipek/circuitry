@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/prompt.py::PromptRuntime._validate_schema, issue #498's own orchestrator follow-up (round-7 stack-overflow fix)",
+  "description": "A `$defs` chain of 1000 single-hop `$ref`s (`L0 -> L1 -> ... -> L1000 = {type: object}`), reply `{}`: the documented accepted boundary both engines agree on (Python's own `RecursionError` starts somewhere between 1000 and 2000 hops; electricity's own cap -- `electricity_schema::engine::MAX_RECURSION_DEPTH` -- is well above 1000). A deeper chain diverges between the two engines (a documented threshold difference, `DESIGN.md` \u00a713), so this pins only the boundary both sides still accept.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

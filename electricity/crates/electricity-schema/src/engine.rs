@@ -14,11 +14,13 @@
 //! represent a schema-literal `NaN`/`Infinity`, so either used to produce
 //! a false `SchemaError` or a wrong verdict for a schema this module
 //! understands perfectly well). The crate decides only when that gate is
-//! false (an unsupported keyword, or an older draft), and is also still
-//! used, narrowly, to decide whether an `anyOf`/`oneOf` *branch* itself
-//! validates when that one branch isn't fully supported -- but the
-//! crate's own `serde_json::Value`-based error objects are never used for
-//! *text*: they lose the schema author's own key order (so a
+//! false (an unsupported keyword, or an older draft) -- including every
+//! `anyOf`/`oneOf` *branch* on that path, since this module itself never
+//! finished the top-level walk that would let it trust its own verdict.
+//! Once the gate holds, [`schema_accepts`]/[`evaluate_branch`] decide
+//! every branch too (PR #502's round-6 fix): the crate's own
+//! `serde_json::Value`-based error objects were never a good *text*
+//! source anyway -- they lose the schema author's own key order (so a
 //! `type: [string, null]` list, or a multi-property object's own repr,
 //! would render alphabetized instead of as-written), and the crate exposes
 //! no sub-error list for `anyOf`/`oneOf` to descend into the way Python's
@@ -834,7 +836,7 @@ fn enter_eval_guard(schema: &Value, instance: &Value) -> (EvalGuard, bool) {
         let stack = s.borrow();
         (stack.contains(&key), stack.len())
     });
-    if cycle || depth >= MAX_RECURSION_DEPTH {
+    if cycle || depth >= MAX_RECURSION_DEPTH || stack_budget_exceeded() {
         RECURSION_EXCEEDED.with(|e| e.set(true));
         return (EvalGuard(None), true);
     }
@@ -848,6 +850,71 @@ fn enter_eval_guard(schema: &Value, instance: &Value) -> (EvalGuard, bool) {
 /// one validation attempt into the next one on the same thread.
 pub(crate) fn take_recursion_exceeded() -> bool {
     RECURSION_EXCEEDED.with(|e| e.replace(false))
+}
+
+/// Reads [`RECURSION_EXCEEDED`] without clearing it -- unlike
+/// [`take_recursion_exceeded`], safe to call mid-walk:
+/// [`crate::validate_prompt_schema`] uses this right after its own
+/// [`schema_is_fully_supported`] call to tell a genuine hop-cap trip
+/// (the schema's own `$ref` graph is already too deep for this engine to
+/// finish walking) apart from an ordinary "not fully supported" `false`
+/// (an unimplemented keyword) *before* deciding whether to fall back to
+/// the `jsonschema` crate at all -- the crate's own build step resolves
+/// a `$ref` eagerly, so handing it a schema already known to be this deep
+/// would just move the same stack-overflow risk into code this module
+/// can't put a guard in.
+pub(crate) fn recursion_exceeded_peek() -> bool {
+    RECURSION_EXCEEDED.with(|e| e.get())
+}
+
+thread_local! {
+    /// The address of a stack-local probe taken once per validation
+    /// call, by [`set_stack_guard`], at the top of the frame the
+    /// dedicated validation thread (or, on a `spawn_scoped` failure, the
+    /// fallback inline path) starts running `evaluate`/
+    /// `schema_is_fully_supported_inner` from -- `0` means no guard is
+    /// configured (a unit test calling either function directly, never
+    /// through [`crate::validate_prompt_schema`]), in which case
+    /// [`stack_budget_exceeded`] never trips.
+    static STACK_GUARD_BASE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many bytes below [`STACK_GUARD_BASE`] this call is allowed to
+    /// use before [`stack_budget_exceeded`] trips -- set alongside it by
+    /// [`set_stack_guard`], sized to the *actual* stack the current
+    /// thread was given (generous on the dedicated validation thread,
+    /// conservative on the fallback inline path), not to
+    /// [`MAX_RECURSION_DEPTH`]'s own hop count. Defense in depth: a
+    /// per-hop frame shape costing more stack than the hop budget ever
+    /// measured against trips this before it could overflow the thread's
+    /// real stack, regardless of which recursive path (or how many of
+    /// them nested together) got there.
+    static STACK_GUARD_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`crate::validate_prompt_schema`]'s own first step (after the
+/// thread-local clears above), run on whichever thread is about to call
+/// into [`evaluate`]/[`schema_is_fully_supported`] -- a stack-probe
+/// address taken *here*, not by the caller, since it must be a local in
+/// the same frame this validation call's own recursion actually grows
+/// down from.
+pub(crate) fn set_stack_guard(budget_bytes: usize) {
+    let probe = 0u8;
+    STACK_GUARD_BASE.with(|b| b.set(std::ptr::addr_of!(probe) as usize));
+    STACK_GUARD_BUDGET.with(|b| b.set(budget_bytes));
+}
+
+/// Whether the current thread has used up its [`STACK_GUARD_BUDGET`]
+/// since [`set_stack_guard`] was last called -- stack grows down on
+/// every target this workspace builds for, so a *smaller* current probe
+/// address than [`STACK_GUARD_BASE`] means more bytes used, never fewer.
+fn stack_budget_exceeded() -> bool {
+    let base = STACK_GUARD_BASE.with(|b| b.get());
+    if base == 0 {
+        return false;
+    }
+    let probe = 0u8;
+    let current = std::ptr::addr_of!(probe) as usize;
+    let used = base.saturating_sub(current);
+    STACK_GUARD_BUDGET.with(|b| used >= b.get())
 }
 
 thread_local! {
@@ -2261,7 +2328,7 @@ fn schema_is_fully_supported_inner(
     depth: usize,
     is_root: bool,
 ) -> bool {
-    if depth >= MAX_RECURSION_DEPTH {
+    if depth >= MAX_RECURSION_DEPTH || stack_budget_exceeded() {
         RECURSION_EXCEEDED.with(|e| e.set(true));
         return false;
     }

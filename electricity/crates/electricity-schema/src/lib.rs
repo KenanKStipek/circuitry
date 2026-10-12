@@ -615,10 +615,11 @@ pub enum PromptSchemaCheck {
     /// against Python's own `jsonschema` output for the keyword
     /// families [`python_message::python_message`] covers (issue #498
     /// ruling 6, tightened by PR #502's review finding 2/orchestrator
-    /// ruling 2); `oneOf`/`anyOf` fall back to the `jsonschema` crate's
-    /// own `Display` text, a known, narrower gap now (`DESIGN.md` §13).
-    /// The `"Schema validation failed: "` prefix is the caller's, as
-    /// it is in `core/prompt.py`.
+    /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
+    /// text, not the `jsonschema` crate's `Display` -- PR #502's
+    /// round-6 fix); the remaining gaps are narrower ones named in
+    /// `DESIGN.md` §13. The `"Schema validation failed: "` prefix is
+    /// the caller's, as it is in `core/prompt.py`.
     Invalid(String),
     /// The schema itself doesn't compile into a validator at all
     /// (`jsonschema.SchemaError`, which `_validate_schema`'s own
@@ -626,6 +627,38 @@ pub enum PromptSchemaCheck {
     /// different, non-retryable failure than an ordinary mismatch).
     SchemaError(String),
 }
+
+/// The dedicated validation thread [`validate_prompt_schema`] runs
+/// [`validate_prompt_schema_impl`] on (round-7 fix) -- sized against a
+/// deliberately pathological case, not a typical one: a single-hop-
+/// per-level `$ref` chain just short of [`engine::MAX_RECURSION_DEPTH`]
+/// (so neither [`engine::evaluate`] nor
+/// [`engine::schema_is_fully_supported`] ever trips their own hop cap --
+/// a schema exactly at the cap recurses far *less*, since the cap itself
+/// cuts the walk off early) measured directly, on this same `opt-level =
+/// 2` build (workspace `Cargo.toml`'s own dev-profile override), to need
+/// a hair under 14 MiB of native stack on every target this has been
+/// measured on (x86_64 and aarch64, debug and release alike). 4x that.
+const VALIDATION_THREAD_STACK_BYTES: usize = 64 * 1024 * 1024;
+/// [`engine::set_stack_guard`]'s own budget on the dedicated thread --
+/// defense in depth, not the primary safety margin ([`VALIDATION_THREAD_
+/// STACK_BYTES`]'s own 4x headroom already is): some slack held back
+/// from the thread's own full stack size for whatever this function
+/// calls into that isn't covered by the two recursive functions
+/// [`engine::set_stack_guard`]'s budget actually bounds.
+const VALIDATION_THREAD_STACK_GUARD_BYTES: usize = 56 * 1024 * 1024;
+/// [`engine::set_stack_guard`]'s own budget on the rare fallback path, if
+/// [`std::thread::Builder::spawn_scoped`] itself fails (platform thread
+/// creation failure -- out of memory or address space, not anything this
+/// crate's own schema/instance shapes can trigger): deliberately small
+/// and conservative, since the calling thread's own remaining headroom
+/// below *its* native limit is unknown here -- it could be the 2 MiB a
+/// worker thread was given, already partway spent by this call's own
+/// ancestors. A pathological document that would have been fine on the
+/// dedicated thread can still report a clean, non-retryable RecursionError
+/// on this path instead of its real verdict; that trade only happens
+/// when thread creation itself is already failing.
+const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 
 /// `jsonschema.validate(value, schema)`, draft auto-selected from
 /// *schema*'s own `$schema` (defaulting to the latest draft) exactly
@@ -647,13 +680,58 @@ pub enum PromptSchemaCheck {
 /// exactly which ones -- or a pre-2020-12 draft), built from *schema*
 /// as a `serde_json::Value` there, where every one of those gaps is
 /// already an accepted, documented divergence (`DESIGN.md` §13).
+///
+/// Runs [`validate_prompt_schema_impl`] on a dedicated, scoped thread
+/// with its own large stack (round-7 fix, issue #498's own orchestrator
+/// follow-up: a `$ref` chain thousands of hops deep -- well under
+/// [`engine::MAX_RECURSION_DEPTH`] -- overflowed the caller's own
+/// ordinary thread stack, an immediate process abort with no state
+/// written at all, in both debug and release builds, since this crate
+/// builds at `opt-level = 2` in both). `electricity_value::Value` holds
+/// no `Rc`/`RefCell` (confirmed directly against its own definition), so
+/// `&Value` is `Sync` and this call's own `schema`/`instance` borrows
+/// are safe to hand across the scope boundary unchanged; the only thing
+/// crossing back is *schema*'s own return value, a plain `String`-based
+/// enum with nothing that could reach back into the new thread's own
+/// (reset-per-call, thread-local) state. If `spawn_scoped` itself fails
+/// (platform thread creation failure), falls back to running inline on
+/// the caller's own thread, under a conservative stack budget
+/// ([`FALLBACK_STACK_GUARD_BYTES`]) rather than trusting
+/// [`engine::MAX_RECURSION_DEPTH`]'s hop count alone against a stack of
+/// unknown remaining size.
 pub fn validate_prompt_schema(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> PromptSchemaCheck {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .stack_size(VALIDATION_THREAD_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
+                validate_prompt_schema_impl(schema, instance)
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap(),
+            Err(_) => {
+                engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
+                validate_prompt_schema_impl(schema, instance)
+            }
+        }
+    })
+}
+
+fn validate_prompt_schema_impl(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
 ) -> PromptSchemaCheck {
     // Clear every thread-local left over from a prior call on this
     // thread -- none of these are return values, so each must be
     // reset before this call can trust what it reads back from them.
+    // This always runs on the thread [`validate_prompt_schema`] just set
+    // [`engine::set_stack_guard`]'s own budget on (the dedicated thread,
+    // or the fallback inline path), never a thread some *earlier* call
+    // left state on -- thread-locals are per thread, and this function
+    // itself never changes which thread it runs on.
     engine::take_recursion_exceeded();
     engine::take_python_exception();
     engine::clear_pattern_cache();
@@ -672,8 +750,24 @@ pub fn validate_prompt_schema(
         return PromptSchemaCheck::SchemaError(message);
     }
 
-    let result = if is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema)
-    {
+    let fully_supported =
+        is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
+    let result = if engine::recursion_exceeded_peek() {
+        // Round-7 fix: the support walk itself already hit its own hop
+        // cap (`engine::MAX_RECURSION_DEPTH`) resolving *schema*'s own
+        // `$ref` graph -- never because of a genuinely unsupported
+        // keyword. Falling through to the crate branch below used to
+        // hand it a schema already known to be this deep, and the
+        // crate's own build step resolves a `$ref` eagerly (unlike this
+        // module's own lazy resolution): on a long enough chain that
+        // recursion cost more native stack than this module's own
+        // (bounded) walk ever had to, reintroducing the same
+        // stack-overflow risk one level down, in code this module can't
+        // put a guard in. Short-circuit straight to the `take_
+        // recursion_exceeded` check below instead; *result* here is
+        // discarded either way once that check fires.
+        PromptSchemaCheck::Valid
+    } else if fully_supported {
         // Ruling R6 (orchestrator follow-up), tightened by finding F5:
         // the engine is the accept/reject authority whenever it fully
         // understands the schema, never the crate -- the crate's own
