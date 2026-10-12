@@ -20,6 +20,7 @@ from .normalize import (
     assert_values_equal,
     normalize_for_comparison,
     prepare_for_comparison,
+    redact_events_text,
     redact_runtime_strings,
 )
 
@@ -109,7 +110,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
-        assert_events_equal(events_path.read_text(encoding="utf-8"), expected_events_text)
+        assert_events_equal(
+            redact_events_text(events_path.read_text(encoding="utf-8"), replacements, third_party_text),
+            redact_events_text(expected_events_text, replacements, third_party_text),
+        )
 
         # `--live-state`'s final write always ends equal to `--out`
         # (electricity/DESIGN.md §10.5, issue #431's acceptance criterion).

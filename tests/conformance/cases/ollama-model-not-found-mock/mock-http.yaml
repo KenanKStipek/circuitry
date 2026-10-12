@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /api/generate
+  response:
+    status: 404
+    reason: "Not Found"
+    headers:
+      Content-Type: application/json
+    body: '{"error": "model \"m\" not found, try pulling it first"}'

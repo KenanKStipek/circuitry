@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #503 (native Ollama, connection closed before any response is retried)",
+  "description": "The first connection closes without ever sending a response (curl exit 52, retryable); the second succeeds.",
+  "engines": [
+    "python"
+  ],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/generate",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "54"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"stream\": false, \"prompt\": \"say hello\"}"
+  }
+]

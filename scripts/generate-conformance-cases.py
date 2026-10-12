@@ -48,10 +48,12 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tests.conformance import harness  # noqa: E402
 from tests.conformance.normalize import (  # noqa: E402
+    apply_third_party_text,
     assert_events_equal,
     assert_states_equal,
     canonicalize_http_requests,
     normalize,
+    redact_events_text,
     redact_leaked_paths,
     redact_runtime_strings,
 )
@@ -136,12 +138,19 @@ def _generate_success(
         "expected.json": _redact_and_reserialize(
             out_path.read_bytes(), pretty=False, replacements=replacements
         ),
-        # No path redaction needed: `--events` carries `path`/`orchestration`
-        # (already relative) and `run_id`/`ts`/`pid`/`engine` (not absolute
-        # paths at all) -- nothing a contributor's own checkout or temp
-        # directory could leak into (`tests/conformance/normalize.py`'s
-        # events comparator normalizes these at comparison time instead).
-        "expected.events.jsonl": events_path.read_bytes(),
+        # `--events` carries `path`/`orchestration` (already relative) and
+        # `run_id`/`ts`/`pid`/`engine` (normalized at comparison time by the
+        # events comparator instead) -- but a failed prompt dispatch's own
+        # `end` event embeds the full failure message, which, for a
+        # mock-HTTP-backed adapter case, can carry the mock server's own
+        # ephemeral port (issue #503) the same way a captured `base_url`/
+        # recorded request does, so this still needs the same redaction
+        # state gets.
+        "expected.events.jsonl": redact_events_text(
+            events_path.read_text(encoding="utf-8"),
+            replacements,
+            metadata.get("third_party_text", []),
+        ).encode("utf-8"),
         "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
     if metadata.get("compare_run_warnings"):
@@ -241,7 +250,13 @@ def generate_case(case_dir: Path) -> dict[str, bytes]:
         raise ValueError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")
 
 
-def _content_is_current(current: bytes | None, generated: bytes, *, filename: str) -> bool:
+def _content_is_current(
+    current: bytes | None,
+    generated: bytes,
+    *,
+    filename: str,
+    third_party_text: list[dict[str, str]],
+) -> bool:
     """Compare a committed expected file to a freshly generated one.
     A `.jsonl` file (`expected.events.jsonl`) is compared with the events
     comparator (`assert_events_equal`) — it is a stream of JSON objects,
@@ -250,14 +265,20 @@ def _content_is_current(current: bytes | None, generated: bytes, *, filename: st
     (run id, timestamps, durations, and friends always differ byte-for-byte
     between two runs); anything that is neither (there is nothing else
     today, but `--check` should degrade safely rather than silently pass)
-    falls back to exact bytes."""
+    falls back to exact bytes. *third_party_text* (issue #503) masks a
+    case's own curl-version-dependent leaf the same way the pytest
+    runners do, before either comparison -- otherwise a case that
+    legitimately varies there would always show as stale."""
     if current is None:
         return False
     if current == generated:
         return True
     if filename.endswith(".jsonl"):
         try:
-            assert_events_equal(generated.decode("utf-8"), current.decode("utf-8"))
+            assert_events_equal(
+                redact_events_text(generated.decode("utf-8"), [], third_party_text),
+                redact_events_text(current.decode("utf-8"), [], third_party_text),
+            )
         except AssertionError:
             return False
         return True
@@ -274,7 +295,12 @@ def _content_is_current(current: bytes | None, generated: bytes, *, filename: st
     if redact_leaked_paths(current_value) != current_value:
         return False
     try:
-        assert_states_equal(normalize(current_value), normalize(generated_value))
+        current_normalized = normalize(current_value)
+        generated_normalized = normalize(generated_value)
+        if third_party_text:
+            current_normalized = apply_third_party_text(current_normalized, third_party_text)
+            generated_normalized = apply_third_party_text(generated_normalized, third_party_text)
+        assert_states_equal(current_normalized, generated_normalized)
     except AssertionError:
         return False
     return True
@@ -317,13 +343,18 @@ def main() -> int:
             print(f"FAIL {case_dir.name}: {exc}", file=sys.stderr)
             return 1
 
+        third_party_text = harness.load_case(case_dir).get("third_party_text", [])
         for filename, content in files.items():
             target = case_dir / filename
             current = target.read_bytes() if target.exists() else None
             if args.check:
-                if not _content_is_current(current, content, filename=filename):
+                if not _content_is_current(
+                    current, content, filename=filename, third_party_text=third_party_text
+                ):
                     stale.append(str(target.relative_to(REPO_ROOT)))
-            elif not _content_is_current(current, content, filename=filename):
+            elif not _content_is_current(
+                current, content, filename=filename, third_party_text=third_party_text
+            ):
                 # Only touch files that actually changed: a fresh run id,
                 # timestamp and duration differ on *every* invocation, so
                 # writing unconditionally would make every regeneration (even

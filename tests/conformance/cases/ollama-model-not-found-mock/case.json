@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #503 (native Ollama, 404 model-not-found is not retried)",
+  "description": "A 404 {\"error\": \"model ... not found\"} body with retries configured: exit 22 with a 404 status is never retryable, so only one request is recorded despite max_attempts: 3, and meta.error carries the exact 'Try `ollama pull m` first.' hint.",
+  "engines": [
+    "python"
+  ],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

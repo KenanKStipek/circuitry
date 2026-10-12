@@ -333,6 +333,61 @@ def prepare_for_comparison(
     return apply_third_party_text(normalized, third_party_text)
 
 
+def _redact_third_party_patterns(value: Any, patterns: Sequence[str]) -> Any:
+    """Like `redact_runtime_strings`, but a regex *search*-and-replace
+    (never a `fullmatch`) for each of *patterns*, applied to every string
+    leaf -- an `--events` line's own `error` field (`cli/events.py`'s own
+    500-character truncation, electricity/src/events.rs's own matching
+    cap) can cut a `third_party_text` match off *after* the span a
+    pattern actually covers while still containing that whole span
+    intact, which a `fullmatch` (state's own rule, `apply_third_party_
+    text`) would wrongly reject outright. A pattern that doesn't occur in
+    a given string is simply a no-op there (`re.sub` with no match).
+    """
+    if isinstance(value, dict):
+        return {k: _redact_third_party_patterns(v, patterns) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_third_party_patterns(v, patterns) for v in value]
+    if isinstance(value, str):
+        for pattern in patterns:
+            value = re.sub(pattern, THIRD_PARTY_TEXT_PLACEHOLDER, value)
+        return value
+    return value
+
+
+def redact_events_text(
+    text: str,
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]] = (),
+) -> str:
+    """`redact_runtime_strings` (and, when *third_party_text* is given,
+    `_redact_third_party_patterns`) applied to each `--events` JSONL
+    line's own parsed object, then re-serialized in the exact wire format
+    (`separators=(",", ":")`, `ensure_ascii=True`) `_assert_compact_wire_
+    format` itself checks for -- issue #503's own harness addition: a
+    failed prompt dispatch's own `end` event embeds the full failure
+    message (`cli/events.py`'s own event record), which, for a mock-HTTP-
+    backed adapter case, carries the mock server's ephemeral port the
+    same way a captured `base_url`/recorded-request host does, and can
+    carry the same curl-version-dependent text a case's own
+    `third_party_text` spec already masks in state. Applied both before a
+    case's `expected.events.jsonl` is ever written (`scripts/generate-
+    conformance-cases.py`) and at comparison time (both pytest runners),
+    so the two can never drift -- the same convention `normalize_for_
+    comparison`'s own state redaction already follows.
+    """
+    patterns = [spec["pattern"] for spec in third_party_text]
+    lines = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parsed = redact_runtime_strings(json.loads(line), replacements)
+        if patterns:
+            parsed = _redact_third_party_patterns(parsed, patterns)
+        lines.append(json.dumps(parsed, separators=(",", ":"), ensure_ascii=True))
+    return "".join(f"{line}\n" for line in lines)
+
+
 def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
     """A recorded HTTP request's own ``headers`` -- either a mapping (a
     freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list

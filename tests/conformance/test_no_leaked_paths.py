@@ -50,7 +50,14 @@ def _fixture_ids() -> list[str]:
 
 @pytest.mark.parametrize("path", _fixture_files(), ids=_fixture_ids())
 def test_no_local_filesystem_paths_committed(path: Path) -> None:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # A binary fixture (issue #503: a local image asset for an
+        # ollama/OpenAI-compatible vision-adapter case) can't carry a
+        # leaked text path the way a JSON/YAML fixture could -- nothing
+        # to scan.
+        return
     for pattern in _LEAK_PATTERNS:
         match = pattern.search(text)
         if match is not None:

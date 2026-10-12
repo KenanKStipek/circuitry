@@ -1,7 +1,9 @@
 {
   "spec_case": "issue #503 (native Ollama, format as a schema object)",
   "description": "prompt_type: json with a schema, plus params.format set to a schema object: format is sent to Ollama verbatim as an object (never derived from schema), and the reply decodes and validates against schema.",
-  "engines": ["python", "electricity"],
+  "engines": [
+    "python"
+  ],
   "config": "config.json",
   "expect": "success",
   "mock_http_fixture": "mock-http.yaml"

@@ -1,6 +1,6 @@
-{"v":1,"seq":0,"ts":"2026-10-12T09:23:00.939Z","ev":"run_start","run_id":"c67c46d3-df41-4570-965b-9f5ed791ffe5","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":82634}
-{"v":1,"seq":1,"ts":"2026-10-12T09:23:00.942Z","ev":"start","id":0,"path":"prime"}
-{"v":1,"seq":2,"ts":"2026-10-12T09:23:00.943Z","ev":"start","id":1,"path":"prime.greeting"}
-{"v":1,"seq":3,"ts":"2026-10-12T09:23:00.963Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":20,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'test-model', 'status': 'failed', 'error': \"ollama request failed (curl exit 7) model='test-model' url=http://127.0.0.1:1/api/generate: curl: (7) Failed to connect to 127.0.0.1 port 1 after 0 ms: Couldn't connect to server Ollama at http://127.0.0.1:1 is not reachable. Start it (`ollama serve`), or set `runtime.adapters.ollama.base_url` in your config. Run `cof doctor` to verify connectivity.\", 'tokens_sent': None, 'tokens_received': N"}
-{"v":1,"seq":4,"ts":"2026-10-12T09:23:00.963Z","ev":"end","id":0,"path":"prime","ok":true,"ms":21}
-{"v":1,"seq":5,"ts":"2026-10-12T09:23:00.963Z","ev":"run_end","ok":true}
+{"v":1,"seq":0,"ts":"2026-10-12T09:45:34.967Z","ev":"run_start","run_id":"c29ebb40-9a51-4662-ab90-84326fac815c","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":609}
+{"v":1,"seq":1,"ts":"2026-10-12T09:45:34.980Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T09:45:34.980Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-12T09:45:35.054Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":74,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'test-model', 'status': 'failed', 'error': \"<THIRD_PARTY_TEXT>\", 'tokens_sent': None, 'tokens_received': N"}
+{"v":1,"seq":4,"ts":"2026-10-12T09:45:35.054Z","ev":"end","id":0,"path":"prime","ok":true,"ms":75}
+{"v":1,"seq":5,"ts":"2026-10-12T09:45:35.054Z","ev":"run_end","ok":true}
