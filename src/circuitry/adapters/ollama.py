@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from ..core.cancellation import run_tracked
-from ..curl_support import curl_failure_message, parse_error_body, redact_host_url, run_curl
+from ..curl_support import (
+    curl_failure_message,
+    parse_error_body,
+    redact_host_url,
+    run_curl,
+)
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, classify_curl_exit
 from .base import (
