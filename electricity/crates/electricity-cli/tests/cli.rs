@@ -568,9 +568,13 @@ fn a_model_mode_while_condition_is_refused_with_no_files_written() {
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, with no file written at all, even though the rest of the
 /// document (`json`/`dynamic` only) is otherwise fully supported --
-/// `cof run` would instead fail this one in preflight (no
-/// `OPENAI_API_KEY` in this test's own `env_clear`'d process), a check
-/// M0-H does not port yet.
+/// `openai` has no electricity-side adapter build at all, so settled
+/// ruling 3's own stateless refusal (`unbuildable_known_adapter`) fires
+/// before preflight (issue #495, lane R) is ever reached, not because
+/// preflight itself is unported. `cof run` would instead reach its own
+/// real preflight check and fail there (no `OPENAI_API_KEY` in this
+/// test's own `env_clear`'d process) -- electricity has no openai
+/// adapter to run that check against.
 #[test]
 fn a_document_level_adapter_is_refused_with_no_files_written() {
     let (mut cmd, home) = command("document-adapter-refusal");
@@ -762,7 +766,12 @@ fn a_failure_with_no_out_flag_still_prints_the_json_payload_on_stdout() {
 /// same path, not `null` (PR #497 review finding 1): Python's own
 /// `effective_settings` always records whichever of `--out`/profile/
 /// default actually applies (`cli/runtime_shim.py:708`), never only a
-/// literal `--out` flag.
+/// literal `--out` flag. Checked directly against a real `cof run
+/// --profile p` with no `--out`, a profile naming the same `out:` path,
+/// and an equivalent failing document: it writes its state to that
+/// path and records `"sources": {"out": "profile", ...}` with
+/// `"effective_settings": {"out": "<that path>", ...}` there -- never
+/// `null` -- exactly this test's own two assertions below.
 #[test]
 fn a_profiles_out_is_both_written_to_and_recorded_with_no_out_flag() {
     let (mut cmd, home) = command("profile-out-no-flag");
@@ -804,4 +813,96 @@ fn a_profiles_out_is_both_written_to_and_recorded_with_no_out_flag() {
         state["runtime"]["effective_settings"]["sources"]["out"],
         "profile"
     );
+}
+
+/// A profile's own `persistence:` block (DESIGN §6.11) reaches the
+/// same preview refusal as a document/config-level `runtime.
+/// persistence` (issue #431's "Out of scope": persistence isn't built
+/// in this milestone at all) -- the profile-layered merge
+/// (`effective_settings_with_profile`'s own `persistence` tier)
+/// reaches `persistence_is_configured` exactly like every other
+/// source, so this refuses up front, no files written, the same as
+/// the unconditional (no-profile) case.
+#[test]
+fn a_profiles_persistence_block_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("profile-persistence-refusal");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let persisted = home.path.join("state.jsonl");
+    let profile = home.path.join("p.yml");
+    fs::write(
+        &profile,
+        format!(
+            "persistence:\n  backend: jsonl-file\n  path: {}\n",
+            persisted.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(
+        error.contains("is a preview and cannot run orchestrations yet"),
+        "{error}"
+    );
+    assert!(error.contains("runtime.persistence"), "{error}");
+    assert!(!out.exists());
+    assert!(!persisted.exists());
+}
+
+/// A failure *before* effective settings is ever resolved (the
+/// document's own structural check, step 5 -- document loading, then
+/// the allowlist check, both run before a `--profile` is even parsed)
+/// reports only the plain `--out`: a loaded profile's own `out:`
+/// (DESIGN §6.11) is irrelevant here because the profile is never
+/// reached at all, matching DESIGN §6.11's "a profile failure's `--out`
+/// is the plain `--out` only" (`lib.rs`'s own `resolved_out_path` doc
+/// comment) -- this is the same rule one step earlier, for a failure
+/// that never even gets as far as loading the profile.
+#[test]
+fn a_failure_before_the_profile_is_ever_loaded_writes_only_the_plain_out_flag() {
+    let (mut cmd, home) = command("failure-before-profile-load");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "").unwrap();
+    let profile_out = home.path.join("profile-out.json");
+    let profile = home.path.join("p.yml");
+    fs::write(
+        &profile,
+        format!("out: {}\n", profile_out.to_str().unwrap()),
+    )
+    .unwrap();
+    let plain_out = home.path.join("plain-out.json");
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "--out",
+            plain_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        payload["state_out"].as_str().unwrap(),
+        plain_out.to_str().unwrap()
+    );
+    assert!(plain_out.exists());
+    assert!(!profile_out.exists());
 }

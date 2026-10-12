@@ -511,6 +511,24 @@ mod tests {
         );
     }
 
+    /// [`hard_effect_names`]'s own side of the same empty-string-is-
+    /// unnamed rule (`allowlist.py:265`'s `u.effect_name or
+    /// "<unnamed>"`), not just [`skippable_effect_names`]'s.
+    #[test]
+    fn an_unnamed_hard_effect_reports_unnamed() {
+        let document = doc_with_adapter("scripted", vec![prompt("", Some("fail"))]);
+        let (hard, soft) = classify_preflight_results(
+            &document,
+            vec![("adapter:scripted".to_string(), failed("down"))],
+            &["scripted"],
+        );
+        assert!(soft.is_empty());
+        assert_eq!(
+            hard[0].1.message.as_deref(),
+            Some("adapter 'scripted' unavailable; required by effects ['<unnamed>'] (down)")
+        );
+    }
+
     fn model_if(name: &str, on_error: Option<&str>) -> Value {
         let mut dict = Dict::new();
         dict.insert(Value::Str("type".to_string()), Value::from("if"));

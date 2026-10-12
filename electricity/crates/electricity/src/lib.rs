@@ -1336,7 +1336,7 @@ pub async fn run_orchestration_with_config(
                 ok: false,
                 out_path: None,
                 state: None,
-                error: Some(format_config_refusal("a profile's per-effect overrides")),
+                error: Some(format_config_refusal("a profile with per-effect overrides")),
                 warnings,
                 signal: None,
             };

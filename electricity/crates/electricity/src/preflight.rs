@@ -56,11 +56,7 @@ impl Adapter for PlaceholderAdapter {
         _call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
         Err(AdapterError {
-            message: format!(
-                "electricity is a preview and cannot run orchestrations yet: adapter '{}' is \
-                 not supported until a later milestone; use `cof run` instead",
-                self.name
-            ),
+            message: crate::format_config_refusal(&format!("adapter '{}'", self.name)),
             retry: electricity_vm::retry::RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         })
@@ -490,6 +486,30 @@ mod tests {
         let document = doc_with_adapter("bogus", vec![]);
         let adapters = electricity_adapters::build_registry();
         assert_eq!(unbuildable_known_adapter(&document, &adapters), None);
+    }
+
+    /// Not reachable from a real run yet (a `use` effect is the only
+    /// way to install [`PlaceholderAdapter`], and nothing in a `use`
+    /// child can call [`Adapter::generate`] in this milestone either)
+    /// -- exercised directly so its message text stays pinned to
+    /// `format_config_refusal`'s own phrasing (PR #497 review finding
+    /// 5), `{VERSION}` included, not a hand-written duplicate of it.
+    #[tokio::test]
+    async fn placeholder_adapter_generate_uses_format_config_refusals_own_phrasing() {
+        let path = electricity_bytecode::EffectPath::root().push_name("p");
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 30,
+            token: &token,
+        };
+        let adapter = PlaceholderAdapter::new("openai".to_string());
+        let err = adapter
+            .generate("gpt", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, crate::format_config_refusal("adapter 'openai'"));
+        assert!(err.message.contains(crate::VERSION));
     }
 
     fn prompt_with_image(name: &str, provider: &str) -> Value {
