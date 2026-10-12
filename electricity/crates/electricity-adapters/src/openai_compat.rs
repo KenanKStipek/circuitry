@@ -191,6 +191,24 @@ pub fn sampling_fields(options: &GenerateOptions, max_tokens_key: &str) -> Dict 
     fields
 }
 
+/// Python truthiness (`message or {}`'s own test): a missing key,
+/// `None`, `False`, a numeric zero, and any empty `str`/`bytes`/
+/// `list`/`dict` are falsy; everything else is truthy.
+fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None => false,
+        Some(Value::None) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => !i.is_zero(),
+        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Str(s)) => !s.is_empty(),
+        Some(Value::Bytes(b)) => !b.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+        Some(Value::Dict(d)) => !d.is_empty(),
+        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
+    }
+}
+
 /// `_openai_compat.py::parse_chat_response` -- `(text, finish_reason)`.
 pub fn parse_chat_response(raw: &Value) -> Result<(String, Option<String>), AdapterError> {
     let dict = raw.as_dict().ok_or_else(|| attribute_error(raw, "get"))?;
@@ -199,9 +217,19 @@ pub fn parse_chat_response(raw: &Value) -> Result<(String, Option<String>), Adap
         Some(list) if !list.is_empty() => match list[0].as_dict() {
             Some(choice) => {
                 let message = choice.get(&Value::Str("message".to_string()));
-                let content = match message.and_then(Value::as_dict) {
-                    Some(message_dict) => message_dict.get(&Value::Str("content".to_string())),
-                    None => None,
+                // `message = choice.get("message") or {}`: a falsy
+                // message (missing, `None`, `{}`, ...) becomes `{}`
+                // (empty content, no error); a truthy *non*-dict
+                // message (a string, a number, `[1]`, ...) raises
+                // `AttributeError` on the next `.get` the same way a
+                // non-dict `raw` does above.
+                let content = if is_truthy(message) {
+                    match message.and_then(Value::as_dict) {
+                        Some(message_dict) => message_dict.get(&Value::Str("content".to_string())),
+                        None => return Err(attribute_error(message.unwrap(), "get")),
+                    }
+                } else {
+                    None
                 };
                 let text = match content {
                     Some(Value::Str(s)) => s.clone(),
@@ -962,6 +990,22 @@ mod tests {
         let (text, finish_reason) = parse_chat_response(&raw).unwrap();
         assert_eq!(text, "hi");
         assert_eq!(finish_reason, Some("stop".to_string()));
+    }
+
+    #[test]
+    fn parse_chat_response_treats_a_falsy_message_as_empty_content() {
+        let raw = electricity_json::loads(r#"{"choices": [{"message": null}]}"#).unwrap();
+        let (text, finish_reason) = parse_chat_response(&raw).unwrap();
+        assert_eq!(text, "");
+        assert_eq!(finish_reason, None);
+    }
+
+    #[test]
+    fn parse_chat_response_raises_on_a_truthy_non_dict_message() {
+        let raw = electricity_json::loads(r#"{"choices": [{"message": "oops"}]}"#).unwrap();
+        let err = parse_chat_response(&raw).unwrap_err();
+        assert_eq!(err.message, "'str' object has no attribute 'get'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
     #[test]

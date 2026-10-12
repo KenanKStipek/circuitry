@@ -36,6 +36,17 @@ fn truncate_chars(text: &str, max_chars: usize) -> &str {
     }
 }
 
+fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
+    AdapterError {
+        message: format!(
+            "'{}' object has no attribute '{attribute}'",
+            value.type_name()
+        ),
+        retry: RetryInfo::not_retryable(),
+        py_class: PyExc::AttributeError,
+    }
+}
+
 fn transport_failure_error(failure: TransportFailure) -> AdapterError {
     match failure {
         TransportFailure::Validation(message) => AdapterError {
@@ -229,12 +240,22 @@ pub fn interpret_outcome(
         py_class: PyExc::RuntimeError,
     })?;
 
-    let content = raw
-        .as_dict()
-        .and_then(|d| d.get(&Value::Str("content".to_string())))
+    // `raw.get("content", [])`: a non-dict `raw` (a JSON
+    // list/number/string body) raises `AttributeError` the same way
+    // Python's own `.get` does, before any field is read.
+    let dict = raw.as_dict().ok_or_else(|| attribute_error(&raw, "get"))?;
+
+    let content = dict
+        .get(&Value::Str("content".to_string()))
         .and_then(Value::as_list)
         .unwrap_or(&[]);
-    let mut text = String::new();
+    // `[block.get("text", "") for block in content if ...]` then
+    // `"".join(text_parts)`: a key that's *absent* defaults to `""`,
+    // but a key *present* with a non-str value (`null` included) is
+    // read verbatim and only fails once `join` actually runs over it
+    // -- `sequence item N: expected str instance, X found`, N counted
+    // over every text-block part, not just the first bad one.
+    let mut text_parts: Vec<Value> = Vec::new();
     for block in content {
         let Some(block_dict) = block.as_dict() else {
             continue;
@@ -246,21 +267,26 @@ pub fn interpret_outcome(
         if !is_text {
             continue;
         }
-        match block_dict.get(&Value::Str("text".to_string())) {
-            None | Some(Value::Str(_)) => {}
-            Some(other) => {
+        let part = block_dict
+            .get(&Value::Str("text".to_string()))
+            .cloned()
+            .unwrap_or_else(|| Value::Str(String::new()));
+        text_parts.push(part);
+    }
+    let mut text = String::new();
+    for (index, part) in text_parts.iter().enumerate() {
+        match part {
+            Value::Str(s) => text.push_str(s),
+            other => {
                 return Err(AdapterError {
                     message: format!(
-                        "can only concatenate str (not \"{}\") to str",
+                        "sequence item {index}: expected str instance, {} found",
                         other.type_name()
                     ),
                     retry: RetryInfo::not_retryable(),
                     py_class: PyExc::TypeError,
                 });
             }
-        }
-        if let Some(Value::Str(s)) = block_dict.get(&Value::Str("text".to_string())) {
-            text.push_str(s);
         }
     }
     let text = if text.is_empty() {
@@ -269,21 +295,20 @@ pub fn interpret_outcome(
         py_strip(&text).to_string()
     };
 
-    let usage = raw
-        .as_dict()
-        .and_then(|d| d.get(&Value::Str("usage".to_string())));
-    let usage_dict = match usage {
+    // `usage = raw.get("usage", {})`: an *absent* key defaults to
+    // `{}` (no tokens, no error); a *present* non-dict value (`null`
+    // included) raises `AttributeError` on the next `.get`, same as a
+    // non-dict `raw` above.
+    let usage_dict = match dict.get(&Value::Str("usage".to_string())) {
+        None => None,
         Some(Value::Dict(d)) => Some(d),
-        _ => None,
+        Some(other) => return Err(attribute_error(other, "get")),
     };
     let tokens_sent =
         int_if_not_none(usage_dict.and_then(|d| d.get(&Value::Str("input_tokens".to_string()))))?;
     let tokens_received =
         int_if_not_none(usage_dict.and_then(|d| d.get(&Value::Str("output_tokens".to_string()))))?;
-    let finish_reason = match raw
-        .as_dict()
-        .and_then(|d| d.get(&Value::Str("stop_reason".to_string())))
-    {
+    let finish_reason = match dict.get(&Value::Str("stop_reason".to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
         _ => None,
     };
@@ -529,5 +554,52 @@ mod tests {
         };
         assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
         assert_eq!(err.py_class, PyExc::ValueError);
+    }
+
+    fn success(stdout: &str) -> crate::transport::CurlOutcome {
+        crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn interpret_outcome_raises_attribute_error_on_a_non_dict_body() {
+        let outcome = success("[1, 2, 3]");
+        let err = interpret_outcome(&outcome, "m", "http://x", "k").unwrap_err();
+        assert_eq!(err.message, "'list' object has no attribute 'get'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn interpret_outcome_raises_attribute_error_on_a_null_usage() {
+        let outcome = success(r#"{"content": [], "usage": null}"#);
+        let err = interpret_outcome(&outcome, "m", "http://x", "k").unwrap_err();
+        assert_eq!(err.message, "'NoneType' object has no attribute 'get'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[test]
+    fn interpret_outcome_tolerates_a_missing_usage_key() {
+        let outcome = success(r#"{"content": []}"#);
+        let result = interpret_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, None);
+        assert_eq!(result.tokens_received, None);
+    }
+
+    #[test]
+    fn interpret_outcome_raises_the_join_text_for_a_non_str_text_block() {
+        let outcome = success(
+            r#"{"content": [{"type": "text", "text": "a"}, {"type": "text", "text": null}]}"#,
+        );
+        let err = interpret_outcome(&outcome, "m", "http://x", "k").unwrap_err();
+        assert_eq!(
+            err.message,
+            "sequence item 1: expected str instance, NoneType found"
+        );
+        assert_eq!(err.py_class, PyExc::TypeError);
     }
 }
