@@ -31,6 +31,7 @@ use electricity_adapters::transport::CurlOutcome;
 use electricity_adapters::{anthropic, ollama, openai, openai_compat, replicate};
 use electricity_value::{Dict, Value};
 use electricity_vm::adapter::{ChatMessage, GenerateOptions, ImageInput};
+use electricity_vm::retry::RetryInfo;
 use std::fs;
 
 fn corpus() -> Value {
@@ -129,6 +130,44 @@ fn dumps(value: &Value) -> String {
     electricity_json::dumps(value, electricity_json::WriteMode::COMPACT).unwrap()
 }
 
+/// `normalize.py::canonicalize_http_headers` -- lowercased names, the
+/// whole set order-insensitive, `User-Agent` dropped (curl's and
+/// electricity's own transport add it after every adapter's own
+/// explicit header set is built; neither side's recorded headers here
+/// ever include it, so this is the same defensive filter that
+/// function applies, not a case this corpus actually exercises).
+fn canonicalize_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("user-agent"))
+        .map(|(name, value)| (name.to_lowercase(), value.clone()))
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+/// The corpus's own `headers` field -- a plain JSON object
+/// (`curl_support.run_curl`'s own `headers: dict[str, str]` parameter),
+/// read as `(name, value)` pairs.
+fn headers_from_case(case: &Value) -> Vec<(String, String)> {
+    get(case, "headers")
+        .as_dict()
+        .map(|d| {
+            d.iter()
+                .map(|(k, v)| (k.py_str(), v.as_str().unwrap().to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn assert_headers_match_expected(actual: &[(String, String)], case: &Value, context: &str) {
+    assert_eq!(
+        canonicalize_headers(actual),
+        canonicalize_headers(&headers_from_case(case)),
+        "{context}: headers"
+    );
+}
+
 fn outcome_from_case(case: &Value) -> CurlOutcome {
     let returncode = i64_opt(get(case, "returncode")).unwrap() as i32;
     let stdout = get(case, "stdout").as_str().unwrap().to_string();
@@ -161,7 +200,16 @@ enum ExpectedOutcome {
     Err {
         class: String,
         message: String,
+        retry: RetryInfo,
     },
+}
+
+fn retry_info_from_json(retry: &Value) -> RetryInfo {
+    RetryInfo {
+        retryable: bool_val(get(retry, "retryable")),
+        status: i64_opt(get(retry, "status")).map(|s| s as u16),
+        retry_after: str_opt(get(retry, "retry_after")),
+    }
 }
 
 fn expected_from_result(result: &Value) -> ExpectedOutcome {
@@ -176,6 +224,7 @@ fn expected_from_result(result: &Value) -> ExpectedOutcome {
         ExpectedOutcome::Err {
             class: get(result, "class").as_str().unwrap().to_string(),
             message: get(result, "message").as_str().unwrap().to_string(),
+            retry: retry_info_from_json(get(result, "retry")),
         }
     }
 }
@@ -206,9 +255,17 @@ fn assert_matches_expected(
                 "{context}: finish_reason"
             );
         }
-        (Err(err), ExpectedOutcome::Err { class, message }) => {
+        (
+            Err(err),
+            ExpectedOutcome::Err {
+                class,
+                message,
+                retry,
+            },
+        ) => {
             assert_eq!(&err.message, message, "{context}: message");
             assert_eq!(err.py_class.name(), class.as_str(), "{context}: class");
+            assert_eq!(&err.retry, retry, "{context}: retry");
         }
         (actual, expected) => {
             panic!("{context}: mismatched shape -- actual={actual:?}, expected={expected:?}");
@@ -270,6 +327,13 @@ fn ollama_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
+        // Issue #515 finding 5's second item: the Rust replay must
+        // compare the recorded request headers, not discard them.
+        assert_headers_match_expected(
+            &[("Content-Type".to_string(), "application/json".to_string())],
+            case,
+            &format!("ollama request {spec:?}"),
+        );
     }
 }
 
@@ -297,27 +361,21 @@ fn openai_compat_request_building_matches_circuitry() {
         let spec = get(case, "spec");
         let prompt = get(spec, "prompt").as_str().unwrap();
         let options = options_from_json(get(spec, "options"));
-        let messages = openai_compat::chat_messages(prompt, &options);
-        let fields = openai_compat::sampling_fields(&options, "max_tokens");
         let configured_model = get(spec, "model").as_str().unwrap();
-        let model = fields
-            .get(&Value::Str("model".to_string()))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| configured_model.to_string());
-        let mut payload = Dict::new();
-        payload.insert(Value::Str("model".to_string()), Value::Str(model));
-        payload.insert(Value::Str("messages".to_string()), Value::List(messages));
-        for (key, value) in fields {
-            if key == Value::Str("model".to_string()) {
-                continue;
-            }
-            payload.insert(key, value);
-        }
+        let payload = openai_compat::build_request(configured_model, prompt, &options);
         assert_eq!(
             dumps(&Value::Dict(payload)),
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
+        );
+        // `LMStudioAdapter` carries no `api_key_env`, so every case here
+        // sends only the one static header -- issue #515 finding 5's
+        // second item, the Rust replay comparing the recorded headers
+        // rather than discarding them.
+        assert_headers_match_expected(
+            &[("Content-Type".to_string(), "application/json".to_string())],
+            case,
+            &format!("openai_compat request {spec:?}"),
         );
     }
 }
@@ -346,6 +404,33 @@ fn openai_compat_outcome_interpretation_matches_circuitry() {
 // ---------------------------------------------------------------------
 // 4. `openai`.
 // ---------------------------------------------------------------------
+
+#[test]
+fn openai_request_building_matches_circuitry() {
+    for case in list(&corpus(), "openai_request_cases") {
+        let spec = get(case, "spec");
+        let prompt = get(spec, "prompt").as_str().unwrap();
+        let options = options_from_json(get(spec, "options"));
+        let model = get(spec, "model").as_str().unwrap();
+        let payload = openai::build_request(model, prompt, &options);
+        assert_eq!(
+            dumps(&Value::Dict(payload)),
+            get(case, "data").as_str().unwrap(),
+            "spec={spec:?}"
+        );
+        assert_headers_match_expected(
+            &[
+                ("Content-Type".to_string(), "application/json".to_string()),
+                (
+                    "Authorization".to_string(),
+                    "Bearer circuitry-test-fake-key".to_string(),
+                ),
+            ],
+            case,
+            &format!("openai request {spec:?}"),
+        );
+    }
+}
 
 #[test]
 fn openai_outcome_interpretation_matches_circuitry() {
@@ -377,6 +462,20 @@ fn anthropic_request_building_matches_circuitry() {
             dumps(&Value::Dict(payload)),
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
+        );
+        // Issue #515 finding 5's second item: the Rust replay must
+        // compare the recorded request headers, not discard them.
+        assert_headers_match_expected(
+            &[
+                ("Content-Type".to_string(), "application/json".to_string()),
+                (
+                    "x-api-key".to_string(),
+                    "circuitry-test-fake-key".to_string(),
+                ),
+                ("anthropic-version".to_string(), "2023-06-01".to_string()),
+            ],
+            case,
+            &format!("anthropic request {spec:?}"),
         );
     }
 }

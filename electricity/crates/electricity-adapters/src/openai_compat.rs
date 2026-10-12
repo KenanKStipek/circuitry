@@ -164,6 +164,29 @@ fn data_url(image: &electricity_vm::adapter::ImageInput) -> String {
 
 /// `_openai_compat.py::sampling_fields` -- shared by `openai.rs` too
 /// (a different *max_tokens_key*).
+/// `_openai_compat.py::chat_completion`'s own payload assembly --
+/// `model`/`messages` first, then every `sampling_fields` entry
+/// inserted over them (so a `params.model` override, present in the
+/// corpus's own override case, wins over the resolved *model* the
+/// same way a plain `dict.update`-equivalent would). `pub` so
+/// `tests/adapter_corpus.rs` replays `generate_adapter_corpus.py`'s
+/// own request-building cases through this exact function, the same
+/// one [`chat_completion`] itself calls, rather than reassembling the
+/// payload by hand in the test (issue #515 finding 5's third item).
+pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
+    let mut payload = Dict::new();
+    dict_insert(&mut payload, "model", Value::Str(model.to_string()));
+    dict_insert(
+        &mut payload,
+        "messages",
+        Value::List(chat_messages(prompt, options)),
+    );
+    for (key, value) in sampling_fields(options, "max_tokens") {
+        payload.insert(key, value);
+    }
+    payload
+}
+
 pub fn sampling_fields(options: &GenerateOptions, max_tokens_key: &str) -> Dict {
     let mut fields = Dict::new();
     if let Some(temperature) = options.temperature {
@@ -314,16 +337,7 @@ pub async fn chat_completion(
     let path = cfg.chat_completions_path.replace("{model}", model);
     let url = format!("{}{path}", cfg.base_url.trim_end_matches('/'));
 
-    let mut payload = Dict::new();
-    dict_insert(&mut payload, "model", Value::Str(model.to_string()));
-    dict_insert(
-        &mut payload,
-        "messages",
-        Value::List(chat_messages(prompt, options)),
-    );
-    for (key, value) in sampling_fields(options, "max_tokens") {
-        payload.insert(key, value);
-    }
+    let payload = build_request(model, prompt, options);
     // `json.dumps(payload)` raises Python's own `TypeError` for a value it
     // can't serialize, uncaught -- never `RuntimeError`.
     let body = electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {

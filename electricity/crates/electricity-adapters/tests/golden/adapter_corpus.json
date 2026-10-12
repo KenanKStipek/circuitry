@@ -773,6 +773,79 @@
       }
     }
   ],
+  "openai_request_cases": [
+    {
+      "spec": {
+        "model": "m",
+        "prompt": "hello",
+        "options": {}
+      },
+      "url": "https://api.openai.com/v1/chat/completions",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer circuitry-test-fake-key"
+      },
+      "data": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hello\"}]}"
+    },
+    {
+      "spec": {
+        "model": "m",
+        "prompt": "hello",
+        "options": {
+          "messages": [
+            {
+              "role": "tool",
+              "content": "tool out"
+            }
+          ],
+          "temperature": 0.5,
+          "max_tokens": 10,
+          "stop": [
+            "END"
+          ]
+        }
+      },
+      "url": "https://api.openai.com/v1/chat/completions",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer circuitry-test-fake-key"
+      },
+      "data": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"tool: tool out\"}], \"temperature\": 0.5, \"max_completion_tokens\": 10, \"stop\": [\"END\"]}"
+    },
+    {
+      "spec": {
+        "model": "m",
+        "prompt": "hello",
+        "options": {
+          "deterministic": true
+        }
+      },
+      "url": "https://api.openai.com/v1/chat/completions",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer circuitry-test-fake-key"
+      },
+      "data": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hello\"}], \"seed\": 0}"
+    },
+    {
+      "spec": {
+        "model": "m",
+        "prompt": "hello",
+        "options": {
+          "params": {
+            "seed": 7
+          },
+          "deterministic": true
+        }
+      },
+      "url": "https://api.openai.com/v1/chat/completions",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer circuitry-test-fake-key"
+      },
+      "data": "{\"model\": \"m\", \"messages\": [{\"role\": \"user\", \"content\": \"hello\"}], \"seed\": 7}"
+    }
+  ],
   "openai_outcome_cases": [
     {
       "returncode": 0,

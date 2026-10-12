@@ -18,6 +18,35 @@ use electricity_vm::retry::RetryInfo;
 
 const DETERMINISTIC_SEED: i64 = 0;
 
+/// `adapters/openai.py::OpenAIAdapter.generate`'s own payload assembly
+/// -- `model`/`messages` first, then `sampling_fields` (with
+/// `max_completion_tokens`, not `max_tokens`), then a deterministic
+/// `seed` only if one wasn't already set via `params`. `pub` so
+/// `tests/adapter_corpus.rs` replays `generate_adapter_corpus.py`'s
+/// own request-building cases through this exact function (issue
+/// #515 finding 5's first item -- `openai` had no request-building
+/// case at all).
+pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
+    let mut payload = Dict::new();
+    payload.insert(
+        Value::Str("model".to_string()),
+        Value::Str(model.to_string()),
+    );
+    payload.insert(
+        Value::Str("messages".to_string()),
+        Value::List(chat_messages(prompt, options)),
+    );
+    for (key, value) in sampling_fields(options, "max_completion_tokens") {
+        payload.insert(key, value);
+    }
+    if options.deterministic {
+        payload
+            .entry(Value::Str("seed".to_string()))
+            .or_insert(Value::from(DETERMINISTIC_SEED));
+    }
+    payload
+}
+
 fn truncate_chars(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {
         Some((byte_index, _)) => &text[..byte_index],
@@ -168,24 +197,7 @@ impl Adapter for OpenAiAdapter {
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-
-        let mut payload = Dict::new();
-        payload.insert(
-            Value::Str("model".to_string()),
-            Value::Str(model.to_string()),
-        );
-        payload.insert(
-            Value::Str("messages".to_string()),
-            Value::List(chat_messages(prompt, options)),
-        );
-        for (key, value) in sampling_fields(options, "max_completion_tokens") {
-            payload.insert(key, value);
-        }
-        if options.deterministic {
-            payload
-                .entry(Value::Str("seed".to_string()))
-                .or_insert(Value::from(DETERMINISTIC_SEED));
-        }
+        let payload = build_request(model, prompt, options);
         let body =
             // `json.dumps(payload)` raises Python's own `TypeError` for a
             // value it can't serialize, uncaught -- never `RuntimeError`.
