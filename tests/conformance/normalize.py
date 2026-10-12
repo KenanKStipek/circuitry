@@ -261,6 +261,78 @@ def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]
     return normalize(redact_runtime_strings(value, replacements))
 
 
+#: `case.json`'s own `third_party_text` key (issue #503's own harness
+#: addition) -- a fixed placeholder, distinct from every other one in
+#: this module, for a leaf whose exact text is curl's own (version-
+#: dependent) wording rather than Circuitry's: a connection-refused or a
+#: timeout failure's own `meta.error`, recorded only by *shape* (a regex
+#: `third_party_text` names), never by exact value.
+THIRD_PARTY_TEXT_PLACEHOLDER = "<THIRD_PARTY_TEXT>"
+
+
+def _resolve_container(root: Any, segments: Sequence[str]) -> Any:
+    node = root
+    for segment in segments:
+        node = node[int(segment)] if isinstance(node, list) else node[segment]
+    return node
+
+
+def apply_third_party_text(state: Any, specs: Sequence[dict[str, str]]) -> Any:
+    """A deep copy of *state* with every `third_party_text` leaf
+    (`case.json`'s own `[{"location": ..., "pattern": ...}]`, issue
+    #503) replaced by `THIRD_PARTY_TEXT_PLACEHOLDER`, after checking it
+    `re.fullmatch`es its own `pattern` first -- a location whose value
+    doesn't match is a real divergence (or a stale fixture), never
+    silently accepted. Call this on *both* the actual and the expected
+    state, independently, before `assert_states_equal`: each side's own
+    leaf has to satisfy the pattern on its own, and the placeholder then
+    makes the two sides compare equal there regardless of curl's own
+    (version-dependent) wording. Dotted `location`, same convention as
+    `apply_known_divergence`: a segment that parses as a non-negative
+    integer indexes a list, otherwise it's a dict key.
+    """
+    root = copy.deepcopy(state)
+    for spec in specs:
+        location = spec["location"]
+        pattern = spec["pattern"]
+        segments = location.split(".")
+        node = _resolve_container(root, segments[:-1])
+        last = segments[-1]
+        if isinstance(node, list):
+            index = int(last)
+            value = node[index]
+        else:
+            if last not in node:
+                raise KeyError(f"third_party_text location {location!r} does not exist in state")
+            value = node[last]
+        if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+            raise AssertionError(
+                f"third_party_text location {location!r} does not fullmatch pattern "
+                f"{pattern!r}: {value!r}"
+            )
+        if isinstance(node, list):
+            node[int(last)] = THIRD_PARTY_TEXT_PLACEHOLDER
+        else:
+            node[last] = THIRD_PARTY_TEXT_PLACEHOLDER
+    return root
+
+
+def prepare_for_comparison(
+    value: Any,
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]] = (),
+) -> Any:
+    """`normalize_for_comparison` then, when *third_party_text* is
+    non-empty, `apply_third_party_text` -- the one call both pytest
+    runners make wherever a case might carry a `third_party_text` spec,
+    so the two steps are never applied out of order or only partially.
+    """
+    normalized = normalize_for_comparison(value, replacements)
+    if not third_party_text:
+        return normalized
+    return apply_third_party_text(normalized, third_party_text)
+
+
 def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
     """A recorded HTTP request's own ``headers`` -- either a mapping (a
     freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list

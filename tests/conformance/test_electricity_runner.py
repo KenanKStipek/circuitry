@@ -25,7 +25,7 @@ from .normalize import (
     assert_events_equal,
     assert_out_serialization,
     assert_states_equal,
-    normalize_for_comparison,
+    prepare_for_comparison,
     redact_runtime_strings,
 )
 
@@ -256,9 +256,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
                 location=known_divergence["location"],
                 value=known_divergence["electricity_value"],
             )
+        third_party_text = metadata.get("third_party_text", [])
         assert_states_equal(
-            normalize_for_comparison(actual_state, replacements),
-            normalize_for_comparison(expected_state, replacements),
+            prepare_for_comparison(actual_state, replacements, third_party_text),
+            prepare_for_comparison(expected_state, replacements, third_party_text),
         )
 
         harness.assert_recorded_http_requests(
@@ -297,8 +298,8 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
                 (case_dir / "expected.pretty.json").read_text(encoding="utf-8")
             )
             assert_states_equal(
-                normalize_for_comparison(actual_pretty_state, replacements),
-                normalize_for_comparison(expected_pretty_state, replacements),
+                prepare_for_comparison(actual_pretty_state, replacements, third_party_text),
+                prepare_for_comparison(expected_pretty_state, replacements, third_party_text),
             )
         return
 
@@ -329,9 +330,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         expected_out_state = json.loads(
             (case_dir / "expected.out.json").read_text(encoding="utf-8")
         )
+        third_party_text = metadata.get("third_party_text", [])
         assert_states_equal(
-            normalize_for_comparison(actual_out_state, replacements),
-            normalize_for_comparison(expected_out_state, replacements),
+            prepare_for_comparison(actual_out_state, replacements, third_party_text),
+            prepare_for_comparison(expected_out_state, replacements, third_party_text),
         )
         return
 

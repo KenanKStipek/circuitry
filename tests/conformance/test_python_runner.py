@@ -19,6 +19,7 @@ from .normalize import (
     assert_states_equal,
     assert_values_equal,
     normalize_for_comparison,
+    prepare_for_comparison,
     redact_runtime_strings,
 )
 
@@ -101,9 +102,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         assert_out_serialization(actual_text, pretty=False)
         actual_state = json.loads(actual_text)
         expected_state = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
+        third_party_text = metadata.get("third_party_text", [])
         assert_states_equal(
-            normalize_for_comparison(actual_state, replacements),
-            normalize_for_comparison(expected_state, replacements),
+            prepare_for_comparison(actual_state, replacements, third_party_text),
+            prepare_for_comparison(expected_state, replacements, third_party_text),
         )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
@@ -137,8 +139,8 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
                 (case_dir / "expected.pretty.json").read_text(encoding="utf-8")
             )
             assert_states_equal(
-                normalize_for_comparison(actual_pretty_state, replacements),
-                normalize_for_comparison(expected_pretty_state, replacements),
+                prepare_for_comparison(actual_pretty_state, replacements, third_party_text),
+                prepare_for_comparison(expected_pretty_state, replacements, third_party_text),
             )
             # Plain and --pretty of the same document carry the same value,
             # just laid out differently (§3.4.1).
@@ -170,9 +172,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         expected_out_state = json.loads(
             (case_dir / "expected.out.json").read_text(encoding="utf-8")
         )
+        third_party_text = metadata.get("third_party_text", [])
         assert_states_equal(
-            normalize_for_comparison(actual_out_state, replacements),
-            normalize_for_comparison(expected_out_state, replacements),
+            prepare_for_comparison(actual_out_state, replacements, third_party_text),
+            prepare_for_comparison(expected_out_state, replacements, third_party_text),
         )
         return
 
