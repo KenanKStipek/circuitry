@@ -1,0 +1,18 @@
+- request:
+    method: POST
+    path: /beta/jobs
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-2", "status": "pending", "tierName": "cheap"}}'
+- request:
+    method: GET
+    path: /beta/jobs/job-2
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-2", "status": "failed", "tierName": "cheap", "errorMessage": "cook crashed"}}'

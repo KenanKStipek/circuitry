@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #515 (cyberdiner adapter in electricity: a server-declared timedOut job)",
+  "description": "The polled job reaches expo's own timedOut status (reason=claim_timeout) -- distinct from a client-side generate() timeout, which never fires here. The run fails, never retried.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "mock_http_fixture": "mock-http.yaml"
+}

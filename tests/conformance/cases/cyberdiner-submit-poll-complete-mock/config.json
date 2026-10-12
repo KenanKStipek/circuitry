@@ -1,0 +1,11 @@
+{
+  "runtime": {
+    "adapters": {
+      "cyberdiner": {
+        "expo_url": "http://127.0.0.1:__MOCK_HTTP_PORT__",
+        "token": "ck_test_mock_token",
+        "poll_interval_ms": 1
+      }
+    }
+  }
+}

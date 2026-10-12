@@ -696,9 +696,9 @@ functions, `api_key_env=` in each adapter file):
 | `databricks` | `DATABRICKS_TOKEN` | `DATABRICKS_HOST` env (no static default — per-workspace) or `base_url` cfg |
 
 electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
-(native, not through this family)/`replicate`/`watsonx` — the unbuildable set after that lane is
-exactly `claude_code`, `cyberdiner`, `litellm` and `pi` (`electricity/README.md`'s own preview
-paragraph).
+(native, not through this family)/`replicate`/`watsonx`, and (issue #515's follow-up) `cyberdiner`
+— the unbuildable set is now exactly `claude_code`, `litellm` and `pi` (`electricity/README.md`'s
+own preview paragraph).
 
 `check_dependencies` (`_openai_compat.py:212-220`): `binary:curl` if `curl` isn't on PATH;
 `env:<api_key_env>` if that var is required and unset. electricity, using a native HTTP client
@@ -795,6 +795,15 @@ mapping, terminal-status folding, semaphore backpressure) is small enough that e
 should implement it natively rather than defer to the external-plugin bridge, since it's a
 model adapter (the bridge is scoped to *tool* plugins per the project's plugin list, which does not
 include a generic "adapter" bridge).
+
+**Ported** (issue #515, `electricity-adapters::cyberdiner`): submit/poll, tier resolution,
+terminal-status folding, and `check()`/`list_models()` all match; built over
+`electricity_tools::http_client` directly (urllib's own request shape -- Host/Accept-encoding/
+Connection headers, an absolute-URL-only redirect follow via `http_client::redirect_policy`),
+never `crate::transport::run_curl`'s curl convention, since the reference adapter is the one
+model adapter that never shells out to curl. The `max_in_flight` semaphore above is **not**
+ported: a Rust adapter is rebuilt fresh per call, so an instance-scoped semaphore would never
+coordinate anything.
 
 ### 3.9 `host_claude`
 

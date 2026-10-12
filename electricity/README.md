@@ -18,10 +18,10 @@ composition run too, in every field that reaches them (a tool's
 `template`, a `prompt`'s own `template`/`messages`). A `prompt` effect runs
 for real against a document's own top-level `adapter:`/a prompt's own
 `provider:` (native Ollama, the OpenAI-compatible family, `openai`,
-`anthropic`, `replicate`, `watsonx`, and the `scripted` adapter) with its
-preflight check run for real too -- `claude_code`, `cyberdiner`, `litellm`
-and `pi` are the only Circuitry-known adapter names with no electricity
-builder yet, and still refuse with the preview message, as does a
+`anthropic`, `replicate`, `watsonx`, `cyberdiner`, and the `scripted`
+adapter) with its preflight check run for real too -- `claude_code`,
+`litellm` and `pi` are the only Circuitry-known adapter names with no
+electricity builder yet, and still refuse with the preview message, as does a
 `reflector`'s own generated plan naming one of them. Everything else (the
 other tool providers, persistence, runtime plugins, complexity routing) is
 also still refused with a preview message pointing at `cof run`. A document

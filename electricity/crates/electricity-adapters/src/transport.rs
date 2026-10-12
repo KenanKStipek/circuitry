@@ -151,15 +151,15 @@ fn validate_request(url: &str, headers: &[(String, String)]) -> Result<(), Trans
 // own `base_url.rstrip('/') + path`).
 // ---------------------------------------------------------------------
 
-struct ParsedUrl {
-    scheme: String,
-    userinfo: Option<(String, String)>,
-    host: String,
-    port: Option<u16>,
-    target: String,
+pub(crate) struct ParsedUrl {
+    pub(crate) scheme: String,
+    pub(crate) userinfo: Option<(String, String)>,
+    pub(crate) host: String,
+    pub(crate) port: Option<u16>,
+    pub(crate) target: String,
 }
 
-fn default_port(scheme: &str) -> u16 {
+pub(crate) fn default_port(scheme: &str) -> u16 {
     if scheme == "https" { 443 } else { 80 }
 }
 
@@ -170,11 +170,11 @@ fn default_port(scheme: &str) -> u16 {
 /// to a successful request's own failure text, applied here too since
 /// these errors happen *before* a [`CurlOutcome`] exists at all and
 /// so never reach that function.
-fn redact_url_for_error(url: &str) -> String {
+pub(crate) fn redact_url_for_error(url: &str) -> String {
     crate::curl_text::strip_url_userinfo(&crate::curl_text::mask_credential_query_params(url))
 }
 
-fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
+pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     // curl's own convention, same as a proxy value
     // ([`resolve_curl_proxy_from`]): a URL with no `scheme://` prefix
     // (a configured `base_url` of `localhost:11434`, say) defaults to
@@ -303,7 +303,10 @@ fn curl_proxy_value(scheme: &str, host: &str, env: &[(String, String)]) -> Optio
 /// The real process environment, read once per request -- the public
 /// entry point every adapter call uses; [`curl_proxy_value`] above is
 /// the pure, test-driven form.
-fn resolve_curl_proxy(scheme: &str, host: &str) -> Result<Option<ProxyTarget>, TransportFailure> {
+pub(crate) fn resolve_curl_proxy(
+    scheme: &str,
+    host: &str,
+) -> Result<Option<ProxyTarget>, TransportFailure> {
     let env: Vec<(String, String)> = std::env::vars().collect();
     resolve_curl_proxy_from(scheme, host, &env)
 }
@@ -479,7 +482,7 @@ pub fn is_retryable_exit(returncode: i32) -> bool {
 /// One header electricity itself adds, title-cased the way curl's own
 /// request line is (the mock harness compares headers by name,
 /// case-insensitively, so casing on the wire is cosmetic only).
-fn host_header_value(host: &str, port: u16, scheme: &str) -> String {
+pub(crate) fn host_header_value(host: &str, port: u16, scheme: &str) -> String {
     if port == default_port(scheme) {
         host.to_string()
     } else {

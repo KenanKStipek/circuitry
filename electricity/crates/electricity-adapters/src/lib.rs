@@ -38,6 +38,7 @@
 pub mod anthropic;
 pub(crate) mod config;
 pub mod curl_text;
+pub mod cyberdiner;
 pub mod host_claude;
 pub mod ollama;
 pub mod openai;
@@ -99,6 +100,7 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("xai", Box::new(openai_compat::build_xai));
     registry.register("replicate", Box::new(replicate::build_replicate));
     registry.register("watsonx", Box::new(watsonx::build_watsonx));
+    registry.register("cyberdiner", Box::new(cyberdiner::build_cyberdiner));
     registry
 }
 
@@ -331,6 +333,7 @@ mod tests {
                 "azure-openai",
                 "cloudflare-workers-ai",
                 "cohere",
+                "cyberdiner",
                 "databricks",
                 "deepseek",
                 "fireworks",

@@ -1,0 +1,27 @@
+- request:
+    method: POST
+    path: /beta/jobs
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-1", "status": "pending", "tierName": "cheap"}}'
+- request:
+    method: GET
+    path: /beta/jobs/job-1
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-1", "status": "running", "tierName": "cheap"}}'
+- request:
+    method: GET
+    path: /beta/jobs/job-1
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-1", "status": "completed", "tierName": "cheap", "result": "hello from cyberdiner", "tokensProcessed": 12, "durationMs": 42}}'
