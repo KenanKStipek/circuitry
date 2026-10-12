@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): deterministic and extra params",
+  "description": "`deterministic: true` and `params: {seed: 1, stop: \"X\"}`: `adapter 'scripted' ignored: temperature; stop; params (seed)`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,11 @@
+name: prompt-deterministic-and-params
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    deterministic: true
+    params:
+      seed: 1
+      stop: "X"

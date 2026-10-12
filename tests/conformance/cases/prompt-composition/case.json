@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): prompt composition",
+  "description": "A `{{> earlier}}` partial naming a prior prompt's own value, spliced unescaped into a later prompt's `template`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

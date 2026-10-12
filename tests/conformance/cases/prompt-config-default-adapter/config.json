@@ -1,0 +1,11 @@
+{
+  "default_adapter": "scripted",
+  "default_model": "m",
+  "runtime": {
+    "adapters": {
+      "scripted": {
+        "replies_file": "scripted-replies.yaml"
+      }
+    }
+  }
+}

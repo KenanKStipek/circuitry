@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #498 (M1-G): finish_reason truncation warning",
+  "description": "`finish_reason: length`: `meta.finish_reason`, the truncation warning, and its `WARNING:` line.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

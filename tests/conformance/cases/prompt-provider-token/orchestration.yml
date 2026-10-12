@@ -1,0 +1,8 @@
+name: prompt-provider-token
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    provider: "scripted:other-model"
+    template: "hi"

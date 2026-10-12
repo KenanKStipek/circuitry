@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "default_prompt_retries": 2,
+    "adapters": {
+      "scripted": {
+        "replies_file": "scripted-replies.yaml"
+      }
+    }
+  }
+}

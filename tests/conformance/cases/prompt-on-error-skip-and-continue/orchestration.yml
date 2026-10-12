@@ -1,0 +1,12 @@
+name: prompt-on-error-skip-and-continue
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: skip_me
+    template: "hi"
+    on_error: skip
+  - type: prompt
+    name: continue_me
+    template: "hi"
+    on_error: continue
