@@ -263,6 +263,57 @@ fn scalar_tag(text: &str, style: ScalarStyle, tag: Option<&Tag>) -> String {
     }
 }
 
+/// The chomping a literal/folded block scalar's header line declares --
+/// [`block_scalar_chomping`]'s own return type (PyYAML's
+/// `scan_block_scalar_indicators`: `None`/clip, `True`/keep,
+/// `False`/strip).
+#[derive(PartialEq, Eq)]
+enum Chomping {
+    Clip,
+    Keep,
+    Strip,
+}
+
+/// Reads a literal/folded block scalar's chomping indicator directly
+/// from its own header (`header` starts at the `|`/`>` style character),
+/// matching `scan_block_scalar_indicators`: a `+`/`-` and a digit may
+/// appear in either order (at most one of each), defaulting to
+/// [`Chomping::Clip`] when neither appears. Only [`fix_block_scalar_eof`]
+/// needs this -- the indentation digit itself is irrelevant to the fix
+/// and deliberately never parsed out.
+fn block_scalar_chomping(header: &str) -> Chomping {
+    let mut chars = header.chars();
+    chars.next(); // the '|' or '>' style character itself
+    match chars.next() {
+        Some('+') => Chomping::Keep,
+        Some('-') => Chomping::Strip,
+        Some(c) if c.is_ascii_digit() => match chars.next() {
+            Some('+') => Chomping::Keep,
+            Some('-') => Chomping::Strip,
+            _ => Chomping::Clip,
+        },
+        _ => Chomping::Clip,
+    }
+}
+
+/// Counts line breaks in `s`, a `\r\n` pair counting as one -- same
+/// convention as [`advance_marker`]'s own doc comment.
+fn count_line_breaks(s: &str) -> usize {
+    let mut count = 0;
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\n' {
+            count += 1;
+        } else if ch == '\r' {
+            count += 1;
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+        }
+    }
+    count
+}
+
 /// The tag a sequence/mapping node resolves to: an explicit, specific
 /// tag always wins; otherwise (no tag, or a bare `!`) it's always the
 /// default (`seq`/`map`) -- containers have no implicit-resolution table
@@ -926,14 +977,84 @@ impl<'t> Composer<'t> {
     ) -> Result<Rc<Node>, YamlError> {
         let (mark, name) = self.node_prefix(span, before, anchor_id != 0);
         self.check_anchor_name(name.as_deref(), mark)?;
-        let tag_str = scalar_tag(text.as_ref(), style, tag.as_deref());
+        let text = self.fix_block_scalar_eof(text.into_owned(), style, span);
+        let tag_str = scalar_tag(&text, style, tag.as_deref());
         let node = Rc::new(Node::Scalar {
-            text: text.into_owned(),
+            text,
             tag: tag_str,
             mark,
         });
         self.store_anchor(anchor_id, Rc::clone(&node));
         Ok(node)
+    }
+
+    /// `saphyr-parser` 0.1.0's block-scalar scanner, unlike PyYAML's own
+    /// `Scanner.scan_block_scalar` (whose `scan_line_break` returns `''`
+    /// at end of input, never a real line break), treats reaching
+    /// end-of-input as though the scalar's final line *did* end in one --
+    /// appending a line break PyYAML never does whenever a literal/folded
+    /// scalar is the very last thing in a document that itself has no
+    /// final line break (issue #493). Scoped narrowly to that one
+    /// divergence by the two EOF checks below: a document that *does*
+    /// end with a line break (or a comment line after the scalar) never
+    /// reaches this function's corrections at all, matching
+    /// `saphyr-parser`'s own, already-correct behaviour for those cases
+    /// untouched.
+    ///
+    /// Chomping governs the correction PyYAML's own tail-chomp logic
+    /// (`scanner.py::scan_block_scalar`) would have applied, worked out
+    /// empirically against real `yaml.safe_load` runs rather than a
+    /// line-by-line port of that scanner (`generate_yaml_corpus.py` is
+    /// the record of that derivation, not this comment):
+    /// - strip (`|-`/`>-`) never produces a trailing line break to begin
+    ///   with, so it's never touched here.
+    /// - clip (`|`/`>`) and keep (`|+`/`>+`) both need exactly one
+    ///   trailing `'\n'` removed whenever the scalar held any real
+    ///   (non-whitespace) content -- PyYAML's own `line_break` variable
+    ///   only ever holds the break *after the last real content line*,
+    ///   which is empty at EOF; `saphyr-parser` adds one anyway.
+    /// - when the body is blank throughout (no real content at all),
+    ///   clip still needs that one `'\n'` removed, but keep does *not*
+    ///   when the body already held its own internal line break (a
+    ///   fully terminated blank line before the final, unterminated
+    ///   one) -- PyYAML's `breaks` list already carries that count
+    ///   correctly in this case, and `saphyr-parser` happens to agree;
+    ///   it only disagrees when the header's own line break is the one
+    ///   and only break anywhere in the scalar's span, which keep must
+    ///   *not* carry into its own output (`count_line_breaks(header) <
+    ///   2` below: the header's own break, if any, plus zero more).
+    fn fix_block_scalar_eof(&mut self, text: String, style: ScalarStyle, span: Span) -> String {
+        if !matches!(style, ScalarStyle::Literal | ScalarStyle::Folded) {
+            return text;
+        }
+        if !text.ends_with('\n') {
+            return text;
+        }
+        if self.text.ends_with('\n') || self.text.ends_with('\r') {
+            return text;
+        }
+        if self.byte_offset(span.end) != self.text.len() {
+            return text;
+        }
+        let header = &self.text[self.byte_offset(span.start)..];
+        match block_scalar_chomping(header) {
+            Chomping::Strip => text,
+            Chomping::Clip => {
+                let mut text = text;
+                text.pop();
+                text
+            }
+            Chomping::Keep => {
+                let has_real_content = text.chars().any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r'));
+                if !has_real_content && count_line_breaks(header) >= 2 {
+                    text
+                } else {
+                    let mut text = text;
+                    text.pop();
+                    text
+                }
+            }
+        }
     }
 
     // One parameter per thing the recursive-descent loop below actually

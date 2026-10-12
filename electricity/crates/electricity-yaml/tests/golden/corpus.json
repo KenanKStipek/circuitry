@@ -1161,6 +1161,56 @@
     "repr": "{'defaults': {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue'}, 'effects': [{'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'prompt', 'name': 'a', 'template': 'Résumé the text: {{{input.text}}}\\n'}, {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'tool', 'name': 'b'}]}"
   },
   {
+    "yaml": "input: |\n  plain text",
+    "kind": "value",
+    "repr": "{'input': 'plain text'}"
+  },
+  {
+    "yaml": "input: |+\n  keep text",
+    "kind": "value",
+    "repr": "{'input': 'keep text'}"
+  },
+  {
+    "yaml": "input: >\n  folded\n  text",
+    "kind": "value",
+    "repr": "{'input': 'folded text'}"
+  },
+  {
+    "yaml": "input: >+\n  folded text",
+    "kind": "value",
+    "repr": "{'input': 'folded text'}"
+  },
+  {
+    "yaml": "input: |\n  text\n  ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}"
+  },
+  {
+    "yaml": "input: |-\n  strip text",
+    "kind": "value",
+    "repr": "{'input': 'strip text'}"
+  },
+  {
+    "yaml": "input: |2\n   text",
+    "kind": "value",
+    "repr": "{'input': ' text'}"
+  },
+  {
+    "yaml": "input: >2\n   folded\n   text",
+    "kind": "value",
+    "repr": "{'input': ' folded\\n text'}"
+  },
+  {
+    "yaml": "input: |\r\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}"
+  },
+  {
+    "yaml": "|\n  text",
+    "kind": "value",
+    "repr": "'text'"
+  },
+  {
     "yaml": "# non-ascii marker é\na: on\n",
     "kind": "value",
     "repr": "{'a': True}",
@@ -3695,5 +3745,65 @@
     "kind": "value",
     "repr": "{'defaults': {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue'}, 'effects': [{'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'prompt', 'name': 'a', 'template': 'Résumé the text: {{{input.text}}}\\n'}, {'retries': {'max_attempts': 2, 'backoff_ms': 100}, 'on_error': 'continue', 'type': 'tool', 'name': 'b'}]}",
     "original_index": 220
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: |\n  plain text",
+    "kind": "value",
+    "repr": "{'input': 'plain text'}",
+    "original_index": 221
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |+\n  keep text",
+    "kind": "value",
+    "repr": "{'input': 'keep text'}",
+    "original_index": 222
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: >\n  folded\n  text",
+    "kind": "value",
+    "repr": "{'input': 'folded text'}",
+    "original_index": 223
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: >+\n  folded text",
+    "kind": "value",
+    "repr": "{'input': 'folded text'}",
+    "original_index": 224
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: |\n  text\n  ",
+    "kind": "value",
+    "repr": "{'input': 'text\\n'}",
+    "original_index": 225
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |-\n  strip text",
+    "kind": "value",
+    "repr": "{'input': 'strip text'}",
+    "original_index": 226
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\ninput: |2\n   text",
+    "kind": "value",
+    "repr": "{'input': ' text'}",
+    "original_index": 227
+  },
+  {
+    "yaml": "# non-ascii marker é\ninput: >2\n   folded\n   text",
+    "kind": "value",
+    "repr": "{'input': ' folded\\n text'}",
+    "original_index": 228
+  },
+  {
+    "yaml": "# non-ascii marker —\ninput: |\r\n  text",
+    "kind": "value",
+    "repr": "{'input': 'text'}",
+    "original_index": 229
+  },
+  {
+    "yaml": "# non-ascii marker 🙂\n|\n  text",
+    "kind": "value",
+    "repr": "'text'",
+    "original_index": 230
   }
 ]

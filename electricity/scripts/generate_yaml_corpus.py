@@ -890,6 +890,39 @@ def scalar_non_ascii_cases() -> list[dict]:
     return [case(y) for y in yaml_texts]
 
 
+# ---------------------------------------------------------------------
+# Issue #493: a literal/folded block scalar that ends the input with no
+# final line break. `yaml.Scanner.scan_line_break` returns `''` at end
+# of input rather than a real line break, so clip/keep's own tail-chomp
+# step (`chunks.append(line_break)`) appends nothing there; `saphyr-
+# parser` 0.1.0's scanner instead treats reaching end-of-input as if the
+# final line *did* end in one. Strip chomping (`|-`/`>-`) never produces
+# a trailing line break to begin with, so it already agrees (included
+# below as a control, matching the issue's own table). A document that
+# *does* end with a line break, or with a comment line, is unaffected
+# either way and deliberately not covered here -- `non_ascii_variants`
+# (`build_corpus`, below) still exercises most of these cases with a
+# non-ASCII comment line *prepended*, which shifts every line/column but
+# leaves the document's own lack of a final line break untouched.
+# ---------------------------------------------------------------------
+
+
+def block_scalar_eof_cases() -> list[dict]:
+    yaml_texts = [
+        "input: |\n  plain text",  # clip
+        "input: |+\n  keep text",  # keep
+        "input: >\n  folded\n  text",  # folded, clip
+        "input: >+\n  folded text",  # folded, keep
+        "input: |\n  text\n  ",  # clip, last line holds only spaces
+        "input: |-\n  strip text",  # strip: already agrees (control)
+        "input: |2\n   text",  # explicit indentation indicator
+        "input: >2\n   folded\n   text",  # ... folded
+        "input: |\r\n  text",  # CRLF throughout
+        "|\n  text",  # a document that is only a block scalar
+    ]
+    return [case(y) for y in yaml_texts]
+
+
 def build_corpus() -> list[dict]:
     base = (
         table_cases()
@@ -911,6 +944,7 @@ def build_corpus() -> list[dict]:
         + non_ascii_cases()
         + reader_edge_cases()
         + scalar_non_ascii_cases()
+        + block_scalar_eof_cases()
     )
     return base + non_ascii_variants(base)
 
