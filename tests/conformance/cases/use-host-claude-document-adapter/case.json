@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.1/§8.6 (preflight, adapter resolution)",
+  "description": "`adapter: host_claude`, `model: m` and a `use` effect: preflight defers (host_claude can only be built at runtime), then the real adapter build raises host_claude's own RuntimeError text -- the run error, not a refusal.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

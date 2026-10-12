@@ -99,6 +99,7 @@ async fn run_case(case: &CorpusCase) -> Ran {
         pretty: false,
         live_state_path: None,
         events_path: None,
+        profile_path: None,
         armed: true,
     };
     let token = CancellationToken::new();

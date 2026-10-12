@@ -1,0 +1,3 @@
+{
+  "error": "Profile 'p' pins effect(s) to unknown routing band(s): 'step' -> 'nonexistent-band'. Valid band names: (no named bands configured)"
+}

@@ -1,0 +1,3 @@
+{
+  "error": "host_claude cannot be built from config; it requires a request_handler injected at runtime via RunRequest.adapter (see circuitry-mcp). Run `circuitry-mcp` (or `cof mcp`) and drive the orchestration via the MCP tool loop, or supply RunRequest(adapter=HostClaudeAdapter(request_handler=...)) from a programmatic caller."
+}

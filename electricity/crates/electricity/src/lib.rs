@@ -17,6 +17,7 @@ use std::path::Path;
 pub mod events;
 pub mod live_state;
 pub mod out;
+pub mod preflight;
 pub mod run;
 pub mod state;
 
@@ -108,6 +109,7 @@ pub fn check_options(
         trust_document: true,
         config_runtime: config_runtime_block(config_path),
         inputs: inputs.clone(),
+        profile_inputs: indexmap::IndexMap::new(),
     }
 }
 
@@ -290,6 +292,69 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
             LeafKind::Yield(_) => false,
         },
         NodeKind::Control(region) => region_has_prompt_effects(region),
+    }
+}
+
+/// Settled ruling 3, widened for lane G (issue #498, #448): whether the
+/// *root* document itself (never a `use` child's own content, which
+/// isn't expanded inline here -- a `use` leaf never recurses) has an
+/// effect that would call *this run's own default adapter* directly --
+/// a `prompt` (regardless of its own `provider:`, conservatively: a
+/// provider override still falls back to the default on
+/// `provider_fallbacks` exhaustion), a model-mode `if`/`while`
+/// (`core/conditional.py`'s own mode-model branch always calls
+/// `generate()` on the document's default adapter, never a per-
+/// condition override), or a model-mode `expect:` on a `tool`/`use`
+/// effect. A `use` effect's own body never counts on its own (the
+/// placeholder below exists precisely for a default reached *only*
+/// through one) -- only its own `expect:`, when present and model-mode,
+/// does. Every one of these is refused outright before a run reaches
+/// this call under this build's own `Supported` (`prompt`/
+/// `model_condition`/`model_expect` all `false` still) -- this
+/// predicate's own unit tests exercise it directly, against a
+/// hand-built `Op`, rather than through a real run.
+fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
+    use electricity_bytecode::{Condition, ExpectCondition, LeafKind, LoopSpec, NodeKind, Region};
+
+    fn region_calls_default_adapter(region: &Region) -> bool {
+        match region {
+            Region::Block { ops, .. } => ops.iter().any(default_adapter_called_directly),
+            Region::Parallel { branches, .. } => {
+                branches.iter().any(default_adapter_called_directly)
+            }
+            Region::TryFinally { body, finally } => {
+                region_calls_default_adapter(body) || region_calls_default_adapter(finally)
+            }
+            Region::If {
+                cond, then_, else_, ..
+            } => {
+                matches!(cond, Condition::Model { .. })
+                    || region_calls_default_adapter(then_)
+                    || else_.as_deref().is_some_and(region_calls_default_adapter)
+            }
+            Region::Loop { spec, body, .. } => {
+                matches!(spec, LoopSpec::While(Condition::Model { .. }))
+                    || region_calls_default_adapter(body)
+            }
+        }
+    }
+
+    if !op.enabled {
+        return false;
+    }
+    match &op.kind {
+        NodeKind::Leaf(leaf) => match leaf.as_ref() {
+            LeafKind::Prompt(_) => true,
+            LeafKind::Use(use_op) => {
+                matches!(&use_op.expect, Some(ExpectCondition::Model { .. }))
+            }
+            LeafKind::Tool(tool) => {
+                matches!(&tool.expect, Some(ExpectCondition::Model { .. }))
+            }
+            LeafKind::Reflector(reflector) => region_calls_default_adapter(&reflector.inner),
+            LeafKind::Yield(_) => false,
+        },
+        NodeKind::Control(region) => region_calls_default_adapter(region),
     }
 }
 
@@ -720,6 +785,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
         Ok(cfg) => run_orchestration_with_config(cfg, req, token).await,
         Err(err) => RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(err.0),
             warnings: Vec::new(),
@@ -754,6 +820,14 @@ pub async fn run_orchestration_with_config(
     let store = Store::new();
     state::seed_state(&store, &req.inputs);
 
+    // A loaded `--profile`'s own `out:` (issue #495, lane R) -- `None`
+    // until a profile actually resolves one; every `fail!` from that
+    // point on reports it, matching DESIGN §6.11's "a profile failure's
+    // `--out` is the plain `--out` only" (a failure *before* this is
+    // ever set, including the profile load itself, never has one to
+    // report).
+    let mut resolved_out_path: Option<std::path::PathBuf> = None;
+
     // A pre-execution check failure (every `fail!` call site below)
     // reports the interrupt text/signal instead of the check's own real
     // error whenever *token* was already cancelled by the time the
@@ -783,6 +857,7 @@ pub async fn run_orchestration_with_config(
             };
             return RunResult {
                 ok: false,
+                out_path: resolved_out_path.clone(),
                 state: Some(store.saved(&store.root)),
                 error: Some(error),
                 warnings,
@@ -792,11 +867,12 @@ pub async fn run_orchestration_with_config(
     }
 
     // Step 5: load the document -- a load error still writes --out.
-    let check_options = electricity_compiler::CheckOptions {
+    let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
         trust_document: true,
         config_runtime: cfg.runtime.clone(),
         inputs: req.inputs.clone(),
+        profile_inputs: indexmap::IndexMap::new(),
     };
     let loaded =
         match electricity_compiler::prepare_document(&req.orchestration_path, &check_options) {
@@ -841,17 +917,60 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // `--profile <path>` (issue #495, lane R): loaded right after the
+    // allowlist check and before effective settings (DESIGN §6.11,
+    // `electricity_config::profile`'s own vm-lanes.md row) -- an
+    // explicit path only, never discovered by name. A load/schema/
+    // effect-path-validation failure is the run error, with state
+    // (`fail!`): it has a direct Python equivalent, unlike the two
+    // refusals above.
+    let profile = match &req.profile_path {
+        Some(path) => match electricity_compiler::profile::load_profile(path, &loaded.document) {
+            Ok(profile) => Some(profile),
+            Err(err) => fail!(err.to_string()),
+        },
+        None => None,
+    };
+    if let Some(profile) = &profile {
+        // Profile `inputs:` become the base layer under `-e` (DESIGN
+        // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
+        // own seam) -- re-seeding `state["input"]` again now, the same
+        // way the step-5 reseed above already does, so every failure
+        // from here on reports the profile-layered namespace too, not
+        // only the one `build_input_namespace` (step 10) itself
+        // produces.
+        check_options.profile_inputs = profile
+            .inputs
+            .iter()
+            .filter_map(|(k, v)| k.as_str().map(|k| (k.to_string(), v.clone())))
+            .collect();
+        let (restored_input, _) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        state::replace_input_namespace(&store, restored_input);
+    }
+
     // Step 6 (part 1): effective settings -- model/adapter/plugins/
     // runtime merge and `sources`, *document_name* naming the "Applied
     // host settings" notice exactly as `resolve_effective_settings`'s
-    // own parameter of the same name does.
+    // own parameter of the same name does. `effective_settings_with_
+    // profile` layers a loaded profile's own `model`/`adapter`/`out`/
+    // `persistence` in at Python's own precedence (issue #495).
     let document_name = req.orchestration_path.file_name().and_then(|n| n.to_str());
-    let mut effective =
-        match electricity_config::effective_settings(&cfg, &loaded.document, document_name) {
-            Ok(effective) => effective,
-            Err(err) => fail!(err.0),
-        };
+    let mut effective = match electricity_config::effective_settings_with_profile(
+        &cfg,
+        &loaded.document,
+        document_name,
+        profile.as_ref(),
+    ) {
+        Ok(effective) => effective,
+        Err(err) => fail!(err.0),
+    };
     warnings.extend(effective.warnings.clone());
+    // A loaded profile's own `out:` (DESIGN §6.11) -- the plain `--out`
+    // still outranks it (set below, at the same point the existing
+    // `sources["out"] = "cli"` override already runs); every `fail!`
+    // from here on reports whichever of the two actually applies.
+    resolved_out_path = effective.out.clone();
 
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
     // the concurrency-config-error check, persistence validation
@@ -864,6 +983,40 @@ pub async fn run_orchestration_with_config(
     // a step-10 failure itself.
     if let Err(err) = electricity_compiler::pre_input_checks(&loaded, effective.runtime.as_ref()) {
         fail!(err.to_string());
+    }
+
+    // Profile routing pins and provider denials (issue #495, lane R):
+    // run only when `profile.effects` is non-empty, after concurrency
+    // and persistence validation (`pre_input_checks` bundles complexity,
+    // concurrency and persistence into one call -- not this lane's own
+    // seam to split, so this sits after all three rather than strictly
+    // between concurrency and persistence as `cli/runtime_shim.py` has
+    // it; the PR body records this divergence, visible only when a
+    // document fails both at once).
+    if let Some(profile) = &profile {
+        if !profile.effects.is_empty() {
+            let routing =
+                electricity_config::resolve_complexity_settings(effective.runtime.as_ref())
+                    .map(|c| c.routing)
+                    .unwrap_or_default();
+            if let Err(err) = electricity_config::validate_profile_routing_pins(
+                &profile.effects,
+                &routing,
+                &profile.name,
+            ) {
+                fail!(err.to_string());
+            }
+            let profile_denials = electricity_config::profile_provider_denials(
+                &profile.effects,
+                cfg.enabled_adapters.as_deref(),
+            );
+            if !profile_denials.is_empty() {
+                fail!(format!(
+                    "Allowlist enforcement failed: {}",
+                    profile_denials.join("; ")
+                ));
+            }
+        }
     }
 
     // After step 9's own validation: a document/config that actually
@@ -880,6 +1033,7 @@ pub async fn run_orchestration_with_config(
     if persistence_is_configured(effective.runtime.as_ref()) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_config_refusal("runtime.persistence")),
             warnings,
@@ -895,6 +1049,7 @@ pub async fn run_orchestration_with_config(
             .join(", ");
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
             warnings,
@@ -1050,8 +1205,9 @@ pub async fn run_orchestration_with_config(
     effective_settings_dict.insert(
         Value::Str("out".to_string()),
         req.out_path
-            .as_ref()
-            .map(|p| Value::Str(out::python_path_str(p)))
+            .clone()
+            .or_else(|| effective.out.clone())
+            .map(|p| Value::Str(out::python_path_str(&p)))
             .unwrap_or(Value::None),
     );
     effective_settings_dict.insert(
@@ -1069,6 +1225,24 @@ pub async fn run_orchestration_with_config(
                 .collect(),
         ),
     );
+    // A loaded `--profile`'s own record (DESIGN §6.11), added after
+    // `sources` (`cli/runtime_shim.py:714-718`) -- never present at all
+    // for a run with no profile, matching Python's own conditional
+    // `if profile is not None` key insertion exactly (never a `null`
+    // placeholder entry).
+    if let Some(profile) = &profile {
+        let mut profile_dict = Dict::new();
+        profile_dict.insert(
+            Value::Str("name".to_string()),
+            Value::Str(profile.name.clone()),
+        );
+        profile_dict.insert(
+            Value::Str("content".to_string()),
+            electricity_redaction::redact(profile.raw.clone()),
+        );
+        effective_settings_dict
+            .insert(Value::Str("profile".to_string()), Value::Dict(profile_dict));
+    }
     store.set_leaf(
         &runtime_node,
         Value::Str("effective_settings".to_string()),
@@ -1117,6 +1291,7 @@ pub async fn run_orchestration_with_config(
     if let Some(refusal) = first_unsupported(&program, complexity.enabled(), &supported) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(format_refusal(&refusal)),
             warnings,
@@ -1140,6 +1315,7 @@ pub async fn run_orchestration_with_config(
     ) {
         return RunResult {
             ok: false,
+            out_path: None,
             state: None,
             error: Some(refusal),
             warnings,
@@ -1147,24 +1323,114 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // `cli/runtime_shim.py::run`'s own `_require_resolved_settings`,
-    // deferred to the same relative position ("right before the
-    // adapter is actually built" -- there is no real adapter object to
-    // build yet here, every capability `has_prompt_effects` can see is
-    // still refused above, but the *name* still has to resolve and
-    // fail exactly like `cof run` the moment it doesn't, now that a
-    // `use` document can actually reach this far). Order matters:
-    // Python checks `effective.adapter` first, so a document missing
-    // both reports only the adapter error. `fail!` (not a bare
-    // `state: None` `RunResult`, unlike the two refusals just above,
-    // which are electricity-only preview concepts with no Python
-    // equivalent): this failure has a direct one, and `cof run` writes
-    // `--out` with whatever state existed when it raised.
-    let resolved_adapter_name: String = if has_prompt_effects(&program.root) {
+    // Lane J2's own per-effect profile overrides stand-in (issue
+    // #495, settled ruling 2): until that lane lands, a profile whose
+    // `effects` map is non-empty is refused (preview marker, no
+    // state) here -- the same relative position Python's own profile-
+    // effect-overrides step (#448's run-order list, step 11) sits at,
+    // after the structural/refusal walkers above and before
+    // `needs_real_adapter` below.
+    if let Some(profile) = &profile {
+        if !profile.effects.is_empty() {
+            return RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(format_config_refusal("a profile with per-effect overrides")),
+                warnings,
+                signal: None,
+            };
+        }
+    }
+
+    // Step 12: `needs_real_adapter`/`resolved_adapter` -- a *lenient*
+    // name only (`effective.adapter or ""`, Python's own `:842-856`):
+    // the strict check (`_require_resolved_settings`) is deferred past
+    // preflight below, matching Python's own order, so an unknown
+    // document-level `adapter:` fails with preflight's text, not an
+    // early "no adapter resolved" error it would never actually hit
+    // either (the name *is* present, just unbuildable -- issue #235).
+    let needs_real_adapter = has_prompt_effects(&program.root);
+    let resolved_adapter_name: String = if needs_real_adapter {
+        effective.adapter.clone().unwrap_or_default()
+    } else {
+        "_noop".to_string()
+    };
+
+    // Review P2-3 on PR #454's second review: `electricity_adapters::
+    // build_registry()` replaces a direct `AdapterRegistry::new()`
+    // call -- lane F1/F2's own PR only ever adds a builder line
+    // inside `build_registry()`'s own crate, never touches this file.
+    // Lane F1 (issue #478) has registered `scripted` and `host_claude`
+    // there; moved up from its old position (next to `RunContext`'s
+    // own construction) so preflight and the real adapter build below
+    // can both use it.
+    let adapters = electricity_adapters::build_registry();
+
+    // Settled ruling 3 (issue #495): refuse the whole run, no state,
+    // for any adapter name preflight would check (the document's own
+    // top-level `adapter:`/prompt `provider:`) that Circuitry itself
+    // supports but this build cannot build at all -- never an ordinary
+    // preflight failure. The config's own `default_adapter` is never
+    // walked here (preflight never checks it either); that case is
+    // [`preflight::PlaceholderAdapter`]'s own job, below.
+    if let Some(name) = preflight::unbuildable_known_adapter(&loaded.document, &adapters) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("adapter '{name}'"))),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Step 13: preflight -- always runs (settled ruling 1: no
+    // `--skip-preflight`/`--dry-run` in electricity's own CLI shape).
+    // `config.runtime`, never the merged `effective.runtime` (a
+    // document-level `runtime.adapters.scripted.replies_file` is
+    // invisible to preflight but used by the run).
+    let preflight_results =
+        preflight::run_preflight(&loaded.document, cfg.runtime.as_ref(), &adapters).await;
+    let (hard_results, soft_results) = electricity_config::preflight::classify_preflight_results(
+        &loaded.document,
+        preflight_results,
+        electricity_vm::adapter_names::ADAPTER_NAMES,
+    );
+    let preflight_errors = electricity_config::preflight::format_preflight_errors(&hard_results);
+    if !preflight_errors.is_empty() {
+        fail!(format!(
+            "Preflight failed: {}. Re-run with --skip-preflight to bypass.",
+            preflight_errors.join("; ")
+        ));
+    }
+    warnings.extend(electricity_config::preflight::format_preflight_warnings(
+        &soft_results,
+    ));
+    warnings.extend(preflight::image_asset_warnings(
+        &loaded.document,
+        &resolved_adapter_name,
+        effective.runtime.as_ref(),
+        &adapters,
+    ));
+
+    // Step 14: the adapter build. `cli/runtime_shim.py::run`'s own
+    // `_require_resolved_settings`, deferred to this same relative
+    // position (right before the adapter is actually built) -- Python
+    // checks `effective.adapter` first, so a document missing both
+    // reports only the adapter error. `fail!` (not a bare `state: None`
+    // `RunResult`, unlike every refusal above, which are electricity-
+    // only preview concepts with no Python equivalent): this failure
+    // has a direct one, and `cof run` writes `--out` with whatever
+    // state existed when it raised.
+    let (default_adapter, adapter_timeout_seconds): (
+        Rc<dyn electricity_vm::adapter::Adapter>,
+        u32,
+    ) = if needs_real_adapter {
         let Some(adapter_name) = effective.adapter.as_deref().filter(|s| !s.is_empty()) else {
             fail!(format!(
                 "No adapter resolved for orchestration {}. Set 'adapter' in the orchestration \
-                 or 'default_adapter' in config.json. (adapter source: {})",
+                     or 'default_adapter' in config.json. (adapter source: {})",
                 out::python_path_str(&req.orchestration_path),
                 effective
                     .sources
@@ -1181,7 +1447,7 @@ pub async fn run_orchestration_with_config(
         {
             fail!(format!(
                 "No model resolved for orchestration {}. Set 'model' in the orchestration or \
-                 'default_model' in config.json. (model source: {})",
+                     'default_model' in config.json. (model source: {})",
                 out::python_path_str(&req.orchestration_path),
                 effective
                     .sources
@@ -1190,10 +1456,62 @@ pub async fn run_orchestration_with_config(
                     .unwrap_or("None")
             ));
         }
-        adapter_name.to_string()
+        if let Err(denial) =
+            electricity_config::require_adapter(adapter_name, cfg.enabled_adapters.as_deref())
+        {
+            fail!(denial);
+        }
+        let adapter: Rc<dyn electricity_vm::adapter::Adapter> = match adapters
+            .build(adapter_name, &runtime_config_value)
+        {
+            Ok(built) => Rc::from(built),
+            Err(err) => {
+                let normalized = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+                let known_but_unbuildable = electricity_vm::adapter_names::ADAPTER_NAMES
+                    .contains(&normalized.as_str())
+                    && !adapters.supported_names().contains(&normalized);
+                if known_but_unbuildable && default_adapter_called_directly(&program.root) {
+                    // Settled ruling 3, widened for lane G (issue
+                    // #498): the root document itself, outside
+                    // any `use` child, has an effect that would
+                    // call this adapter directly (a `prompt`, a
+                    // model-mode `if`/`while`, or a model-mode
+                    // `expect:`) -- refuse the whole run up
+                    // front, statelessly, the same preview text
+                    // as the document-referenced-name refusal
+                    // above, rather than install a placeholder
+                    // that would just defer the identical failure
+                    // to the first `generate` call.
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format_config_refusal(&format!("adapter '{normalized}'"))),
+                        warnings,
+                        signal: None,
+                    };
+                } else if known_but_unbuildable {
+                    // Reachable only when a `use` effect alone
+                    // makes `needs_real_adapter` true -- `generate`
+                    // is never actually called on this placeholder
+                    // in that case (checked just above).
+                    Rc::new(preflight::PlaceholderAdapter::new(normalized))
+                } else {
+                    fail!(err.message);
+                }
+            }
+        };
+        let timeout = electricity_config::configured_timeout_seconds(
+            adapter_name,
+            effective.runtime.as_ref(),
+        )
+        .and_then(|seconds| u32::try_from(seconds).ok())
+        .unwrap_or(120);
+        (adapter, timeout)
     } else {
-        "_noop".to_string()
+        (Rc::new(electricity_vm::adapter::NoopAdapter), 120)
     };
+    let model_locked = effective.model_locked;
 
     // Step 16: the live-state mirror (first write synchronous and
     // fatal), then EventLog + run_start.
@@ -1232,13 +1550,6 @@ pub async fn run_orchestration_with_config(
 
     let model = effective.model.clone().unwrap_or_default();
     let registry = tool_registry();
-    // Review P2-3 on PR #454's second review: `electricity_adapters::
-    // build_registry()` replaces a direct `AdapterRegistry::new()`
-    // call here, so lane F1/F2's own PR only ever adds a builder line
-    // inside `build_registry()`'s own crate, never touches this file
-    // to wire a real registry into the run. Lane F1 (issue #478) has
-    // since registered `scripted` and `host_claude` there.
-    let adapters = electricity_adapters::build_registry();
     let orchestration_dir: &Path = program
         .document
         .as_ref()
@@ -1259,9 +1570,9 @@ pub async fn run_orchestration_with_config(
         dry_run: false,
         armed: req.armed,
         adapters: &adapters,
-        default_adapter: Rc::new(electricity_vm::adapter::NoopAdapter),
-        model_locked: false,
-        adapter_timeout_seconds: 120,
+        default_adapter,
+        model_locked,
+        adapter_timeout_seconds,
         complexity: &complexity,
         decomposition_depth: 0,
         orchestration_dir,
@@ -1380,6 +1691,7 @@ pub async fn run_orchestration_with_config(
 
     RunResult {
         ok,
+        out_path: resolved_out_path,
         state: Some(final_state),
         error,
         warnings,
@@ -1390,6 +1702,214 @@ pub async fn run_orchestration_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_bytecode::effects::{
+        PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp, UseOp, UseSource,
+    };
+    use electricity_bytecode::region::{Condition, ExpectCondition, LoopFlow, LoopSpec, Region};
+    use electricity_bytecode::template::{Escape, TemplateText};
+    use electricity_bytecode::{EffectPath, LeafKind, NodeKind, OnError};
+
+    fn leaf(kind: LeafKind) -> electricity_bytecode::Op {
+        electricity_bytecode::Op {
+            path: EffectPath::root().push_name("n"),
+            name: Some("n".to_string()),
+            kind: NodeKind::Leaf(Box::new(kind)),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn block(ops: Vec<electricity_bytecode::Op>) -> electricity_bytecode::Op {
+        electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops,
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    fn tool_op() -> ToolOp {
+        ToolOp {
+            provider: "json".to_string(),
+            params: electricity_bytecode::ParamNode::Map(indexmap::IndexMap::new()),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+        }
+    }
+
+    fn prompt_op() -> PromptOp {
+        PromptOp {
+            content: PromptContent::Template(TemplateText::new(
+                "hi".to_string(),
+                false,
+                Escape::None,
+            )),
+            prompt_type: PromptType::Text,
+            schema: None,
+            model: None,
+            provider: None,
+            provider_fallbacks: Vec::new(),
+            routing_override: None,
+            model_params: None,
+            timeout_ms: None,
+            deterministic: false,
+            inputs: None,
+            assets: Vec::new(),
+            retries: RetryPolicy::default(),
+            description: None,
+            group: None,
+        }
+    }
+
+    fn use_op() -> UseOp {
+        UseOp {
+            source: UseSource::Path("child.yml".to_string()),
+            inputs: None,
+            outputs: None,
+            validate: true,
+            retries: RetryPolicy::default(),
+            expect: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn a_prompt_effect_calls_the_default_adapter_directly() {
+        let op = block(vec![leaf(LeafKind::Prompt(prompt_op()))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_plain_use_effect_never_calls_the_default_adapter_on_its_own() {
+        let op = block(vec![leaf(LeafKind::Use(use_op()))]);
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Use(UseOp {
+            expect: Some(ExpectCondition::Model {
+                template: TemplateText::new("ok?".to_string(), false, Escape::None),
+            }),
+            ..use_op()
+        }))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_tools_own_model_mode_expect_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Tool(ToolOp {
+            expect: Some(ExpectCondition::Model {
+                template: TemplateText::new("ok?".to_string(), false, Escape::None),
+            }),
+            ..tool_op()
+        }))]);
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_tools_own_cel_expect_never_calls_the_default_adapter() {
+        let op = block(vec![leaf(LeafKind::Tool(ToolOp {
+            expect: Some(ExpectCondition::Cel {
+                expr: "true".to_string(),
+            }),
+            ..tool_op()
+        }))]);
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_model_mode_if_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Model {
+                    template: TemplateText::new("ok?".to_string(), false, Escape::None),
+                },
+                then_: Box::new(Region::Block {
+                    ops: vec![],
+                    overlay: false,
+                }),
+                else_: None,
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_cel_mode_if_never_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::If {
+                cond: Condition::Cel {
+                    expr: "true".to_string(),
+                    strict: false,
+                },
+                then_: Box::new(Region::Block {
+                    ops: vec![leaf(LeafKind::Use(use_op()))],
+                    overlay: false,
+                }),
+                else_: None,
+                threshold: 0.5,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(!default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_model_mode_while_loop_calls_the_default_adapter() {
+        let op = electricity_bytecode::Op {
+            path: EffectPath::root(),
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Loop {
+                name: None,
+                spec: LoopSpec::While(Condition::Model {
+                    template: TemplateText::new("ok?".to_string(), false, Escape::None),
+                }),
+                body: Box::new(Region::Block {
+                    ops: vec![],
+                    overlay: false,
+                }),
+                flow: LoopFlow::Chain,
+                max_concurrency: None,
+                max_iterations: None,
+                min_iterations: 0,
+                collect: None,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        assert!(default_adapter_called_directly(&op));
+    }
+
+    #[test]
+    fn a_disabled_prompt_effect_never_calls_the_default_adapter() {
+        let mut prompt_leaf = leaf(LeafKind::Prompt(prompt_op()));
+        prompt_leaf.enabled = false;
+        assert!(!default_adapter_called_directly(&prompt_leaf));
+    }
 
     #[test]
     fn version_string_has_preview_notice() {

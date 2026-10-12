@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §8.6 (adapter resolution), allowlist_gate.py::require_adapter",
+  "description": "config.json's `enabled_adapters: [\"scripted\"]` denies the default `ollama` (SANE_DEFAULTS), plus a `use` effect: the allowlist denial text, raised bare with no 'Allowlist enforcement failed:' prefix (allowlist_gate.py's own require_adapter, not cli/allowlist.py's static check).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

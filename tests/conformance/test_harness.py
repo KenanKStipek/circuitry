@@ -76,6 +76,70 @@ def test_load_case_defaults_sort_warnings_to_false(tmp_path: Path) -> None:
     assert metadata["sort_warnings"] is False
 
 
+def test_load_case_defaults_profile_and_compare_run_warnings(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success"})
+    metadata = harness.load_case(case_dir)
+    assert metadata["profile"] is None
+    assert metadata["compare_run_warnings"] is False
+
+
+def test_load_case_rejects_non_bool_compare_run_warnings(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "compare_run_warnings": "yes"})
+    with pytest.raises(ValueError, match="'compare_run_warnings' must be a bool"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_profile_path_shaped_wrong(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "profile": "p.yml"})
+    with pytest.raises(ValueError, match="'profile' must look like"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_profile_path_that_does_not_exist(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "profile": "profiles/p.yml"})
+    with pytest.raises(ValueError, match="which doesn't exist"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_profile_path_with_both_suffixes_present(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "profile": "profiles/p.yml"})
+    profiles_dir = case_dir / "profiles"
+    profiles_dir.mkdir()
+    (profiles_dir / "p.yml").write_text("model: m\n", encoding="utf-8")
+    (profiles_dir / "p.yaml").write_text("model: m\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="also exists"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_accepts_a_well_formed_profile_path(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "profile": "profiles/p.yml"})
+    profiles_dir = case_dir / "profiles"
+    profiles_dir.mkdir()
+    (profiles_dir / "p.yml").write_text("model: m\n", encoding="utf-8")
+    metadata = harness.load_case(case_dir)
+    assert metadata["profile"] == "profiles/p.yml"
+
+
+def test_profile_name_from_path_strips_the_profiles_prefix_and_suffix() -> None:
+    assert harness.profile_name_from_path("profiles/p.yml") == "p"
+    assert harness.profile_name_from_path("profiles/p.yaml") == "p"
+
+
+def test_run_warning_lines_keeps_only_the_warning_colon_prefix() -> None:
+    stderr = (
+        "WARNING: Unknown environment variable\n"
+        "Warning: adapter 'scripted' unavailable; effects [] will skip\n"
+        "ERROR: something else\n"
+    )
+    assert harness.run_warning_lines(stderr) == [
+        "Warning: adapter 'scripted' unavailable; effects [] will skip"
+    ]
+
+
+def test_run_warning_lines_empty_stderr_is_an_empty_list() -> None:
+    assert harness.run_warning_lines("") == []
+
+
 def test_load_case_rejects_an_exact_credential_env_key(tmp_path: Path) -> None:
     case_dir = _write_case(
         tmp_path, {"expect": "success", "env": {"OPENAI_API_KEY": "sk-leaked"}}

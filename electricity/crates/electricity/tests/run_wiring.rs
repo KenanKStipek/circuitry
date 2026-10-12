@@ -37,6 +37,7 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         pretty: false,
         live_state_path: None,
         events_path: None,
+        profile_path: None,
         armed: true,
     }
 }
@@ -466,6 +467,7 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
         pretty: false,
         live_state_path: Some(live_state_path.clone()),
         events_path: Some(events_path.clone()),
+        profile_path: None,
         armed: true,
     };
 
@@ -512,6 +514,7 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
         pretty: false,
         live_state_path: None,
         events_path: Some(events_path.clone()),
+        profile_path: None,
         armed: true,
     };
 
@@ -632,6 +635,7 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         pretty: false,
         live_state_path: None,
         events_path: None,
+        profile_path: None,
         armed: true,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

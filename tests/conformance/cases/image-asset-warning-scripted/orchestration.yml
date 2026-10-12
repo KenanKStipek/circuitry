@@ -1,0 +1,10 @@
+name: image-asset-warning-scripted
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "look at this"
+    assets:
+      - kind: image
+        ref: "https://example.com/pic.png"

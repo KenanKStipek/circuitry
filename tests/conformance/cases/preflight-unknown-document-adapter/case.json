@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight), issue #235",
+  "description": "A document naming an unknown top-level `adapter: bogus` plus a `use` effect, which would otherwise reach the factory's own build. Preflight catches the unknown name first (`cli/runtime_shim.py:868` runs before `:911`), so the run fails with preflight's own text, not the factory's raw `Unknown adapter: ...` -- and the message's own trailing `.` produces `..` before `Re-run`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

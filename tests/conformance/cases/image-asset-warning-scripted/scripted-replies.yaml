@@ -1,0 +1,4 @@
+prime.greeting:
+  - text: "hello from the scripted adapter"
+    tokens_sent: 4
+    tokens_received: 6

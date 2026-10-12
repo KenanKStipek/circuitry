@@ -1,0 +1,6 @@
+name: profile-schema-invalid
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: unreachable}

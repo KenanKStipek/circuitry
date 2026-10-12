@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight)",
+  "description": "config.json sets `runtime.plugins.awk.binary` to a non-existent absolute path: preflight's own tool check fails hard before any effect dispatches, naming the configured path and its resolved form.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

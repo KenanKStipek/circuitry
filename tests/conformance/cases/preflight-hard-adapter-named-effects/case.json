@@ -1,0 +1,7 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight), issue #495",
+  "description": "Two prompt effects use the `scripted` adapter: one `on_error: fail`, one `on_error: skip`. The missing-replies-file failure is hard because of the first usage, and names it. electricity doesn't run `prompt` yet (lane G), so this stays Python-only until then.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}
