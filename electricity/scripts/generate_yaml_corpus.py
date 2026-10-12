@@ -890,6 +890,74 @@ def scalar_non_ascii_cases() -> list[dict]:
     return [case(y) for y in yaml_texts]
 
 
+# ---------------------------------------------------------------------
+# Issue #493: a literal/folded block scalar that ends the input with no
+# final line break. `yaml.Scanner.scan_line_break` returns `''` at end
+# of input rather than a real line break, so clip/keep's own tail-chomp
+# step (`chunks.append(line_break)`) appends nothing there; `saphyr-
+# parser` 0.1.0's scanner instead treats reaching end-of-input as if the
+# final line *did* end in one. Strip chomping (`|-`/`>-`) never produces
+# a trailing line break to begin with, so it already agrees (included
+# below as a control, matching the issue's own table). A document that
+# *does* end with a line break, or with a comment line, is unaffected
+# either way and deliberately not covered here -- `non_ascii_variants`
+# (`build_corpus`, below) still exercises most of these cases with a
+# non-ASCII comment line *prepended*, which shifts every line/column but
+# leaves the document's own lack of a final line break untouched.
+# ---------------------------------------------------------------------
+
+
+def block_scalar_eof_cases() -> list[dict]:
+    yaml_texts = [
+        "input: |\n  plain text",  # clip
+        "input: |+\n  keep text",  # keep
+        "input: >\n  folded\n  text",  # folded, clip
+        "input: >+\n  folded text",  # folded, keep
+        "input: |\n  text\n  ",  # clip, last line holds only spaces
+        "input: |-\n  strip text",  # strip: already agrees (control)
+        "input: |2\n   text",  # explicit indentation indicator
+        "input: >2\n   folded\n   text",  # ... folded
+        "input: |\r\n  text",  # CRLF throughout
+        "|\n  text",  # a document that is only a block scalar
+        # PR #500 review, finding 1: the scalar's last line holds *fewer*
+        # columns than its own body indent -- `saphyr-parser`'s own EOF
+        # check (`self.mark.col >= indent.max(1)`) already agrees with
+        # PyYAML without any correction here; a fix that pops regardless
+        # regresses these two relative to `main`.
+        "input: |\n  text\n ",  # clip, last line shorter than the indent
+        "input: |+\n  text\n ",  # keep, same
+        # finding 1's mirror: a last line *longer* than the indent still
+        # needs the correction (content continues past the indent column).
+        "input: |\n  text\n    ",
+        # finding 2: chomping must never be read back out of the scalar's
+        # own content -- a content line starting with `-` right after the
+        # header reads as strip chomping if the header lookup starts at
+        # the first content character instead of the real `|`/`>`.
+        "input: |\n  a-b",
+        "input: |+\n  --flag",
+        "- |\n  1-2",
+        # finding 5 / the orchestrator's ruling: an all-blank body at end
+        # of input, for clip and keep, with and without one further
+        # blank line -- `saphyr-parser`'s empty-body branch substitutes
+        # the header's own line break for PyYAML's (which never fires
+        # the content loop, so stays `''`) whenever no further blank
+        # line followed it.
+        "input: |\n",
+        "input: |\n        \n",
+        "input: |+\n",
+        "input: |+\n\n",
+        # an explicit indentation indicator whose only body line is blank
+        # -- still the content path (the loop runs once, at the
+        # indicated column, even though that line holds only spaces).
+        "input: |2+\n     ",
+        # a header followed by a trailing comment, still ending at EOF
+        # with no final line break.
+        "input: | # c\n  text",
+        "input: |+ # c\n  text",
+    ]
+    return [case(y) for y in yaml_texts]
+
+
 def build_corpus() -> list[dict]:
     base = (
         table_cases()
@@ -911,6 +979,7 @@ def build_corpus() -> list[dict]:
         + non_ascii_cases()
         + reader_edge_cases()
         + scalar_non_ascii_cases()
+        + block_scalar_eof_cases()
     )
     return base + non_ascii_variants(base)
 

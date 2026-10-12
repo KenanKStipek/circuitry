@@ -1,0 +1,16 @@
+name: use-inline-block-scalar-eof
+effects:
+  - type: use
+    name: inl
+    inline: |
+      effects:
+        - type: tool
+          name: t
+          provider: json
+          params:
+            mode: stringify
+            input: |
+              plain text
+    outputs:
+      result:
+        path: prime.t.value
