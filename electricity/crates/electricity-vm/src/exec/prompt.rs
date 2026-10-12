@@ -372,9 +372,7 @@ fn validate_schema(
             electricity_tools::PyExc::SchemaValidationError,
         ));
     }
-    let json_schema = electricity_compiler::schema_instance::to_schema_instance(schema);
-    let json_instance = electricity_compiler::schema_instance::to_schema_instance(decoded);
-    match electricity_schema::validate_prompt_schema(&json_schema, &json_instance) {
+    match electricity_schema::validate_prompt_schema(schema, decoded) {
         electricity_schema::PromptSchemaCheck::Valid => Ok(()),
         electricity_schema::PromptSchemaCheck::Invalid(message) => Err((
             format!("Schema validation failed: {message}"),

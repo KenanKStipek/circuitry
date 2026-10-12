@@ -763,6 +763,7 @@ name = "electricity-schema"
 version = "0.1.0"
 dependencies = [
  "electricity-value",
+ "fancy-regex 0.14.0",
  "jsonschema",
  "serde_json",
 ]

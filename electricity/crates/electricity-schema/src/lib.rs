@@ -94,6 +94,7 @@ use jsonschema::primitive_type::PrimitiveType;
 use jsonschema::{Keyword, ValidationError};
 use serde_json::{Map, Number, Value};
 
+mod engine;
 mod python_message;
 
 /// The marker key `electricity-compiler`'s `schema_instance.rs` wraps a
@@ -624,21 +625,110 @@ pub enum PromptSchemaCheck {
 
 /// `jsonschema.validate(value, schema)`, draft auto-selected from
 /// *schema*'s own `$schema` (defaulting to the latest draft) exactly
-/// as Python's own `jsonschema.validate` does -- including Python's own
-/// `best_match` error *selection* among every violation, not just the
-/// first one `iter_errors` happens to yield (issue #498 ruling 6,
-/// tightened by PR #502's review finding 2/orchestrator ruling 2).
-pub fn validate_prompt_schema(schema: &Value, instance: &Value) -> PromptSchemaCheck {
-    let validator = match jsonschema::validator_for(schema) {
+/// as Python's own `jsonschema.validate` does. The `jsonschema` crate
+/// is still the accept/reject authority (and still used, narrowly, for
+/// an `anyOf`/`oneOf` branch's own accept/reject check) -- but *text*
+/// comes from [`engine::evaluate`]/[`engine::best_match`], which walk
+/// *schema*/*instance* directly (order-preserving, so a `type: [...]`
+/// list and a multi-key object's own repr come out exactly as authored,
+/// and tie-breaking among several equally-relevant violations matches
+/// Python's own `iter_errors` order) rather than the crate's own lossy
+/// `serde_json::Value` error objects (issue #498 ruling 6, tightened by
+/// PR #502's review finding 2 and its own orchestrator follow-up).
+/// Falls back to the crate's own single best-match `Display` text only
+/// when [`engine::evaluate`] finds nothing at all for a document the
+/// crate has already confirmed is invalid -- an unsupported keyword is
+/// the only way that can happen; see `engine`'s own module docs and
+/// `DESIGN.md` §13 for exactly which keywords that leaves unmatched.
+pub fn validate_prompt_schema(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> PromptSchemaCheck {
+    let schema_json = value_to_json(schema);
+    let instance_json = value_to_json(instance);
+    let validator = match jsonschema::validator_for(&schema_json) {
         Ok(validator) => validator,
         Err(err) => return PromptSchemaCheck::SchemaError(err.to_string()),
     };
-    match python_message::best_match(validator.iter_errors(instance)) {
+    if validator.is_valid(&instance_json) {
+        return PromptSchemaCheck::Valid;
+    }
+    let mut violations = Vec::new();
+    engine::evaluate(schema, instance, schema, &[], &mut violations);
+    if let Some(best) = engine::best_match(&violations) {
+        return PromptSchemaCheck::Invalid(engine::render(best));
+    }
+    match python_message::best_match(validator.iter_errors(&instance_json)) {
         None => PromptSchemaCheck::Valid,
         Some(err) => {
-            let message = python_message::python_message(&err, schema)
+            let message = python_message::python_message(&err, &schema_json)
                 .unwrap_or_else(|| substitute_value_prefix(&err.instance, err.to_string()));
             PromptSchemaCheck::Invalid(message)
+        }
+    }
+}
+
+/// The inverse of [`value_to_json`] -- every ordinary JSON shape
+/// (`null`/`bool`/number/string/array/object), order-preserving. Public
+/// only for `validate_prompt_schema`'s own corpus-replay test
+/// (`tests/prompt_schema_corpus.rs`), which has no other way to turn a
+/// corpus case's `serde_json`-parsed schema/instance into the
+/// `electricity_value::Value` the function under test now takes --
+/// not meant as a general-purpose JSON bridge for any other caller.
+pub fn value_from_json(json: &serde_json::Value) -> electricity_value::Value {
+    python_message::json_to_value(json)
+}
+
+/// The inverse of `electricity-compiler::schema_instance::to_schema_instance`
+/// -- a prompt's decoded JSON value and its own author-written `schema:`
+/// are both plain `json.loads`-shaped data (never a
+/// `Date`/`DateTime`/`Bytes`/non-string-key marker, per this module's own
+/// top doc comment), so this never needs that function's own marker
+/// handling, only the plain scalar/container cases.
+fn value_to_json(value: &electricity_value::Value) -> Value {
+    use electricity_value::{IntValue, Value as EValue};
+    match value {
+        EValue::None => Value::Null,
+        EValue::Bool(b) => Value::Bool(*b),
+        EValue::Int(IntValue::Small(n)) => Value::Number((*n).into()),
+        // `electricity-compiler::schema_instance::int_to_json_number`'s own
+        // clamp: the `jsonschema` crate's `minimum`/`maximum`/`type:
+        // integer` keywords call `.expect("Always valid")` on this
+        // `Number`'s own `as_f64()`, which is `None` for a magnitude past
+        // `f64`'s own range -- panicking inside the crate rather than
+        // returning an error. Clamped to the same side of the range the
+        // real value is on (still a real JSON number, so `type: integer`
+        // keeps accepting it, as Python's own unbounded `int` does).
+        EValue::Int(IntValue::Big(n)) => {
+            let digits = n.to_string();
+            match digits.parse::<Number>() {
+                Ok(number) if number.as_f64().is_some() => Value::Number(number),
+                _ => Value::Number(if digits.starts_with('-') {
+                    Number::from(i64::MIN)
+                } else {
+                    Number::from(u64::MAX)
+                }),
+            }
+        }
+        EValue::Float(f) if f.is_finite() => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        EValue::Float(_) => Value::Null,
+        EValue::Str(s) => Value::String(s.clone()),
+        EValue::Bytes(_) => Value::Null,
+        // Never real here (a decoded JSON reply and a document author's
+        // own `schema:` are both plain `json.loads`-shaped data, per this
+        // module's own top doc comment) -- kept only so this match stays
+        // exhaustive against `Value`'s own full variant set.
+        EValue::Date(_) | EValue::DateTime(_, _) => Value::Null,
+        EValue::List(items) => Value::Array(items.iter().map(value_to_json).collect()),
+        EValue::Dict(dict) => {
+            let mut map = Map::new();
+            for (k, v) in dict.iter() {
+                let key = k.as_str().map(str::to_string).unwrap_or_else(|| k.py_str());
+                map.insert(key, value_to_json(v));
+            }
+            Value::Object(map)
         }
     }
 }
@@ -955,23 +1045,24 @@ fn is_json_path_compatible_property(segment: &str) -> bool {
 
 #[cfg(test)]
 mod prompt_schema_tests {
-    use super::{PromptSchemaCheck, validate_prompt_schema};
+    use super::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
     use serde_json::json;
+
+    fn check(schema: serde_json::Value, instance: serde_json::Value) -> PromptSchemaCheck {
+        validate_prompt_schema(&value_from_json(&schema), &value_from_json(&instance))
+    }
 
     #[test]
     fn a_matching_instance_is_valid() {
         let schema = json!({"type": "object", "required": ["a"]});
-        assert_eq!(
-            validate_prompt_schema(&schema, &json!({"a": 1})),
-            PromptSchemaCheck::Valid
-        );
+        assert_eq!(check(schema, json!({"a": 1})), PromptSchemaCheck::Valid);
     }
 
     #[test]
     fn a_missing_required_property_is_invalid() {
         let schema = json!({"type": "object", "required": ["a"]});
         assert_eq!(
-            validate_prompt_schema(&schema, &json!({})),
+            check(schema, json!({})),
             PromptSchemaCheck::Invalid("'a' is a required property".to_string())
         );
     }
@@ -980,7 +1071,7 @@ mod prompt_schema_tests {
     fn a_type_mismatch_is_invalid() {
         let schema = json!({"type": "string"});
         assert_eq!(
-            validate_prompt_schema(&schema, &json!(5)),
+            check(schema, json!(5)),
             PromptSchemaCheck::Invalid("5 is not of type 'string'".to_string())
         );
     }
@@ -989,27 +1080,20 @@ mod prompt_schema_tests {
     fn an_enum_mismatch_is_invalid() {
         let schema = json!({"enum": ["a", "b"]});
         assert_eq!(
-            validate_prompt_schema(&schema, &json!("c")),
+            check(schema, json!("c")),
             PromptSchemaCheck::Invalid("'c' is not one of ['a', 'b']".to_string())
         );
     }
 
     #[test]
     fn additional_properties_false_rejects_an_extra_key() {
-        // `properties` must be declared (even empty) for the `jsonschema`
-        // Rust crate to report one combined `AdditionalProperties` error
-        // for every extra key -- with no `properties` keyword at all, it
-        // validates each extra key against the bare `false` schema
-        // instead (`FalseSchema`, a different, per-key error), unlike
-        // Python's own `additionalProperties` keyword handler, which
-        // always collects every extra key into one list regardless.
         let schema = json!({
             "type": "object",
             "properties": {"a": {}},
             "additionalProperties": false
         });
         assert_eq!(
-            validate_prompt_schema(&schema, &json!({"a": 1, "extra": 2})),
+            check(schema, json!({"a": 1, "extra": 2})),
             PromptSchemaCheck::Invalid(
                 "Additional properties are not allowed ('extra' was unexpected)".to_string()
             )
@@ -1020,7 +1104,7 @@ mod prompt_schema_tests {
     fn min_items_rejects_a_short_array() {
         let schema = json!({"type": "array", "minItems": 2});
         assert_eq!(
-            validate_prompt_schema(&schema, &json!([1])),
+            check(schema, json!([1])),
             PromptSchemaCheck::Invalid("[1] is too short".to_string())
         );
     }
@@ -1038,7 +1122,7 @@ mod prompt_schema_tests {
             "required": ["a"]
         });
         assert_eq!(
-            validate_prompt_schema(&schema, &json!({})),
+            check(schema, json!({})),
             PromptSchemaCheck::Invalid("'a' is a required property".to_string())
         );
     }
@@ -1047,7 +1131,7 @@ mod prompt_schema_tests {
     fn no_schema_keyword_defaults_to_the_latest_draft() {
         let schema = json!({"type": "object", "required": ["a"]});
         assert!(matches!(
-            validate_prompt_schema(&schema, &json!({})),
+            check(schema, json!({})),
             PromptSchemaCheck::Invalid(_)
         ));
     }
@@ -1058,7 +1142,7 @@ mod prompt_schema_tests {
         // compile as a schema at all.
         let schema = json!({"type": 5});
         assert!(matches!(
-            validate_prompt_schema(&schema, &json!("anything")),
+            check(schema, json!("anything")),
             PromptSchemaCheck::SchemaError(_)
         ));
     }

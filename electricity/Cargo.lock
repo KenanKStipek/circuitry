@@ -504,7 +504,9 @@ dependencies = [
 name = "electricity-schema"
 version = "0.1.0"
 dependencies = [
+ "electricity-json",
  "electricity-value",
+ "fancy-regex",
  "jsonschema",
  "serde",
  "serde_json",

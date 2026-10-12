@@ -7,9 +7,16 @@
 //! Unlike `golden_corpus.rs`'s own `orchestration_errors`/`profile_errors`
 //! replay (third-party message text never required to match, `DESIGN.md`
 //! §1/§12), this one *does* compare message text exactly: issue #498
-//! ruling 6 (tightened by PR #502's review finding 2/orchestrator ruling
-//! 2) requires `validate_prompt_schema`'s own text to match Python's
-//! `jsonschema` output for the keyword families `python_message` covers.
+//! ruling 6 (tightened by PR #502's review finding 2 and its own
+//! orchestrator follow-up) requires `validate_prompt_schema`'s own text to
+//! match Python's `jsonschema` output, including which violation
+//! `best_match` itself picks among several.
+//!
+//! Parsed through [`electricity_json::loads`], not `serde_json::Value` --
+//! several cases exist specifically to pin a tie-break that depends on the
+//! schema/instance's own authored key order, which a `serde_json::Value`
+//! round trip (a `BTreeMap`-backed `Map`, alphabetical, regardless of the
+//! source text's own order) would destroy on the way in.
 //!
 //! The corpus is checked in (`tests/golden/prompt_schema_corpus.json`); CI
 //! separately regenerates it (via the pinned `jsonschema` version in
@@ -18,33 +25,42 @@
 //! needs to trust the committed file.
 
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema};
-use serde::Deserialize;
-use serde_json::Value;
+use electricity_value::Value;
 
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    schema: Value,
-    instance: Value,
-    message: Option<String>,
+static NONE: Value = Value::None;
+
+fn field<'a>(case: &'a Value, name: &str) -> &'a Value {
+    case.as_dict()
+        .and_then(|d| d.get(&Value::Str(name.to_string())))
+        .unwrap_or(&NONE)
 }
 
 #[test]
 fn prompt_schema_corpus_matches_pythons_jsonschema() {
     let text = include_str!("golden/prompt_schema_corpus.json");
-    let cases: Vec<Case> =
-        serde_json::from_str(text).expect("golden/prompt_schema_corpus.json is valid JSON");
+    let parsed =
+        electricity_json::loads(text).expect("golden/prompt_schema_corpus.json is valid JSON");
+    let cases = parsed
+        .as_list()
+        .expect("the corpus is a JSON array")
+        .to_vec();
     assert!(!cases.is_empty(), "prompt schema corpus must not be empty");
 
     let mut failures = Vec::new();
     for case in &cases {
-        let result = validate_prompt_schema(&case.schema, &case.instance);
-        match (&case.message, &result) {
+        let name = field(case, "name")
+            .as_str()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let schema = field(case, "schema");
+        let instance = field(case, "instance");
+        let expected = field(case, "message").as_str().map(str::to_string);
+        let result = validate_prompt_schema(schema, instance);
+        match (&expected, &result) {
             (None, PromptSchemaCheck::Valid) => {}
             (Some(expected), PromptSchemaCheck::Invalid(actual)) if expected == actual => {}
             (expected, actual) => failures.push(format!(
-                "case {:?}: expected message={expected:?}, got {actual:?}",
-                case.name
+                "case {name:?}: expected message={expected:?}, got {actual:?}"
             )),
         }
     }

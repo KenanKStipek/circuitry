@@ -11,15 +11,40 @@ description = "Offline JSON Schema (Draft 7) validation against Circuitry's own 
 # default-features off: "resolve-http"/"resolve-file" pull in reqwest for
 # remote $ref fetching, which this crate never needs (DESIGN.md §4 step 3 —
 # offline only) and Circuitry's schemas only ever use local "#/$defs/..."
-# refs. fancy-regex (DESIGN.md §7.3) is already jsonschema's own, non-optional
-# dependency for the `pattern` keyword, so nothing further is added for it.
+# refs.
 jsonschema = { version = "0.26", default-features = false }
-serde_json = "1"
+# `arbitrary_precision`: `engine.rs`'s own `value_to_json` round-trips a
+# `Value::Int(IntValue::Big(_))` through `serde_json::Number` (for the
+# crate-based anyOf/oneOf branch accept/reject check) without truncating it
+# to `i64`/`f64` first -- the same reason `electricity-compiler`'s own
+# `schema_instance.rs` already turns this feature on; already part of the
+# shared dependency graph through that crate on any `cargo build --workspace`,
+# so this isn't a new feature-unification risk.
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+# `engine.rs`'s own `pattern`/`patternProperties`/`additionalProperties`
+# matching -- the same regex engine (and the same two Python-`re`
+# corrections, `rewrite_digit_class`/`rewrite_trailing_dollar`) the
+# `jsonschema` crate itself already uses internally for every other
+# keyword's own pattern matching; pinned to the same version Cargo.lock
+# already resolves it to as that crate's own transitive dependency.
+fancy-regex = "0.14"
 # `validate_prompt_schema`'s own Python-`jsonschema`-style message text
-# (issue #498 ruling 6, tightened by PR #502's review) -- `py_repr`/
-# `py_float_repr` for rendering a failing instance/limit the same way
-# Python's own `%r`/`repr()` would.
+# (issue #498 ruling 6, tightened by PR #502's review and its own
+# orchestrator follow-up) -- `py_repr`/`py_float_repr` for rendering a
+# failing instance/limit/schema value the same way Python's `%r`/`repr()`
+# would, from the original, order-preserving tree rather than a lossy
+# `serde_json::Value`.
 electricity-value = { path = "../electricity-value" }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
+# `tests/prompt_schema_corpus.rs`'s own corpus parse: `serde_json::Value`'s
+# `Map` is a `BTreeMap` (alphabetical, see this crate's own `serde_json`
+# dependency comment above) and would re-sort every nested schema/instance
+# object on the way in regardless of what order the committed corpus file
+# itself preserves -- exactly the thing several corpus cases exist to
+# pin. `electricity_json::loads` is this workspace's own always
+# order-preserving JSON reader (`electricity-json`'s own crate
+# description), so the replay test parses the whole corpus file through
+# it instead, straight into `electricity_value::Value`.
+electricity-json = { path = "../electricity-json" }

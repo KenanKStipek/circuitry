@@ -1,11 +1,8 @@
 [
   {
-    "instance": {
-      "b": 1
-    },
-    "message": "'a' is a required property",
     "name": "required_missing_one",
     "schema": {
+      "type": "object",
       "properties": {
         "a": {
           "type": "string"
@@ -13,11 +10,37 @@
       },
       "required": [
         "a"
-      ],
-      "type": "object"
-    }
+      ]
+    },
+    "instance": {
+      "b": 1
+    },
+    "message": "'a' is a required property"
   },
   {
+    "name": "required_nested_in_array",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "n"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
     "instance": {
       "items": [
         {
@@ -28,38 +51,12 @@
         }
       ]
     },
-    "message": "'n' is a required property",
-    "name": "required_nested_in_array",
-    "schema": {
-      "properties": {
-        "items": {
-          "items": {
-            "properties": {
-              "n": {
-                "type": "integer"
-              }
-            },
-            "required": [
-              "n"
-            ],
-            "type": "object"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "items"
-      ],
-      "type": "object"
-    }
+    "message": "'n' is a required property"
   },
   {
-    "instance": {
-      "a": 5
-    },
-    "message": "5 is not of type 'string'",
     "name": "type_scalar_string_expected",
     "schema": {
+      "type": "object",
       "properties": {
         "a": {
           "type": "string"
@@ -67,89 +64,90 @@
       },
       "required": [
         "a"
-      ],
-      "type": "object"
-    }
+      ]
+    },
+    "instance": {
+      "a": 5
+    },
+    "message": "5 is not of type 'string'"
   },
   {
-    "instance": [
-      "list"
-    ],
-    "message": "['list'] is not of type 'object'",
     "name": "type_object_expected",
     "schema": {
       "type": "object"
-    }
+    },
+    "instance": [
+      "list"
+    ],
+    "message": "['list'] is not of type 'object'"
   },
   {
-    "instance": "nine",
-    "message": "'nine' is not of type 'number'",
     "name": "type_number_expected",
     "schema": {
       "type": "number"
-    }
+    },
+    "instance": "nine",
+    "message": "'nine' is not of type 'number'"
   },
   {
-    "instance": {
-      "score": "high",
-      "title": "x"
-    },
-    "message": "'high' is not of type 'number'",
     "name": "type_nested_under_property",
     "schema": {
+      "type": "object",
       "properties": {
-        "score": {
-          "type": "number"
-        },
         "title": {
           "type": "string"
+        },
+        "score": {
+          "type": "number"
         }
       },
       "required": [
         "title",
         "score"
-      ],
-      "type": "object"
-    }
+      ]
+    },
+    "instance": {
+      "title": "x",
+      "score": "high"
+    },
+    "message": "'high' is not of type 'number'"
   },
   {
-    "instance": "yes",
-    "message": "'yes' is not of type 'boolean'",
     "name": "type_boolean_expected",
     "schema": {
       "type": "boolean"
-    }
+    },
+    "instance": "yes",
+    "message": "'yes' is not of type 'boolean'"
   },
   {
-    "instance": 0,
-    "message": "0 is not of type 'null'",
     "name": "type_null_expected",
     "schema": {
       "type": "null"
-    }
+    },
+    "instance": 0,
+    "message": "0 is not of type 'null'"
   },
   {
-    "instance": 3.5,
-    "message": "3.5 is not of type 'integer'",
     "name": "type_integer_expected",
     "schema": {
       "type": "integer"
-    }
+    },
+    "instance": 3.5,
+    "message": "3.5 is not of type 'integer'"
   },
   {
-    "instance": "blue",
-    "message": "'blue' is not one of ['red', 'green']",
     "name": "enum_string_mismatch",
     "schema": {
       "enum": [
         "red",
         "green"
       ]
-    }
+    },
+    "instance": "blue",
+    "message": "'blue' is not one of ['red', 'green']"
   },
   {
-    "instance": 4,
-    "message": "4 is not one of [1, 2, 3]",
     "name": "enum_number_mismatch",
     "schema": {
       "enum": [
@@ -157,255 +155,254 @@
         2,
         3
       ]
-    }
+    },
+    "instance": 4,
+    "message": "4 is not one of [1, 2, 3]"
   },
   {
-    "instance": "other",
-    "message": "'fixed' was expected",
     "name": "const_mismatch",
     "schema": {
       "const": "fixed"
-    }
+    },
+    "instance": "other",
+    "message": "'fixed' was expected"
   },
   {
-    "instance": {
-      "a": 1,
-      "z": 2
-    },
-    "message": "Additional properties are not allowed ('z' was unexpected)",
     "name": "additional_properties_one_extra",
     "schema": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
         "a": {}
       },
-      "type": "object"
-    }
-  },
-  {
+      "additionalProperties": false
+    },
     "instance": {
       "a": 1,
-      "y": 3,
       "z": 2
     },
-    "message": "Additional properties are not allowed ('y', 'z' were unexpected)",
+    "message": "Additional properties are not allowed ('z' was unexpected)"
+  },
+  {
     "name": "additional_properties_two_extra_sorted",
     "schema": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
         "a": {}
       },
-      "type": "object"
-    }
+      "additionalProperties": false
+    },
+    "instance": {
+      "a": 1,
+      "z": 2,
+      "y": 3
+    },
+    "message": "Additional properties are not allowed ('y', 'z' were unexpected)"
   },
   {
-    "instance": [],
-    "message": "[] should be non-empty",
     "name": "min_items_zero_of_one",
     "schema": {
-      "minItems": 1,
-      "type": "array"
-    }
+      "type": "array",
+      "minItems": 1
+    },
+    "instance": [],
+    "message": "[] should be non-empty"
   },
   {
-    "instance": [
-      "x"
-    ],
-    "message": "['x'] is too short",
     "name": "min_items_one_of_two",
     "schema": {
-      "minItems": 2,
-      "type": "array"
-    }
-  },
-  {
+      "type": "array",
+      "minItems": 2
+    },
     "instance": [
       "x"
     ],
-    "message": "['x'] is expected to be empty",
-    "name": "max_items_one_over_zero",
-    "schema": {
-      "maxItems": 0,
-      "type": "array"
-    }
+    "message": "['x'] is too short"
   },
   {
+    "name": "max_items_one_over_zero",
+    "schema": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "instance": [
+      "x"
+    ],
+    "message": "['x'] is expected to be empty"
+  },
+  {
+    "name": "max_items_one_over_two",
+    "schema": {
+      "type": "array",
+      "maxItems": 2
+    },
     "instance": [
       "x",
       "y",
       "z"
     ],
-    "message": "['x', 'y', 'z'] is too long",
-    "name": "max_items_one_over_two",
-    "schema": {
-      "maxItems": 2,
-      "type": "array"
-    }
+    "message": "['x', 'y', 'z'] is too long"
   },
   {
-    "instance": "",
-    "message": "'' should be non-empty",
     "name": "min_length_empty_of_one",
     "schema": {
-      "minLength": 1,
-      "type": "string"
-    }
+      "type": "string",
+      "minLength": 1
+    },
+    "instance": "",
+    "message": "'' should be non-empty"
   },
   {
-    "instance": "ab",
-    "message": "'ab' is too short",
     "name": "min_length_short_of_three",
     "schema": {
-      "minLength": 3,
-      "type": "string"
-    }
+      "type": "string",
+      "minLength": 3
+    },
+    "instance": "ab",
+    "message": "'ab' is too short"
   },
   {
-    "instance": "a",
-    "message": "'a' is expected to be empty",
     "name": "max_length_one_over_zero",
     "schema": {
-      "maxLength": 0,
-      "type": "string"
-    }
+      "type": "string",
+      "maxLength": 0
+    },
+    "instance": "a",
+    "message": "'a' is expected to be empty"
   },
   {
-    "instance": "abcdef",
-    "message": "'abcdef' is too long",
     "name": "max_length_over_three",
     "schema": {
-      "maxLength": 3,
-      "type": "string"
-    }
+      "type": "string",
+      "maxLength": 3
+    },
+    "instance": "abcdef",
+    "message": "'abcdef' is too long"
   },
   {
-    "instance": 3,
-    "message": "3 is less than the minimum of 5",
     "name": "minimum_below",
     "schema": {
-      "minimum": 5,
-      "type": "integer"
-    }
+      "type": "integer",
+      "minimum": 5
+    },
+    "instance": 3,
+    "message": "3 is less than the minimum of 5"
   },
   {
-    "instance": 9,
-    "message": "9 is greater than the maximum of 5",
     "name": "maximum_above",
     "schema": {
-      "maximum": 5,
-      "type": "integer"
-    }
+      "type": "integer",
+      "maximum": 5
+    },
+    "instance": 9,
+    "message": "9 is greater than the maximum of 5"
   },
   {
-    "instance": 5,
-    "message": "5 is less than or equal to the minimum of 5",
     "name": "exclusive_minimum_equal",
     "schema": {
-      "exclusiveMinimum": 5,
-      "type": "number"
-    }
+      "type": "number",
+      "exclusiveMinimum": 5
+    },
+    "instance": 5,
+    "message": "5 is less than or equal to the minimum of 5"
   },
   {
-    "instance": 5,
-    "message": "5 is greater than or equal to the maximum of 5",
     "name": "exclusive_maximum_equal",
     "schema": {
-      "exclusiveMaximum": 5,
-      "type": "number"
-    }
+      "type": "number",
+      "exclusiveMaximum": 5
+    },
+    "instance": 5,
+    "message": "5 is greater than or equal to the maximum of 5"
   },
   {
-    "instance": 7,
-    "message": "7 is not a multiple of 2",
     "name": "multiple_of_int_divisor",
     "schema": {
-      "multipleOf": 2,
-      "type": "integer"
-    }
+      "type": "integer",
+      "multipleOf": 2
+    },
+    "instance": 7,
+    "message": "7 is not a multiple of 2"
   },
   {
-    "instance": 0.3,
-    "message": "0.3 is not a multiple of 0.5",
     "name": "multiple_of_float_divisor",
     "schema": {
-      "multipleOf": 0.5,
-      "type": "number"
-    }
+      "type": "number",
+      "multipleOf": 0.5
+    },
+    "instance": 0.3,
+    "message": "0.3 is not a multiple of 0.5"
   },
   {
-    "instance": "ABC",
-    "message": "'ABC' does not match '^[a-z]+$'",
     "name": "pattern_mismatch",
     "schema": {
-      "pattern": "^[a-z]+$",
-      "type": "string"
-    }
+      "type": "string",
+      "pattern": "^[a-z]+$"
+    },
+    "instance": "ABC",
+    "message": "'ABC' does not match '^[a-z]+$'"
   },
   {
+    "name": "unique_items_has_duplicate",
+    "schema": {
+      "type": "array",
+      "uniqueItems": true
+    },
     "instance": [
       1,
       2,
       1
     ],
-    "message": "[1, 2, 1] has non-unique elements",
-    "name": "unique_items_has_duplicate",
-    "schema": {
-      "type": "array",
-      "uniqueItems": true
-    }
+    "message": "[1, 2, 1] has non-unique elements"
   },
   {
-    "instance": "it's blue",
-    "message": "\"it's blue\" is not one of ['red', 'green']",
     "name": "string_with_embedded_single_quote",
     "schema": {
       "enum": [
         "red",
         "green"
       ]
-    }
+    },
+    "instance": "it's blue",
+    "message": "\"it's blue\" is not one of ['red', 'green']"
   },
   {
-    "instance": "thé",
-    "message": "'thé' is not one of ['café']",
     "name": "non_ascii_string_mismatch",
     "schema": {
       "enum": [
         "café"
       ]
-    }
+    },
+    "instance": "thé",
+    "message": "'thé' is not one of ['café']"
   },
   {
-    "instance": 1.5,
-    "message": "1.5 is not of type 'string'",
     "name": "float_instance_type_mismatch",
     "schema": {
       "type": "string"
-    }
+    },
+    "instance": 1.5,
+    "message": "1.5 is not of type 'string'"
   },
   {
-    "instance": true,
-    "message": "True is not of type 'string'",
     "name": "bool_instance_type_mismatch",
     "schema": {
       "type": "string"
-    }
+    },
+    "instance": true,
+    "message": "True is not of type 'string'"
   },
   {
-    "instance": null,
-    "message": "None is not of type 'object'",
     "name": "none_instance_required_value",
     "schema": {
       "type": "object"
-    }
+    },
+    "instance": null,
+    "message": "None is not of type 'object'"
   },
   {
-    "instance": {
-      "a": "ok"
-    },
-    "message": null,
     "name": "valid_instance_no_error",
     "schema": {
+      "type": "object",
       "properties": {
         "a": {
           "type": "string"
@@ -413,8 +410,898 @@
       },
       "required": [
         "a"
+      ]
+    },
+    "instance": {
+      "a": "ok"
+    },
+    "message": null
+  },
+  {
+    "name": "multiple_of_under_ref",
+    "schema": {
+      "$ref": "#/$defs/positiveMultiple",
+      "$defs": {
+        "positiveMultiple": {
+          "type": "integer",
+          "multipleOf": 3
+        }
+      }
+    },
+    "instance": 7,
+    "message": "7 is not a multiple of 3"
+  },
+  {
+    "name": "different_depths_shallower_wins",
+    "schema": {
+      "type": "object",
+      "required": [
+        "a"
       ],
+      "properties": {
+        "b": {
+          "type": "string"
+        }
+      }
+    },
+    "instance": {
+      "b": 5
+    },
+    "message": "'a' is a required property"
+  },
+  {
+    "name": "required_list_authored_order_three_entries",
+    "schema": {
+      "type": "object",
+      "required": [
+        "z",
+        "m",
+        "a"
+      ]
+    },
+    "instance": {},
+    "message": "'z' is a required property"
+  },
+  {
+    "name": "pattern_properties_descent_type_mismatch",
+    "schema": {
+      "type": "object",
+      "patternProperties": {
+        "^b": {
+          "type": "string"
+        }
+      }
+    },
+    "instance": {
+      "bx": 5
+    },
+    "message": "5 is not of type 'string'"
+  },
+  {
+    "name": "pattern_properties_vs_properties_path_tie",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        }
+      },
+      "patternProperties": {
+        "^b": {
+          "type": "string"
+        }
+      }
+    },
+    "instance": {
+      "a": 1,
+      "bx": 2
+    },
+    "message": "2 is not of type 'string'"
+  },
+  {
+    "name": "one_of_multiple_valid_first_match_goes_last",
+    "schema": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "minimum": 0
+        }
+      ]
+    },
+    "instance": 5,
+    "message": "5 is valid under each of {'minimum': 0}, {'type': 'number'}"
+  },
+  {
+    "name": "probe_schema_c0",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a"
+      ]
+    },
+    "instance": {
+      "b": 1
+    },
+    "message": "'a' is a required property"
+  },
+  {
+    "name": "probe_schema_c1",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a"
+      ]
+    },
+    "instance": {
+      "a": 5
+    },
+    "message": "5 is not of type 'string'"
+  },
+  {
+    "name": "probe_schema_c2",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ]
+    },
+    "instance": {},
+    "message": "'a' is a required property"
+  },
+  {
+    "name": "probe_schema_c3",
+    "schema": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2
+    },
+    "instance": [
+      "x"
+    ],
+    "message": "['x'] is too short"
+  },
+  {
+    "name": "probe_schema_c4",
+    "schema": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "instance": [],
+    "message": "[] should be non-empty"
+  },
+  {
+    "name": "probe_schema_c5",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "a": {}
+      }
+    },
+    "instance": {
+      "a": 1,
+      "z": 2
+    },
+    "message": "Additional properties are not allowed ('z' was unexpected)"
+  },
+  {
+    "name": "probe_schema_c6",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "a": {}
+      }
+    },
+    "instance": {
+      "a": 1,
+      "z": 2,
+      "y": 3
+    },
+    "message": "Additional properties are not allowed ('y', 'z' were unexpected)"
+  },
+  {
+    "name": "probe_schema_c7",
+    "schema": {
+      "enum": [
+        "red",
+        "green"
+      ]
+    },
+    "instance": "blue",
+    "message": "'blue' is not one of ['red', 'green']"
+  },
+  {
+    "name": "probe_schema_c8",
+    "schema": {
+      "type": "number"
+    },
+    "instance": "nine",
+    "message": "'nine' is not of type 'number'"
+  },
+  {
+    "name": "probe_schema_c9",
+    "schema": {
       "type": "object"
-    }
+    },
+    "instance": [
+      "list"
+    ],
+    "message": "['list'] is not of type 'object'"
+  },
+  {
+    "name": "probe_schema_c10",
+    "schema": {
+      "type": "string",
+      "maxLength": 3
+    },
+    "instance": "abcdef",
+    "message": "'abcdef' is too long"
+  },
+  {
+    "name": "probe_schema_c11",
+    "schema": {
+      "type": "integer",
+      "minimum": 5
+    },
+    "instance": 3,
+    "message": "3 is less than the minimum of 5"
+  },
+  {
+    "name": "probe_schema_c12",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "title",
+        "score"
+      ]
+    },
+    "instance": {
+      "title": "x",
+      "score": "high"
+    },
+    "message": "'high' is not of type 'number'"
+  },
+  {
+    "name": "probe_schema_c13",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "n"
+            ]
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "instance": {
+      "items": [
+        {
+          "n": 1
+        },
+        {
+          "m": 2
+        }
+      ]
+    },
+    "message": "'n' is a required property"
+  },
+  {
+    "name": "probe_schema2_c0",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "a",
+        "z"
+      ]
+    },
+    "instance": {
+      "a": {
+        "b": 1
+      }
+    },
+    "message": "'z' is a required property"
+  },
+  {
+    "name": "probe_schema2_c1",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "instance": {
+      "n": "s"
+    },
+    "message": "'x' is a required property"
+  },
+  {
+    "name": "probe_schema2_c2",
+    "schema": {
+      "type": "integer"
+    },
+    "instance": "it's \"quoted\"",
+    "message": "'it\\'s \"quoted\"' is not of type 'integer'"
+  },
+  {
+    "name": "probe_schema2_c3",
+    "schema": {
+      "type": "integer"
+    },
+    "instance": "naïve ✓ \\ tab\t",
+    "message": "'naïve ✓ \\\\ tab\\t' is not of type 'integer'"
+  },
+  {
+    "name": "probe_schema2_c4",
+    "schema": {
+      "enum": [
+        "a'b",
+        "c\"d"
+      ]
+    },
+    "instance": "x",
+    "message": "'x' is not one of [\"a'b\", 'c\"d']"
+  },
+  {
+    "name": "probe_schema2_c5",
+    "schema": {
+      "type": "string"
+    },
+    "instance": 1.5,
+    "message": "1.5 is not of type 'string'"
+  },
+  {
+    "name": "probe_schema2_c6",
+    "schema": {
+      "type": "string"
+    },
+    "instance": 1e+20,
+    "message": "1e+20 is not of type 'string'"
+  },
+  {
+    "name": "probe_schema2_c7",
+    "schema": {
+      "type": "string"
+    },
+    "instance": true,
+    "message": "True is not of type 'string'"
+  },
+  {
+    "name": "probe_schema2_c8",
+    "schema": {
+      "type": "string"
+    },
+    "instance": null,
+    "message": "None is not of type 'string'"
+  },
+  {
+    "name": "probe_schema2_c9",
+    "schema": {
+      "type": "string"
+    },
+    "instance": {
+      "k": [
+        1,
+        2.0,
+        false,
+        null
+      ]
+    },
+    "message": "{'k': [1, 2.0, False, None]} is not of type 'string'"
+  },
+  {
+    "name": "probe_schema2_c10",
+    "schema": {
+      "type": "number"
+    },
+    "instance": [
+      1,
+      "two"
+    ],
+    "message": "[1, 'two'] is not of type 'number'"
+  },
+  {
+    "name": "probe_schema2_c11",
+    "schema": {
+      "type": "number",
+      "maximum": 10
+    },
+    "instance": 11.5,
+    "message": "11.5 is greater than the maximum of 10"
+  },
+  {
+    "name": "probe_schema2_c12",
+    "schema": {
+      "type": "number",
+      "exclusiveMinimum": 3
+    },
+    "instance": 3,
+    "message": "3 is less than or equal to the minimum of 3"
+  },
+  {
+    "name": "probe_schema2_c13",
+    "schema": {
+      "type": "number",
+      "exclusiveMaximum": 3
+    },
+    "instance": 3,
+    "message": "3 is greater than or equal to the maximum of 3"
+  },
+  {
+    "name": "probe_schema2_c14",
+    "schema": {
+      "type": "integer",
+      "multipleOf": 3
+    },
+    "instance": 7,
+    "message": "7 is not a multiple of 3"
+  },
+  {
+    "name": "probe_schema2_c15",
+    "schema": {
+      "type": "number",
+      "multipleOf": 0.5
+    },
+    "instance": 0.3,
+    "message": "0.3 is not a multiple of 0.5"
+  },
+  {
+    "name": "probe_schema2_c16",
+    "schema": {
+      "type": "string",
+      "minLength": 3
+    },
+    "instance": "ab",
+    "message": "'ab' is too short"
+  },
+  {
+    "name": "probe_schema2_c17",
+    "schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instance": "",
+    "message": "'' should be non-empty"
+  },
+  {
+    "name": "probe_schema2_c18",
+    "schema": {
+      "type": "string",
+      "pattern": "^[a-z]+$"
+    },
+    "instance": "ABC",
+    "message": "'ABC' does not match '^[a-z]+$'"
+  },
+  {
+    "name": "probe_schema2_c19",
+    "schema": {
+      "type": "array",
+      "maxItems": 1
+    },
+    "instance": [
+      1,
+      2
+    ],
+    "message": "[1, 2] is too long"
+  },
+  {
+    "name": "probe_schema2_c20",
+    "schema": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "instance": [
+      1
+    ],
+    "message": "[1] is expected to be empty"
+  },
+  {
+    "name": "probe_schema2_c21",
+    "schema": {
+      "type": "array",
+      "uniqueItems": true
+    },
+    "instance": [
+      1,
+      1
+    ],
+    "message": "[1, 1] has non-unique elements"
+  },
+  {
+    "name": "probe_schema2_c22",
+    "schema": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "instance": [
+      1,
+      "x",
+      3
+    ],
+    "message": "'x' is not of type 'integer'"
+  },
+  {
+    "name": "probe_schema2_c23",
+    "schema": {
+      "const": "fixed"
+    },
+    "instance": "other",
+    "message": "'fixed' was expected"
+  },
+  {
+    "name": "probe_schema2_c24",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "a": {}
+      },
+      "additionalProperties": false
+    },
+    "instance": {
+      "b": 1,
+      "a": 2,
+      "c": 3
+    },
+    "message": "Additional properties are not allowed ('b', 'c' were unexpected)"
+  },
+  {
+    "name": "probe_schema2_c25",
+    "schema": {
+      "type": "object",
+      "minProperties": 2
+    },
+    "instance": {
+      "a": 1
+    },
+    "message": "{'a': 1} does not have enough properties"
+  },
+  {
+    "name": "probe_schema2_c26",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "shots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "duration": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "prompt",
+              "duration"
+            ]
+          }
+        }
+      },
+      "required": [
+        "shots"
+      ]
+    },
+    "instance": {
+      "shots": [
+        {
+          "prompt": "x",
+          "duration": "5"
+        }
+      ]
+    },
+    "message": "'5' is not of type 'number'"
+  },
+  {
+    "name": "probe_schema2_c27",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "title",
+        "tags"
+      ]
+    },
+    "instance": {
+      "title": "t",
+      "tags": []
+    },
+    "message": "[] should be non-empty"
+  },
+  {
+    "name": "probe_schema2_c28",
+    "schema": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        }
+      ]
+    },
+    "instance": 1.5,
+    "message": "1.5 is not valid under any of the given schemas"
+  },
+  {
+    "name": "probe_schema2_c29",
+    "schema": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "instance": null,
+    "message": "None is not valid under any of the given schemas"
+  },
+  {
+    "name": "probe_schema3_c0",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        }
+      }
+    },
+    "instance": {
+      "title": 1,
+      "score": "high"
+    },
+    "message": "1 is not of type 'string'"
+  },
+  {
+    "name": "probe_schema3_c1",
+    "schema": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "instance": [
+      1,
+      2
+    ],
+    "message": "2 is not of type 'string'"
+  },
+  {
+    "name": "probe_schema3_c2",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "x": {}
+      },
+      "required": [
+        "x"
+      ],
+      "additionalProperties": false
+    },
+    "instance": {
+      "y": 1
+    },
+    "message": "'x' is a required property"
+  },
+  {
+    "name": "probe_schema3_c3",
+    "schema": {
+      "type": "integer",
+      "minimum": 5
+    },
+    "instance": 3.5,
+    "message": "3.5 is not of type 'integer'"
+  },
+  {
+    "name": "probe_schema3_c4",
+    "schema": {
+      "type": "array",
+      "maxItems": 1
+    },
+    "instance": [
+      {
+        "b": 1,
+        "a": 2
+      },
+      {
+        "b": 3,
+        "a": 4
+      }
+    ],
+    "message": "[{'b': 1, 'a': 2}, {'b': 3, 'a': 4}] is too long"
+  },
+  {
+    "name": "probe_schema3_c5",
+    "schema": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "instance": 5,
+    "message": "5 is not of type 'string', 'null'"
+  },
+  {
+    "name": "probe_schema3_c6",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "b": {
+          "type": "string"
+        },
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "b",
+        "a"
+      ]
+    },
+    "instance": {},
+    "message": "'b' is a required property"
+  },
+  {
+    "name": "probe_schema3_c7",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "z": {
+          "type": "integer"
+        },
+        "a": {
+          "type": "integer"
+        }
+      }
+    },
+    "instance": {
+      "z": "s",
+      "a": "t"
+    },
+    "message": "'s' is not of type 'integer'"
+  },
+  {
+    "name": "probe_schema3_c8",
+    "schema": {
+      "type": "object",
+      "patternProperties": {
+        "^a": {}
+      },
+      "additionalProperties": false
+    },
+    "instance": {
+      "zz": 1
+    },
+    "message": "'zz' does not match any of the regexes: '^a'"
+  },
+  {
+    "name": "probe_schema3_c9",
+    "schema": {
+      "enum": [
+        {
+          "b": 1,
+          "a": 2
+        }
+      ]
+    },
+    "instance": {
+      "c": 3
+    },
+    "message": "{'c': 3} is not one of [{'b': 1, 'a': 2}]"
+  },
+  {
+    "name": "probe_schema3_c10",
+    "schema": {
+      "type": "integer"
+    },
+    "instance": 1180591620717411303424,
+    "message": null
+  },
+  {
+    "name": "probe_schema3_c11",
+    "schema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer"
+          },
+          "m": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "n"
+        ]
+      }
+    },
+    "instance": [
+      {
+        "m": 1
+      },
+      {
+        "n": "x"
+      }
+    ],
+    "message": "'n' is a required property"
   }
 ]

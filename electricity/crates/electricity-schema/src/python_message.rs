@@ -19,44 +19,86 @@ use serde_json::Value as JsonValue;
 use electricity_value::Value;
 
 /// `jsonschema.exceptions.best_match`: Python's own relevance key is
-/// `(-len(error.path), validator not in WEAK_MATCHES, validator in
-/// STRONG_MATCHES)` (`STRONG_MATCHES` is always empty), picked with `max`,
-/// which keeps the *first* maximal element when several tie -- unlike
-/// Rust's own `Iterator::max_by_key`, which keeps the *last*. `path` here is
-/// the error's own *instance* path (`error.path`, not `error.schema_path`),
-/// matching Python.
+/// `(-len(error.path), error.path, validator not in WEAK_MATCHES,
+/// validator in STRONG_MATCHES, not error._matches_type())`
+/// (`STRONG_MATCHES` is always empty, and this fallback-only path can't
+/// recover `_matches_type()` at all -- see [`relevance_cmp`]'s own doc
+/// comment), picked with `max`, which keeps the *first* maximal element
+/// when several tie -- this loop mirrors that by only replacing `best` on
+/// a strict `Greater`. `path` here is the error's own *instance* path
+/// (`error.path`, not `error.schema_path`), matching Python, compared
+/// element by element, not just by length -- two same-depth sibling
+/// errors routinely tie on every other component, and Python's `max()`
+/// then picks whichever has the lexicographically *greatest* path.
 ///
 /// The one piece of `best_match` this never replicates: once the winner is
 /// an `anyOf`/`oneOf` failure, Python descends into `best.context` (the
 /// losing branches' own sub-errors) with a second, `min`-based pass. The
 /// `jsonschema` Rust crate's own `ValidationErrorKind::AnyOf`/`OneOfNotValid`/
 /// `OneOfMultipleValid` carry no such sub-error list at all (`error.rs` in
-/// that crate), so there is nothing to descend into -- an accepted,
-/// documented gap (`DESIGN.md` §13), never reached by any of the keyword
-/// families [`python_message`] covers.
+/// that crate), so there is nothing to descend into here -- `engine.rs`'s
+/// own `evaluate`/`best_match` replicate the descent instead (by
+/// re-validating each branch directly) and are the primary path for
+/// every document this module's own fallback ever needs to run at all,
+/// so this gap is accepted and documented (`DESIGN.md` §13), never
+/// reached by any of the keyword families [`python_message`] covers.
 pub fn best_match<'a>(
     errors: impl Iterator<Item = ValidationError<'a>>,
 ) -> Option<ValidationError<'a>> {
     let mut best: Option<ValidationError<'a>> = None;
-    let mut best_key: Option<(i64, bool)> = None;
     for error in errors {
-        let key = relevance(&error);
-        let better = match best_key {
+        let better = match &best {
             None => true,
-            Some(current) => key > current,
+            Some(current) => relevance_cmp(&error, current) == std::cmp::Ordering::Greater,
         };
         if better {
-            best_key = Some(key);
             best = Some(error);
         }
     }
     best
 }
 
-fn relevance(error: &ValidationError<'_>) -> (i64, bool) {
-    let depth = error.instance_path.as_str().split('/').skip(1).count();
-    let weak = is_weak_keyword(&error.kind);
-    (-(depth as i64), !weak)
+/// `jsonschema.exceptions.by_relevance`'s own relevance key, missing only
+/// its `not error._matches_type()` component -- the crate's own
+/// `ValidationError` carries no reference to the *local* schema node a
+/// failing keyword ran against (only `instance_path`/`schema_path`
+/// strings), and `_matches_type` needs that schema's own `"type"` value,
+/// which isn't recoverable from a bare pointer string alone. A narrow gap
+/// in this crate-based *fallback* path only (`engine.rs` is the primary
+/// path and replicates the full key, `_matches_type` included) -- see
+/// `engine.rs`'s own module docs and `DESIGN.md` §13.
+fn relevance_cmp(a: &ValidationError<'_>, b: &ValidationError<'_>) -> std::cmp::Ordering {
+    let path_a = pointer_segments(a.instance_path.as_str());
+    let path_b = pointer_segments(b.instance_path.as_str());
+    (-(path_a.len() as i64))
+        .cmp(&-(path_b.len() as i64))
+        .then_with(|| compare_pointer_paths(&path_a, &path_b))
+        .then_with(|| (!is_weak_keyword(&a.kind)).cmp(&!is_weak_keyword(&b.kind)))
+}
+
+fn pointer_segments(pointer: &str) -> Vec<&str> {
+    pointer.split('/').skip(1).collect()
+}
+
+/// `error.path`'s own comparison, from the already-rendered JSON Pointer
+/// text rather than the typed path `engine.rs`'s own `compare_paths` has
+/// -- a numeric segment compares as a number (an array index), any other
+/// as a string (a property key), matching Python's own mixed-type deque
+/// comparison for the common case; a pointer segment that is itself
+/// ambiguous (a digit-string property name at the same position another
+/// violation has a real array index) is a narrower version of the same
+/// documented corner `engine.rs`'s own `compare_paths` already names.
+fn compare_pointer_paths(a: &[&str], b: &[&str]) -> std::cmp::Ordering {
+    for (x, y) in a.iter().zip(b.iter()) {
+        let ordering = match (x.parse::<usize>(), y.parse::<usize>()) {
+            (Ok(ix), Ok(iy)) => ix.cmp(&iy),
+            _ => x.cmp(y),
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    a.len().cmp(&b.len())
 }
 
 fn is_weak_keyword(kind: &ValidationErrorKind) -> bool {
@@ -235,7 +277,7 @@ fn schema_value_at<'a>(schema: &'a JsonValue, pointer: &str) -> Option<&'a JsonV
 /// every keyword family [`python_message`] covers only ever renders a
 /// scalar, array or single-key object as `{instance!r}`, so this never
 /// actually diverges for those, and is not claimed to for anything else.
-fn json_to_value(value: &JsonValue) -> Value {
+pub(crate) fn json_to_value(value: &JsonValue) -> Value {
     match value {
         JsonValue::Null => Value::None,
         JsonValue::Bool(b) => Value::Bool(*b),
