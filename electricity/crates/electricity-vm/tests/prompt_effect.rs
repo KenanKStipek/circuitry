@@ -1279,3 +1279,175 @@ async fn py_repr_of_the_wrapper_message_includes_a_raw_reply() {
          key of its own: {text}"
     );
 }
+
+/// Orchestrator follow-up, finding N12: a real HTTP adapter's own
+/// `generate()` call must race cancellation too, not just the backoff
+/// sleep/limiter wait around it -- otherwise Ctrl-C/SIGTERM during a
+/// prompt would wait out the whole call (up to its own timeout) and
+/// then get recorded as a failed attempt, instead of stopping the run
+/// at once with no attempt entry at all (the same contract `exec/
+/// tool.rs`'s own cancellation check already has).
+#[tokio::test]
+async fn cancelling_mid_generate_stops_the_run_without_recording_an_attempt() {
+    struct NeverAnswers {
+        token: CancellationToken,
+        called: std::cell::Cell<bool>,
+    }
+    #[async_trait(?Send)]
+    impl Adapter for NeverAnswers {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &GenerateOptions,
+            _call: &CallContext<'_>,
+        ) -> Result<GenerateResult, AdapterError> {
+            self.called.set(true);
+            // Requests cancellation itself, then never resolves --
+            // this is what a real HTTP adapter's own in-flight call
+            // looks like from `generate_with_fallbacks`'s own
+            // `tokio::select!`'s point of view: it must never
+            // actually be awaited to completion.
+            self.token.request(2);
+            std::future::pending::<()>().await;
+            unreachable!("must be cancelled before this future ever resolves")
+        }
+        async fn check(&self) -> CheckResult {
+            CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+    let token = CancellationToken::new();
+    let default = Rc::new(NeverAnswers {
+        token: token.clone(),
+        called: std::cell::Cell::new(false),
+    });
+    let adapters = registry_with_scripted();
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        template_prompt("hi"),
+        OnError::Fail,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = RecordingObserver::new();
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(VmError::Cancelled)),
+        "expected VmError::Cancelled, got {result:?}"
+    );
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert_eq!(
+        get(meta, "fallback_attempts"),
+        Some(&Value::List(Vec::new())),
+        "a cancelled-mid-call attempt must never be recorded at all: {meta:?}"
+    );
+    assert_eq!(
+        get(meta, "completed_at"),
+        Some(&Value::None),
+        "a cancellation must never reach the ordinary completed_at write either: {meta:?}"
+    );
+}
+
+/// A token cancelled *between* two fallback attempts (after the first
+/// one's own ordinary failure, before the second one ever dispatches)
+/// must stop the chain there -- checked at the top of every attempt,
+/// not just the first (orchestrator follow-up, finding N12).
+#[tokio::test]
+async fn cancelling_between_fallback_attempts_never_dispatches_the_next_one() {
+    struct CancelsThenPanics {
+        token: CancellationToken,
+        calls: std::cell::Cell<u32>,
+    }
+    #[async_trait(?Send)]
+    impl Adapter for CancelsThenPanics {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &GenerateOptions,
+            _call: &CallContext<'_>,
+        ) -> Result<GenerateResult, AdapterError> {
+            self.calls.set(self.calls.get() + 1);
+            // The *first* (and only) attempt this adapter must ever be
+            // handed: fails ordinarily, then requests cancellation --
+            // by the time the chain would move on to the next fallback
+            // entry, the token is already set.
+            self.token.request(2);
+            Err(AdapterError {
+                message: "scripted: server_error".to_string(),
+                retry: RetryInfo::not_retryable(),
+                py_class: PyExc::AdapterCallError,
+            })
+        }
+        async fn check(&self) -> CheckResult {
+            CheckResult {
+                ok: true,
+                ..Default::default()
+            }
+        }
+    }
+    let token = CancellationToken::new();
+    let default = Rc::new(CancelsThenPanics {
+        token: token.clone(),
+        calls: std::cell::Cell::new(0),
+    });
+    let calls = Rc::clone(&default);
+    let adapters = registry_with_scripted();
+    let store = Store::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = default;
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let mut op = template_prompt("hi");
+    op.provider_fallbacks = vec!["scripted:other".to_string()];
+    let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, OnError::Fail);
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = RecordingObserver::new();
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(VmError::Cancelled)),
+        "expected VmError::Cancelled, got {result:?}"
+    );
+    assert_eq!(
+        calls.calls.get(),
+        1,
+        "the second fallback entry must never dispatch once the token is set"
+    );
+}

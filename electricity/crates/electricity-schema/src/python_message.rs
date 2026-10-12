@@ -284,8 +284,16 @@ pub(crate) fn json_to_value(value: &JsonValue) -> Value {
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Value::from(i)
-            } else if let Some(u) = n.as_u64() {
-                Value::from(u as i64)
+            } else if n.is_u64() || n.is_i64() {
+                // A `u64` (or arbitrary-precision integer) past
+                // `i64::MAX` -- `u as i64` wraps around silently
+                // (finding N10); parse the exact decimal text instead,
+                // the same big-int fast path `electricity_value::
+                // IntValue::parse_decimal` already gives every other
+                // caller that needs one.
+                electricity_value::IntValue::parse_decimal(&n.to_string())
+                    .map(Value::Int)
+                    .unwrap_or_else(|| Value::Float(n.as_f64().unwrap_or(0.0)))
             } else {
                 Value::Float(n.as_f64().unwrap_or(0.0))
             }

@@ -161,6 +161,27 @@ pub(crate) enum Kind<'a> {
         matching: Vec<&'a Value>,
     },
     FalseSchema,
+    Not {
+        not_schema: &'a Value,
+    },
+    DependentRequired {
+        each: &'a str,
+        property: &'a str,
+    },
+    ContainsNone,
+    MinContains {
+        min_contains: i64,
+        matches: i64,
+    },
+    MaxContains {
+        max_contains: i64,
+    },
+    ItemsFalse {
+        prefix: usize,
+        extra: usize,
+        item_word: &'static str,
+        rest_repr: String,
+    },
     /// A failing `anyOf`/`oneOf` branch this module's own `evaluate` found
     /// nothing wrong with (an unsupported keyword is the real cause) --
     /// carries the legacy crate-`Display` single-message text for that
@@ -186,12 +207,131 @@ fn as_f64(value: &Value) -> Option<f64> {
     }
 }
 
-/// `TypeChecker.is_type` (Draft 2020-12): a `bool` is never `"integer"`/
-/// `"number"` even though Python's own `bool` is an `int` subclass; an
-/// `"integer"` instance is a JSON literal with no `.`/`e` in it (`Value::
-/// Int`), never a whole-numbered `Value::Float` -- `json.loads("3.0")` is a
-/// Python `float`, which `is_integer` rejects, so no fuzzy
-/// `f.fract() == 0.0` check belongs here either.
+/// `jsonschema._utils.equal`: evades Python's own type hierarchy (`bool`
+/// is an `int` subclass) by special-casing it, and never equates a `str`
+/// with anything but another `str` (unlike `_sequence_equal`, which would
+/// otherwise iterate a string's own characters as if it were a plain
+/// sequence). `None`/numeric comparison falls through to plain `==`.
+/// Numeric cross-type comparison (`Int` vs `Float`) goes through `f64`,
+/// not exact arbitrary-precision arithmetic -- Python's own `int`-`float`
+/// `==` is exact at any magnitude; this is a narrow, documented residual
+/// gap for an enum/const value large enough for that to matter (`DESIGN.md`
+/// §13), accepted the same way [`as_f64`]'s other callers already are.
+pub(crate) fn py_equal(one: &Value, two: &Value) -> bool {
+    match (one, two) {
+        (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Str(_), _) | (_, Value::Str(_)) => false,
+        (Value::List(a), Value::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| py_equal(x, y))
+        }
+        (Value::Dict(a), Value::Dict(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(k, v)| b.get(k).is_some_and(|v2| py_equal(v, v2)))
+        }
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Bool(_), _) | (_, Value::Bool(_)) => false,
+        (Value::None, Value::None) => true,
+        (Value::None, _) | (_, Value::None) => false,
+        (Value::Int(a), Value::Int(b)) => a.to_bigint() == b.to_bigint(),
+        _ => match (as_f64(one), as_f64(two)) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        },
+    }
+}
+
+/// A hashable stand-in for [`py_equal`]'s own equivalence classes --
+/// `Hash`/`Eq` agree with it exactly (unlike `electricity_value::Value`'s
+/// own derived ones, which deliberately let `True`/`1`/`1.0` collide as
+/// Python dict keys do -- the opposite of what `jsonschema._utils.equal`
+/// wants here). `Int`/`Float` share one numeric bucket so `1` and `1.0`
+/// still collide (Python's own `hash(1) == hash(1.0)` invariant); a
+/// `Float` outside `i64`'s range, or carrying a fractional part, falls
+/// back to its own bit pattern; a `NaN` has no key at all ([`uniq_key`]
+/// gives `None`), since it is never equal to anything under `py_equal`
+/// -- not even another `NaN`, not even itself -- and a hash key would
+/// otherwise wrongly treat two same-bit-pattern `NaN`s as a duplicate
+/// pair.
+#[derive(PartialEq, Eq, Hash)]
+enum UniqKey {
+    Str(String),
+    Bool(bool),
+    None,
+    Int(i64),
+    FloatBits(u64),
+}
+
+fn uniq_key(value: &Value) -> Option<UniqKey> {
+    match value {
+        Value::Str(s) => Some(UniqKey::Str(s.clone())),
+        Value::Bool(b) => Some(UniqKey::Bool(*b)),
+        Value::None => Some(UniqKey::None),
+        Value::Int(electricity_value::IntValue::Small(n)) => Some(UniqKey::Int(*n)),
+        Value::Float(f) if f.is_nan() => None,
+        Value::Float(f)
+            if f.is_finite()
+                && f.fract() == 0.0
+                && *f >= i64::MIN as f64
+                && *f <= i64::MAX as f64 =>
+        {
+            Some(UniqKey::Int(*f as i64))
+        }
+        Value::Float(f) => Some(UniqKey::FloatBits(f.to_bits())),
+        // `IntValue::Big` and every container type fall back to
+        // `py_uniq`'s own brute-force bucket below -- a `BigInt` could
+        // in principle get its own exact key too, but no required
+        // case needs `uniqueItems` over instances that large.
+        _ => None,
+    }
+}
+
+/// `jsonschema._utils.uniq`: Python's own *sorted* fast path isn't
+/// replicated (it needs every element mutually orderable, a `TypeError`
+/// in Python for anything heterogeneous, caught and handled by the same
+/// brute-force fallback this always uses for a `List`/`Dict` element --
+/// container equality is never by identity/hash here, so there's no fast
+/// path for it to take regardless). Every hashable scalar (everything
+/// but a `List`, a `Dict`, or a `BigInt`) instead goes through
+/// [`uniq_key`]'s own `O(n)` duplicate-count pass -- the one that
+/// actually matters for a large array, per issue #498's own orchestrator
+/// follow-up, finding N11 (`O(n^2)` over 50k items took several seconds
+/// in a debug build; this brings it back to milliseconds).
+fn py_uniq(items: &[Value]) -> bool {
+    let mut seen: std::collections::HashMap<UniqKey, usize> = std::collections::HashMap::new();
+    let mut unhashable: Vec<&Value> = Vec::new();
+    for item in items {
+        match uniq_key(item) {
+            Some(key) => {
+                let count = seen.entry(key).or_insert(0);
+                *count += 1;
+                if *count > 1 {
+                    return false;
+                }
+            }
+            None => unhashable.push(item),
+        }
+    }
+    for (i, item) in unhashable.iter().enumerate() {
+        for earlier in &unhashable[..i] {
+            if py_equal(earlier, item) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// `TypeChecker.is_type`: a `bool` is never `"integer"`/`"number"` even
+/// though Python's own `bool` is an `int` subclass. `"integer"` is wider
+/// than a bare JSON-literal integer from Draft 6 onward (every draft this
+/// engine targets): `draft6_type_checker.redefine("integer", ...)` also
+/// accepts a whole-numbered, *finite* `float` (`instance.is_integer()`),
+/// so `3.0` passes `type: integer` even though `json.loads("3.0")` is a
+/// Python `float`, not an `int` -- `NaN`/`Infinity` never do (`float.
+/// is_integer()` is `False` for both). `"number"` already includes every
+/// `Value::Float`, finite or not, matching Python's own `isinstance(x,
+/// numbers.Number)` (`NaN`/`Infinity` are real Python floats).
 fn is_type_match(instance: &Value, type_name: &str) -> bool {
     match type_name {
         "null" => matches!(instance, Value::None),
@@ -199,7 +339,11 @@ fn is_type_match(instance: &Value, type_name: &str) -> bool {
         "object" => matches!(instance, Value::Dict(_)),
         "array" => matches!(instance, Value::List(_)),
         "string" => matches!(instance, Value::Str(_)),
-        "integer" => matches!(instance, Value::Int(_)),
+        "integer" => match instance {
+            Value::Int(_) => true,
+            Value::Float(f) => f.is_finite() && f.fract() == 0.0,
+            _ => false,
+        },
         "number" => matches!(instance, Value::Int(_) | Value::Float(_)),
         _ => false,
     }
@@ -307,6 +451,63 @@ fn resolve_ref<'a>(root: &'a Value, pointer: &str) -> Option<&'a Value> {
     Some(node)
 }
 
+thread_local! {
+    /// A global (thread-local, since `evaluate` never actually runs
+    /// concurrently with itself on one thread -- it's a plain
+    /// synchronous call tree with no `.await` inside it) recursion
+    /// counter, incremented on every `evaluate` call regardless of
+    /// entry point (a top-level `evaluate`, or one reached through
+    /// `is_valid`'s own `not`/`if`/`contains`/`anyOf`/`oneOf` checks) --
+    /// a self-referencing `$ref` (`$defs: {loop: {$ref: '#/$defs/loop'}}`)
+    /// recurses through this exact function forever otherwise, and
+    /// Rust has no `RecursionError` to catch: it's a stack overflow, an
+    /// immediate abort with no state at all (issue #498's own
+    /// orchestrator follow-up, finding N6).
+    static RECURSION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Set once the depth budget below is exceeded during a call;
+    /// [`crate::validate_prompt_schema`] checks and clears it after
+    /// calling [`evaluate`]/[`best_match`], the same way Python's own
+    /// uncaught `RecursionError` would reach `core/prompt.py`'s own
+    /// generic `except Exception` (never `except jsonschema.
+    /// ValidationError`) and record a `"failed"`, non-retryable attempt
+    /// with that exception's own text -- not `schema_invalid`.
+    pub(crate) static RECURSION_EXCEEDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Comfortably past any legitimate schema's own nesting depth (Circuitry
+/// documents never approach even double digits here), comfortably short
+/// of where Rust's own real call-stack limit would bite first.
+const MAX_RECURSION_DEPTH: u32 = 500;
+
+struct DepthGuard;
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        RECURSION_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+fn enter_depth_guard() -> (DepthGuard, bool) {
+    let depth = RECURSION_DEPTH.with(|d| {
+        let v = d.get() + 1;
+        d.set(v);
+        v
+    });
+    let exceeded = depth > MAX_RECURSION_DEPTH;
+    if exceeded {
+        RECURSION_EXCEEDED.with(|e| e.set(true));
+    }
+    (DepthGuard, exceeded)
+}
+
+/// Clears [`RECURSION_EXCEEDED`] and returns its own prior value --
+/// [`crate::validate_prompt_schema`]'s own first step, since the flag is
+/// thread-local *state*, not a return value, and must never leak from
+/// one validation attempt into the next one on the same thread.
+pub(crate) fn take_recursion_exceeded() -> bool {
+    RECURSION_EXCEEDED.with(|e| e.replace(false))
+}
+
 /// Collects every violation *schema* has against *instance*, in Python's
 /// own `iter_errors` order, appending to *out*. *path* is the instance
 /// path already descended through from this call's own starting point (an
@@ -321,6 +522,10 @@ pub(crate) fn evaluate<'a>(
     path: &[PathSegment],
     out: &mut Vec<Violation<'a>>,
 ) {
+    let (_depth_guard, exceeded) = enter_depth_guard();
+    if exceeded {
+        return;
+    }
     if matches!(schema, Value::Bool(false)) {
         out.push(Violation {
             kind: Kind::FalseSchema,
@@ -355,7 +560,7 @@ pub(crate) fn evaluate<'a>(
             }
             "enum" => {
                 if let Value::List(options) = value {
-                    if !options.contains(instance) {
+                    if !options.iter().any(|option| py_equal(option, instance)) {
                         out.push(Violation {
                             kind: Kind::Enum,
                             path: path.to_vec(),
@@ -366,7 +571,7 @@ pub(crate) fn evaluate<'a>(
                 }
             }
             "const" => {
-                if instance != value {
+                if !py_equal(instance, value) {
                     out.push(Violation {
                         kind: Kind::Const,
                         path: path.to_vec(),
@@ -432,9 +637,16 @@ pub(crate) fn evaluate<'a>(
                 }
             }
             "additionalProperties" => {
-                let (Value::Bool(false), Value::Dict(obj)) = (value, instance) else {
-                    continue;
-                };
+                let Value::Dict(obj) = instance else { continue };
+                // `"patternProperties" in schema` (mere key *presence*,
+                // even an empty `{}`) -- not whether any pattern inside
+                // it actually compiled, matching `_keywords.
+                // additionalProperties`'s own `if "patternProperties" in
+                // schema:` check exactly (review of PR #502's own
+                // orchestrator follow-up, finding N8).
+                let has_pattern_properties = schema
+                    .as_dict()
+                    .is_some_and(|d| d.contains_key(&key("patternProperties")));
                 let properties = schema
                     .as_dict()
                     .and_then(|d| get(d, "properties"))
@@ -462,34 +674,102 @@ pub(crate) fn evaluate<'a>(
                     }
                     extras.push(name);
                 }
-                if !extras.is_empty() {
-                    extras.sort_unstable();
-                    let kind = if !pattern_keys.is_empty() {
-                        Kind::AdditionalPropertiesPatterned { unexpected: extras }
+                if extras.is_empty() {
+                    continue;
+                }
+                match value {
+                    // A subschema: `for extra in extras: yield from
+                    // validator.descend(instance[extra], aP, path=extra)`
+                    // -- `extras` is a Python `set` there, so real `cof`
+                    // output has no guaranteed order for 2+ extra keys;
+                    // this keeps the instance's own key order instead, a
+                    // documented, narrower residual gap than leaving the
+                    // keyword unsupported entirely (`DESIGN.md` §13).
+                    Value::Dict(_) => {
+                        for name in &extras {
+                            let prop_instance = obj.get(&key(name)).expect("just found above");
+                            let mut child_path = path.to_vec();
+                            child_path.push(PathSegment::Key(name.to_string()));
+                            evaluate(value, prop_instance, root, &child_path, out);
+                        }
+                    }
+                    Value::Bool(false) => {
+                        extras.sort_unstable();
+                        let kind = if has_pattern_properties {
+                            Kind::AdditionalPropertiesPatterned { unexpected: extras }
+                        } else {
+                            Kind::AdditionalPropertiesPlain { unexpected: extras }
+                        };
+                        out.push(Violation {
+                            kind,
+                            path: path.to_vec(),
+                            local_schema: schema,
+                            local_instance: instance,
+                        });
+                    }
+                    // `true` (or any other bare value no real schema
+                    // ever uses here): every property is allowed.
+                    _ => {}
+                }
+            }
+            "items" => {
+                // Draft 7's tuple form (`items` itself a list) is left to
+                // the legacy fallback -- 2020-12's `items` only ever
+                // applies past `prefixItems`' own length.
+                if matches!(value, Value::List(_)) {
+                    continue;
+                }
+                let Value::List(elements) = instance else {
+                    continue;
+                };
+                let prefix = schema
+                    .as_dict()
+                    .and_then(|d| get(d, "prefixItems"))
+                    .and_then(Value::as_list)
+                    .map(<[Value]>::len)
+                    .unwrap_or(0);
+                let total = elements.len();
+                if total <= prefix {
+                    continue;
+                }
+                if matches!(value, Value::Bool(false)) {
+                    let extra = total - prefix;
+                    let rest: Vec<Value> = elements[prefix..].to_vec();
+                    let rest_repr = if extra == 1 {
+                        rest[0].py_repr()
                     } else {
-                        Kind::AdditionalPropertiesPlain { unexpected: extras }
+                        Value::List(rest).py_repr()
                     };
+                    let item_word = if prefix == 1 { "item" } else { "items" };
                     out.push(Violation {
-                        kind,
+                        kind: Kind::ItemsFalse {
+                            prefix,
+                            extra,
+                            item_word,
+                            rest_repr,
+                        },
                         path: path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
-                }
-            }
-            "items" => {
-                // Only the Draft 2020-12 single-schema form; the Draft 7
-                // tuple form (`items` itself a list) is left to the
-                // legacy fallback.
-                if matches!(value, Value::List(_)) {
-                    continue;
-                }
-                if let Value::List(elements) = instance {
-                    for (index, element) in elements.iter().enumerate() {
+                } else {
+                    for (index, element) in elements.iter().enumerate().skip(prefix) {
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Index(index));
                         evaluate(value, element, root, &child_path, out);
                     }
+                }
+            }
+            "prefixItems" => {
+                let (Value::List(prefix_schemas), Value::List(elements)) = (value, instance) else {
+                    continue;
+                };
+                for (index, (subschema, element)) in
+                    prefix_schemas.iter().zip(elements.iter()).enumerate()
+                {
+                    let mut child_path = path.to_vec();
+                    child_path.push(PathSegment::Index(index));
+                    evaluate(subschema, element, root, &child_path, out);
                 }
             }
             "minItems" => {
@@ -565,66 +845,67 @@ pub(crate) fn evaluate<'a>(
                 }
             }
             "minimum" => {
-                if let (Some(i), Some(limit)) = (as_f64(instance), as_f64(value)) {
-                    if matches!(instance, Value::Int(_) | Value::Float(_)) && i < limit {
-                        out.push(Violation {
-                            kind: Kind::Minimum,
-                            path: path.to_vec(),
-                            local_schema: schema,
-                            local_instance: instance,
-                        });
-                    }
+                if matches!(instance, Value::Int(_) | Value::Float(_))
+                    && numeric_cmp(instance, value) == Some(std::cmp::Ordering::Less)
+                {
+                    out.push(Violation {
+                        kind: Kind::Minimum,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
                 }
             }
             "maximum" => {
-                if let (Some(i), Some(limit)) = (as_f64(instance), as_f64(value)) {
-                    if matches!(instance, Value::Int(_) | Value::Float(_)) && i > limit {
-                        out.push(Violation {
-                            kind: Kind::Maximum,
-                            path: path.to_vec(),
-                            local_schema: schema,
-                            local_instance: instance,
-                        });
-                    }
+                if matches!(instance, Value::Int(_) | Value::Float(_))
+                    && numeric_cmp(instance, value) == Some(std::cmp::Ordering::Greater)
+                {
+                    out.push(Violation {
+                        kind: Kind::Maximum,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
                 }
             }
             "exclusiveMinimum" => {
-                if let (Some(i), Some(limit)) = (as_f64(instance), as_f64(value)) {
-                    if matches!(instance, Value::Int(_) | Value::Float(_)) && i <= limit {
-                        out.push(Violation {
-                            kind: Kind::ExclusiveMinimum,
-                            path: path.to_vec(),
-                            local_schema: schema,
-                            local_instance: instance,
-                        });
-                    }
+                if matches!(instance, Value::Int(_) | Value::Float(_))
+                    && matches!(
+                        numeric_cmp(instance, value),
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                    )
+                {
+                    out.push(Violation {
+                        kind: Kind::ExclusiveMinimum,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
                 }
             }
             "exclusiveMaximum" => {
-                if let (Some(i), Some(limit)) = (as_f64(instance), as_f64(value)) {
-                    if matches!(instance, Value::Int(_) | Value::Float(_)) && i >= limit {
-                        out.push(Violation {
-                            kind: Kind::ExclusiveMaximum,
-                            path: path.to_vec(),
-                            local_schema: schema,
-                            local_instance: instance,
-                        });
-                    }
+                if matches!(instance, Value::Int(_) | Value::Float(_))
+                    && matches!(
+                        numeric_cmp(instance, value),
+                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                    )
+                {
+                    out.push(Violation {
+                        kind: Kind::ExclusiveMaximum,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
                 }
             }
             "multipleOf" => {
-                if let (Some(i), Some(divisor)) = (as_f64(instance), as_f64(value)) {
-                    if matches!(instance, Value::Int(_) | Value::Float(_)) && divisor != 0.0 {
-                        let quotient = i / divisor;
-                        if quotient.trunc() != quotient {
-                            out.push(Violation {
-                                kind: Kind::MultipleOf,
-                                path: path.to_vec(),
-                                local_schema: schema,
-                                local_instance: instance,
-                            });
-                        }
-                    }
+                if multiple_of_failed(instance, value) {
+                    out.push(Violation {
+                        kind: Kind::MultipleOf,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
                 }
             }
             "pattern" => {
@@ -643,16 +924,7 @@ pub(crate) fn evaluate<'a>(
             }
             "uniqueItems" => {
                 if let (Value::Bool(true), Value::List(items)) = (value, instance) {
-                    let mut seen: Vec<&Value> = Vec::new();
-                    let mut duplicate = false;
-                    for item in items {
-                        if seen.contains(&item) {
-                            duplicate = true;
-                            break;
-                        }
-                        seen.push(item);
-                    }
-                    if duplicate {
+                    if !py_uniq(items) {
                         out.push(Violation {
                             kind: Kind::UniqueItems,
                             path: path.to_vec(),
@@ -737,8 +1009,226 @@ pub(crate) fn evaluate<'a>(
                     }
                 }
             }
+            "allOf" => {
+                // `for index, subschema in enumerate(allOf): yield from
+                // validator.descend(instance, subschema, schema_path=
+                // index)` -- no `path=`, so every subschema's own
+                // violations flow straight into `out`, never wrapped.
+                if let Value::List(subschemas) = value {
+                    for subschema in subschemas {
+                        evaluate(subschema, instance, root, path, out);
+                    }
+                }
+            }
+            "not" => {
+                if is_valid(value, instance, root) {
+                    out.push(Violation {
+                        kind: Kind::Not { not_schema: value },
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
+                }
+            }
+            "if" => {
+                if is_valid(value, instance, root) {
+                    if let Some(then) = schema.as_dict().and_then(|d| get(d, "then")) {
+                        evaluate(then, instance, root, path, out);
+                    }
+                } else if let Some(else_) = schema.as_dict().and_then(|d| get(d, "else")) {
+                    evaluate(else_, instance, root, path, out);
+                }
+            }
+            "dependentRequired" => {
+                let (Value::Dict(dependent), Value::Dict(obj)) = (value, instance) else {
+                    continue;
+                };
+                for (prop_key, dependency) in dependent.iter() {
+                    let Some(property) = prop_key.as_str() else {
+                        continue;
+                    };
+                    if !obj.contains_key(&key(property)) {
+                        continue;
+                    }
+                    let Value::List(each_list) = dependency else {
+                        continue;
+                    };
+                    for each in each_list {
+                        let Some(each) = each.as_str() else {
+                            continue;
+                        };
+                        if !obj.contains_key(&key(each)) {
+                            out.push(Violation {
+                                kind: Kind::DependentRequired { each, property },
+                                path: path.to_vec(),
+                                local_schema: schema,
+                                local_instance: instance,
+                            });
+                        }
+                    }
+                }
+            }
+            "dependentSchemas" => {
+                let (Value::Dict(dependent), Value::Dict(obj)) = (value, instance) else {
+                    continue;
+                };
+                for (prop_key, dependency) in dependent.iter() {
+                    let Some(property) = prop_key.as_str() else {
+                        continue;
+                    };
+                    if obj.contains_key(&key(property)) {
+                        evaluate(dependency, instance, root, path, out);
+                    }
+                }
+            }
+            "contains" => {
+                let Value::List(elements) = instance else {
+                    continue;
+                };
+                let min_contains = schema
+                    .as_dict()
+                    .and_then(|d| get(d, "minContains"))
+                    .and_then(as_i64)
+                    .unwrap_or(1);
+                let max_contains = schema
+                    .as_dict()
+                    .and_then(|d| get(d, "maxContains"))
+                    .and_then(as_i64)
+                    .unwrap_or(elements.len() as i64);
+                let mut matches: i64 = 0;
+                let mut too_many = false;
+                for element in elements {
+                    if is_valid(value, element, root) {
+                        matches += 1;
+                        if matches > max_contains {
+                            too_many = true;
+                            break;
+                        }
+                    }
+                }
+                if too_many {
+                    out.push(Violation {
+                        kind: Kind::MaxContains { max_contains },
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
+                } else if matches < min_contains {
+                    let kind = if matches == 0 {
+                        Kind::ContainsNone
+                    } else {
+                        Kind::MinContains {
+                            min_contains,
+                            matches,
+                        }
+                    };
+                    out.push(Violation {
+                        kind,
+                        path: path.to_vec(),
+                        local_schema: schema,
+                        local_instance: instance,
+                    });
+                }
+            }
+            "propertyNames" => {
+                // `for property in instance: yield from validator.descend(
+                // instance=property, schema=propertyNames)` -- no `path=`,
+                // same as `allOf`/`not`'s own descends.
+                let Value::Dict(obj) = instance else {
+                    continue;
+                };
+                for prop_key in obj.keys() {
+                    if prop_key.as_str().is_some() {
+                        evaluate(value, prop_key, root, path, out);
+                    }
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// `Validator.is_valid`: *schema* has no violations at all against
+/// *instance* -- used by `not`/`if`/`contains` exactly the way Python's
+/// own keyword functions call `validator.evolve(schema=...).is_valid(...)`
+/// rather than collecting (and discarding) a full violation list.
+pub(crate) fn is_valid(schema: &Value, instance: &Value, root: &Value) -> bool {
+    let mut violations = Vec::new();
+    evaluate(schema, instance, root, &[], &mut violations);
+    violations.is_empty()
+}
+
+/// `instance < limit`/`instance > limit`/... as Python's own numeric
+/// tower compares them: exact for an `Int`-vs-`Int` pair (never losing
+/// precision for a big instance, the same reason [`multiple_of_failed`]
+/// does its own `int`/`int` arm in `BigInt`), `f64` otherwise (a `NaN` on
+/// either side gives `None`, matching Python's own "every comparison
+/// with `NaN` is `False`" rule -- callers that only check for one
+/// specific `Ordering` already get that for free; `None` compares equal
+/// to nothing).
+fn numeric_cmp(instance: &Value, limit: &Value) -> Option<std::cmp::Ordering> {
+    if let (Value::Int(a), Value::Int(b)) = (instance, limit) {
+        return Some(a.to_bigint().cmp(&b.to_bigint()));
+    }
+    let a = as_f64(instance)?;
+    let b = as_f64(limit)?;
+    a.partial_cmp(&b)
+}
+
+/// `_keywords.multipleOf`, ported exactly: an `int`-instance/`int`-divisor
+/// pair uses exact arbitrary-precision modulo (never `f64`, so issue
+/// #498's own `2**70`-sized instance ported correctly rather than
+/// drifting on the way to a float); anything else (either side a
+/// `float`, including `NaN`/`Infinity`) follows `instance / dB`, checking
+/// the quotient has no fractional part. Python's own `Fraction`-exact
+/// fallback for a quotient that overflows to infinity is not replicated
+/// (an `f64` division overflowing while every value involved is still a
+/// real, finite number) -- a narrow, documented residual gap (`DESIGN.md`
+/// §13); an *already*-non-finite quotient (a `NaN` instance, or a zero
+/// divisor) is treated as a violation, matching Python's own `bool(nan)
+/// == True` by the same coincidence of IEEE-754 comparison rules `bool`
+/// never needs to intervene for.
+fn multiple_of_failed(instance: &Value, divisor: &Value) -> bool {
+    if !matches!(instance, Value::Int(_) | Value::Float(_)) {
+        return false;
+    }
+    if let (Value::Int(n), Value::Int(d)) = (instance, divisor) {
+        let d = d.to_bigint();
+        if d == num_bigint::BigInt::from(0) {
+            return false;
+        }
+        return n.to_bigint() % d != num_bigint::BigInt::from(0);
+    }
+    let Some(i) = as_f64(instance) else {
+        return false;
+    };
+    let Some(d) = as_f64(divisor) else {
+        return false;
+    };
+    if matches!(divisor, Value::Int(_)) {
+        // A `float` instance against an `int` divisor: Python's `%`
+        // follows floor division (the result's own sign matches the
+        // *divisor*'s), unlike Rust's `%` (truncated division, the
+        // dividend's own sign) -- `py_fmod` corrects that.
+        let remainder = py_fmod(i, d);
+        return remainder != 0.0;
+    }
+    let quotient = i / d;
+    if !quotient.is_finite() {
+        return true;
+    }
+    quotient.trunc() != quotient
+}
+
+/// Python's own float `%`: floor division, sign of the result matches
+/// the divisor's (`-1.0 % 3.0 == 2.0` in Python; Rust's own `%` gives
+/// `-1.0`).
+fn py_fmod(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r != 0.0 && (r < 0.0) != (b < 0.0) {
+        r + b
+    } else {
+        r
     }
 }
 
@@ -750,20 +1240,216 @@ fn as_i64(value: &Value) -> Option<i64> {
 }
 
 fn compile_pattern(pattern: &str) -> Option<fancy_regex::Regex> {
-    let normalized = crate::rewrite_digit_class(&crate::rewrite_trailing_dollar(pattern));
+    let normalized = rewrite_word_and_space_classes(&crate::rewrite_digit_class(
+        &crate::rewrite_trailing_dollar(pattern),
+    ));
     fancy_regex::Regex::new(&normalized).ok()
 }
 
-/// Whether *instance* validates against *branch* at all -- delegates to the
-/// `jsonschema` crate (via a `serde_json` round trip) rather than this
-/// module's own `evaluate`, since a pure accept/reject check has none of
-/// `evaluate`'s own text-rendering concerns and the crate's verdict is
-/// already trusted everywhere else in `validate_prompt_schema`.
+/// Every unescaped `\w`/`\W`/`\s`/`\S` token, narrowed/widened to match
+/// Python `re`'s own Unicode tables exactly (issue #498's own orchestrator
+/// follow-up, finding N3) -- `fancy-regex`'s own default `\w` also
+/// matches a combining mark (`\p{M}`), which Python's own `str.isalnum()`
+/// never does (`'e\u0301'` -- `e` plus a free-standing acute accent --
+/// fails `^\w+$` in Python, passes it here otherwise); its own `\s`, in
+/// turn, is missing the four ASCII separator controls (`\x1c`-`\x1f`)
+/// CPython's own Unicode tables still class as whitespace for historical
+/// reasons. `\b`/`\B` are left alone (`fancy-regex`'s own word-boundary
+/// test does not consult a schema-provided override the way this
+/// rewrite's `\w`/`\W` do, so it keeps whatever divergence its *own*
+/// default has -- `DESIGN.md` §13).
+fn rewrite_word_and_space_classes(pattern: &str) -> String {
+    const WORD: &str = r"\p{L}\p{Nd}\p{Nl}\p{No}_";
+    const SPACE: &str = r"\s\x1c-\x1f";
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            // Only rewritten outside a character class: `[\w-]` needs
+            // the class's own *members* spliced in unbracketed
+            // (`[\p{L}...-]`), never a second, nested `[...]`, and
+            // `\W`/`\S` can't be inlined that way inside one at all
+            // (a negated class has no complement *within* another
+            // class) -- left as `fancy-regex`'s own default there, a
+            // narrower, documented residual gap than emitting invalid
+            // syntax (`DESIGN.md` §13); no pattern in this engine's own
+            // required corpus uses either inside a class.
+            match (in_class, chars[i + 1]) {
+                (false, 'w') => out.push_str(&format!("[{WORD}]")),
+                (false, 'W') => out.push_str(&format!("[^{WORD}]")),
+                (false, 's') => out.push_str(&format!("[{SPACE}]")),
+                (false, 'S') => out.push_str(&format!("[^{SPACE}]")),
+                (true, 'w') => out.push_str(WORD),
+                (true, 's') => out.push_str(SPACE),
+                (_, other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            }
+            i += 2;
+            continue;
+        }
+        if chars[i] == '[' && !in_class {
+            in_class = true;
+        } else if chars[i] == ']' && in_class {
+            in_class = false;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Every keyword [`evaluate`] understands on its own, needing no
+/// subschema recursion to confirm support for -- the leaf keywords plus
+/// the pure-annotation no-ops Draft 2020-12 itself defines (`$defs`,
+/// `$id`, `$anchor`, `$comment`, `title`, `description`, `default`,
+/// `examples`, `deprecated`, `readOnly`, `writeOnly`, and every
+/// `content*`/`format` keyword -- Python's own reference implementation
+/// never validates `format` without an explicit `format_checker`, so it
+/// is an annotation here too, issue #498 ruling 6's own module docs).
+/// `minContains`/`maxContains` ride along with `contains`, never
+/// meaningful alone, so they're listed as leaves too.
+const SUPPORTED_LEAF_KEYWORDS: &[&str] = &[
+    "type",
+    "enum",
+    "const",
+    "required",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+    "minProperties",
+    "maxProperties",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "pattern",
+    "uniqueItems",
+    "minContains",
+    "maxContains",
+    "dependentRequired",
+    "$defs",
+    "definitions",
+    "$id",
+    "$anchor",
+    "$comment",
+    "title",
+    "description",
+    "default",
+    "examples",
+    "deprecated",
+    "readOnly",
+    "writeOnly",
+    "format",
+    "contentEncoding",
+    "contentMediaType",
+    "contentSchema",
+];
+
+/// Whether *schema* (and, recursively, every subschema it can reach --
+/// `properties`/`patternProperties`/`additionalProperties`/`items`/
+/// `prefixItems`/`allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`/
+/// `dependentSchemas`/`contains`/`propertyNames`, and whatever a `$ref`
+/// resolves to) uses *only* keywords [`evaluate`] implements -- the
+/// authority test issue #498's own orchestrator follow-up (ruling R6)
+/// requires: this engine decides accept/reject itself only when this
+/// returns `true`, never the `jsonschema` crate (whose own lossy
+/// `serde_json`/ECMA-regex/format-by-default behavior is exactly what
+/// the follow-up's own probes caught diverging from Python). `depth`
+/// guards against a self-referencing `$ref` the same way [`evaluate`]'s
+/// own [`RECURSION_DEPTH`] does, independently (this function never
+/// calls `evaluate`, so it needs its own budget) -- a schema that deep
+/// or cyclic is simply judged unsupported, which safely routes it to
+/// the crate-authority path (crate-vs-Python divergence on a document
+/// this pathological is the least of its problems).
+pub(crate) fn schema_is_fully_supported(schema: &Value, root: &Value, depth: u32) -> bool {
+    if depth > MAX_RECURSION_DEPTH {
+        // The same signal `evaluate`'s own `DepthGuard` raises: a
+        // schema this deep is, for every real document, a
+        // self-referencing `$ref` -- and the crate itself (unlike
+        // Python) can resolve one gracefully without erroring, which
+        // would otherwise mean `validate_prompt_schema`'s own
+        // crate-authority fallback silently gives a *different*,
+        // non-crashing-but-wrong verdict instead of matching Python's
+        // own uncaught `RecursionError` here (issue #498's own
+        // orchestrator follow-up, finding N6).
+        RECURSION_EXCEEDED.with(|e| e.set(true));
+        return false;
+    }
+    match schema {
+        Value::Bool(_) => true,
+        Value::Dict(dict) => dict.iter().all(|(k, v)| {
+            let Some(key_str) = k.as_str() else {
+                return false;
+            };
+            if SUPPORTED_LEAF_KEYWORDS.contains(&key_str) {
+                return true;
+            }
+            match key_str {
+                "$ref" => v
+                    .as_str()
+                    .and_then(|pointer| resolve_ref(root, pointer))
+                    .is_some_and(|resolved| schema_is_fully_supported(resolved, root, depth + 1)),
+                "properties" | "patternProperties" | "dependentSchemas" => {
+                    v.as_dict().is_some_and(|d| {
+                        d.values()
+                            .all(|sub| schema_is_fully_supported(sub, root, depth + 1))
+                    })
+                }
+                "additionalProperties" | "items" | "not" | "propertyNames" | "contains" => {
+                    schema_is_fully_supported(v, root, depth + 1)
+                }
+                "if" => {
+                    schema_is_fully_supported(v, root, depth + 1)
+                        && dict
+                            .get(&key("then"))
+                            .is_none_or(|t| schema_is_fully_supported(t, root, depth + 1))
+                        && dict
+                            .get(&key("else"))
+                            .is_none_or(|e| schema_is_fully_supported(e, root, depth + 1))
+                }
+                "then" | "else" => true, // handled alongside "if" above
+                "prefixItems" | "allOf" | "anyOf" | "oneOf" => v.as_list().is_some_and(|items| {
+                    items
+                        .iter()
+                        .all(|sub| schema_is_fully_supported(sub, root, depth + 1))
+                }),
+                _ => false,
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// Whether *instance* validates against *branch* at all. Prefers this
+/// module's own [`is_valid`] directly on the *unresolved* branch (whose
+/// own `evaluate` already understands `$ref`, siblings included, exactly
+/// as Python's own `_validate_reference` applicator does) whenever
+/// [`schema_is_fully_supported`] judges the branch trustworthy; only
+/// then falls back to the `jsonschema` crate (format checking off,
+/// matching Python never validating `format` without an explicit
+/// checker) -- never the other way around, and never by compiling the
+/// branch as its own standalone document (issue #498's own orchestrator
+/// follow-up, finding N1: a `$ref` nested inside a branch, or a `$ref`
+/// with sibling keywords, used to be judged by a *freshly compiled*,
+/// branch-only validator that either couldn't resolve the ref at all or
+/// silently dropped the siblings).
 fn schema_accepts(branch: &Value, instance: &Value, root: &Value) -> bool {
+    if schema_is_fully_supported(branch, root, 0) {
+        return is_valid(branch, instance, root);
+    }
     let resolved = resolve_schema_refs(branch, root);
     let branch_json = crate::value_to_json(&resolved);
     let instance_json = crate::value_to_json(instance);
-    match jsonschema::validator_for(&branch_json) {
+    match jsonschema::options()
+        .should_validate_formats(false)
+        .build(&branch_json)
+    {
         Ok(validator) => validator.is_valid(&instance_json),
         Err(_) => false,
     }
@@ -808,9 +1494,16 @@ fn collect_branch_violations<'a>(
         let resolved = resolve_schema_refs(branch, root);
         let branch_json = crate::value_to_json(&resolved);
         let instance_json = crate::value_to_json(instance);
-        if let Ok(validator) = jsonschema::validator_for(&branch_json) {
+        if let Ok(validator) = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&branch_json)
+        {
             if let Err(err) = validator.validate(&instance_json) {
-                let message = crate::substitute_value_prefix(&err.instance, err.to_string());
+                // Not `crate::substitute_value_prefix` -- that's
+                // `core.document_check`'s own compile-time convention,
+                // never `core/prompt.py`'s own raw `e.message` (finding
+                // N10, same as `validate_prompt_schema`'s own fallback).
+                let message = err.to_string();
                 context.push(Violation {
                     kind: Kind::Fallback { message },
                     path: path.to_vec(),
@@ -999,6 +1692,38 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
             format!("{} is valid under each of {reprs}", instance.py_repr())
         }
         Kind::FalseSchema => format!("False schema does not allow {}", instance.py_repr()),
+        Kind::Not { not_schema } => {
+            format!(
+                "{} should not be valid under {}",
+                instance.py_repr(),
+                not_schema.py_repr()
+            )
+        }
+        Kind::DependentRequired { each, property } => format!(
+            "{} is a dependency of {}",
+            Value::Str(each.to_string()).py_repr(),
+            Value::Str(property.to_string()).py_repr()
+        ),
+        Kind::ContainsNone => format!(
+            "{} does not contain items matching the given schema",
+            instance.py_repr()
+        ),
+        Kind::MinContains {
+            min_contains,
+            matches,
+        } => format!(
+            "Too few items match the given schema (expected at least {min_contains} but only \
+             {matches} matched)"
+        ),
+        Kind::MaxContains { max_contains } => {
+            format!("Too many items match the given schema (expected at most {max_contains})")
+        }
+        Kind::ItemsFalse {
+            prefix,
+            extra,
+            item_word,
+            rest_repr,
+        } => format!("Expected at most {prefix} {item_word} but found {extra} extra: {rest_repr}"),
         Kind::Fallback { message } => message.clone(),
     }
 }
@@ -1013,4 +1738,70 @@ fn extras_msg(extras: &[&str]) -> (String, &'static str) {
         .join(", ");
     let verb = if extras.len() == 1 { "was" } else { "were" };
     (joined, verb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #498's own orchestrator follow-up, finding N11: the
+    /// brute-force `O(n^2)` `uniqueItems` check this module used to run
+    /// took several seconds on a 20,000-item array in a debug build --
+    /// unusable on anything realistic. [`py_uniq`]'s own hash-bucketed
+    /// fast path must stay well under a second even at a much larger
+    /// size.
+    #[test]
+    fn uniq_items_stays_fast_at_scale() {
+        let items: Vec<Value> = (0..50_000).map(|i| Value::from(i as i64)).collect();
+        let start = std::time::Instant::now();
+        assert!(py_uniq(&items));
+        assert!(
+            start.elapsed().as_secs() < 2,
+            "py_uniq(50_000 unique items) took {:?}",
+            start.elapsed()
+        );
+
+        let mut with_duplicate = items.clone();
+        with_duplicate.push(Value::from(1i64));
+        assert!(!py_uniq(&with_duplicate));
+    }
+
+    /// A `NaN` is never a duplicate of anything, including a `NaN` with
+    /// the exact same bit pattern (`py_equal`'s own rule, which a hash
+    /// key would otherwise violate -- [`uniq_key`]'s own doc comment).
+    #[test]
+    fn uniq_items_never_dedupes_nan() {
+        let items = vec![Value::Float(f64::NAN), Value::Float(f64::NAN)];
+        assert!(py_uniq(&items));
+    }
+
+    /// Issue #498's own orchestrator follow-up, finding N11: `anyOf`
+    /// branch validity used to compile a fresh `jsonschema`-crate
+    /// validator per branch per instance node -- `schema_accepts`'s own
+    /// engine-authority fast path (no crate compile at all for a fully
+    /// supported branch) must stay well under a second even with many
+    /// branches.
+    #[test]
+    fn any_of_with_many_branches_stays_fast() {
+        let mut branches = Vec::new();
+        for i in 0..2000 {
+            let mut schema = Dict::new();
+            schema.insert(key("const"), Value::from(i as i64));
+            branches.push(Value::Dict(schema));
+        }
+        let mut schema = Dict::new();
+        schema.insert(key("anyOf"), Value::List(branches));
+        let schema = Value::Dict(schema);
+        let instance = Value::from(1999i64);
+
+        let start = std::time::Instant::now();
+        let mut violations = Vec::new();
+        evaluate(&schema, &instance, &schema, &[], &mut violations);
+        assert!(violations.is_empty(), "the last branch should have matched");
+        assert!(
+            start.elapsed().as_secs() < 2,
+            "anyOf over 2000 branches took {:?}",
+            start.elapsed()
+        );
+    }
 }

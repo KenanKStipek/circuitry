@@ -451,6 +451,17 @@ async fn generate_with_fallbacks(
     let mut last_failure: Option<LastFailure> = None;
 
     for (adapter_name, model_name) in attempts {
+        // `run_tracked`'s own `RunCancelledBySignal` (a `BaseException`)
+        // fires at once and is never recorded as an attempt nor
+        // absorbed by `on_error` -- the same contract `exec/tool.rs`'s
+        // own cancellation check already has (orchestrator follow-up,
+        // finding N12). Checked before *every* fallback attempt, not
+        // just the first, so a token cancelled between two attempts
+        // (e.g. while an earlier one was still building/dispatching)
+        // stops the chain before the next one ever dispatches.
+        if token.is_set() {
+            return Err(HardStop::Refused(VmError::Cancelled));
+        }
         if is_unbuildable(adapter_name, run_ctx) {
             return Err(HardStop::Refused(VmError::Refused {
                 refusal: electricity_bytecode::Refusal {
@@ -514,11 +525,20 @@ async fn generate_with_fallbacks(
             json_schema: json_schema.cloned(),
         };
 
-        match adapter_holder
-            .as_ref()
-            .generate(model_name, prompt_sent, &generate_options, &call)
-            .await
-        {
+        // The backoff sleep and the limiter acquire already race
+        // `token.cancelled()` (this function's own caller); the
+        // dispatch itself didn't -- a real HTTP adapter would
+        // otherwise wait out Ctrl-C/SIGTERM for the whole call, up to
+        // its own timeout, and then record it as a failed attempt
+        // (orchestrator follow-up, finding N12). Dropping the
+        // `generate` future (what `select!` does to the losing branch)
+        // is what actually aborts an in-flight HTTP connection.
+        let generate_outcome = tokio::select! {
+            biased;
+            () = token.cancelled() => return Err(HardStop::Refused(VmError::Cancelled)),
+            result = adapter_holder.as_ref().generate(model_name, prompt_sent, &generate_options, &call) => result,
+        };
+        match generate_outcome {
             Err(err) => {
                 attempts_meta.push(
                     AttemptEntry {

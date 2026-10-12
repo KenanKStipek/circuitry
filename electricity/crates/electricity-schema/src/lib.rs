@@ -644,28 +644,103 @@ pub fn validate_prompt_schema(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
 ) -> PromptSchemaCheck {
+    engine::take_recursion_exceeded(); // clear any stale flag from a prior call on this thread
     let schema_json = value_to_json(schema);
-    let instance_json = value_to_json(instance);
-    let validator = match jsonschema::validator_for(&schema_json) {
-        Ok(validator) => validator,
-        Err(err) => return PromptSchemaCheck::SchemaError(err.to_string()),
+    // The schema's own well-formedness (`jsonschema.SchemaError`) is
+    // checked regardless of which side decides accept/reject below --
+    // `engine` never validates schema *structure* itself (e.g. a
+    // non-string/array `"type"`), only instances against one already
+    // assumed well-formed.
+    let crate_validator = jsonschema::options()
+        .should_validate_formats(false)
+        .build(&schema_json);
+    if let Err(err) = &crate_validator {
+        return PromptSchemaCheck::SchemaError(err.to_string());
+    }
+
+    let result =
+        if is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema, 0) {
+            // Ruling R6 (orchestrator follow-up): the engine is the
+            // accept/reject authority whenever it fully understands the
+            // schema, never the crate -- the crate's own `serde_json::
+            // Value` can't even represent a `NaN`/`Infinity` instance, its
+            // regex classes are ECMA/ASCII-narrower than Python's `re`, and
+            // (for non-2020-12 drafts only, which this branch never reaches)
+            // it validates `format` by default where Python never does.
+            let mut violations = Vec::new();
+            engine::evaluate(schema, instance, schema, &[], &mut violations);
+            match engine::best_match(&violations) {
+                None => PromptSchemaCheck::Valid,
+                Some(best) => PromptSchemaCheck::Invalid(engine::render(best)),
+            }
+        } else {
+            // The crate decides -- an unsupported keyword, or a pre-2020-12
+            // draft (`DESIGN.md` §13 names both as accepted, narrower gaps
+            // than trusting an engine that doesn't fully understand the
+            // schema at hand not to silently say "valid" instead). Text
+            // comes from the crate's own errors exclusively here, never a
+            // second opinion from `engine::evaluate` -- the schema has an
+            // unsupported keyword *somewhere*, so the engine's own
+            // violation list (built only from the keywords it does
+            // understand) can disagree with the crate's own `best_match`
+            // on *which* violation is most relevant, or miss the real one
+            // entirely (e.g. `unevaluatedProperties`, which the engine
+            // never implements at all).
+            let instance_json = value_to_json(instance);
+            let validator = crate_validator.expect("checked above");
+            if validator.is_valid(&instance_json) {
+                PromptSchemaCheck::Valid
+            } else {
+                match python_message::best_match(validator.iter_errors(&instance_json)) {
+                    None => PromptSchemaCheck::Valid,
+                    Some(err) => {
+                        // `core/prompt.py::_validate_schema`'s own
+                        // `f"Schema validation failed: {e.message}"`
+                        // always uses `jsonschema`'s raw `.message` -- the
+                        // `repr(instance) -> "value"` substitution belongs
+                        // to a different caller entirely (`core.
+                        // document_check._describe_schema_error`,
+                        // [`orchestration_errors`]/[`profile_errors`]'s own
+                        // compile-time convention), never this one
+                        // (orchestrator follow-up, finding N10).
+                        let message = python_message::python_message(&err, &schema_json)
+                            .unwrap_or_else(|| err.to_string());
+                        PromptSchemaCheck::Invalid(message)
+                    }
+                }
+            }
+        };
+
+    // N6 (orchestrator follow-up): a self-referencing `$ref` recurses
+    // forever in both `schema_is_fully_supported` and `evaluate` --
+    // caught by a depth budget rather than a stack overflow, but still
+    // not a real verdict, so whatever `result` above computed (likely
+    // nonsense, built from a truncated walk) is discarded in favour of
+    // the same shape a real, uncaught Python `RecursionError` reaches
+    // `core/prompt.py` as: a generic, non-retryable failure, never
+    // `schema_invalid`.
+    if engine::take_recursion_exceeded() {
+        return PromptSchemaCheck::SchemaError(
+            "maximum recursion depth exceeded while calling a Python object".to_string(),
+        );
+    }
+    result
+}
+
+/// Whether *schema*'s own `$schema` (if any) names Draft 2020-12 --
+/// [`validate_prompt_schema`]'s own engine-authority gate never applies
+/// to any other draft (`DESIGN.md` §13: a draft ≤7 schema stays under
+/// crate authority unconditionally, `ignore_ref_siblings` quirk and all).
+fn is_2020_12_or_unset(schema: &electricity_value::Value) -> bool {
+    let Some(declared) = schema
+        .as_dict()
+        .and_then(|d| d.get(&electricity_value::Value::Str("$schema".to_string())))
+    else {
+        return true;
     };
-    if validator.is_valid(&instance_json) {
-        return PromptSchemaCheck::Valid;
-    }
-    let mut violations = Vec::new();
-    engine::evaluate(schema, instance, schema, &[], &mut violations);
-    if let Some(best) = engine::best_match(&violations) {
-        return PromptSchemaCheck::Invalid(engine::render(best));
-    }
-    match python_message::best_match(validator.iter_errors(&instance_json)) {
-        None => PromptSchemaCheck::Valid,
-        Some(err) => {
-            let message = python_message::python_message(&err, &schema_json)
-                .unwrap_or_else(|| substitute_value_prefix(&err.instance, err.to_string()));
-            PromptSchemaCheck::Invalid(message)
-        }
-    }
+    declared
+        .as_str()
+        .is_some_and(|s| s.starts_with("https://json-schema.org/draft/2020-12/schema"))
 }
 
 /// The inverse of [`value_to_json`] -- every ordinary JSON shape

@@ -508,6 +508,7 @@ dependencies = [
  "electricity-value",
  "fancy-regex",
  "jsonschema",
+ "num-bigint 0.5.1",
  "serde",
  "serde_json",
 ]

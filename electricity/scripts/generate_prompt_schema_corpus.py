@@ -253,6 +253,229 @@ def cases() -> list[dict]:
         _case('probe_schema3_c9', {'enum': [{'b': 1, 'a': 2}]}, {'c': 3}),
         _case('probe_schema3_c10', {'type': 'integer'}, 1180591620717411303424),
         _case('probe_schema3_c11', {'type': 'array', 'items': {'type': 'object', 'properties': {'n': {'type': 'integer'}, 'm': {'type': 'string'}}, 'required': ['n']}}, [{'m': 1}, {'n': 'x'}]),
+        # Orchestrator follow-up (round 2): valid-side cases where the
+        # `jsonschema` Rust crate and real Python disagree -- the engine
+        # must be the one deciding "valid" here, never the crate (ruling
+        # R6): an integral, finite float satisfies `type: integer`
+        # (Draft 6+'s own widened checker); a combining mark alone never
+        # satisfies `\w`; an Arabic-Indic digit satisfies `\d`; `NaN`/
+        # `Infinity` satisfy `type: number` (both real Python floats);
+        # `True`/`1` and `1`/`1.0` are each other's own `jsonschema`
+        # equality classes in opposite ways for `enum`/`uniqueItems`.
+        _case("valid_integral_float_is_integer", {"type": "integer"}, 3.0),
+        _case(
+            "valid_combining_mark_alone_rejected_by_w",
+            {"pattern": "^\\w+$"},
+            "e\u0301",
+        ),
+        _case("valid_arabic_indic_digit_matches_d", {"pattern": "^\\d+$"}, "\u0661\u0662"),
+        _case("valid_nan_is_type_number", {"type": "number"}, float("nan")),
+        _case("valid_infinity_is_type_number", {"type": "number"}, float("inf")),
+        _case(
+            "bool_never_equals_one_in_enum",
+            {"enum": [1]},
+            True,
+        ),
+        _case(
+            "one_and_one_point_oh_are_the_same_enum_member",
+            {"enum": [1.0]},
+            1,
+        ),
+        _case(
+            "unique_items_one_and_true_are_distinct",
+            {"uniqueItems": True},
+            [1, True],
+        ),
+        _case(
+            "unique_items_one_and_one_point_oh_are_the_same",
+            {"uniqueItems": True},
+            [1, 1.0],
+        ),
+        _case(
+            "multiple_of_big_int_exact",
+            {"type": "integer", "multipleOf": 3},
+            100000000000000001,
+        ),
+        _case(
+            "prefix_items_then_items_past_prefix",
+            {"prefixItems": [{"type": "string"}], "items": {"type": "integer"}},
+            ["s", 2],
+        ),
+        _case(
+            "items_false_rejects_any_extra",
+            {"items": False},
+            [1],
+        ),
+        _case(
+            "all_of_collects_every_subschema_violation",
+            {"allOf": [{"required": ["b"]}], "properties": {"a": {"type": "string"}}},
+            {"a": 1},
+        ),
+        _case(
+            "not_rejects_a_matching_instance",
+            {"not": {"type": "string"}},
+            "s",
+        ),
+        _case(
+            "if_then_applies_only_when_if_matches",
+            {
+                "if": {"properties": {"k": {"const": 1}}},
+                "then": {"required": ["x"]},
+                "properties": {"a": {"type": "string"}},
+            },
+            {"k": 1, "a": 5},
+        ),
+        _case(
+            "dependent_required_names_the_missing_dependency",
+            {"dependentRequired": {"k": ["b"]}},
+            {"k": 1},
+        ),
+        _case(
+            "contains_with_no_match_at_all",
+            {"contains": {"type": "integer"}},
+            ["a"],
+        ),
+        _case(
+            "property_names_rejects_a_long_key",
+            {"propertyNames": {"maxLength": 2}},
+            {"abc": 1},
+        ),
+        _case(
+            "additional_properties_as_subschema_descends_by_key",
+            {"properties": {"a": {"type": "string"}}, "additionalProperties": {"type": "integer"}},
+            {"a": "x", "z": "y"},
+        ),
+        _case(
+            "pattern_properties_empty_list_with_additional_false",
+            {"patternProperties": {}, "additionalProperties": False},
+            {"x": 1},
+        ),
+        _case(
+            "boolean_schema_false_rejects_everything",
+            {"properties": {"z": False, "a": {"type": "string"}}},
+            {"z": 1, "a": 5},
+        ),
+        _case(
+            "ref_to_defs_resolves_the_target_schema",
+            {"$defs": {"s": {"type": "string"}}, "properties": {"z": {"$ref": "#/$defs/s"}, "a": {"type": "string"}}},
+            {"z": 5, "a": 6},
+        ),
+        _case(
+            "nested_ref_inside_an_anyof_branch",
+            {
+                "$defs": {"name": {"type": "string"}},
+                "properties": {
+                    "a": {"type": "string"},
+                    "z": {
+                        "anyOf": [
+                            {"type": "object", "properties": {"n": {"$ref": "#/$defs/name"}}},
+                            {"type": "null"},
+                        ]
+                    },
+                },
+            },
+            {"a": 1, "z": {"n": "ok"}},
+        ),
+        _case(
+            "ref_with_sibling_keywords_inside_an_anyof_branch",
+            {
+                "$defs": {"obj": {"type": "object"}},
+                "properties": {
+                    "a": {"type": "string"},
+                    "z": {"anyOf": [{"$ref": "#/$defs/obj", "required": ["k"]}, {"type": "null"}]},
+                },
+            },
+            {"a": "x", "z": {}},
+        ),
+        _case(
+            "one_of_multiple_valid_first_match_goes_last_numeric",
+            {"oneOf": [{"type": "number"}, {"minimum": 0}]},
+            5,
+        ),
+        _case('probe_schema4_c0', {'properties': {'z': {'type': 'integer'}, 'a': {'type': 'string'}}}, {'z': 1.0, 'a': 5}),
+        _case('probe_schema4_c1', {'properties': {'z': {'enum': [1]}, 'a': {'type': 'string'}}}, {'z': 1.0, 'a': 5}),
+        _case('probe_schema4_c2', {'properties': {'z': {'enum': [1]}, 'a': {'type': 'string'}}}, {'z': True, 'a': 5}),
+        _case('probe_schema4_c3', {'properties': {'z': {'const': 1}, 'a': {'type': 'string'}}}, {'z': 1.0, 'a': 5}),
+        _case('probe_schema4_c4', {'properties': {'z': {'uniqueItems': True}, 'a': {'type': 'string'}}}, {'z': [1, True], 'a': 5}),
+        _case('probe_schema4_c5', {'properties': {'z': {'uniqueItems': True}, 'a': {'type': 'string'}}}, {'z': [1, 1.0], 'a': 5}),
+        _case('probe_schema4_c6', {'properties': {'z': {'uniqueItems': True}, 'a': {'type': 'string'}}}, {'z': [{'a': 1, 'b': 2}, {'b': 2, 'a': 1}], 'a': 5}),
+        _case('probe_schema4_c7', {'properties': {'z': {'uniqueItems': True}, 'a': {'type': 'string'}}}, {'z': [[1], [True]], 'a': 5}),
+        _case('probe_schema4_c8', {'properties': {'z': {'minLength': 2}, 'a': {'type': 'string'}}}, {'z': '👍', 'a': 5}),
+        _case('probe_schema4_c9', {'properties': {'z': {'minLength': 2}, 'a': {'type': 'string'}}}, {'z': 'é', 'a': 5}),
+        _case('probe_schema4_c10', {'properties': {'z': {'multipleOf': 0.1}, 'a': {'type': 'string'}}}, {'z': 0.3, 'a': 5}),
+        _case('probe_schema4_c11', {'properties': {'z': {'multipleOf': 2.5}, 'a': {'type': 'string'}}}, {'z': 7.5, 'a': 5}),
+        _case('probe_schema4_c12', {'properties': {'z': {'multipleOf': 3}, 'a': {'type': 'string'}}}, {'z': 9.0, 'a': 5}),
+        _case('probe_schema4_c13', {'properties': {'z': {'pattern': '^\\w+$'}, 'a': {'type': 'string'}}}, {'z': 'naïve', 'a': 5}),
+        _case('probe_schema4_c14', {'properties': {'z': {'pattern': '^\\d+$'}, 'a': {'type': 'string'}}}, {'z': '١٢', 'a': 5}),
+        _case('probe_schema4_c15', {'type': 'integer'}, 1.0),
+        _case('probe_schema4_c16', {'properties': {'z': {'pattern': '^\\w+$'}}}, {'z': 'naïve'}),
+        _case('probe_schema4_c17', {'properties': {'z': {'pattern': '^\\d+$'}}}, {'z': '١٢'}),
+        _case('probe_schema4_c18', {'type': 'number'}, float("nan")),
+        _case('probe_schema4_c19', {'type': 'number'}, float("inf")),
+        _case('probe_schema4_c20', {'maximum': 10}, float("inf")),
+        _case('probe_schema4_c21', {'type': 'integer', 'multipleOf': 3}, 1180591620717411303424),
+        _case('probe_schema4_c22', {'$schema': 'http://json-schema.org/draft-07/schema#', 'properties': {'e': {'format': 'email'}}}, {'e': 'not-an-email'}),
+        _case('probe_schema4_c23', {'properties': {'e': {'format': 'email'}}}, {'e': 'not-an-email'}),
+        _case('probe_schema4_c24', {'pattern': '^(?P<x>a)+$'}, 'aa'),
+        _case('probe_schema4_c25', {'properties': {'a': {'type': 'string'}}, 'additionalProperties': {'type': 'integer'}}, {'a': 5, 'z': 'x'}),
+        _case('probe_schema4_c26', {'allOf': [{'required': ['b']}], 'properties': {'a': {'type': 'string'}}}, {'a': 1}),
+        _case('probe_schema4_c27', {'properties': {'z': {'not': {'type': 'string'}}, 'a': {'type': 'string'}}}, {'z': 's', 'a': 5}),
+        _case('probe_schema4_c28', {'if': {'properties': {'k': {'const': 1}}}, 'then': {'required': ['x']}, 'properties': {'a': {'type': 'string'}}}, {'k': 1, 'a': 5}),
+        _case('probe_schema4_c29', {'dependentRequired': {'k': ['b']}, 'properties': {'z': {'type': 'string'}}}, {'k': 1, 'z': 5}),
+        _case('probe_schema4_c30', {'properties': {'a': {'items': {'type': 'string'}}, 't': {'prefixItems': [{'type': 'string'}], 'items': {'type': 'integer'}}}}, {'a': [5], 't': ['s', 2]}),
+        _case('probe_schema4_c31', {'$schema': 'http://json-schema.org/draft-07/schema#', 'properties': {'z': {'items': [{'type': 'string'}]}, 'a': {'items': {'type': 'string'}}}}, {'z': [1], 'a': [5]}),
+        _case('probe_schema4_c32', {'properties': {'z': False, 'a': {'type': 'string'}}}, {'z': 1, 'a': 5}),
+        _case('probe_schema4_c33', {'$defs': {'s': {'type': 'string'}}, 'properties': {'z': {'$ref': '#/$defs/s'}, 'a': {'type': 'string'}}}, {'z': 5, 'a': 6}),
+        _case('probe_schema4_c34', {'not': {'type': 'string'}}, 's'),
+        _case('probe_schema4_c35', {'contains': {'type': 'integer'}}, ['a']),
+        _case('probe_schema4_c36', {'propertyNames': {'maxLength': 2}}, {'abc': 1}),
+        _case('probe_schema4_c37', {'items': False}, [1]),
+        _case('probe_schema4_c38', {'anyOf': [{'type': 'object', 'required': ['a']}, {'type': 'string'}]}, {}),
+        _case('probe_schema4_c39', {'oneOf': [{'type': 'number'}, {'type': 'integer'}]}, 5),
+        _case('probe_schema4_c40', {'properties': {'z': {'anyOf': [{'type': 'string', 'minLength': 3}, {'type': 'null'}]}, 'a': {'type': 'string'}}}, {'z': 'ab', 'a': 5}),
+        _case('probe_schema4_c41', {'anyOf': [{'anyOf': [{'type': 'object', 'required': ['q']}, {'type': 'array'}]}, {'type': 'string'}]}, {}),
+        _case('probe_schema4_c42', {'oneOf': [{'type': 'object', 'properties': {'k': {'type': 'string'}}, 'required': ['k']}, {'type': 'object', 'required': ['j']}]}, {'k': 1}),
+        _case('probe_schema4_c43', {'anyOf': [{'not': {'type': 'object'}}, {'type': 'string'}]}, {}),
+        _case('probe_schema4_c44', {'minProperties': 1}, {}),
+        _case('probe_schema4_c45', {'maxProperties': 0}, {'a': 1}),
+        _case('probe_schema4_c46', {'maxProperties': 1}, {'a': 1, 'b': 2}),
+        _case('probe_schema4_c47', {'minItems': 1}, []),
+        _case('probe_schema4_c48', {'maxItems': 0}, [1]),
+        _case('probe_schema4_c49', {'exclusiveMinimum': 3}, 3),
+        _case('probe_schema4_c50', {'exclusiveMaximum': 3}, 3.0),
+        _case('probe_schema4_c51', {'type': 'string'}, 1e+16),
+        _case('probe_schema4_c52', {'type': 'string'}, 1e-05),
+        _case('probe_schema4_c53', {'type': 'string'}, 0.30000000000000004),
+        _case('probe_schema4_c54', {'type': 'string'}, -0.0),
+        _case('probe_schema4_c55', {'type': 'string'}, 1.5e+300),
+        _case('probe_schema4_c56', {'type': 'string'}, 1180591620717411303424),
+        _case('probe_schema4_c57', {'type': 'integer'}, 'it\'s "q"'),
+        _case('probe_schema4_c58', {'type': 'integer'}, '\x07 \u2028 \u200b \x7f 😀'),
+        _case('probe_schema4_c59', {'const': {'a': [True, None, 1.0]}}, {}),
+        _case('probe_schema4_c60', {'items': {'type': 'string'}}, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        _case('probe_schema4_c61', {'type': ['integer', 'string']}, 1.5),
+        _case('probe_schema4_c62', {'type': 'number'}, True),
+        _case('probe_schema5_c0', {'$defs': {'name': {'type': 'string'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'type': 'object', 'properties': {'n': {'$ref': '#/$defs/name'}}}, {'type': 'null'}]}}}, {'a': 1, 'z': {'n': 'ok'}}),
+        _case('probe_schema5_c1', {'$defs': {'obj': {'type': 'object'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'$ref': '#/$defs/obj', 'required': ['k']}, {'type': 'null'}]}}}, {'a': 1, 'z': {}}),
+        # Not pinned here (`unevaluatedProperties`, issue #498's own
+        # orchestrator follow-up, finding N2): not implemented by the
+        # engine, so the `jsonschema` crate decides and renders this
+        # one -- and the crate's own `unevaluatedProperties` keyword
+        # has a *second*, independent bug beyond this crate's own
+        # control: it doesn't recognize a sibling `properties` key as
+        # evaluating anything at all, so it lists every instance key
+        # (`'a', 'zz'`) as unevaluated instead of just the genuinely
+        # extra one (`'zz'`), per Python's own `jsonschema`. Recorded
+        # in `DESIGN.md` §13 instead of pinned here, since the text
+        # this crate's own `unevaluatedProperties` produces is already
+        # known wrong, not merely untranslated.
+        _case('probe_schema5_c3', {'properties': {'b': {'type': 'string'}, 'z': {'pattern': '^\\w+$'}}}, {'b': 1, 'z': 'é'}),
+        _case('probe_schema5_c4', {'properties': {'b': {'type': 'string'}, 'z': {'pattern': '^\\s$'}}}, {'b': 1, 'z': '\x1c'}),
+        _case('probe_schema5_c5', {'$schema': 'http://json-schema.org/draft-07/schema#', 'definitions': {'s': {'type': 'string'}}, 'properties': {'a': {'enum': ['x'], '$ref': '#/definitions/s'}}}, {'a': 5}),
+        _case('probe_schema5_c6', {'properties': {'a': {'type': 'string'}, 'z': {'multipleOf': 3}}}, {'a': 1, 'z': 100000000000000001}),
+        _case('probe_schema5_c7', {'properties': {'a': {'type': 'string'}, 'z': {'multipleOf': 3}}}, {'a': 1, 'z': 1e+17}),
+        _case('probe_schema5_c8', {'patternProperties': {}, 'additionalProperties': False}, {'x': 1}),
+        _case('probe_schema5_c9', {'properties': {'a': {'type': 'string'}, 'z': {'maximum': 9007199254740992}}}, {'a': 1, 'z': 9007199254740993}),
     ]
 
 
