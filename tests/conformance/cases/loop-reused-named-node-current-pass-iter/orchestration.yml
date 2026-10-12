@@ -1,0 +1,28 @@
+name: loop-reused-named-node-current-pass-iter
+effects:
+  - type: tool
+    name: outer_items
+    provider: json
+    params: {mode: parse, input: "[0, 1]"}
+  - type: tool
+    name: inner_items
+    provider: json
+    params: {mode: parse, input: "[100, 200]"}
+  - type: loop
+    each: {in: "prime.outer_items.value", as: "ox"}
+    body:
+      - type: loop
+        name: inner
+        each: {in: "prime.inner_items.value", as: "item"}
+        body:
+          - type: tool
+            name: x
+            provider: json
+            params: {mode: parse, input: '{"v": "{{ox}}-{{item}}"}'}
+          - type: tool
+            name: y
+            provider: json
+            params:
+              mode: stringify
+              input:
+                self_iter1_x: "{{prime.inner.iter_1.x.value.v}}"

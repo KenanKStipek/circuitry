@@ -10,7 +10,10 @@
 
 use super::dynamic::now_iso;
 use super::{BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err};
-use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError};
+use crate::{
+    CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
+    node_from_entries,
+};
 use electricity_bytecode::{Condition, NodeKind, OnError, Op, Region};
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -450,19 +453,27 @@ fn local_writes(
 /// Every entry of *chain*'s own top-level map, [`Slot`]s rather than
 /// resolved values -- [`super::live_ctx`]'s own merge loop, stopping one
 /// level short of turning each entry into an owned [`Value`]. A
-/// [`CtxSource::Live`] entry's own map is borrowed and cloned directly
-/// (a [`Slot::Node`] clone is an `Rc` clone: the live node itself, not a
-/// copy of its contents); a [`CtxSource::Frozen`] entry (a tree's own
-/// one-time snapshot, DESIGN.md §5.5 -- already a plain `Value` with
-/// nothing further live underneath it to preserve) has its own
-/// top-level dict entries wrapped as opaque [`Slot::Value`] leaves.
+/// [`CtxSource::Live`] entry's own map is flattened through
+/// [`crate::store::Node::flat_entries`] -- not a plain `.iter()`/Deref
+/// read of the node's own direct entries, which would silently drop
+/// every key reachable only through a [`crate::store::Node::fallback`]
+/// (issue #501 review finding 1: a loop body's `ctx_chain` can now be
+/// one of `exec::loop_`'s own overlay nodes, carrying only that pass's/
+/// step's own local keys directly, with everything else -- `item`,
+/// `input`, `prime`'s own sibling entries -- one or more fallback hops
+/// down) -- a [`Slot::Node`] clone inside that flattened map is still an
+/// `Rc` clone (the live node itself, not a copy of its contents); a
+/// [`CtxSource::Frozen`] entry (a tree's own one-time snapshot,
+/// DESIGN.md §5.5 -- already a plain `Value` with nothing further live
+/// underneath it to preserve) has its own top-level dict entries
+/// wrapped as opaque [`Slot::Value`] leaves.
 fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
     let mut merged: IndexMap<Value, Slot> = IndexMap::new();
     for source in chain {
         match source {
             CtxSource::Live(node) => {
-                for (k, v) in node.borrow().iter() {
-                    merged.insert(k.clone(), v.clone());
+                for (k, v) in node.borrow().flat_entries() {
+                    merged.insert(k, v);
                 }
             }
             CtxSource::Frozen(Value::Dict(map)) => {
@@ -478,10 +489,13 @@ fn chain_slots(chain: &CtxChain) -> IndexMap<Value, Slot> {
 
 /// *node*'s own top-level map as [`Slot`]s, or an empty one if *node*
 /// isn't a tracked [`Slot::Node`] (nor a plain `Value::Dict` leaf) --
-/// [`build_overlay`]'s own `parent = ctx.get("prime")` read.
+/// [`build_overlay`]'s own `parent = ctx.get("prime")` read. Uses
+/// [`crate::store::Node::flat_entries`] for the same reason
+/// [`chain_slots`] does: the `prime` node resolved out of *slot* can
+/// itself be one of `exec::loop_`'s overlay nodes.
 fn dict_slots(slot: Option<&Slot>) -> IndexMap<Value, Slot> {
     match slot {
-        Some(Slot::Node(node)) => node.borrow().clone(),
+        Some(Slot::Node(node)) => node.borrow().flat_entries(),
         Some(Slot::Value(Value::Dict(map))) => map
             .iter()
             .map(|(k, v)| (k.clone(), Slot::Value(v.clone())))
@@ -529,10 +543,7 @@ fn build_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
     for (k, v) in local {
         prime.insert(k.clone(), v.clone());
     }
-    top.insert(
-        prime_key,
-        Slot::Node(std::rc::Rc::new(std::cell::RefCell::new(prime))),
-    );
+    top.insert(prime_key, Slot::Node(node_from_entries(prime)));
 
-    std::rc::Rc::new(std::cell::RefCell::new(top))
+    node_from_entries(top)
 }

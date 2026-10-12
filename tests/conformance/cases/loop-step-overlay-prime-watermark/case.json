@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #501's third review (P1, step_overlay's own prime watermark)",
+  "description": "A container (`if`) step's own skeleton node (ensure_dict'd before it ever renders its own params) must stay invisible to its own inner step's `{{prime.c...}}`/`{{#prime.c}}` reads on pass 0, before `c` itself has written anything. A named loop (`L`) that is the *second* step of an unnamed outer loop must not show `prime.L.meta` to its own first-pass body before `L` itself has run -- step_overlay's own watermark on `prime_fallback` must hide both, matching core/scope.py::scope_ctx's per-step dict(ctx['prime']) freeze.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

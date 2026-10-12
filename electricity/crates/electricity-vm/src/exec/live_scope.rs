@@ -396,7 +396,6 @@ mod differential_tests {
     use crate::params::ParamsCtx;
     use electricity_template::{PlainCtx, ScopeRoot, render_template, render_template_with_root};
     use indexmap::IndexMap;
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     fn k(s: &str) -> Value {
@@ -489,7 +488,7 @@ mod differential_tests {
         }
         vec![
             CtxSource::Live(Rc::clone(&store.root)),
-            CtxSource::Live(Rc::new(RefCell::new(overlay))),
+            CtxSource::Live(crate::node_from_entries(overlay)),
         ]
     }
 

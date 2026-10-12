@@ -1,0 +1,46 @@
+name: loop-step-overlay-prime-watermark
+effects:
+  - type: tool
+    name: items
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    each: {in: "prime.items.value", as: it}
+    body:
+      - type: tool
+        name: a
+        provider: json
+        params: {mode: parse, input: '{"v": "{{it}}"}'}
+      - type: if
+        name: c
+        if: {mode: cel, expr: "true"}
+        then:
+          - type: tool
+            name: inner
+            provider: json
+            params:
+              mode: stringify
+              input:
+                c_inner: "{{prime.c.inner.value}}"
+                c_has: "{{#prime.c}}yes{{/prime.c}}"
+                a: "{{prime.a.value.v}}"
+  - type: loop
+    each: {in: "prime.items.value", as: o}
+    body:
+      - type: tool
+        name: first
+        provider: json
+        params: {mode: parse, input: '{"o": "{{o}}"}'}
+      - type: loop
+        name: L
+        each: {in: "prime.items.value", as: it}
+        body:
+          - type: tool
+            name: x
+            provider: json
+            params:
+              mode: stringify
+              input:
+                L_iter0: "{{prime.L.iter_0.x.value}}"
+                L_meta: "{{#prime.L.meta}}has-meta{{/prime.L.meta}}"
+                prev: "{{prime.L.prev.x.value}}"

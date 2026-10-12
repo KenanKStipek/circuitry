@@ -1172,24 +1172,22 @@ Model-mode condition/`expect:` (unreachable until lane G2), and `--out`/`--live-
 `Store::saved`. `electricity_value::Value` itself is untouched — the design-1 alternative this issue's
 body named (Rc-shared `Dict`/`List` children) stays unneeded for this.
 
-**Chain `each` stays above the truly-linear ≈4x bound — confirmed, not fixed, in this lane (review
-finding 5).** `exec::loop_::with_prev_overlay` (a named, chain-flow loop's own `prime.<loop>.prev`
-overlay, rebuilt fresh every pass once there is a previous completed pass to show) calls `dict_slots`
-on the loop's own live node (`prime.<loop>`) to build its own detached replacement — an `IndexMap`
-`.clone()` of *every* top-level entry already written there, every `iter_<K>` for `K < N` included,
-so this one call is O(N) on pass N, the same shape `live_ctx` had before this lane, one level
-deeper. Confirmed
-by reading, not measured indirectly: `dict_slots(prime.get(&loop_key))` is exactly `node.borrow()
-.clone()` on the tracked node holding every earlier pass's own `iter_<K>` entry. A real fix needs the
-detached replacement to defer to the live node for any key it doesn't itself carry, instead of
-copying every key forward — the same per-node overlay/fallback concept `exec::live_scope` gives the
-*top* of a `CtxChain`, one level further in, where nothing in this crate's data model
-(`NodeRef`/`Slot`, `electricity-value`'s own `IndexMap`-backed `Dict`) supports it today. That is a
-shared-type change (`Slot`/`NodeRef` are read by every crate that touches a `Store`), the same scope
-`live_ctx`'s own "design 1" alternative was — outside this lane's own footprint, left as a follow-up
-rather than attempted here. The existing 15x ceiling (headroom over today's own ≈7-12x, machine-noise
-dependent) still catches a regression back toward the old, fully quadratic ≈18-24x shape; it is not
-retightened in this PR.
+**Chain `each` and tree `each` fixed to the same truly-linear ≈4x bound, in issue #484/#501.**
+`exec::loop_::with_prev_overlay` no longer clones the loop's own live node's whole top-level map into
+a fresh `prime.<loop>.prev` overlay every pass: it layers `prev` on a one-entry node with the real
+node as its own `Node::fallback` (`store.rs`), resolved lazily by `Store::peek`/`Store::snapshot`
+exactly like any other live read. The current pass's own not-yet-created `iter_<N>` stays out of that
+fallback (`Node::hidden`) unless the real node already carried it from an earlier run through the
+same node — a named loop reused inside an unnamed outer loop, or `--state`-resumed persisted state —
+since `core/loop.py::LoopRuntime._with_prev`'s own `dict(own_node)` copy shows exactly that, new or
+old. A body step's own view of `prime` (`exec::loop_::step_overlay`) is watermarked to the real
+`prime` node's own entry count as of that step's own build time (`Node::watermark`), so a *later*
+sibling's own in-progress skeleton node (`ensure_dict`'d before it ever renders its own params) never
+leaks in one step early — the same one-time freeze `core/scope.py::scope_ctx`'s own
+`dict(ctx["prime"])` takes after every step, not only a loop's own `_with_prev`. `plain_overlay`/
+`step_overlay` also stopped re-flattening the *enclosing* scope's own top-level map fresh on every
+pass/step, the separate cost behind tree `each`'s own growth. `tests/loop_perf.rs`'s ceilings for
+chain/tree `each` tightened from 15x to 8x, matching `while`'s own bound, once all of this landed.
 
 ### 6.10 Run-level state (`runtime.last_run`, `effective_settings`, `plugins`)
 

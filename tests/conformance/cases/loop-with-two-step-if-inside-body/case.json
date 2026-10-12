@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #501 review finding 1",
+  "description": "A named chain each loop whose if has two then steps: the second (`b`) must still see the loop's own `item`, an earlier sibling's `prime.first`, the branch's own earlier sibling `prime.a`, and `prime.shots.prev` -- not just the first (`a`) branch step.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
