@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #516 (M1-K2): a prompt naming its own model",
+  "description": "An explicit model: band is still recorded (routing is on, scored), model_reason: \"explicit\", model unchanged -- the router defers to an explicit choice by default (respect_explicit: true).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

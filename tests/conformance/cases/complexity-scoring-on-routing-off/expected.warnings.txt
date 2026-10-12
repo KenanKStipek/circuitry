@@ -1,0 +1,2 @@
+WARNING: prompt 'ask_template': adapter 'scripted' ignored: max_tokens
+WARNING: prompt 'ask_messages': adapter 'scripted' ignored: messages (roles flattened into one prompt)

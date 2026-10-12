@@ -86,7 +86,7 @@ fn push_warning(store: &Store, meta_node: &NodeRef, name: &str, warning: String)
     set_leaf(store, meta_node, "warnings", Value::List(current));
 }
 
-fn role_str(role: Role) -> &'static str {
+pub(crate) fn role_str(role: Role) -> &'static str {
     match role {
         Role::System => "system",
         Role::User => "user",
@@ -95,7 +95,7 @@ fn role_str(role: Role) -> &'static str {
     }
 }
 
-fn prompt_type_str(prompt_type: PromptType) -> &'static str {
+pub(crate) fn prompt_type_str(prompt_type: PromptType) -> &'static str {
     match prompt_type {
         PromptType::Text => "text",
         PromptType::Json => "json",
@@ -111,7 +111,7 @@ fn prompt_type_str(prompt_type: PromptType) -> &'static str {
 /// absent (`effects::PromptOp::inputs`/`model_params`'s own doc
 /// comment: the compiler only ever emits `ParamNode::Literal` for
 /// either, never a `{from:}`/Mustache leaf).
-fn raw_dict(node: &Option<ParamNode>) -> Option<&Dict> {
+pub(crate) fn raw_dict(node: &Option<ParamNode>) -> Option<&Dict> {
     match node {
         Some(ParamNode::Literal(Value::Dict(dict))) => Some(dict),
         _ => None,
@@ -772,14 +772,15 @@ pub(crate) async fn execute_prompt(
     // falls back to the run's own default model, `model_reason:
     // "default"`.
     let explicit_model = prompt.model.as_deref().filter(|m| !m.is_empty());
-    let resolved_model = explicit_model
+    let mut resolved_model = explicit_model
         .map(str::to_string)
         .unwrap_or_else(|| run_ctx.model.to_string());
-    let model_reason = if explicit_model.is_some() {
+    let mut model_reason = if explicit_model.is_some() {
         "explicit"
     } else {
         "default"
-    };
+    }
+    .to_string();
 
     set_leaf(store, &meta_node, "created_at", now_iso());
     set_leaf(store, &meta_node, "completed_at", Value::None);
@@ -799,7 +800,7 @@ pub(crate) async fn execute_prompt(
         store,
         &meta_node,
         "model_reason",
-        Value::Str(model_reason.to_string()),
+        Value::Str(model_reason.clone()),
     );
     set_leaf(
         store,
@@ -834,12 +835,39 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
-    // K2's own call-site placeholder: `_score_and_route` runs here in
-    // Python (`prompt.py:546-556`), right after `meta.waiting_for` is
-    // set and before `effect_start` fires, writing `meta.complexity`
-    // and (on a routed model) overriding `resolved_model`/`model_reason:
-    // "router"`. Out of scope for this lane (issue #498 ruling 2) --
-    // `meta.complexity` is simply never written.
+    // `_score_and_route` (`prompt.py:546-556`, issue #516/M1-K2), right
+    // after `meta.waiting_for` is set and before `effect_start` fires:
+    // scores the effect when scoring is on, and may replace
+    // `resolved_model`/`model_reason` with the router's (or a pin's)
+    // choice. The `?` here only ever carries the unknown-pinned-band
+    // `ValueError` (§3 finding 7) -- raised before `effect_start`, so
+    // no start/complete pair fires and `on_error` never sees it.
+    let (complexity_meta, routed_model) = crate::complexity::score_and_route(
+        op,
+        prompt,
+        &prompt_sent,
+        frame.display_depth(),
+        run_ctx,
+    )?;
+    if let Some(complexity_meta) = complexity_meta {
+        set_leaf(store, &meta_node, "complexity", complexity_meta);
+    }
+    if let Some(routed) = routed_model {
+        resolved_model = routed;
+        model_reason = "router".to_string();
+        set_leaf(
+            store,
+            &meta_node,
+            "model",
+            Value::Str(resolved_model.clone()),
+        );
+        set_leaf(
+            store,
+            &meta_node,
+            "model_reason",
+            Value::Str(model_reason.clone()),
+        );
+    }
     observer.write();
 
     let effect_path = frame.effect_path(&op.path);
@@ -1290,7 +1318,6 @@ mod tests {
             orchestration_dir: Path::new("."),
             declared_prompts,
             effect_names,
-            display_depth: 0,
             supported: electricity_bytecode::Supported::m0(&[]),
         }
     }

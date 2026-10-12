@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #516 (M1-K2): two prompts landing in different routing bands",
+  "description": "short_one scores into the named \"low\" band (model-small); long_one scores into the unnamed catch-all band, whose model equals the run default -- meta.model, model_reason: \"router\", fallback_attempts[].model, band.{name,model} (including name: \"\" for the unnamed band), and effective_settings.sources.model.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

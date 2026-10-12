@@ -1,0 +1,2 @@
+WARNING: Complexity scoring failed for prompt 'ask'; the effect will run without a recorded score
+WARNING: prompt 'ask': adapter 'scripted' ignored: params (num_predict)
