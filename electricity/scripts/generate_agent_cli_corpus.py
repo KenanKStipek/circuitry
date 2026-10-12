@@ -24,7 +24,6 @@ Usage: python3 generate_agent_cli_corpus.py [--check]
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import subprocess
 import sys
@@ -160,7 +159,7 @@ def _child_env_cases() -> list[dict[str, Any]]:
         {},
     ]
     unset_envs: list[list[str]] = [
-        list(("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")),
+        ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
         [],
         ["MY_VAR"],
     ]
@@ -201,7 +200,7 @@ def _claude_case(
 def _parse_claude_output_cases() -> list[dict[str, Any]]:
     array_schema = {"type": "array", "items": {"type": "integer"}}
     long_non_ascii = "\u00e9rreur " * 400
-    cases = [
+    return [
         _claude_case(0, json.dumps({"result": "hello", "is_error": False})),
         _claude_case(
             0,
@@ -326,7 +325,6 @@ def _parse_claude_output_cases() -> list[dict[str, Any]]:
         _claude_case(1, "", "é" * 2001),
         _claude_case(0, json.dumps({"result": "  spaced result  ", "is_error": False})),
     ]
-    return cases
 
 
 # --- parse_pi_output --------------------------------------------------------
@@ -350,7 +348,7 @@ def _pi_case(stdout: str, returncode: int = 0, stderr: str = "") -> dict[str, An
 
 def _parse_pi_output_cases() -> list[dict[str, Any]]:
     assistant = lambda text, **extra: {"role": "assistant", "content": text, **extra}  # noqa: E731
-    cases = [
+    return [
         _pi_case(_message_end(assistant("hello"))),
         _pi_case(
             _message_end(
@@ -449,7 +447,6 @@ def _parse_pi_output_cases() -> list[dict[str, Any]]:
             _message_end(assistant("\xa0\x1cstripped\x1f\xa0"))
         ),
     ]
-    return cases
 
 
 # --- the timeout text run_agent_cli raises --------------------------------
@@ -465,17 +462,15 @@ def _timeout_text(binary: str, timeout_seconds: float) -> str:
 def _timeout_text_cases() -> list[dict[str, Any]]:
     seconds = [1, 120, 999999, 1000000, 4294967295]
     binaries = ["claude", "/usr/local/bin/pi"]
-    cases = []
-    for binary in binaries:
-        for timeout_seconds in seconds:
-            cases.append(
-                {
-                    "binary": binary,
-                    "timeout_seconds": timeout_seconds,
-                    "expected": _timeout_text(binary, timeout_seconds),
-                }
-            )
-    return cases
+    return [
+        {
+            "binary": binary,
+            "timeout_seconds": timeout_seconds,
+            "expected": _timeout_text(binary, timeout_seconds),
+        }
+        for binary in binaries
+        for timeout_seconds in seconds
+    ]
 
 
 # --- check_binary / _string_list (part B, reused from this corpus) -------
