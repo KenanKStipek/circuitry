@@ -1,6 +1,6 @@
 {
   "spec_case": "runtime-semantics.md §8.1 (preflight)",
-  "description": "A document whose own top-level `adapter: openai` has no OPENAI_API_KEY in the sandboxed environment fails `cof run`'s preflight check before any effect dispatches (`cli/runtime_shim.py::preflight`, `cli/allowlist.py::walk_orchestration_refs`'s own top-level-adapter inclusion). electricity does not port preflight yet, so it refuses the same document up front with the preview marker instead of comparing output (electricity/DESIGN.md §13).",
+  "description": "A document whose own top-level `adapter: openai` has no OPENAI_API_KEY in the sandboxed environment fails `cof run`'s preflight check before any effect dispatches (`cli/runtime_shim.py::preflight`, `cli/allowlist.py::walk_orchestration_refs`'s own top-level-adapter inclusion). electricity ports preflight (issue #495), but `openai` is a Circuitry-known adapter with no Rust builder yet (lane F2), so it refuses the whole run up front with the preview marker instead of running preflight at all (settled ruling 3, electricity/DESIGN.md §13). Once F2 builds `openai` this must match `… missing ['env:OPENAI_API_KEY']. Re-run with --skip-preflight to bypass.` exactly.",
   "engines": ["python", "electricity"],
   "expect": "failure",
   "error_compare": "exact"

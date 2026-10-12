@@ -263,8 +263,8 @@ impl<'a> Supported<'a> {
             model_expect: false,
             // lane P (#448, #487)
             declared_prompts: true,
-            // lane R (#448)
-            preflight: false,
+            // lane R (#448, #495)
+            preflight: true,
             // lane C (#448)
             tools_process: true,
             // lane D1 (#460)
@@ -477,6 +477,13 @@ mod tests {
     }
 
     #[test]
+    fn supported_current_preflight_is_true() {
+        // Issue #495's own acceptance criterion: asserted directly,
+        // not merely via the field-for-field comparison below.
+        assert!(Supported::current(&["json"]).preflight);
+    }
+
+    #[test]
     fn current_matches_m0_until_the_first_m1_lane_lands() {
         // Review P2-b on PR #454: `Supported::current` is the single
         // place every M1 lane flips its own flag, never `Supported::m0`
@@ -507,7 +514,11 @@ mod tests {
         assert_eq!(current.model_expect, m0.model_expect);
         assert!(current.declared_prompts);
         assert!(!m0.declared_prompts);
-        assert_eq!(current.preflight, m0.preflight);
+        // lane R (#448, #495): `preflight` is `true` now -- asserted
+        // directly rather than against `m0.preflight` (always `false`),
+        // the one field this lane's own PR flips.
+        assert!(current.preflight);
+        assert!(!m0.preflight);
         assert!(current.tools_process);
         assert!(current.tools_stdlib);
         // lane D2 (#448, #479): `tool_regex` is `true` now -- asserted

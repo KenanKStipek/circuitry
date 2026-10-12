@@ -1,0 +1,6 @@
+name: profile-routing-pin-unknown-band
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: unreachable}

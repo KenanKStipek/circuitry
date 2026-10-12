@@ -1,0 +1,6 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight)",
+  "description": "`adapter: host_claude` on a tool-only document: preflight defers (host_claude can only be built at runtime), `_noop` resolves since there is no prompt effect, and the run succeeds.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -1,0 +1,1 @@
+{"runtime": {"plugins": {"awk": {"binary": "/does/not/exist/awk"}}}}

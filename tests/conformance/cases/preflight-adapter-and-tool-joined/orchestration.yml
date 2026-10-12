@@ -1,0 +1,8 @@
+name: preflight-adapter-and-tool-joined
+adapter: scripted
+effects:
+  - type: tool
+    name: result
+    provider: awk
+    params:
+      args: ["--print-env", "FAKE_AWK_VAR"]

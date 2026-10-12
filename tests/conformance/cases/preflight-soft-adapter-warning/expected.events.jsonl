@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-11T22:48:28.907Z","ev":"run_start","run_id":"3ca7bb20-dcb9-4745-a3d2-9121a88fe9f6","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":74880}
+{"v":1,"seq":1,"ts":"2026-10-11T22:48:28.924Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-11T22:48:28.926Z","ev":"start","id":1,"path":"prime.greeting"}
+{"v":1,"seq":3,"ts":"2026-10-11T22:48:28.926Z","ev":"end","id":1,"path":"prime.greeting","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: cannot read scripted-replies.yaml: [Errno 2] No such file or directory: 'scripted-replies.yaml'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-11T22:48:28.926Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-10-11T22:48:28.926Z","ev":"run_end","ok":true}

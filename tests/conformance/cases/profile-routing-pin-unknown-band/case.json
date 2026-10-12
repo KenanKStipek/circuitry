@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), cli/profiles.py::validate_profile_routing_pins",
+  "description": "A profile pins a named effect to a routing band that doesn't exist, with no bands configured at all: the pin check runs once the run's real routing table is known (after the concurrency limiter), reporting the fixed '(no named bands configured)' text.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "failure",
+  "error_compare": "exact"
+}

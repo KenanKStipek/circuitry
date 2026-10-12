@@ -1,0 +1,14 @@
+name: profile-run-level-settings
+interface:
+  inputs:
+    a:
+      type: string
+    b:
+      type: string
+effects:
+  - type: tool
+    name: result
+    provider: json
+    params:
+      mode: stringify
+      input: "{{input.a}}-{{input.b}}"

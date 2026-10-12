@@ -17,9 +17,11 @@
 //! error, never silently accepted or ignored. An unknown flag is a usage
 //! error (exit 2): issue #431's gate lane tightens this from the pre-#431
 //! preview CLI, which let a trailing unknown flag fall through to the
-//! (always-refusing) run path instead. `--profile` refuses with the
-//! preview marker (profiles are M1-J1/J2) before `run_orchestration` is ever
-//! called -- no state is written for it, same as any other refusal.
+//! (always-refusing) run path instead. `--profile <path>` (issue #495,
+//! lane R) is passed straight through to `RunRequest::profile_path` --
+//! an explicit path only, never discovered by name (DESIGN §1, §6.11).
+//! A loaded profile's own `out:` (`RunResult::out_path`) is written only
+//! when no `--out` was given.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -52,8 +54,9 @@ Options:
                       written to --out's own file.
   --live-state <path> Mirror the running state to <path> as it changes.
   --events <path>     Write a JSONL event stream to <path>.
-  --profile <path>    Not supported in this preview (profiles land in a
-                      later milestone).
+  --profile <path>    Load a profile (adapter/model/inputs/persistence
+                      overrides, routing pins and provider denials) from
+                      an explicit path -- no name discovery.
   --dump-ir           Print the compiled IR as JSON and exit. Unstable: this
                       format is a debugging aid and can change in any release.";
 
@@ -69,8 +72,8 @@ struct RunArgs {
     pretty: bool,
     live_state: Option<String>,
     events: Option<String>,
-    /// Parsed (and its own value consumed) but never acted on in this
-    /// preview -- profiles refuse the same way every other `Run` does.
+    /// `--profile <path>` (issue #495, lane R): an explicit path
+    /// only, passed through to `RunRequest::profile_path`.
     profile: Option<String>,
 }
 
@@ -421,24 +424,6 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
     }
 }
 
-/// The preview marker refusal for a flag this preview doesn't support
-/// at all (`--profile`; profiles are M1-J1/J2) -- refused before
-/// `run_orchestration` is ever called, so no state exists to write
-/// (issue #431's "Refused before the run starts" list).
-fn profile_refusal() -> RunResult {
-    RunResult {
-        ok: false,
-        state: None,
-        error: Some(format!(
-            "electricity {} is a preview and cannot run orchestrations yet: --profile is not \
-             supported until a later milestone; use `cof run` instead",
-            electricity::VERSION
-        )),
-        warnings: Vec::new(),
-        signal: None,
-    }
-}
-
 /// Writes *text* to stdout, ignoring any error -- `print!`/`println!`
 /// panic on a write error (a closed terminal after SIGHUP, a closed
 /// pipe downstream), which would report this run's own exit code as
@@ -699,31 +684,31 @@ fn run_action(run_args: RunArgs) -> ExitCode {
 
     let out_path = run_args.out.map(PathBuf::from);
 
-    // `--profile` refuses with the preview marker before anything else
-    // runs (issue #431's CLI section) -- profiles are M1-J1/J2.
-    let result = if run_args.profile.is_some() {
-        profile_refusal()
-    } else {
-        let req = RunRequest {
-            config_path,
-            orchestration_path,
-            inputs,
-            out_path: out_path.clone(),
-            pretty: run_args.pretty,
-            live_state_path: run_args.live_state.map(PathBuf::from),
-            events_path: run_args.events.map(PathBuf::from),
-            armed: true,
-        };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("could not start the electricity async runtime");
-        runtime.block_on(electricity::run_orchestration_with_config(
-            cfg, &req, &token,
-        ))
+    let req = RunRequest {
+        config_path,
+        orchestration_path,
+        inputs,
+        out_path: out_path.clone(),
+        pretty: run_args.pretty,
+        live_state_path: run_args.live_state.map(PathBuf::from),
+        events_path: run_args.events.map(PathBuf::from),
+        profile_path: run_args.profile.map(PathBuf::from),
+        armed: true,
     };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("could not start the electricity async runtime");
+    let result = runtime.block_on(electricity::run_orchestration_with_config(
+        cfg, &req, &token,
+    ));
 
-    if let Some(path) = &out_path {
+    // `--out` outranks a loaded profile's own `out:` (DESIGN §6.11,
+    // issue #495's own seam on `RunResult::out_path`) -- a profile's
+    // `out:` is honoured only when no `--out` was given.
+    let effective_out_path = out_path.or_else(|| result.out_path.clone());
+
+    if let Some(path) = &effective_out_path {
         if let Some(state) = &result.state {
             if let Err(err) = electricity::out::write_out(path, state, run_args.pretty) {
                 signal_guard.disarm();
@@ -743,7 +728,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // comment).
     signal_guard.disarm();
 
-    print_stdout_contract(&result, out_path.as_deref(), run_args.pretty);
+    print_stdout_contract(&result, effective_out_path.as_deref(), run_args.pretty);
     print_stderr_contract(&result);
     exit_code_for(&result)
 }

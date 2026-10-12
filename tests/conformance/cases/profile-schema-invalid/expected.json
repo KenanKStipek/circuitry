@@ -1,0 +1,3 @@
+{
+  "error": "Profile 'p' at <CASE_DIR>/profiles/p.yml failed schema validation:\n  - adapter: 5 is not of type 'string'"
+}

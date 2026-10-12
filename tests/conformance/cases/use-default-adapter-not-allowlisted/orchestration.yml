@@ -1,0 +1,13 @@
+name: use-default-adapter-not-allowlisted
+effects:
+  - type: use
+    name: step
+    inline: |
+      effects:
+        - type: tool
+          name: inner
+          provider: json
+          params: {mode: stringify, input: unreachable}
+    outputs:
+      result:
+        path: prime.inner.value

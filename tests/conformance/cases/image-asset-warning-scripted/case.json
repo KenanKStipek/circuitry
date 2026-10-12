@@ -1,0 +1,9 @@
+{
+  "spec_case": "runtime-semantics.md §8.1 (preflight, image_asset_warnings), issue #495",
+  "description": "A prompt with an image asset, answered through the `scripted` adapter, which cannot send images: one warning, compared through `compare_run_warnings`. electricity doesn't run `prompt` yet (lane G), so this stays Python-only until then.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "electricity_preview_ok": true,
+  "compare_run_warnings": true
+}
