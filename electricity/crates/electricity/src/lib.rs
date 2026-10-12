@@ -167,7 +167,7 @@ pub fn dump_ir(
 // run_orchestration -- issue #431's run-wiring steps 1-19
 // ---------------------------------------------------------------------
 
-use electricity_bytecode::{EffectPath, first_unsupported, format_refusal};
+use electricity_bytecode::{EffectPath, PREVIEW_MARKER, first_unsupported, format_refusal};
 use electricity_config::CircuitryConfig;
 use electricity_value::{Dict, Value};
 use electricity_vm::{Limiter, RunContext, RunObserver, Store};
@@ -373,7 +373,7 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
 /// tree.
 fn format_config_refusal(reason: &str) -> String {
     format!(
-        "electricity {VERSION} is a preview and cannot run orchestrations yet: {reason} is not \
+        "electricity {VERSION} {PREVIEW_MARKER}: {reason} is not \
          supported until a later milestone; use `cof run` instead"
     )
 }

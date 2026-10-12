@@ -405,10 +405,7 @@ mod tests {
         ]))
         .await
         .unwrap_err();
-        assert!(
-            err.message
-                .contains("is a preview and cannot run orchestrations yet")
-        );
+        assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
     }
 
     #[tokio::test]

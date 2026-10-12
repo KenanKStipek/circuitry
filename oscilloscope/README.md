@@ -14,14 +14,12 @@ CYBERDINER_TOKEN=... osp do-thing.yml config.json
 <orchestration>` launches and supervises `cof` or `electricity` and exits
 with the engine's own exit code; `osp watch <dir>` attaches to a run `osp`
 didn't start. Milestone O-2 (issue #434) adds the terminal UI below.
-electricity's own M0-H milestone (issue #431) gave it a real run path,
-`--events` and `--live-state`, so `--engine electricity` now shows the
-same live view `cof` does, for the documents it runs so far: `tool`
-effects (the `json` provider), `dynamic`, a CEL `if`, and `finally:`.
-Everything else (`prompt`/`loop`/`use`/`reflector`/`yield`, a model-mode
-`if`, other tool providers) is refused up front, with a message naming the
-preview marker, before any state is written. See [`DESIGN.md`](DESIGN.md)
-§4.2.
+electricity's own run path, `--events` and `--live-state` give
+`--engine electricity` the same live view `cof` does for the content it
+runs — see [`electricity/README.md`](../electricity/README.md)'s preview
+section for exactly what runs today. Anything it doesn't support yet is
+refused up front, with a message naming the preview marker, before any
+state is written. See [`DESIGN.md`](DESIGN.md) §4.2.
 
 ```
 osp do-thing.yml config.json

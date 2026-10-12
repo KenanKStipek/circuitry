@@ -505,7 +505,7 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let error = payload["error"].as_str().unwrap();
     assert!(
-        error.contains("is a preview and cannot run orchestrations yet"),
+        error.contains(electricity_bytecode::PREVIEW_MARKER),
         "{error}"
     );
     assert!(!out.exists());
@@ -557,7 +557,7 @@ fn a_model_mode_while_condition_is_refused_with_no_files_written() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let error = payload["error"].as_str().unwrap();
     assert!(
-        error.contains("is a preview and cannot run orchestrations yet"),
+        error.contains(electricity_bytecode::PREVIEW_MARKER),
         "{error}"
     );
     assert!(!out.exists());
@@ -606,7 +606,7 @@ fn a_document_level_adapter_is_refused_with_no_files_written() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let error = payload["error"].as_str().unwrap();
     assert!(
-        error.contains("is a preview and cannot run orchestrations yet"),
+        error.contains(electricity_bytecode::PREVIEW_MARKER),
         "{error}"
     );
     assert!(error.contains("openai"), "{error}");
@@ -855,7 +855,7 @@ fn a_profiles_persistence_block_is_refused_with_no_files_written() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let error = payload["error"].as_str().unwrap();
     assert!(
-        error.contains("is a preview and cannot run orchestrations yet"),
+        error.contains(electricity_bytecode::PREVIEW_MARKER),
         "{error}"
     );
     assert!(error.contains("runtime.persistence"), "{error}");

@@ -242,8 +242,8 @@ jobs:
             echo "---"
             echo ""
             image_version="${{ needs.electricity-build.outputs.version }}"
-            echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$image_version\`) are attached below as a **preview**: they cannot run orchestrations yet."
-            echo "osp's (oscilloscope's) binaries are attached below as a **preview**: it cannot watch or launch orchestrations yet."
+            echo "electricity's binaries and container image (\`ghcr.io/kenankstipek/electricity:$image_version\`) are attached below as a **preview**: it runs many orchestrations and refuses, with a clear message, what it doesn't support yet — see [electricity/README.md](https://github.com/${{ github.repository }}/blob/v$version/electricity/README.md)."
+            echo "osp's (oscilloscope's) binaries are attached below as a **preview**: it watches and launches a run on either engine — see [oscilloscope/README.md](https://github.com/${{ github.repository }}/blob/v$version/oscilloscope/README.md)."
           } >> "$notes_file"
           {
             echo "notes_file=$notes_file"
