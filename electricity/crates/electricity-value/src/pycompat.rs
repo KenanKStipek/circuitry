@@ -266,6 +266,62 @@ pub fn py_strip(s: &str) -> &str {
     s.trim_matches(is_py_whitespace)
 }
 
+/// `True` for every codepoint Python's `str.splitlines()` treats as a
+/// line boundary -- a strict superset of `\n` alone: `\r` (and `\r\n`
+/// as one boundary, never two empty lines), the four C0/C1 "other
+/// line/paragraph separator" controls `\x0b`/`\x0c`/`\x1c`-`\x1e`, and
+/// the two Unicode line/paragraph separators `\x85`/`\u2028`/`\u2029`
+/// (CPython's own `Objects/unicodeobject.c::STRINGLIB(splitlines)`/
+/// `unicodectype.c`'s own line-break table) -- used by [`py_splitlines`]
+/// and shared with lane L2's own `strip_fences` (issue #506's "Hazards"
+/// section: model output can carry any of these, which Rust's own
+/// `str::lines()` doesn't split on).
+fn is_py_line_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r'
+            | '\u{0b}'
+            | '\u{0c}'
+            | '\u{1c}'
+            | '\u{1d}'
+            | '\u{1e}'
+            | '\u{85}'
+            | '\u{2028}'
+            | '\u{2029}'
+    )
+}
+
+/// `str.splitlines()` with no arguments -- every boundary
+/// [`is_py_line_boundary`] recognizes, `\r\n` consumed as one boundary
+/// (never an extra empty line between them), the terminator itself
+/// dropped from every returned line (`keepends` defaults to `False`),
+/// and no trailing empty line for text that ends in a boundary (`"a\n"
+/// .splitlines() == ["a"]`, unlike `"a\n".split("\n") == ["a", ""]`).
+pub fn py_splitlines(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < n {
+        if is_py_line_boundary(chars[i]) {
+            lines.push(chars[start..i].iter().collect());
+            i += if chars[i] == '\r' && i + 1 < n && chars[i + 1] == '\n' {
+                2
+            } else {
+                1
+            };
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    if start < n {
+        lines.push(chars[start..n].iter().collect());
+    }
+    lines
+}
+
 /// `round(x, 6)`: correctly rounded on the *exact* binary value of
 /// *x*, with half-even tie-breaking, exactly like CPython's `round()`
 /// builtin for a float (`float.__round__`, `Objects/floatobject.c::
@@ -494,6 +550,506 @@ pub fn urlencode(params: &[(String, Value)], doseq: bool) -> Result<String, Stri
         }
     }
     Ok(pairs.join("&"))
+}
+
+/// Why [`py_str_format`] fell back to the raw template -- every
+/// variant is a documented divergence from CPython's own `str.format`
+/// (issue #506's lane L1, the "Settled questions" section): a
+/// positional field, an unknown name, attribute/index access, an
+/// unknown conversion or a malformed format spec all raise a real
+/// Python exception there, but this port never reproduces the exact
+/// exception text -- callers (the reflector prime) only ever log a
+/// fixed warning and fall back to the unformatted template, never this
+/// error's own text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyFormatError {
+    /// A lone `{` or `}` with no matching partner.
+    LoneBrace,
+    /// `{}`/`{0}` -- auto-numbering/explicit positional fields, never
+    /// supported (the prime only ever has named fields).
+    PositionalField,
+    /// A field name not in *fields*.
+    UnknownField,
+    /// `{goal.upper}`/`{goal[0]}` -- attribute/index access.
+    AttributeOrIndex,
+    /// `{goal!x}` -- a conversion other than `s`/`r`/`a`.
+    UnknownConversion,
+    /// A format spec this subset doesn't parse, or applies to a type
+    /// it doesn't support (a sign/`#`/`0`/grouping flag on a `str`
+    /// value, a `.precision` on an `int`, a `type` char that isn't
+    /// valid for the value's own type).
+    BadFormatSpec,
+}
+
+enum ConvertedValue {
+    Raw(Value),
+    Str(String),
+}
+
+/// Python `ascii(value)`: [`crate::string_repr::py_str_repr`] (which
+/// keeps printable non-ASCII literal, matching `repr()`) with every
+/// remaining non-ASCII character backslash-escaped the same way
+/// CPython's own `ascii()` does -- `\xHH`/`\uHHHH`/`\UHHHHHHHH` by
+/// code-point size.
+fn py_ascii_repr(s: &str) -> String {
+    let repr = crate::string_repr::py_str_repr(s);
+    let mut out = String::with_capacity(repr.len());
+    for ch in repr.chars() {
+        if ch.is_ascii() {
+            out.push(ch);
+        } else {
+            let cp = ch as u32;
+            if cp <= 0xFF {
+                out.push_str(&format!("\\x{cp:02X}"));
+            } else if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{cp:04X}"));
+            } else {
+                out.push_str(&format!("\\U{cp:08X}"));
+            }
+        }
+    }
+    out
+}
+
+/// `value.__repr__()`/`value.__str__()` for exactly the types
+/// [`py_str_format`]'s own callers ever hand it (`str`/`int` --
+/// [`Value::py_repr`]/[`Value::py_str`] already match CPython for
+/// both).
+fn converted_text(value: &Value, conv: char) -> String {
+    match conv {
+        's' => value.py_str(),
+        'r' => value.py_repr(),
+        'a' => py_ascii_repr(&value.py_repr()),
+        _ => unreachable!("converted_text is only ever called with a validated conversion"),
+    }
+}
+
+/// One `{field_spec}` replacement field's own parsed shape --
+/// `field_name[!conversion][:format_spec]`, Python's own "Format
+/// String Syntax" grammar narrowed to a bare name (no `.attr`/
+/// `[index]`, [`PyFormatError::AttributeOrIndex`] instead).
+struct ParsedField<'a> {
+    name: &'a str,
+    conversion: Option<char>,
+    format_spec: &'a str,
+}
+
+fn parse_field(field_spec: &str) -> Result<ParsedField<'_>, PyFormatError> {
+    let (before_spec, format_spec) = match field_spec.find(':') {
+        Some(idx) => (&field_spec[..idx], &field_spec[idx + 1..]),
+        None => (field_spec, ""),
+    };
+    let (name, conversion) = match before_spec.find('!') {
+        Some(idx) => {
+            let rest = &before_spec[idx + 1..];
+            let mut chars = rest.chars();
+            let conv = chars.next().ok_or(PyFormatError::UnknownConversion)?;
+            if chars.next().is_some() || !matches!(conv, 's' | 'r' | 'a') {
+                return Err(PyFormatError::UnknownConversion);
+            }
+            (&before_spec[..idx], Some(conv))
+        }
+        None => (before_spec, None),
+    };
+    if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return Err(PyFormatError::PositionalField);
+    }
+    if name.contains('.') || name.contains('[') {
+        return Err(PyFormatError::AttributeOrIndex);
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(PyFormatError::UnknownField);
+    }
+    Ok(ParsedField {
+        name,
+        conversion,
+        format_spec,
+    })
+}
+
+/// Python's own "Format Specification Mini-Language":
+/// `[[fill]align][sign][#][0][width][,_][.precision][type]`, parsed
+/// once and applied by [`apply_str_spec`]/[`apply_int_spec`] against
+/// whichever of the two types actually reached them.
+#[derive(Default)]
+struct FormatSpec {
+    fill: char,
+    align: Option<char>,
+    sign: Option<char>,
+    alternate: bool,
+    zero: bool,
+    width: Option<usize>,
+    grouping: Option<char>,
+    precision: Option<usize>,
+    kind: Option<char>,
+}
+
+fn parse_format_spec(spec: &str) -> Result<FormatSpec, PyFormatError> {
+    let chars: Vec<char> = spec.chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut out = FormatSpec {
+        fill: ' ',
+        ..Default::default()
+    };
+
+    if n >= 2 && matches!(chars[1], '<' | '>' | '^' | '=') {
+        out.fill = chars[0];
+        out.align = Some(chars[1]);
+        i = 2;
+    } else if n >= 1 && matches!(chars[0], '<' | '>' | '^' | '=') {
+        out.align = Some(chars[0]);
+        i = 1;
+    }
+    if i < n && matches!(chars[i], '+' | '-' | ' ') {
+        out.sign = Some(chars[i]);
+        i += 1;
+    }
+    if i < n && chars[i] == '#' {
+        out.alternate = true;
+        i += 1;
+    }
+    if i < n && chars[i] == '0' {
+        out.zero = true;
+        if out.align.is_none() {
+            out.align = Some('=');
+            out.fill = '0';
+        }
+        i += 1;
+    }
+    let width_start = i;
+    while i < n && chars[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > width_start {
+        let width_text: String = chars[width_start..i].iter().collect();
+        out.width = Some(
+            width_text
+                .parse()
+                .map_err(|_| PyFormatError::BadFormatSpec)?,
+        );
+    }
+    if i < n && matches!(chars[i], ',' | '_') {
+        out.grouping = Some(chars[i]);
+        i += 1;
+    }
+    if i < n && chars[i] == '.' {
+        i += 1;
+        let prec_start = i;
+        while i < n && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == prec_start {
+            return Err(PyFormatError::BadFormatSpec);
+        }
+        let prec_text: String = chars[prec_start..i].iter().collect();
+        out.precision = Some(
+            prec_text
+                .parse()
+                .map_err(|_| PyFormatError::BadFormatSpec)?,
+        );
+    }
+    if i < n {
+        out.kind = Some(chars[i]);
+        i += 1;
+    }
+    if i != n {
+        return Err(PyFormatError::BadFormatSpec);
+    }
+    Ok(out)
+}
+
+fn pad(text: &str, spec: &FormatSpec, default_align: char) -> String {
+    let width = spec.width.unwrap_or(0);
+    let len = text.chars().count();
+    if len >= width {
+        return text.to_string();
+    }
+    let pad_len = width - len;
+    let align = spec.align.unwrap_or(default_align);
+    match align {
+        '<' => format!("{text}{}", spec.fill.to_string().repeat(pad_len)),
+        '>' => format!("{}{text}", spec.fill.to_string().repeat(pad_len)),
+        '^' => {
+            let left = pad_len / 2;
+            let right = pad_len - left;
+            format!(
+                "{}{text}{}",
+                spec.fill.to_string().repeat(left),
+                spec.fill.to_string().repeat(right)
+            )
+        }
+        '=' => format!("{}{text}", spec.fill.to_string().repeat(pad_len)),
+        _ => text.to_string(),
+    }
+}
+
+/// `format(s, spec)` for a `str` -- CPython raises `ValueError` for a
+/// `sign`/`#`/`0`/grouping flag or any `type` but `s` on a string;
+/// this subset falls back on all of those rather than reproducing the
+/// exact message.
+fn apply_str_spec(text: &str, spec: &FormatSpec) -> Result<String, PyFormatError> {
+    if spec.sign.is_some() || spec.alternate || spec.zero || spec.grouping.is_some() {
+        return Err(PyFormatError::BadFormatSpec);
+    }
+    if let Some(kind) = spec.kind {
+        if kind != 's' {
+            return Err(PyFormatError::BadFormatSpec);
+        }
+    }
+    let truncated: String = match spec.precision {
+        Some(p) => text.chars().take(p).collect(),
+        None => text.to_string(),
+    };
+    Ok(pad(&truncated, spec, '<'))
+}
+
+/// `format(i, spec)` for an `int` -- `b`/`o`/`d`/`x`/`X`/`n`/no type
+/// (decimal); `#` prepends the base prefix; `0` zero-pads between the
+/// sign and the digits (the `=` alignment [`pad`] already implements,
+/// since `0`-fill defaults `align` to `=`); CPython raises
+/// `ValueError` for a `.precision` on an int, matched here by falling
+/// back instead.
+fn apply_int_spec(value: i64, spec: &FormatSpec) -> Result<String, PyFormatError> {
+    if spec.precision.is_some() {
+        return Err(PyFormatError::BadFormatSpec);
+    }
+    let negative = value < 0;
+    let magnitude = value.unsigned_abs();
+    let kind = spec.kind.unwrap_or('d');
+    let (digits, prefix) = match kind {
+        'd' | 'n' => (magnitude.to_string(), ""),
+        'b' => (format!("{magnitude:b}"), "0b"),
+        'o' => (format!("{magnitude:o}"), "0o"),
+        'x' => (format!("{magnitude:x}"), "0x"),
+        'X' => (format!("{magnitude:X}"), "0X"),
+        'c' => return Err(PyFormatError::BadFormatSpec),
+        _ => return Err(PyFormatError::BadFormatSpec),
+    };
+    let sign = if negative {
+        "-"
+    } else {
+        match spec.sign {
+            Some('+') => "+",
+            Some(' ') => " ",
+            _ => "",
+        }
+    };
+    let base_prefix = if spec.alternate { prefix } else { "" };
+    let body = digits;
+    if spec.align == Some('=') {
+        let width = spec.width.unwrap_or(0);
+        let core_len = sign.chars().count() + base_prefix.chars().count() + body.chars().count();
+        let fill_count = width.saturating_sub(core_len);
+        return Ok(format!(
+            "{sign}{base_prefix}{}{body}",
+            spec.fill.to_string().repeat(fill_count)
+        ));
+    }
+    let combined = format!("{sign}{base_prefix}{body}");
+    Ok(pad(&combined, spec, '>'))
+}
+
+/// `str.format(**fields)`, narrowed to exactly the subset the
+/// reflector prime needs (issue #506's lane L1, "Hazards"): `{{`/`}}`
+/// literal braces, named fields only (no positional/auto-numbering),
+/// `!s`/`!r`/`!a` conversions, and the Format Specification Mini-
+/// Language for `str`/`int` values. *fields* is searched linearly (a
+/// handful of entries -- `goal`/`context`/`max_effects` -- never worth
+/// a map). Any field this subset can't handle -- a positional field,
+/// an unknown name, `.attr`/`[index]` access, an unknown conversion, a
+/// malformed or type-mismatched format spec, or a lone unescaped
+/// `{`/`}` -- is `Err(_)`; the caller's own fallback (raw template
+/// text) is what actually reproduces CPython's behaviour of raising
+/// and being caught, not this error's own value (see
+/// [`PyFormatError`]'s own doc comment).
+pub fn py_str_format(template: &str, fields: &[(&str, Value)]) -> Result<String, PyFormatError> {
+    let chars: Vec<char> = template.chars().collect();
+    let n = chars.len();
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < n {
+        match chars[i] {
+            '{' if i + 1 < n && chars[i + 1] == '{' => {
+                out.push('{');
+                i += 2;
+            }
+            '}' if i + 1 < n && chars[i + 1] == '}' => {
+                out.push('}');
+                i += 2;
+            }
+            '{' => {
+                let start = i + 1;
+                let mut j = start;
+                while j < n && chars[j] != '}' {
+                    if chars[j] == '{' {
+                        return Err(PyFormatError::LoneBrace);
+                    }
+                    j += 1;
+                }
+                if j >= n {
+                    return Err(PyFormatError::LoneBrace);
+                }
+                let field_spec: String = chars[start..j].iter().collect();
+                let parsed = parse_field(&field_spec)?;
+                let value = fields
+                    .iter()
+                    .find(|(name, _)| *name == parsed.name)
+                    .map(|(_, value)| value)
+                    .ok_or(PyFormatError::UnknownField)?;
+                let converted = match parsed.conversion {
+                    Some(conv) => ConvertedValue::Str(converted_text(value, conv)),
+                    None => ConvertedValue::Raw(value.clone()),
+                };
+                let spec = parse_format_spec(parsed.format_spec)?;
+                let rendered = match &converted {
+                    ConvertedValue::Str(s) => apply_str_spec(s, &spec)?,
+                    ConvertedValue::Raw(Value::Str(s)) => apply_str_spec(s, &spec)?,
+                    ConvertedValue::Raw(Value::Int(int_value)) => {
+                        let as_i64 = py_int(&Value::Int(int_value.clone()))
+                            .map_err(|_| PyFormatError::BadFormatSpec)?;
+                        apply_int_spec(as_i64, &spec)?
+                    }
+                    ConvertedValue::Raw(_) => return Err(PyFormatError::BadFormatSpec),
+                };
+                out.push_str(&rendered);
+                i = j + 1;
+            }
+            '}' => return Err(PyFormatError::LoneBrace),
+            ch => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod py_str_format_tests {
+    use super::*;
+
+    fn fields(pairs: &[(&'static str, Value)]) -> Vec<(&'static str, Value)> {
+        pairs.to_vec()
+    }
+
+    #[test]
+    fn substitutes_named_fields() {
+        let f = fields(&[
+            ("goal", Value::Str("g".to_string())),
+            ("context", Value::Str("c".to_string())),
+        ]);
+        assert_eq!(
+            py_str_format("{goal} and {context}", &f).unwrap(),
+            "g and c"
+        );
+    }
+
+    #[test]
+    fn literal_double_braces_survive() {
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert_eq!(
+            py_str_format("{{literal}} {goal}", &f).unwrap(),
+            "{literal} g"
+        );
+    }
+
+    #[test]
+    fn zero_padded_int_width() {
+        let f = fields(&[("max_effects", Value::from(8i64))]);
+        assert_eq!(py_str_format("{max_effects:03d}", &f).unwrap(), "008");
+    }
+
+    #[test]
+    fn plain_int_width_and_alignment() {
+        let f = fields(&[("max_effects", Value::from(8i64))]);
+        assert_eq!(py_str_format("{max_effects:5d}", &f).unwrap(), "    8");
+        assert_eq!(py_str_format("{max_effects:<5d}|", &f).unwrap(), "8    |");
+        assert_eq!(py_str_format("{max_effects:^5d}|", &f).unwrap(), "  8  |");
+    }
+
+    #[test]
+    fn str_alignment_and_precision() {
+        let f = fields(&[("goal", Value::Str("hi".to_string()))]);
+        assert_eq!(py_str_format("{goal:>10s}|", &f).unwrap(), "        hi|");
+        let f2 = fields(&[("goal", Value::Str("hello".to_string()))]);
+        assert_eq!(py_str_format("{goal:.2s}|", &f2).unwrap(), "he|");
+    }
+
+    #[test]
+    fn repr_conversion_quotes_like_cpython() {
+        let f = fields(&[("context", Value::Str("c'text".to_string()))]);
+        assert_eq!(py_str_format("{context!r}", &f).unwrap(), "\"c'text\"");
+    }
+
+    #[test]
+    fn str_conversion_is_a_no_op_for_a_string() {
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert_eq!(py_str_format("{goal!s}", &f).unwrap(), "g");
+    }
+
+    #[test]
+    fn unknown_field_falls_back() {
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert_eq!(
+            py_str_format("{unknown}", &f),
+            Err(PyFormatError::UnknownField)
+        );
+    }
+
+    #[test]
+    fn positional_field_falls_back() {
+        assert_eq!(
+            py_str_format("{0}", &[]),
+            Err(PyFormatError::PositionalField)
+        );
+        assert_eq!(
+            py_str_format("{}", &[]),
+            Err(PyFormatError::PositionalField)
+        );
+    }
+
+    #[test]
+    fn attribute_and_index_access_fall_back() {
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert_eq!(
+            py_str_format("{goal.upper}", &f),
+            Err(PyFormatError::AttributeOrIndex)
+        );
+        assert_eq!(
+            py_str_format("{goal[0]}", &f),
+            Err(PyFormatError::AttributeOrIndex)
+        );
+    }
+
+    #[test]
+    fn lone_braces_fall_back() {
+        assert_eq!(py_str_format("{", &[]), Err(PyFormatError::LoneBrace));
+        assert_eq!(py_str_format("}", &[]), Err(PyFormatError::LoneBrace));
+    }
+
+    #[test]
+    fn unknown_conversion_falls_back() {
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert_eq!(
+            py_str_format("{goal!x}", &f),
+            Err(PyFormatError::UnknownConversion)
+        );
+    }
+
+    #[test]
+    fn mustache_text_survives_the_fallback_raw_template() {
+        // The prime's own fallback path (`_render_reflector_prime`)
+        // hands the *raw* template to the caller on `Err`, not this
+        // function's own partial output -- `{{input.x}}` inside a
+        // custom `prime_template` therefore reaches Mustache rendering
+        // later exactly as written, never half-substituted here. This
+        // test only pins that `py_str_format` itself never panics or
+        // partially mutates anything observable on an error path (it
+        // returns `Err` before `out` is ever handed back).
+        let f = fields(&[("goal", Value::Str("g".to_string()))]);
+        assert!(py_str_format("{{input.x}} {unknown}", &f).is_err());
+    }
 }
 
 #[cfg(test)]

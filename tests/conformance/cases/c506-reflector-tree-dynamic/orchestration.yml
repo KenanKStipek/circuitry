@@ -1,0 +1,21 @@
+name: c506-reflector-tree-dynamic
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: dynamic
+    name: branches
+    flow: tree
+    effects:
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it. Goal: {goal}"
+        stop_on_done: false
+        max_iterations: 2
+        effects:
+          - type: prompt
+            name: propose_steps
+            model: alt-model
+            template: "propose steps; prior: {{generated.iter_0.check.value}}"

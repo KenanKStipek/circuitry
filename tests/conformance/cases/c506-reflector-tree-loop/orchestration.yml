@@ -1,0 +1,20 @@
+name: c506-reflector-tree-loop
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[10, 20]"}
+  - type: loop
+    name: shots
+    flow: tree
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it."
+        effects:
+          - type: prompt
+            name: propose_steps
+            template: "propose steps"

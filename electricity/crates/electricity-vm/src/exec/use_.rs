@@ -147,17 +147,23 @@ fn validation_failed_text(label: &str, errors: &[String]) -> String {
     text
 }
 
-/// `core/use.py::_clean_yaml_fences`.
+/// `core/use.py::_clean_yaml_fences` -- `text.splitlines()`/`line.strip()`,
+/// never Rust's own `str::lines()`/`str::trim()` (issue #506's own
+/// "Hazards" section: model output -- the one place this function
+/// ever runs against untrusted text, a reflector's generated plan
+/// included -- can carry `\x0c`, a lone `\r`, or a Unicode line/
+/// paragraph separator, which Python's `splitlines()` treats as a line
+/// boundary and Rust's `lines()` does not).
 pub fn clean_yaml_fences(text: &str) -> String {
-    let mut lines: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        let stripped = line.trim();
+    let mut lines: Vec<String> = Vec::new();
+    for line in electricity_value::pycompat::py_splitlines(text) {
+        let stripped = electricity_value::pycompat::py_strip(&line);
         if stripped.starts_with("```") || stripped == "---" {
             continue;
         }
         lines.push(line);
     }
-    lines.join("\n").trim().to_string()
+    electricity_value::pycompat::py_strip(&lines.join("\n")).to_string()
 }
 
 /// `core/use.py::_validate_inline_yaml` -- `Ok(())` once *cleaned* (as
@@ -1177,7 +1183,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     if run_ctx.dry_run {
         set_leaf(store, &meta_node, "completed_at", now_iso());
         set_leaf(store, &meta_node, "dry_run", Value::Bool(true));
-        observer.effect_complete(&effect_path, instance, None);
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            None,
+            super::completed_at_is_truthy(store, &meta_node),
+        );
         observer.write();
         return Ok(());
     }
@@ -1239,7 +1250,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         Value::from(i64::from(attempt_index)),
                     );
                 }
-                observer.effect_complete(&effect_path, instance, None);
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    None,
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Ok(());
             }
@@ -1256,7 +1272,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                         Value::from(i64::from(attempt_index)),
                     );
                 }
-                observer.effect_complete(&effect_path, instance, Some(&text));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&text),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Err(refused);
             }
@@ -1316,7 +1337,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         return match op.on_error {
             OnError::Fail => {
                 let wrapped = format!("use '{name}' -> {label}: {message}");
-                observer.effect_complete(&effect_path, instance, Some(&message));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&message),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 Err(VmError::Raised {
                     py_class: PyExc::RuntimeError,
@@ -1327,7 +1353,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             }
             OnError::Skip | OnError::Continue => {
                 set_leaf(store, &effect_node, "value", Value::None);
-                observer.effect_complete(&effect_path, instance, Some(&message));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    Some(&message),
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 Ok(())
             }
@@ -1375,11 +1406,18 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.effect_start(path)
     }
 
-    fn effect_complete(&self, path: &EffectPath, instance: InstanceId, error: Option<&str>) {
+    fn effect_complete(
+        &self,
+        path: &EffectPath,
+        instance: InstanceId,
+        error: Option<&str>,
+        completed_at_is_truthy: bool,
+    ) {
         if *path == self.root_path {
             return;
         }
-        self.parent.effect_complete(path, instance, error);
+        self.parent
+            .effect_complete(path, instance, error, completed_at_is_truthy);
     }
 
     // A child loop's `dispatch` must carry the same absolute path its
@@ -2111,6 +2149,22 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     fn clean_yaml_fences_keeps_original_indentation() {
         let text = "effects:\n  - type: tool\n```\n";
         assert_eq!(clean_yaml_fences(text), "effects:\n  - type: tool");
+    }
+
+    #[test]
+    fn clean_yaml_fences_splits_on_every_python_splitlines_separator() {
+        // Issue #506's own "Hazards" section: `str::lines()` only
+        // splits on `\n`/`\r\n` -- model output reaches this function
+        // first, so it has to split on every boundary Python's
+        // `str.splitlines()` does, not just those two.
+        assert_eq!(clean_yaml_fences("a\x0cb"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\rb"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\u{2028}b"), "a\nb");
+        assert_eq!(clean_yaml_fences("a\u{85}b"), "a\nb");
+        assert_eq!(
+            clean_yaml_fences("```\x0ceffects: []\x0c---\x0c```"),
+            "effects: []"
+        );
     }
 
     #[test]

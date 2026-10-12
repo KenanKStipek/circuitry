@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #506",
+  "description": "A reflector whose planner replies `done: true`. With `stop_on_done` at its default (true), the plan parses but never runs: no `generated.iter_0`, and a successful reflector never writes `meta.created_at`/`completed_at`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

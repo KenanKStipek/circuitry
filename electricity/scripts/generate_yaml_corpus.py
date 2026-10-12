@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate electricity-yaml's golden corpus from Circuitry's real YAML loader.
 
-Every case is a synthetic YAML document (nothing copied from private
-orchestrations) run through `circuitry.core.yaml_load.load_yaml` --
+Every case is a synthetic YAML document written for this corpus, run
+through `circuitry.core.yaml_load.load_yaml` --
 `yaml.safe_load` plus Circuitry's own duplicate-key check -- the ground
 truth electricity-yaml's composer must match (DESIGN.md §3.2, issue #376):
 

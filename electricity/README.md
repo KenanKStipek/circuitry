@@ -8,22 +8,24 @@ tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
 **This is a preview.** `electricity <config.json> <orchestration.yml>` runs
-documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield` and
-`prompt` effects and `finally:` blocks, with the `json`, `shell`, `awk`,
-`imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid` and `clock` tool
-providers, aiming at the same final state, `--live-state` and `--events`
-output as `cof run`. A top-level `prompts:` map and `{{> name}}` composition
-run too, in every field that reaches them (a tool's `prompt`/`params`/
-`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s `template`, a
-`prompt`'s own `template`/`messages`). A `prompt` effect runs for real
-against a document's own top-level `adapter:`/a prompt's own `provider:`
-(native Ollama, the OpenAI-compatible family, `openai`, `anthropic`,
-`replicate`, `watsonx`, and the `scripted` adapter) with its preflight check
-run for real too -- `claude_code`, `cyberdiner`, `litellm` and `pi` are the
-only Circuitry-known adapter names with no electricity builder yet, and
-still refuse with the preview message. Everything else (reflectors, the
+documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
+`prompt` and `reflector` effects and `finally:` blocks, with the `json`,
+`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid` and
+`clock` tool providers, aiming at the same final state, `--live-state` and
+`--events` output as `cof run`. A top-level `prompts:` map and `{{> name}}`
+composition run too, in every field that reaches them (a tool's
+`prompt`/`params`/`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s
+`template`, a `prompt`'s own `template`/`messages`). A `prompt` effect runs
+for real against a document's own top-level `adapter:`/a prompt's own
+`provider:` (native Ollama, the OpenAI-compatible family, `openai`,
+`anthropic`, `replicate`, `watsonx`, and the `scripted` adapter) with its
+preflight check run for real too -- `claude_code`, `cyberdiner`, `litellm`
+and `pi` are the only Circuitry-known adapter names with no electricity
+builder yet, and still refuse with the preview message, as does a
+`reflector`'s own generated plan naming one of them. Everything else (the
 other tool providers, persistence, runtime plugins, complexity routing) is
-also still refused with a preview message pointing at `cof run`. A document and its literal
+also still refused with a preview message pointing at `cof run`. A document
+and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
 options, and `--dump-ir` prints the compiled IR as unstable debugging JSON.

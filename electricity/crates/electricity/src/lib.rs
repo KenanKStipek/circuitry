@@ -515,7 +515,20 @@ fn now_iso() -> String {
 
 /// `state.runtime.last_run.totals` (issue #431's run-wiring step 17/18):
 /// `effects_run` counts every completed node, root and containers
-/// included (`RunObserver::effect_complete`'s own call count).
+/// included, whose own `meta.completed_at` is truthy -- `Observer::
+/// effect_complete`'s own *completed_at_is_truthy* parameter
+/// ([`electricity_vm::RunObserver::effect_complete`]'s own doc
+/// comment), matching `_TotalsAccumulator.observe`'s identical check
+/// exactly. Issue #506's lane L1, review round 2: that parameter used
+/// to be re-derived here by walking *this run's own root* `Store` from
+/// *path* alone, which could never see a node still isolated in its
+/// own `use` child's or tree branch's own `Store` at the moment its
+/// own `effect_complete` fired -- silently over-counting a successful
+/// `reflector` inside either container shape (the one effect type
+/// that never writes `completed_at` on success at all, so it's the one
+/// call `Totals::observe_complete` below must not count). Every
+/// caller now decides the parameter itself, from whichever store/node
+/// it already has in scope.
 /// `tokens_sent`/`tokens_received`/`cost_usd` (issue #498 ruling 7) are
 /// real now -- `cli/runtime_shim.py::_TotalsAccumulator`'s own
 /// `_int_field(meta, "<f>_total", "<f>")`/cost-sum rules, applied to
@@ -655,8 +668,11 @@ impl RunObserver for Observer<'_> {
         path: &EffectPath,
         instance: electricity_vm::observer::InstanceId,
         error: Option<&str>,
+        completed_at_is_truthy: bool,
     ) {
-        self.totals.observe_complete();
+        if completed_at_is_truthy {
+            self.totals.observe_complete();
+        }
         if let Some(log) = self.events {
             log.on_complete(&path.to_string(), instance, error);
         }

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "A reflector inside a `flow: tree` loop, two passes -- orchestrator finding on PR #510's first review: `last_run.totals.effects_run` used to over-count a successful reflector here, since each tree pass runs in its own isolated store, invisible to a root-store walk at the moment its own effect_complete fires.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "sort_warnings": true
+}

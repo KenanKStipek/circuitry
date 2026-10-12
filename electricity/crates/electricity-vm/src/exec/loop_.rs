@@ -251,7 +251,15 @@ pub(crate) async fn execute_loop(
             observer.record_totals(&store.snapshot(m));
         }
         let error_for_complete = meta.as_ref().and_then(|m| node_error(store, m));
-        observer.effect_complete(&effect_path, instance, error_for_complete.as_deref());
+        let completed = meta
+            .as_ref()
+            .is_some_and(|m| super::completed_at_is_truthy(store, m));
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            error_for_complete.as_deref(),
+            completed,
+        );
     }
 
     outcome

@@ -1,0 +1,30 @@
+name: c506-reflector-silent-stops
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: prose
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"
+  - type: reflector
+    name: no_effects_key
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"
+  - type: reflector
+    name: json_plan
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        prompt_type: json
+        schema: {type: object}
+        template: "propose steps"

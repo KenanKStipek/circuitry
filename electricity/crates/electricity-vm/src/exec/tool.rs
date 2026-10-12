@@ -1118,7 +1118,12 @@ pub async fn execute_tool<R: ParamsCtx>(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            observer.effect_complete(&effect_path, instance, Some(&failure.message));
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                Some(&failure.message),
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             // The final store write for this effect (whichever
             // `on_error` branch below actually returns) -- same
             // contract as the per-attempt reset's own `observer.
@@ -1139,7 +1144,12 @@ pub async fn execute_tool<R: ParamsCtx>(
                 Value::from(i64::from(attempt_index)),
             );
         }
-        observer.effect_complete(&effect_path, instance, None);
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            None,
+            super::completed_at_is_truthy(store, &meta_node),
+        );
         observer.write();
         return Ok(());
     }
@@ -1470,6 +1480,7 @@ mod tests {
                 _path: &electricity_bytecode::EffectPath,
                 _instance: crate::observer::InstanceId,
                 _error: Option<&str>,
+                _completed_at_is_truthy: bool,
             ) {
                 self.0.set(self.0.get() + 1);
             }

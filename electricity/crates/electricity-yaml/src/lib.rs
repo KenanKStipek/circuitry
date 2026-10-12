@@ -11,10 +11,12 @@
 //! Circuitry's own duplicate-key check (`core/yaml_load.py`).
 
 mod compose;
+mod dump;
 mod error;
 mod scalar;
 
 pub use compose::{load_yaml, load_yaml_last_key_wins};
+pub use dump::{DumpError, DumpOptions, dump};
 pub use error::{Mark, YamlError};
 
 /// The deepest a document's containers (sequences/mappings) may nest,

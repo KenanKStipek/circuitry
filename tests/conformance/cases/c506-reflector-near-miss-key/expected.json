@@ -1,0 +1,3 @@
+{
+  "error": "prime.plan_it: generated_exec_failed: use 'iter_0' -> inline: Inline orchestration validation failed:\n  - effects[0]: unknown key 'tempalte' on a 'prompt' effect \u2014 did you mean 'template'? As written it is ignored."
+}

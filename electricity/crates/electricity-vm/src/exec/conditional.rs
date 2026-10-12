@@ -95,6 +95,7 @@ pub(crate) fn execute_conditional<'a>(
                     &effect_path,
                     instance,
                     node_error(store, &meta).as_deref(),
+                    super::completed_at_is_truthy(store, &meta),
                 );
                 result
             }

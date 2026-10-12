@@ -1,0 +1,11 @@
+name: c506-reflector-done-true-stop
+adapter: scripted
+model: test
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

@@ -42,8 +42,27 @@ pub trait RunObserver {
     /// A named effect finished -- *instance* is the id
     /// [`RunObserver::effect_start`] returned for *this same call*;
     /// *error* is the text that would become `meta.error`, `None` on
-    /// success.
-    fn effect_complete(&self, _path: &EffectPath, _instance: InstanceId, _error: Option<&str>) {}
+    /// success. *completed_at_is_truthy* is this effect's own node's
+    /// `meta.completed_at`, Python-truthy, decided by the caller from
+    /// whichever `Store`/`NodeRef` it already has in scope
+    /// ([`crate::exec::completed_at_is_truthy`]'s own doc comment,
+    /// issue #506 lane L1's review round 2) -- `true` for every effect
+    /// type's every exit but a successful `reflector`'s (which never
+    /// writes one at all) and a cancellation a container lets fall
+    /// through to this call without refreshing it; `electricity`
+    /// (lib)'s own `Observer::effect_complete` is the only
+    /// implementation that reads this back, for `runtime.last_run.
+    /// totals.effects_run` (`cli/runtime_shim.py::
+    /// _TotalsAccumulator.observe`'s own guard) -- never re-derived by
+    /// walking a store of its own.
+    fn effect_complete(
+        &self,
+        _path: &EffectPath,
+        _instance: InstanceId,
+        _error: Option<&str>,
+        _completed_at_is_truthy: bool,
+    ) {
+    }
 
     /// A tree `dynamic`/`each` loop is about to dispatch -- `--events`'s
     /// own `dispatch` event (`branches`: `n` itself, `concurrency`:
@@ -138,7 +157,7 @@ mod tests {
         let path = EffectPath::root();
         let instance = observer.effect_start(&path);
         assert_eq!(instance, 0);
-        observer.effect_complete(&path, instance, Some("boom"));
+        observer.effect_complete(&path, instance, Some("boom"), true);
         observer.dispatch(&path, 3, 2);
         observer.write();
         observer.warning("a run-time warning with no effect of its own");

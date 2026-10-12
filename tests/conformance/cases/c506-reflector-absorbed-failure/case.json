@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "A `max_effects`-exceeded reflector inside a `dynamic` with `on_error: continue` -- pins `meta.iterations`/`error`/`completed_at` key order, `value: false`, the absorbed failure (the enclosing chain's own next effect still runs), and the stderr `WARNING:` line (review finding 2 on PR #510's first review).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "compare_run_warnings": false
+}
