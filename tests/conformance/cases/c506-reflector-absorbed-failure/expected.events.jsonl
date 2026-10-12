@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-10-12T17:39:10.511Z","ev":"run_start","run_id":"258e6a75-e5cb-4839-8c59-565b69100ab5","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":94642}
+{"v":1,"seq":1,"ts":"2026-10-12T17:39:10.514Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T17:39:10.514Z","ev":"start","id":1,"path":"prime.goal"}
+{"v":1,"seq":3,"ts":"2026-10-12T17:39:10.514Z","ev":"end","id":1,"path":"prime.goal","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-12T17:39:10.514Z","ev":"start","id":2,"path":"prime.wrapper"}
+{"v":1,"seq":5,"ts":"2026-10-12T17:39:10.514Z","ev":"start","id":3,"path":"prime.wrapper.plan_it"}
+{"v":1,"seq":6,"ts":"2026-10-12T17:39:10.514Z","ev":"start","id":4,"path":"prime.wrapper.plan_it.inner"}
+{"v":1,"seq":7,"ts":"2026-10-12T17:39:10.515Z","ev":"start","id":5,"path":"prime.wrapper.plan_it.inner.propose_steps"}
+{"v":1,"seq":8,"ts":"2026-10-12T17:39:10.515Z","ev":"end","id":5,"path":"prime.wrapper.plan_it.inner.propose_steps","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-12T17:39:10.515Z","ev":"end","id":4,"path":"prime.wrapper.plan_it.inner","ok":true,"ms":1}
+{"v":1,"seq":10,"ts":"2026-10-12T17:39:10.516Z","ev":"end","id":3,"path":"prime.wrapper.plan_it","ok":false,"ms":2,"error":"invalid_plan: generated plan has 3 top-level effects, exceeds max_effects (2)"}
+{"v":1,"seq":11,"ts":"2026-10-12T17:39:10.516Z","ev":"end","id":2,"path":"prime.wrapper","ok":false,"ms":2,"error":"wrapper.plan_it: invalid_plan: generated plan has 3 top-level effects, exceeds max_effects (2)"}
+{"v":1,"seq":12,"ts":"2026-10-12T17:39:10.516Z","ev":"start","id":6,"path":"prime.after"}
+{"v":1,"seq":13,"ts":"2026-10-12T17:39:10.516Z","ev":"end","id":6,"path":"prime.after","ok":true,"ms":0}
+{"v":1,"seq":14,"ts":"2026-10-12T17:39:10.516Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":15,"ts":"2026-10-12T17:39:10.516Z","ev":"run_end","ok":true}

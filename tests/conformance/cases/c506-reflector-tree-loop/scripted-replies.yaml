@@ -1,0 +1,24 @@
+prime.shots.iter_0.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: check
+          provider: json
+          params:
+            mode: parse
+            input: '{"ok": true}'
+    tokens_sent: 10
+    tokens_received: 20
+prime.shots.iter_1.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: check
+          provider: json
+          params:
+            mode: parse
+            input: '{"ok": true}'
+    tokens_sent: 11
+    tokens_received: 21

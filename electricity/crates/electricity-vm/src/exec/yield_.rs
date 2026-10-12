@@ -184,7 +184,12 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
     if run_ctx.dry_run {
         set_leaf(store, &effect_node, "value", Value::None);
         set_leaf(store, &meta_node, "completed_at", now_iso());
-        observer.effect_complete(&effect_path, instance, None);
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            None,
+            super::completed_at_is_truthy(store, &meta_node),
+        );
         observer.write();
         return Ok(());
     }
@@ -223,7 +228,12 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
         Ok(rendered) => {
             set_leaf(store, &effect_node, "value", Value::Str(rendered));
             set_leaf(store, &meta_node, "completed_at", now_iso());
-            observer.effect_complete(&effect_path, instance, None);
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                None,
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             observer.write();
             Ok(())
         }
@@ -253,7 +263,12 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
             // secret-shaped message must never reach the event stream
             // even though `Raised` below still carries it unredacted
             // (review finding 2 on issue #492's PR).
-            observer.effect_complete(&effect_path, instance, Some(&redacted));
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                Some(&redacted),
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Raised {

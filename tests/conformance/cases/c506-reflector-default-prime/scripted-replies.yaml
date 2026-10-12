@@ -1,0 +1,6 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: true
+      effects: []
+    tokens_sent: 10
+    tokens_received: 20

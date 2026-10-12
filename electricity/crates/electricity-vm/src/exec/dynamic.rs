@@ -248,7 +248,12 @@ pub(crate) fn execute_dynamic<'a>(
         };
         store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
 
-        observer.effect_complete(&effect_path, instance, reported_error.as_deref());
+        observer.effect_complete(
+            &effect_path,
+            instance,
+            reported_error.as_deref(),
+            super::completed_at_is_truthy(store, &meta_node),
+        );
 
         if let Some(be) = body_exc {
             if be.is_fatal() || matches!(op.on_error, OnError::Fail) {

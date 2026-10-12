@@ -1,0 +1,14 @@
+prime.prose.inner.propose_steps:
+  - text: "I cannot plan this."
+    tokens_sent: 10
+    tokens_received: 20
+prime.no_effects_key.inner.propose_steps:
+  - text: |
+      done: false
+      goal: not a real plan key
+    tokens_sent: 11
+    tokens_received: 21
+prime.json_plan.inner.propose_steps:
+  - text: '{"note": "not a string plan"}'
+    tokens_sent: 12
+    tokens_received: 22

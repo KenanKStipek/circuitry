@@ -679,7 +679,12 @@ fn finish_failure(
         set_leaf(store, effect_node, "value", Value::None);
     }
     observer.record_totals(&store.snapshot(meta_node));
-    observer.effect_complete(effect_path, instance, Some(&redacted));
+    observer.effect_complete(
+        effect_path,
+        instance,
+        Some(&redacted),
+        super::completed_at_is_truthy(store, meta_node),
+    );
     observer.write();
     if op.on_error == OnError::Fail {
         return Err(VmError::Raised {
@@ -742,7 +747,12 @@ pub(crate) async fn execute_prompt(
             let effect_path = frame.effect_path(&op.path);
             let instance = observer.effect_start(&effect_path);
             observer.record_totals(&store.snapshot(&meta_node));
-            observer.effect_complete(&effect_path, instance, Some(&redact_str(&message)));
+            observer.effect_complete(
+                &effect_path,
+                instance,
+                Some(&redact_str(&message)),
+                super::completed_at_is_truthy(store, &meta_node),
+            );
             observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Raised {
@@ -1117,7 +1127,12 @@ pub(crate) async fn execute_prompt(
                     );
                 }
                 observer.record_totals(&store.snapshot(&meta_node));
-                observer.effect_complete(&effect_path, instance, None);
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    None,
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
                 observer.write();
                 return Ok(());
             }

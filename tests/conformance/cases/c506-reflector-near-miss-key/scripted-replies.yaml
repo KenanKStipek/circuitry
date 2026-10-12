@@ -1,0 +1,10 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: prompt
+          name: a
+          template: "real"
+          tempalte: "oops"
+    tokens_sent: 10
+    tokens_received: 20

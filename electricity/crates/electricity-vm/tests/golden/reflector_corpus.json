@@ -1,0 +1,463 @@
+[
+  {
+    "kind": "clean_fences",
+    "input": "```yaml\neffects: []\n---\n```",
+    "cleaned": "effects: []"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "effects:\n  - type: tool\n```\n",
+    "cleaned": "effects:\n  - type: tool"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\u000bb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\fb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\rb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\r\nb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\u001cb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\u001db",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a\u001eb",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a b",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "ab",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "a b",
+    "cleaned": "a\nb"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "```\feffects: []\f---\f```",
+    "cleaned": "effects: []"
+  },
+  {
+    "kind": "clean_fences",
+    "input": "  \n```\n  \n",
+    "cleaned": ""
+  },
+  {
+    "kind": "clean_fences",
+    "input": "no fences at all\njust plain text",
+    "cleaned": "no fences at all\njust plain text"
+  },
+  {
+    "kind": "extract_done",
+    "input": "",
+    "ok": true,
+    "done": true,
+    "plan_yaml": ""
+  },
+  {
+    "kind": "extract_done",
+    "input": "   \n\n",
+    "ok": true,
+    "done": true,
+    "plan_yaml": ""
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: false\neffects:\n  - type: prompt\n    name: a\n    template: hi\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: a\n  template: hi\n  type: prompt\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: true\neffects: []\n",
+    "ok": true,
+    "done": true,
+    "plan_yaml": "effects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "steps:\n  - type: prompt\n    name: a\n    template: hi\ndone: false\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: a\n  template: hi\n  type: prompt\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "plan:\n  effects:\n    - type: prompt\n      name: a\n      template: hi\ndone: false\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: a\n  template: hi\n  type: prompt\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "plan:\n  - type: prompt\n    name: a\n    template: hi\ndone: false\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: a\n  template: hi\n  type: prompt\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "- type: prompt\n  name: a\n  template: hi\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: a\n  template: hi\n  type: prompt\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "I cannot plan this.\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "I cannot plan this."
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: false\nnotes: just a mapping with no effects/steps/plan\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "done: false\nnotes: just a mapping with no effects/steps/plan"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: 'false'\neffects: []\n",
+    "ok": true,
+    "done": true,
+    "plan_yaml": "effects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: 'no'\neffects: []\n",
+    "ok": true,
+    "done": true,
+    "plan_yaml": "effects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: no\neffects: []\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: off\neffects: []\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "effects: [\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects: ["
+  },
+  {
+    "kind": "extract_done",
+    "input": "1: a\nb: c\neffects: []\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "1: a\nb: c\neffects: []\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "```yaml\ndone: false\neffects:\n  - type: tool\n    name: x\n    provider: json\n```\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects:\n- name: x\n  provider: json\n  type: tool\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: false\nsteps: not-a-list\neffects: []\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "effects: []\nsteps: not-a-list\n"
+  },
+  {
+    "kind": "extract_done",
+    "input": "done: false\nplan: not-a-dict-or-list\n",
+    "ok": true,
+    "done": false,
+    "plan_yaml": "done: false\nplan: not-a-dict-or-list"
+  },
+  {
+    "kind": "prime",
+    "template": "Goal: {goal}\nContext: {context}\nMax: {max_effects}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nGoal: g\nContext: c\nMax: 8\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Max (padded): {max_effects:03d}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nMax (padded): 008\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Context repr: {context!r}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nContext repr: 'c'\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Goal str: {goal!s}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nGoal str: g\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Literal braces: {{not a field}}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nLiteral braces: {not a field}\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Unknown field: {nope}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": true,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nUnknown field: {nope}\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Lone brace: {",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": true,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nLone brace: {\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Lone close: }",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": true,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nLone close: }\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Positional: {}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": true,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nPositional: {}\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Index access: {goal[0]}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": true,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nIndex access: g\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Bad conversion: {goal!x}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": true,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nBad conversion: {goal!x}\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "",
+    "max_effects": 3,
+    "goal": "",
+    "context": "",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\n\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "{max_effects:<6d}|end",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\n8     |end\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Quoted: {context!r}",
+    "max_effects": 8,
+    "goal": "g",
+    "context": "has 'single' and \"double\"",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nQuoted: 'has \\'single\\' and \"double\"'\n\n"
+  },
+  {
+    "kind": "prime",
+    "template": "Non-ascii: {goal}",
+    "max_effects": 8,
+    "goal": "café 😀",
+    "context": "c",
+    "fell_back": false,
+    "divergence": false,
+    "rendered": "CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\nDo not output any '*' characters except as plain text INSIDE a YAML quoted string.\nNever use *, **, backticks, headings, or bullet prose outside YAML.\nEvery line must be valid YAML.\nNon-ascii: café 😀\n\n"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {},
+    "context": "{\n  \"adapter\": null,\n  \"model\": null,\n  \"plugins\": null\n}"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {
+      "model": "gpt-4",
+      "adapter": "openai",
+      "plugins": [
+        "json",
+        "shell"
+      ]
+    },
+    "context": "{\n  \"adapter\": \"openai\",\n  \"model\": \"gpt-4\",\n  \"plugins\": [\n    \"json\",\n    \"shell\"\n  ]\n}"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {
+      "model": null,
+      "adapter": null,
+      "plugins": null
+    },
+    "context": "{\n  \"adapter\": null,\n  \"model\": null,\n  \"plugins\": null\n}"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {
+      "model": "café-😀",
+      "adapter": "openai",
+      "plugins": []
+    },
+    "context": "{\n  \"adapter\": \"openai\",\n  \"model\": \"caf\\u00e9-\\ud83d\\ude00\",\n  \"plugins\": []\n}"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {
+      "model": "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "adapter": "openai",
+      "plugins": [
+        "json"
+      ]
+    },
+    "context": "{\n  \"adapter\": \"openai\",\n  \"model\": \"***REDACTED***\",\n  \"plugins\": [\n    \"json\"\n  ]\n}"
+  },
+  {
+    "kind": "context",
+    "effective_settings": {
+      "model": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+      "adapter": "a",
+      "plugins": []
+    },
+    "context": "{\n  \"adapter\": \"a\",\n  \"model\": \"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\n... (truncated)"
+  },
+  {
+    "kind": "goal",
+    "prime": {},
+    "goal": ""
+  },
+  {
+    "kind": "goal",
+    "prime": {
+      "goal": {
+        "value": "  Summarize the project.  "
+      }
+    },
+    "goal": "Summarize the project."
+  },
+  {
+    "kind": "goal",
+    "prime": {
+      "goal": {
+        "value": ""
+      }
+    },
+    "goal": ""
+  },
+  {
+    "kind": "goal",
+    "prime": {
+      "goal": {
+        "value": "   "
+      }
+    },
+    "goal": ""
+  },
+  {
+    "kind": "goal",
+    "prime": {
+      "goal": {
+        "value": 5
+      }
+    },
+    "goal": ""
+  },
+  {
+    "kind": "goal",
+    "prime": {
+      "goal": "not a dict"
+    },
+    "goal": ""
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "A generated plan's own effect has a near-miss key (`tempalte` for `template`) alongside the real one -- Circuitry's own \"did you mean\" text, compared exact (review finding 2 on PR #510's first review).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

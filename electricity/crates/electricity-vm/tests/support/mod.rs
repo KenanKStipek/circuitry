@@ -405,6 +405,7 @@ impl RunObserver for RecordingObserver {
         path: &EffectPath,
         _instance: electricity_vm::observer::InstanceId,
         error: Option<&str>,
+        _completed_at_is_truthy: bool,
     ) {
         self.events
             .borrow_mut()
@@ -470,8 +471,10 @@ impl RunObserver for CancelOnStart<'_> {
         path: &EffectPath,
         instance: electricity_vm::observer::InstanceId,
         error: Option<&str>,
+        completed_at_is_truthy: bool,
     ) {
-        self.inner.effect_complete(path, instance, error);
+        self.inner
+            .effect_complete(path, instance, error, completed_at_is_truthy);
     }
 
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {

@@ -1,0 +1,2737 @@
+[
+  {
+    "input": {
+      "t": "list",
+      "v": []
+    },
+    "sort_keys": true,
+    "expected": "[]\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": []
+    },
+    "sort_keys": true,
+    "expected": "{}\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: []\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": []
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: {}\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "int",
+          "v": "2"
+        },
+        {
+          "t": "int",
+          "v": "3"
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- 1\n- 2\n- 3\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 1\nb: 2\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a:\n- 1\n- 2\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        },
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "3"
+            },
+            {
+              "t": "int",
+              "v": "4"
+            }
+          ]
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- - 1\n  - 2\n- - 3\n  - 4\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "dict",
+          "v": [
+            [
+              {
+                "t": "str",
+                "v": "a"
+              },
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ],
+            [
+              {
+                "t": "str",
+                "v": "b"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- a: 1\n  b: 2\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "b"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "c"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a:\n  b:\n  - 1\n  - 2\n  c: 3\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "list",
+                "v": [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "int",
+                    "v": "2"
+                  }
+                ]
+              },
+              {
+                "t": "list",
+                "v": [
+                  {
+                    "t": "int",
+                    "v": "3"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "4"
+                      },
+                      {
+                        "t": "int",
+                        "v": "5"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a:\n- - 1\n  - 2\n- - 3\n  - - 4\n    - 5\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "x"
+                    },
+                    {
+                      "t": "int",
+                      "v": "1"
+                    }
+                  ]
+                ]
+              },
+              {
+                "t": "dict",
+                "v": [
+                  [
+                    {
+                      "t": "str",
+                      "v": "y"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a:\n- x: 1\n- y: 2\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "3"
+                },
+                {
+                  "t": "int",
+                  "v": "4"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- - - 1\n    - 2\n  - - 3\n    - 4\n- - 5\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "list",
+                      "v": [
+                        {
+                          "t": "str",
+                          "v": "deep"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- - - - - deep\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "z"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "nested"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "y"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "int",
+                      "v": "1"
+                    },
+                    {
+                      "t": "int",
+                      "v": "2"
+                    },
+                    {
+                      "t": "int",
+                      "v": "3"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "nested:\n  x:\n  - 1\n  - 2\n  - 3\n  y: 2\nz: 1\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "none"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "bool",
+            "v": true
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "c"
+          },
+          {
+            "t": "float",
+            "v": "1.5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "d"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "str",
+                "v": "two"
+              },
+              {
+                "t": "float",
+                "v": "3.0"
+              },
+              {
+                "t": "none"
+              },
+              {
+                "t": "bool",
+                "v": true
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: null\nb: true\nc: 1.5\nd:\n- 1\n- two\n- 3.0\n- null\n- true\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "hello"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: hello\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "yes"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'yes'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "Yes"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'Yes'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "123"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '123'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "1.5"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '1.5'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "null"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'null'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "~"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '~'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "*foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '*foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "&foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '&foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "!foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '!foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "|foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '|foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ">foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '>foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "%foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '%foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "@foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '@foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "`foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '`foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "#foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '#foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo #bar"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'foo #bar'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo: bar"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'foo: bar'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo:bar"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: foo:bar\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "- foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '- foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "-foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: -foo\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "?foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: ?foo\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo?"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: foo?\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": " foo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: ' foo'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'foo '\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "foo\tbar"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"foo\\tbar\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ":leading colon"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: :leading colon\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "colon:no space"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: colon:no space\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "trailing colon:"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'trailing colon:'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "skip: me"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'skip: me'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "héllo"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"h\\xE9llo\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: ''\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "   test"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '   test'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "contains\u0007bell"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"contains\\abell\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": " leading and trailing \t"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \" leading and trailing \\t\"\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "hello"
+    },
+    "sort_keys": true,
+    "expected": "hello\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "yes"
+    },
+    "sort_keys": true,
+    "expected": "'yes'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "Yes"
+    },
+    "sort_keys": true,
+    "expected": "'Yes'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "123"
+    },
+    "sort_keys": true,
+    "expected": "'123'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "1.5"
+    },
+    "sort_keys": true,
+    "expected": "'1.5'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "null"
+    },
+    "sort_keys": true,
+    "expected": "'null'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "~"
+    },
+    "sort_keys": true,
+    "expected": "'~'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "*foo"
+    },
+    "sort_keys": true,
+    "expected": "'*foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "&foo"
+    },
+    "sort_keys": true,
+    "expected": "'&foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "!foo"
+    },
+    "sort_keys": true,
+    "expected": "'!foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "|foo"
+    },
+    "sort_keys": true,
+    "expected": "'|foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": ">foo"
+    },
+    "sort_keys": true,
+    "expected": "'>foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "%foo"
+    },
+    "sort_keys": true,
+    "expected": "'%foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "@foo"
+    },
+    "sort_keys": true,
+    "expected": "'@foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "`foo"
+    },
+    "sort_keys": true,
+    "expected": "'`foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "#foo"
+    },
+    "sort_keys": true,
+    "expected": "'#foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo #bar"
+    },
+    "sort_keys": true,
+    "expected": "'foo #bar'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo: bar"
+    },
+    "sort_keys": true,
+    "expected": "'foo: bar'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo:bar"
+    },
+    "sort_keys": true,
+    "expected": "foo:bar\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "- foo"
+    },
+    "sort_keys": true,
+    "expected": "'- foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "-foo"
+    },
+    "sort_keys": true,
+    "expected": "-foo\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "?foo"
+    },
+    "sort_keys": true,
+    "expected": "?foo\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo?"
+    },
+    "sort_keys": true,
+    "expected": "foo?\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": " foo"
+    },
+    "sort_keys": true,
+    "expected": "' foo'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo "
+    },
+    "sort_keys": true,
+    "expected": "'foo '\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "foo\tbar"
+    },
+    "sort_keys": true,
+    "expected": "\"foo\\tbar\"\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": ":leading colon"
+    },
+    "sort_keys": true,
+    "expected": ":leading colon\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "colon:no space"
+    },
+    "sort_keys": true,
+    "expected": "colon:no space\n...\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "trailing colon:"
+    },
+    "sort_keys": true,
+    "expected": "'trailing colon:'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "skip: me"
+    },
+    "sort_keys": true,
+    "expected": "'skip: me'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "héllo"
+    },
+    "sort_keys": true,
+    "expected": "\"h\\xE9llo\"\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": ""
+    },
+    "sort_keys": true,
+    "expected": "''\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "   test"
+    },
+    "sort_keys": true,
+    "expected": "'   test'\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "contains\u0007bell"
+    },
+    "sort_keys": true,
+    "expected": "\"contains\\abell\"\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": " leading and trailing \t"
+    },
+    "sort_keys": true,
+    "expected": "\" leading and trailing \\t\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "null"
+          },
+          {
+            "t": "str",
+            "v": "x"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "true"
+          },
+          {
+            "t": "str",
+            "v": "y"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "'null': x\n'true': y\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "on"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "off"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "'off': 2\n'on': 1\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "yes"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "no"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "'no': b\n'yes': a\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "line1\nline2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'line1\n\n  line2'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "line1\nline2\n"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'line1\n\n  line2\n\n  '\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "a\n\nb"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'a\n\n\n  b'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "a  b"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: a  b\n"
+  },
+  {
+    "input": {
+      "t": "str",
+      "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "sort_keys": true,
+    "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n...\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\n  word13 word14 word15 word16 word17 word18 word19\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\n  word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24\n  word25 word26 word27 word28 word29\n"
+  },
+  {
+    "input": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29"
+        },
+        {
+          "t": "str",
+          "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29"
+        }
+      ]
+    },
+    "sort_keys": true,
+    "expected": "- word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\n  word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24\n  word25 word26 word27 word28 word29\n- word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\n  word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24\n  word25 word26 word27 word28 word29\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "outer"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "str",
+                      "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "outer:\n  a:\n  - word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\n    word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24\n    word25 word26 word27 word28 word29\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "outer"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "inner"
+                },
+                {
+                  "t": "str",
+                  "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "outer:\n  inner: word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11\n    word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23\n    word24 word25 word26 word27 word28 word29\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "word word word word word word word word word word word word word word word word word word word word "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'word word word word word word word word word word word word word word word word\n  word word word word '\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29\t"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12\\\n  \\ word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24\\\n  \\ word25 word26 word27 word28 word29\\t\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "tab\there\nline2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"tab\\there\\nline2\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\tyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\tyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "line1\nline2\nline3 with a lot more words to push this line past col eighty definitely yes"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 'line1\n\n  line2\n\n  line3 with a lot more words to push this line past col eighty definitely yes'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé ünïcödé "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9\\\n  \\ \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9\\\n  \\ \\xFCn\\xEFc\\xF6d\\xE9 \\xFCn\\xEFc\\xF6d\\xE9 \"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "😀 emoji text 😀 emoji text 😀 emoji text 😀 emoji text 😀 emoji text 😀 emoji text 😀 emoji text 😀 emoji text "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\U0001F600 emoji text \\U0001F600 emoji text \\U0001F600 emoji text \\U0001F600 emoji\\\n  \\ text \\U0001F600 emoji text \\U0001F600 emoji text \\U0001F600 emoji text \\U0001F600\\\n  \\ emoji text \"\n"
+  },
+  {
+    "input": {
+      "t": "int",
+      "v": "5"
+    },
+    "sort_keys": true,
+    "expected": "5\n...\n"
+  },
+  {
+    "input": {
+      "t": "none"
+    },
+    "sort_keys": true,
+    "expected": "null\n...\n"
+  },
+  {
+    "input": {
+      "t": "bool",
+      "v": true
+    },
+    "sort_keys": true,
+    "expected": "true\n...\n"
+  },
+  {
+    "input": {
+      "t": "bool",
+      "v": false
+    },
+    "sort_keys": true,
+    "expected": "false\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "1.0"
+    },
+    "sort_keys": true,
+    "expected": "1.0\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "1e+20"
+    },
+    "sort_keys": true,
+    "expected": "1.0e+20\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "inf"
+    },
+    "sort_keys": true,
+    "expected": ".inf\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "nan"
+    },
+    "sort_keys": true,
+    "expected": ".nan\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "-0.0"
+    },
+    "sort_keys": true,
+    "expected": "-0.0\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "0.1"
+    },
+    "sort_keys": true,
+    "expected": "0.1\n...\n"
+  },
+  {
+    "input": {
+      "t": "float",
+      "v": "-1.5e-10"
+    },
+    "sort_keys": true,
+    "expected": "-1.5e-10\n...\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "-5"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: -5\n"
+  },
+  {
+    "input": {
+      "t": "int",
+      "v": "123456789012345678901234567890"
+    },
+    "sort_keys": true,
+    "expected": "123456789012345678901234567890\n...\n"
+  },
+  {
+    "input": {
+      "t": "int",
+      "v": "-123456789012345678901234567890"
+    },
+    "sort_keys": true,
+    "expected": "-123456789012345678901234567890\n...\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "123456789012345678901234567890"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 123456789012345678901234567890\n"
+  },
+  {
+    "input": {
+      "t": "date",
+      "v": "2024-01-01"
+    },
+    "sort_keys": true,
+    "expected": "2024-01-01\n...\n"
+  },
+  {
+    "input": {
+      "t": "datetime",
+      "naive": "2024-01-01T02:03:04",
+      "offset_sec": null
+    },
+    "sort_keys": true,
+    "expected": "2024-01-01 02:03:04\n...\n"
+  },
+  {
+    "input": {
+      "t": "datetime",
+      "naive": "2024-01-02T03:04:05.123456",
+      "offset_sec": null
+    },
+    "sort_keys": true,
+    "expected": "2024-01-02 03:04:05.123456\n...\n"
+  },
+  {
+    "input": {
+      "t": "datetime",
+      "naive": "2024-01-02T03:04:05",
+      "offset_sec": 19800
+    },
+    "sort_keys": true,
+    "expected": "2024-01-02 03:04:05+05:30\n...\n"
+  },
+  {
+    "input": {
+      "t": "datetime",
+      "naive": "2024-01-02T03:04:05",
+      "offset_sec": 0
+    },
+    "sort_keys": true,
+    "expected": "2024-01-02 03:04:05+00:00\n...\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\u0000"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\0\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\u0007"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\a\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\b"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\b\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\u000b"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\v\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\f"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\f\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\r"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\r\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\u001b"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\e\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\x7F\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": " "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\_\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "­"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\xAD\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": ""
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\N\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": " "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\L\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": " "
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\P\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "﻿"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\uFEFF\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "​"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \"\\u200B\"\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\""
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: '\"'\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "str",
+            "v": "\\"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: \\\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "1: b\n2: c\n3: a\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ]
+      ]
+    },
+    "sort_keys": false,
+    "expected": "3: a\n1: b\n2: c\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "a: 2\nb: 1\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "sort_keys": false,
+    "expected": "b: 1\na: 2\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "1: a\nb: c\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "b: c\n1: a\n"
+  },
+  {
+    "input": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "b"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "z"
+          },
+          {
+            "t": "str",
+            "v": "c"
+          }
+        ]
+      ]
+    },
+    "sort_keys": true,
+    "expected": "3: a\n1: b\nz: c\n"
+  }
+]

@@ -1,0 +1,23 @@
+name: c506-reflector-absorbed-failure
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: dynamic
+    name: wrapper
+    on_error: continue
+    effects:
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it."
+        max_effects: 2
+        effects:
+          - type: prompt
+            name: propose_steps
+            template: "propose steps"
+  - type: tool
+    name: after
+    provider: json
+    params: {mode: stringify, input: survived}

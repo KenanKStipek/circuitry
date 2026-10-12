@@ -1,0 +1,9 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: true
+      effects:
+        - type: tool
+          name: check
+          provider: json
+    tokens_sent: 5
+    tokens_received: 8

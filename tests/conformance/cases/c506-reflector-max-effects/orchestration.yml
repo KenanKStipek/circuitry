@@ -1,0 +1,12 @@
+name: c506-reflector-max-effects
+adapter: scripted
+model: test
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    max_effects: 2
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

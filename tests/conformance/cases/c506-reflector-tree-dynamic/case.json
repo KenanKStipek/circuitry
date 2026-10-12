@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #506",
+  "description": "A reflector inside a `flow: tree` dynamic: two iterations, a plan step with a `model:` override, and a cycle-2 plan template that reads `{{generated.iter_0.check.value}}` from cycle 1's generated node -- orchestrator finding on PR #510's first review: `last_run.totals.effects_run` used to over-count a successful reflector here, since a tree branch runs in its own isolated store, invisible to a root-store walk at the moment its own effect_complete fires.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "sort_warnings": true
+}
