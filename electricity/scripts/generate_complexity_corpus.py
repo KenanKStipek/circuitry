@@ -414,6 +414,20 @@ def family_keywords() -> list[dict[str, Any]]:
     )
     cases.append(
         run_case(
+            "keyword table backslash phrases match literally",
+            rendered_prompt="see a\\d here, and a1 and a\\ too",
+            keyword_weights={"a\\d": 0.4, "a\\": 0.3, "\\": 0.2},
+        )
+    )
+    cases.append(
+        run_case(
+            "keyword table backslash phrase does not act as a digit class",
+            rendered_prompt="only a1 and a2 here",
+            keyword_weights={"a\\d": 0.4},
+        )
+    )
+    cases.append(
+        run_case(
             "keyword description contributes",
             definition=_basic_definition(template="plain text", description="please analyze this"),
         )

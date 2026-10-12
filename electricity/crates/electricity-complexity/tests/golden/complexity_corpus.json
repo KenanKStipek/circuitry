@@ -20657,6 +20657,150 @@
       }
     },
     {
+      "description": "keyword table backslash phrases match literally",
+      "input": {
+        "rendered_prompt": "see a\\d here, and a1 and a\\ too",
+        "keyword_weights": {
+          "a\\d": 0.4,
+          "a\\": 0.3,
+          "\\": 0.2
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 9.177228,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 1.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 8.0,
+              "normalized": 0.009901,
+              "weight": 0.28,
+              "contribution": 0.277228,
+              "note": "~8 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.18,
+              "contribution": 0.0,
+              "note": "0 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.14,
+              "contribution": 3.5,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.16,
+              "contribution": 0.0,
+              "note": "no schema declared"
+            },
+            "output_size": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.1,
+              "contribution": 0.0,
+              "note": "no declared output limit"
+            },
+            "structural_position": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.08,
+              "contribution": 0.0,
+              "note": "depth 0"
+            },
+            "keywords": {
+              "raw": 3.0,
+              "normalized": 0.9,
+              "weight": 0.06,
+              "contribution": 5.4,
+              "note": "matched \\, a\\, a\\d"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
+      }
+    },
+    {
+      "description": "keyword table backslash phrase does not act as a digit class",
+      "input": {
+        "rendered_prompt": "only a1 and a2 here",
+        "keyword_weights": {
+          "a\\d": 0.4
+        }
+      },
+      "expected": {
+        "meta": {
+          "score": 3.673908,
+          "max_score": 100.0,
+          "mode": "rendered",
+          "estimated": false,
+          "weight_total": 1.0,
+          "signals": {
+            "prompt_size": {
+              "raw": 5.0,
+              "normalized": 0.006211,
+              "weight": 0.28,
+              "contribution": 0.173908,
+              "note": "~5 tokens of rendered prompt"
+            },
+            "state_references": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.18,
+              "contribution": 0.0,
+              "note": "0 distinct reference(s)"
+            },
+            "prompt_type": {
+              "raw": 0.25,
+              "normalized": 0.25,
+              "weight": 0.14,
+              "contribution": 3.5,
+              "note": "prompt_type=text"
+            },
+            "output_schema": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.16,
+              "contribution": 0.0,
+              "note": "no schema declared"
+            },
+            "output_size": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.1,
+              "contribution": 0.0,
+              "note": "no declared output limit"
+            },
+            "structural_position": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.08,
+              "contribution": 0.0,
+              "note": "depth 0"
+            },
+            "keywords": {
+              "raw": 0.0,
+              "normalized": 0.0,
+              "weight": 0.06,
+              "contribution": 0.0,
+              "note": "no keyword matches"
+            }
+          },
+          "warnings": []
+        },
+        "estimated_signals": []
+      }
+    },
+    {
       "description": "keyword description contributes",
       "input": {
         "definition": {
