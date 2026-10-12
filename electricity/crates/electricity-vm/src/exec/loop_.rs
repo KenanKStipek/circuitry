@@ -17,6 +17,7 @@ use crate::exec::dynamic::now_iso;
 use crate::{
     CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
     node_from_entries, node_with_fallback, node_with_fallback_hiding,
+    node_with_fallback_watermarked,
 };
 use electricity_bytecode::{
     Condition, LoopFlow, LoopId, LoopSpec, OnError, Op, PathSegment, Region,
@@ -725,6 +726,22 @@ fn layered_hiding(
     }
 }
 
+/// [`layered`], plus [`crate::store::Node::watermark`] -- *fallback*'s
+/// own direct-entry count right now, so a key it gains afterward (a
+/// later sibling step's own skeleton node, `exec::tool::execute_tool`
+/// `ensure_dict`s one before it ever renders its own params) stays
+/// invisible through the result -- [`step_overlay`]'s own use (issue
+/// #501's second review). A no-op if *fallback* is `None`.
+fn layered_watermarked(entries: IndexMap<Value, Slot>, fallback: Option<NodeRef>) -> NodeRef {
+    match fallback {
+        Some(f) => {
+            let watermark = f.borrow().len();
+            node_with_fallback_watermarked(entries, f, watermark)
+        }
+        None => node_from_entries(entries),
+    }
+}
+
 /// *chain*'s own single [`CtxSource::Live`] entry, if that's all it
 /// has -- [`build_pass_chain`]'s own output, and so [`with_prev_overlay`]/
 /// [`step_overlay`]'s own *chain*/*pass_chain* argument, is always
@@ -799,15 +816,23 @@ fn plain_overlay(chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
 /// `snapshot` doc comments).
 ///
 /// *idx* -- the pass about to run -- is hidden from `own`'s own
-/// fallback ([`layered_hiding`]): [`execute_loop`]'s own callers
-/// `ensure_dict` the real loop node's `iter_<idx>` child right after
-/// this returns, before the pass's body ever runs, and that child is
-/// then the real, live write target for the whole pass -- so without
-/// hiding it, the live `own_fallback` below would let a later step of
-/// *this very pass* see its own, still-in-progress `iter_<idx>`
-/// through `prime.<loop_name>.iter_<idx>`, something `core/loop.py::
-/// LoopRuntime._with_prev`'s own one-time, pre-`iter_<idx>` dict copy
-/// never exposes (issue #501 review finding 2).
+/// fallback ([`layered_hiding`]) **only if it doesn't already exist
+/// there**: `core/loop.py::LoopRuntime._with_prev`'s own `dict(
+/// own_node)` copy runs *before* `store.child(iter_<idx>)` creates
+/// this pass's own node, so it freezes the real loop node's key SET
+/// as of that exact moment -- genuinely absent (the common case: a
+/// loop running for the first time) stays absent all pass, even
+/// though `own_fallback` below is a live `NodeRef` that will
+/// eventually gain that key once [`execute_loop`]'s own caller
+/// `ensure_dict`s it right after this returns. But a **reused** real
+/// loop node (a named loop inside an unnamed outer loop, or
+/// `--state`-resumed persisted state, issue #501's second review's
+/// own P0) can already carry `iter_<idx>` from an *earlier* run
+/// through this same node -- `dict(own_node)`'s own copy, taken at
+/// *this* run's pass start, includes it right along with every other
+/// key already there, same as any other already-present key. Checked
+/// with one extra [`Store::peek`] (O(1), paid once per pass, not per
+/// read) rather than unconditionally hiding it.
 fn with_prev_overlay(
     store: &Store,
     chain: &CtxChain,
@@ -830,7 +855,14 @@ fn with_prev_overlay(
 
     let mut own_entries = IndexMap::new();
     own_entries.insert(key("prev"), Slot::Node(node_from_entries(prev.clone())));
-    let own = layered_hiding(own_entries, own_fallback, iter_key);
+    let iter_already_exists = own_fallback
+        .as_ref()
+        .is_some_and(|f| store.peek(f, &iter_key).is_some());
+    let own = if iter_already_exists {
+        layered(own_entries, own_fallback)
+    } else {
+        layered_hiding(own_entries, own_fallback, iter_key)
+    };
 
     let mut prime_entries = IndexMap::new();
     prime_entries.insert(loop_key, Slot::Node(own));
@@ -880,17 +912,30 @@ fn build_pass_chain(
 /// single-`Live`-entry output (or, for a `step_chain` rebuilt after an
 /// earlier step this same pass, this function's own previous result --
 /// still single-entry), so this layers *local* straight onto it
-/// ([`fallback_for`]/[`layered`]) rather than flattening it fresh via
-/// [`chain_slots`]/[`dict_slots`] -- the same per-pass-and-per-step
-/// saving [`plain_overlay`]'s own doc comment explains, except this
-/// one was already guaranteed safe for every caller (no `Frozen`-chain
-/// case ever reaches here).
+/// ([`fallback_for`]/[`layered_watermarked`]) rather than flattening it
+/// fresh via [`chain_slots`]/[`dict_slots`] -- the same
+/// per-pass-and-per-step saving [`plain_overlay`]'s own doc comment
+/// explains, except this one was already guaranteed safe for every
+/// caller (no `Frozen`-chain case ever reaches here).
+///
+/// Issue #501's second review: `prime_fallback` gets
+/// [`crate::store::Node::watermark`]ed to its own entry count *before*
+/// *local*'s own step ever ran -- `core/scope.py::scope_ctx`'s own
+/// `prime = dict(ctx.get("prime") or {})` takes that exact one-time
+/// snapshot of `prime`'s key SET after *every* step, not only a named
+/// loop's own `_with_prev`. Without it, a *later* sibling step (not the
+/// first in its own scope -- the first step still runs against
+/// *pass_chain* directly, unwatermarked, matching cof's own live-shared
+/// `ctx["prime"]` there too) could see a sibling that starts *after*
+/// this overlay was built the instant that sibling's own node is
+/// `ensure_dict`-ed, before it has even rendered its own params --
+/// something cof's frozen copy never exposes.
 fn step_overlay(store: &Store, pass_chain: &CtxChain, local: &IndexMap<Value, Slot>) -> NodeRef {
     let base = single_live(pass_chain)
         .expect("step_overlay is only ever called with a single-Live pass/step chain");
     let prime_key = key("prime");
     let prime_fallback = fallback_for(store, base, &prime_key);
-    let prime_overlay = layered(local.clone(), prime_fallback);
+    let prime_overlay = layered_watermarked(local.clone(), prime_fallback);
 
     let mut top_entries = local.clone();
     top_entries.insert(prime_key, Slot::Node(prime_overlay));
@@ -2049,6 +2094,44 @@ mod prev_overlay_differential_tests {
             &old,
             &new,
             "loop inside a use child's own store",
+        );
+    }
+
+    /// Issue #501's second review, finding on `Store::snapshot`: a
+    /// shadowed key (`shots`, shadowed by `with_prev_overlay`'s own
+    /// `prime` overlay once `prev` exists) must keep its own natural
+    /// position -- here, before `other`, exactly as `loop_shaped_store`
+    /// built it -- not move to the end. `Value: PartialEq`'s own
+    /// `py_eq` ignores dict key order (same as Python's `==`), so this
+    /// checks the actual [`IndexMap`] key order directly rather than
+    /// `assert_eq!`ing two [`Value`]s.
+    #[test]
+    fn snapshot_keeps_a_shadowed_keys_own_position_not_the_end() {
+        let store = loop_shaped_store();
+        let outer = outer_chain(&store);
+        let local = local_overlay(2);
+        let prev = prev_writes("one-stringified");
+        let pass_chain = build_pass_chain(&store, &outer, &local, Some(("shots", &prev, 2)));
+
+        let snapshot = store.snapshot(&chain_node(&pass_chain));
+        let prime_dict = match walk(&snapshot, "prime") {
+            Some(Value::Dict(d)) => d,
+            other => panic!("expected prime to be a dict, got {other:?}"),
+        };
+        let order: Vec<&str> = prime_dict
+            .keys()
+            .map(|key| match key {
+                Value::Str(s) => s.as_str(),
+                _ => panic!("expected string keys"),
+            })
+            .collect();
+        let shots_pos = order.iter().position(|k| *k == "shots").unwrap();
+        let other_pos = order.iter().position(|k| *k == "other").unwrap();
+        assert!(
+            shots_pos < other_pos,
+            "shots (built before other in loop_shaped_store) must still \
+             sort before other once shots has grown a prev overlay, not \
+             move to the end: order was {order:?}"
         );
     }
 }

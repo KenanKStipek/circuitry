@@ -1532,6 +1532,24 @@ fn stringify_from_many(path: EffectPath, name: &str, fields: &[(&str, &str, &str
     tool_op(path, name, params, None, RetryPolicy::default())
 }
 
+/// A `json` tool leaf, `mode: parse`, against a fixed literal dict
+/// `{"k": "seedval"}` -- a named effect run *before* a loop, as its
+/// own sibling (not nested inside it), the shape every two-step-`if`
+/// test below uses to check a fallback-only sibling under `prime`
+/// (`prime.seed.value.k`) from the `if`'s own second branch step.
+fn seed_dict_tool(path: EffectPath, name: &str) -> Op {
+    let mut params = IndexMap::new();
+    params.insert(
+        k("mode"),
+        ParamNode::Literal(Value::Str("parse".to_string())),
+    );
+    params.insert(
+        k("input"),
+        ParamNode::Literal(Value::Str("{\"k\": \"seedval\"}".to_string())),
+    );
+    tool_op(path, name, params, None, RetryPolicy::default())
+}
+
 /// Parses *value* (a [`stringify_from_many`] tool's own `value`, a JSON
 /// object string) back into a dict, and returns the field named *key*
 /// (`Value::None` if *value* didn't carry it).
@@ -1581,6 +1599,7 @@ async fn two_step_if_in_a_named_chain_each_sees_the_enclosing_scope_on_every_pas
                         ("first", "prime.first.value", "MISSING"),
                         ("items", "items", "MISSING"),
                         ("prev", "prime.c.prev.first.value", "MISSING"),
+                        ("seed", "prime.seed.value.k", "MISSING"),
                     ],
                 ),
             ],
@@ -1600,7 +1619,17 @@ async fn two_step_if_in_a_named_chain_each_sees_the_enclosing_scope_on_every_pas
         body,
     );
 
-    run(single(loop_op_), &store).await.unwrap();
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
 
     let pr = prime(&store);
     let c = as_dict(get(&pr, "c").unwrap());
@@ -1616,6 +1645,7 @@ async fn two_step_if_in_a_named_chain_each_sees_the_enclosing_scope_on_every_pas
         Value::Str("MISSING".to_string()),
         "pass 0 has no prev yet"
     );
+    assert_eq!(parsed_field(b0, "seed"), Value::Str("seedval".to_string()));
 
     let b1 = dig(c, &["iter_1", "gate", "b", "value"]);
     assert_eq!(parsed_field(b1, "item"), Value::from(20_i64));
@@ -1626,6 +1656,7 @@ async fn two_step_if_in_a_named_chain_each_sees_the_enclosing_scope_on_every_pas
         Value::Str("10".to_string()),
         "pass 1's own prev must see pass 0's first.value"
     );
+    assert_eq!(parsed_field(b1, "seed"), Value::Str("seedval".to_string()));
 }
 
 #[tokio::test]
@@ -1651,6 +1682,7 @@ async fn two_step_if_in_an_unnamed_chain_each_sees_the_enclosing_scope() {
                         ("item", "item", "MISSING"),
                         ("first", "prime.first.value", "MISSING"),
                         ("items", "items", "MISSING"),
+                        ("seed", "prime.seed.value.k", "MISSING"),
                     ],
                 ),
             ],
@@ -1670,7 +1702,17 @@ async fn two_step_if_in_an_unnamed_chain_each_sees_the_enclosing_scope() {
         body,
     );
 
-    run(single(loop_op_), &store).await.unwrap();
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
 
     let pr = prime(&store);
     // An unnamed loop reuses the same node every pass -- only the last
@@ -1683,6 +1725,7 @@ async fn two_step_if_in_an_unnamed_chain_each_sees_the_enclosing_scope() {
         parsed_field(b, "items"),
         Value::List(vec![Value::from(10_i64), Value::from(20_i64)])
     );
+    assert_eq!(parsed_field(b, "seed"), Value::Str("seedval".to_string()));
 }
 
 #[tokio::test]
@@ -1716,6 +1759,7 @@ async fn two_step_if_in_a_named_while_sees_the_enclosing_scope_on_every_pass() {
                         ("first", "prime.first.value", "MISSING"),
                         ("marker", "marker", "MISSING"),
                         ("prev", "prime.counter.prev.first.value", "MISSING"),
+                        ("seed", "prime.seed.value.k", "MISSING"),
                     ],
                 ),
             ],
@@ -1735,7 +1779,17 @@ async fn two_step_if_in_a_named_while_sees_the_enclosing_scope_on_every_pass() {
         body,
     );
 
-    run(single(loop_op_), &store).await.unwrap();
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
 
     let pr = prime(&store);
     let counter = as_dict(get(&pr, "counter").unwrap());
@@ -1745,12 +1799,14 @@ async fn two_step_if_in_a_named_while_sees_the_enclosing_scope_on_every_pass() {
     assert_eq!(parsed_field(b0, "first"), Value::Str("0".to_string()));
     assert_eq!(parsed_field(b0, "marker"), Value::Str("outer".to_string()));
     assert_eq!(parsed_field(b0, "prev"), Value::Str("MISSING".to_string()));
+    assert_eq!(parsed_field(b0, "seed"), Value::Str("seedval".to_string()));
 
     let b1 = dig(counter, &["iter_1", "gate", "b", "value"]);
     assert_eq!(parsed_field(b1, "idx"), Value::from(1_i64));
     assert_eq!(parsed_field(b1, "first"), Value::Str("1".to_string()));
     assert_eq!(parsed_field(b1, "marker"), Value::Str("outer".to_string()));
     assert_eq!(parsed_field(b1, "prev"), Value::Str("0".to_string()));
+    assert_eq!(parsed_field(b1, "seed"), Value::Str("seedval".to_string()));
 }
 
 #[tokio::test]
@@ -1778,6 +1834,7 @@ async fn two_step_if_in_a_named_tree_each_sees_the_enclosing_scope() {
                         ("item", "item", "MISSING"),
                         ("first", "prime.first.value", "MISSING"),
                         ("items", "items", "MISSING"),
+                        ("seed", "prime.seed.value.k", "MISSING"),
                     ],
                 ),
             ],
@@ -1797,7 +1854,17 @@ async fn two_step_if_in_a_named_tree_each_sees_the_enclosing_scope() {
         body,
     );
 
-    run(single(loop_op_), &store).await.unwrap();
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![seed_dict_tool(root_path().push_name("seed"), "seed"), loop_op_],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
 
     let pr = prime(&store);
     let shots = as_dict(get(&pr, "shots").unwrap());
@@ -1807,11 +1874,13 @@ async fn two_step_if_in_a_named_tree_each_sees_the_enclosing_scope() {
     assert_eq!(parsed_field(b0, "item"), Value::from(10_i64));
     assert_eq!(parsed_field(b0, "first"), Value::Str("10".to_string()));
     assert_eq!(parsed_field(b0, "items"), items.clone());
+    assert_eq!(parsed_field(b0, "seed"), Value::Str("seedval".to_string()));
 
     let b1 = dig(shots, &["iter_1", "gate", "b", "value"]);
     assert_eq!(parsed_field(b1, "item"), Value::from(20_i64));
     assert_eq!(parsed_field(b1, "first"), Value::Str("20".to_string()));
     assert_eq!(parsed_field(b1, "items"), items);
+    assert_eq!(parsed_field(b1, "seed"), Value::Str("seedval".to_string()));
 }
 
 #[tokio::test]
@@ -1870,6 +1939,7 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
                         ("inner_items", "inner_items", "MISSING"),
                         ("outer_items", "outer_items", "MISSING"),
                         ("prev", "prime.inner.prev.first.value", "MISSING"),
+                        ("seed", "prime.seed.value.k", "MISSING"),
                     ],
                 ),
             ],
@@ -1902,7 +1972,20 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
         vec![mid],
     );
 
-    run(single(outer_loop), &store).await.unwrap();
+    run(
+        chain_dynamic(
+            root_path(),
+            "prime",
+            OnError::Fail,
+            vec![
+                seed_dict_tool(root_path().push_name("seed"), "seed"),
+                outer_loop,
+            ],
+        ),
+        &store,
+    )
+    .await
+    .unwrap();
 
     let pr = prime(&store);
     let outer_items = Value::List(vec![Value::from(99_i64)]);
@@ -1918,6 +2001,7 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
     assert_eq!(parsed_field(b0, "inner_items"), inner_items.clone());
     assert_eq!(parsed_field(b0, "outer_items"), outer_items.clone());
     assert_eq!(parsed_field(b0, "prev"), Value::Str("MISSING".to_string()));
+    assert_eq!(parsed_field(b0, "seed"), Value::Str("seedval".to_string()));
 
     let b1 = dig(inner, &["iter_1", "gate", "b", "value"]);
     assert_eq!(parsed_field(b1, "item"), Value::from(20_i64));
@@ -1925,4 +2009,171 @@ async fn two_step_if_in_a_loop_inside_a_dynamic_inside_a_loop_body_sees_the_encl
     assert_eq!(parsed_field(b1, "inner_items"), inner_items);
     assert_eq!(parsed_field(b1, "outer_items"), outer_items);
     assert_eq!(parsed_field(b1, "prev"), Value::Str("10".to_string()));
+    assert_eq!(parsed_field(b1, "seed"), Value::Str("seedval".to_string()));
 }
+
+// ---------------------------------------------------------------------
+// Issue #501's second review (P0, confirmed at runtime): a named loop's
+// `with_prev_overlay` must hide the current pass's own `iter_<idx>`
+// only when it's genuinely new -- a *reused* real loop node (a named
+// loop inside an unnamed outer loop, or `--state`-resumed persisted
+// state) that already carries `iter_<idx>` from an earlier run through
+// the same node must still show it, exactly as `core/loop.py::
+// LoopRuntime._with_prev`'s own `dict(own_node)` copy -- taken from
+// whatever the real node already held at that exact moment -- would.
+// "Today no test covers `hidden` at all: deleting it fails nothing" --
+// these two do.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn with_prev_overlay_hides_a_fresh_loops_own_current_pass_iter_node() {
+    let store = Store::new();
+
+    // The outer loop is unnamed -- its own body writes directly into
+    // the enclosing node every pass (no `iter_<N>`), so its body ops'
+    // own paths carry no `push_pass` segment, matching every other
+    // unnamed-loop test in this file.
+    let outer_path = root_path().push_name("outer");
+
+    let inner_id = LoopId(0);
+    let inner_path = outer_path.push_name("inner");
+    let inner_body_prefix = inner_path.push_pass(inner_id);
+
+    let inner_body = vec![
+        stringify_from(inner_body_prefix.push_name("x"), "x", "item", "MISSING"),
+        stringify_from_many(
+            inner_body_prefix.push_name("y"),
+            "y",
+            &[("self_iter1_x", "prime.inner.iter_1.x.value", "MISSING")],
+        ),
+    ];
+    let inner_loop = loop_op(
+        inner_path,
+        Some("inner"),
+        each_spec("inner_items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        inner_body,
+    );
+    let outer_loop = loop_op(
+        outer_path,
+        None,
+        each_spec("outer_items", "ox", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![inner_loop],
+    );
+
+    store.set_leaf(&store.root, k("outer_items"), Value::List(vec![Value::from(0_i64)]));
+    store.set_leaf(
+        &store.root,
+        k("inner_items"),
+        Value::List(vec![Value::from(100_i64), Value::from(200_i64)]),
+    );
+
+    run(single(outer_loop), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let inner = as_dict(get(&pr, "inner").unwrap());
+    let y1 = dig(inner, &["iter_1", "y", "value"]);
+    assert_eq!(
+        parsed_field(y1, "self_iter1_x"),
+        Value::Str("MISSING".to_string()),
+        "a fresh loop node's own current pass must stay hidden through \
+         prime.inner.iter_1, even after this same pass's own `x` step \
+         already wrote it -- cof's own frozen `dict(own_node)` copy \
+         never updates for the rest of the pass either"
+    );
+}
+
+#[tokio::test]
+async fn with_prev_overlay_shows_a_reused_loops_own_current_pass_iter_node() {
+    let store = Store::new();
+
+    // The outer loop is unnamed -- its own body writes directly into
+    // the enclosing node every pass (no `iter_<N>`), so its body ops'
+    // own paths carry no `push_pass` segment, matching every other
+    // unnamed-loop test in this file.
+    let outer_path = root_path().push_name("outer");
+
+    let inner_id = LoopId(0);
+    let inner_path = outer_path.push_name("inner");
+    let inner_body_prefix = inner_path.push_pass(inner_id);
+
+    let inner_body = vec![
+        stringify_from(inner_body_prefix.push_name("x"), "x", "item", "MISSING"),
+        stringify_from_many(
+            inner_body_prefix.push_name("y"),
+            "y",
+            &[("self_iter1_x", "prime.inner.iter_1.x.value", "MISSING")],
+        ),
+    ];
+    let inner_loop = loop_op(
+        inner_path,
+        Some("inner"),
+        each_spec("inner_items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        inner_body,
+    );
+    // Two *outer* passes -- an unnamed loop reuses the exact same
+    // `write_parent`, so the inner loop's own name ("inner") resolves
+    // to the identical real `NodeRef` on the second outer pass that it
+    // did on the first, carrying every earlier `iter_<N>` forward.
+    let outer_loop = loop_op(
+        outer_path,
+        None,
+        each_spec("outer_items", "ox", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![inner_loop],
+    );
+
+    store.set_leaf(
+        &store.root,
+        k("outer_items"),
+        Value::List(vec![Value::from(0_i64), Value::from(1_i64)]),
+    );
+    store.set_leaf(
+        &store.root,
+        k("inner_items"),
+        Value::List(vec![Value::from(100_i64), Value::from(200_i64)]),
+    );
+
+    run(single(outer_loop), &store).await.unwrap();
+
+    let pr = prime(&store);
+    // The *last* outer pass's own `inner` is the one real, reused node
+    // (`prime.inner` directly: an unnamed loop writes straight into the
+    // enclosing node every pass, so only the final outer pass's own
+    // content survives).
+    let inner = as_dict(get(&pr, "inner").unwrap());
+    let y1 = dig(inner, &["iter_1", "y", "value"]);
+    assert_eq!(
+        parsed_field(y1, "self_iter1_x"),
+        Value::Str("200".to_string()),
+        "a reused loop node's own current-pass iter_<idx> already existed \
+         before this with_prev_overlay was even built (from the earlier \
+         outer pass's own inner-loop run), so cof's own dict(own_node) \
+         copy -- taken at that exact moment -- includes it, same as this \
+         fix must"
+    );
+}
+
+

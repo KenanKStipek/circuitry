@@ -35,3 +35,4 @@ effects:
                 first: "{{prime.first.value.f}}"
                 a: "{{prime.a.value}}"
                 prev: "{{prime.shots.prev.first.value.f}}"
+                seed: "{{prime.seed.value}}"

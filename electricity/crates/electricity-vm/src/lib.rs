@@ -39,7 +39,7 @@ pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
 pub use store::{
     NodeRef, Slot, Store, StoreError, node_from_entries, node_with_fallback,
-    node_with_fallback_hiding,
+    node_with_fallback_hiding, node_with_fallback_watermarked,
 };
 
 use electricity_bytecode::Program;
