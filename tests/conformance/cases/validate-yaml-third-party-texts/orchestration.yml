@@ -1,0 +1,15 @@
+effects:
+  - type: tool
+    name: scan_error
+    provider: validate_yaml
+    params:
+      yaml: "effects: [{a: [1, 2}]"
+
+  - type: tool
+    name: schema_error
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            provider: json

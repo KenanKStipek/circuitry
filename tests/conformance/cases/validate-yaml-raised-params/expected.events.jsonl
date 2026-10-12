@@ -1,0 +1,18 @@
+{"v":1,"seq":0,"ts":"2026-10-12T23:25:55.848Z","ev":"run_start","run_id":"8d4572e4-bdb0-44bc-a043-f77003826806","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":71919}
+{"v":1,"seq":1,"ts":"2026-10-12T23:25:55.852Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T23:25:55.852Z","ev":"start","id":1,"path":"prime.yaml_is_an_int"}
+{"v":1,"seq":3,"ts":"2026-10-12T23:25:55.853Z","ev":"end","id":1,"path":"prime.yaml_is_an_int","ok":false,"ms":0,"error":"ValidateYamlPlugin requires params['yaml'] as a string (got int)."}
+{"v":1,"seq":4,"ts":"2026-10-12T23:25:55.853Z","ev":"start","id":2,"path":"prime.yaml_is_a_list"}
+{"v":1,"seq":5,"ts":"2026-10-12T23:25:55.853Z","ev":"end","id":2,"path":"prime.yaml_is_a_list","ok":false,"ms":0,"error":"ValidateYamlPlugin requires params['yaml'] as a string (got list)."}
+{"v":1,"seq":6,"ts":"2026-10-12T23:25:55.853Z","ev":"start","id":3,"path":"prime.max_errors_non_numeric_string"}
+{"v":1,"seq":7,"ts":"2026-10-12T23:25:55.853Z","ev":"end","id":3,"path":"prime.max_errors_non_numeric_string","ok":false,"ms":0,"error":"ValidateYamlPlugin params['max_errors'] must be an integer: invalid literal for int() with base 10: 'x'"}
+{"v":1,"seq":8,"ts":"2026-10-12T23:25:55.853Z","ev":"start","id":4,"path":"prime.max_errors_is_a_list"}
+{"v":1,"seq":9,"ts":"2026-10-12T23:25:55.853Z","ev":"end","id":4,"path":"prime.max_errors_is_a_list","ok":false,"ms":0,"error":"ValidateYamlPlugin params['max_errors'] must be an integer: int() argument must be a string, a bytes-like object or a real number, not 'list'"}
+{"v":1,"seq":10,"ts":"2026-10-12T23:25:55.855Z","ev":"start","id":5,"path":"prime.max_errors_below_one"}
+{"v":1,"seq":11,"ts":"2026-10-12T23:25:55.856Z","ev":"end","id":5,"path":"prime.max_errors_below_one","ok":false,"ms":1,"error":"ValidateYamlPlugin params['max_errors'] must be >= 1."}
+{"v":1,"seq":12,"ts":"2026-10-12T23:25:55.856Z","ev":"start","id":6,"path":"prime.max_errors_float_truncates"}
+{"v":1,"seq":13,"ts":"2026-10-12T23:25:55.856Z","ev":"end","id":6,"path":"prime.max_errors_float_truncates","ok":true,"ms":1}
+{"v":1,"seq":14,"ts":"2026-10-12T23:25:55.856Z","ev":"start","id":7,"path":"prime.no_yaml_param_at_all"}
+{"v":1,"seq":15,"ts":"2026-10-12T23:25:55.857Z","ev":"end","id":7,"path":"prime.no_yaml_param_at_all","ok":true,"ms":0}
+{"v":1,"seq":16,"ts":"2026-10-12T23:25:55.857Z","ev":"end","id":0,"path":"prime","ok":true,"ms":5}
+{"v":1,"seq":17,"ts":"2026-10-12T23:25:55.857Z","ev":"run_end","ok":true}
