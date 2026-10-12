@@ -1,0 +1,11 @@
+name: profile-condition-target
+effects:
+  - type: if
+    name: gate
+    if:
+      expr: "true"
+    then:
+      - type: tool
+        name: inner
+        provider: json
+        params: {mode: stringify, input: unreachable}

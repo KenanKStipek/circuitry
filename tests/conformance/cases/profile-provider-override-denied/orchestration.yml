@@ -1,0 +1,6 @@
+name: profile-provider-override-denied
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: unreachable}

@@ -1,0 +1,7 @@
+name: document-adapter-host-claude-tool-only
+adapter: host_claude
+effects:
+  - name: parse
+    type: tool
+    provider: json
+    params: {mode: parse, input: '{"a": 1}'}

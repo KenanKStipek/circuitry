@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §6.11 (profiles), cli/profiles.py::_validate_effect_paths",
+  "description": "A profile's `effects:` map names a path the orchestration doesn't define: J1's own validation text, raised while loading the profile, before anything else in the run checks out.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "failure",
+  "error_compare": "exact"
+}

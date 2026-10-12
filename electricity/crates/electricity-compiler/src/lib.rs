@@ -289,6 +289,16 @@ pub struct CheckOptions {
     /// [`pipeline::check_interface_inputs_error`] reduces to its old,
     /// always-empty-input-namespace behavior when this is empty.
     pub inputs: indexmap::IndexMap<String, String>,
+    /// A loaded `--profile`'s own `inputs:` (issue #495, lane R) --
+    /// the base layer under *inputs* in the `input` namespace: a
+    /// profile key comes first in key order, an `-e` value for the
+    /// same key wins but keeps the profile key's position, and an
+    /// `-e`-only key follows (`cli/runtime_shim.py::run`, `merged =
+    /// dict(profile.inputs); merged.update(input_ns)`). Already
+    /// resolved `Value`s (a profile's own YAML, not CLI text), unlike
+    /// *inputs* -- never sniffed/re-stringified the way an `-e` value
+    /// is. Empty by default, so every existing caller is unaffected.
+    pub profile_inputs: indexmap::IndexMap<String, Value>,
 }
 
 /// Matches `runtime_shim.validate(...)`'s return shape.

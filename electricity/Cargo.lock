@@ -373,6 +373,7 @@ dependencies = [
 name = "electricity"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "electricity-adapters",
  "electricity-bytecode",
@@ -383,6 +384,7 @@ dependencies = [
  "electricity-tools",
  "electricity-value",
  "electricity-vm",
+ "futures",
  "indexmap",
  "log",
  "serde_json",

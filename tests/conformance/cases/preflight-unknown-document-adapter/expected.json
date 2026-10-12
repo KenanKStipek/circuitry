@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:bogus: not ready \u2014 Unknown adapter: 'bogus'. Supported adapters: ai21, anthropic, azure-openai, claude_code, cloudflare-workers-ai, cohere, cyberdiner, databricks, deepseek, fireworks, gemini, groq, host_claude, huggingface-inference, litellm, llamacpp, lmstudio, mistral, nvidia-nim, ollama, openai, openrouter, perplexity, pi, qwen-dashscope, replicate, scripted, tgi, together, vllm, watsonx, xai. Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution.. Re-run with --skip-preflight to bypass."
+}

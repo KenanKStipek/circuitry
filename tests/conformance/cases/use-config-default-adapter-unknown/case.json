@@ -1,0 +1,8 @@
+{
+  "spec_case": "runtime-semantics.md §8.6 (adapter resolution), issue #235",
+  "description": "config.json sets an unknown `default_adapter: bogus` and `default_model`, plus a `use` effect: the config default is never walked by preflight, so this is the factory's own raw `Unknown adapter: 'bogus'. ...` text, not a preflight failure.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

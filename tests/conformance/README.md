@@ -17,6 +17,7 @@ cases/<name>/
   config.json              # optional — passed as --config if case.json sets "config" (materialized
                             # fresh per run when the case also sets "mock_http_fixture", see below)
   fakes/                    # optional — prepended to PATH for process-backed tool fakes
+  profiles/<name>.yml       # optional — a --profile document, named by case.json's own "profile" key
   <name>.yaml               # optional — a scripted-adapter replies file, named by config.json's own
                             # runtime.adapters.scripted.replies_file (electricity/docs/spec/scripted-replies.md)
   <name>.yaml               # optional — a mock-HTTP-server fixture, named by case.json's "mock_http_fixture"
@@ -25,6 +26,7 @@ cases/<name>/
   expected.out.json         # failure cases only -- the --out `cof run` still writes on a load/check failure
   expected.events.jsonl     # success cases only -- the --events stream `cof run` wrote for this case
   expected.warnings.txt    # always written (empty when there are none) -- cof run's own stderr WARNING:/ERROR: lines (issue #442)
+  expected.run_warnings.txt # only when case.json sets "compare_run_warnings": true -- cof run's own stderr Warning: ... lines
   expected.http_requests.json # only when case.json sets "mock_http_fixture" -- every request the mock
                             # server actually received, in arrival order
 ```
@@ -48,6 +50,8 @@ cases/<name>/
 | `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`prompt`/`shell`/`http`/...); see "Running it" below |
 | `sort_warnings` | a case whose document dispatches a tree `dynamic` — `expected.warnings.txt` is written, and compared, as a sorted set rather than `cof run`'s own real order, since two branches' own warnings can land in either relative order between runs |
 | `env` | a mapping of extra environment variables set for both engines' own subprocess (applied after the credential/`CIRCUITRY_*` filter, so it can set a name the filter would otherwise drop) — for a case that needs a controlled variable neither engine's own process otherwise sees, e.g. `env_vars`'s own `list` mode |
+| `profile` | a path relative to the case directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml` — exactly one of the two suffixes must exist. `cof run` gets `--profile <name>` (discovery finds it under the orchestration directory, the case directory); electricity gets `--profile <case_dir>/<profile>` (the absolute path) |
+| `compare_run_warnings` | bool, default `false` — also compares `expected.run_warnings.txt` against `harness.run_warning_lines(stderr)` (`cli/app.py::_print_run_warnings`'s own `Warning: ...` lines, e.g. preflight's soft warnings — distinct from `WARNING:`/`ERROR:` `logging`-module lines, which `expected.warnings.txt` already covers unconditionally) |
 
 `harness.load_case` rejects an unknown `case.json` key and an `expect`/
 `engines`/`error_compare`/`known_divergence`/`electricity_preview_ok` value

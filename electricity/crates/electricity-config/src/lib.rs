@@ -42,12 +42,15 @@ pub mod dotenv;
 mod effective_settings;
 mod merge;
 mod persistence;
+pub mod preflight;
 mod profile;
+mod timeout;
 mod util;
 
 pub use allowlist::{
     Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist,
-    orchestration_denials, tool_denial, walk_orchestration_refs,
+    orchestration_denials, profile_provider_denials, require_adapter, tool_denial,
+    walk_orchestration_refs,
 };
 pub use capability_gate::{
     CAPABILITY_CEILING_KEY, CapabilityConsentError, capabilities_beyond_ceiling,
@@ -58,7 +61,9 @@ pub use complexity::{
     SCORE_MIN, ScoringSettings, resolve_complexity_settings,
 };
 pub use config::{CircuitryConfig, ConfigError, resolve_config};
-pub use effective_settings::{EffectiveSettings, effective_settings};
+pub use effective_settings::{
+    EffectiveSettings, effective_settings, effective_settings_with_profile,
+};
 pub use merge::merge_runtime;
 pub use persistence::persistence_enabled;
 pub use profile::{
@@ -66,6 +71,7 @@ pub use profile::{
     collect_orchestration_effect_paths, condition_target_message, profile_name_from_path,
     settings_from_raw, validate_effect_paths, validate_profile_routing_pins,
 };
+pub use timeout::configured_timeout_seconds;
 
 use electricity_value::Value;
 

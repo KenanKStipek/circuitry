@@ -1,0 +1,6 @@
+adapter: bogus
+effects:
+  - type: tool
+    name: inner
+    provider: json
+    params: {mode: stringify, input: from-path-child}
