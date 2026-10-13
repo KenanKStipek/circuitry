@@ -1,0 +1,22 @@
+name: decompose-nested-paths
+adapter: scripted
+model: m
+effects:
+- type: tool
+  name: seed
+  provider: json
+  params:
+    mode: parse
+    input: '["x", "y"]'
+- type: loop
+  name: lp
+  each:
+    in: prime.seed.value
+    as: item
+  body:
+  - type: prompt
+    name: big
+    template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+- type: use
+  name: u
+  inline: "effects:\n  - type: prompt\n    name: big\n    template: \"Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.\"\n"

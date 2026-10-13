@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 11: decomposing prompts nested in a loop and a use child",
+  "description": "Decomposing prompts in a named each loop (2 passes) and in an inline use child. Pins keys prime.lp.iter_0.big.plan, prime.u.big.plan, and the events.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
