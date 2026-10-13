@@ -695,8 +695,13 @@ the full bottom width, two content lines:
     prompt_sent) / 4)` when its `prompt_sent` is actually in state —
     for one confirmed running by events alone, with no state node to
     read at all, that can never be known, so the total is shown as a
-    lower bound (`≈52+`) rather than silently reading too low. With
-    nothing running, the line says so ("nothing in flight").
+    lower bound (`≈52+`) rather than silently reading too low. When
+    *no* running prompt's `prompt_sent` is known at all, the estimate
+    isn't merely low, it's entirely unknown — `≈0+` would read as a
+    broken number (zero tokens, yet something's running?), so the
+    line shows a plain `?` instead (the orchestrator's own finding on
+    issue #527's own PR). With nothing running, the line says so
+    ("nothing in flight").
 
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to

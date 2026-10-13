@@ -742,17 +742,26 @@ fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &To
         // The orchestrator's own finding: a tree-loop pass's prompt,
         // and a `use: path:` child's, are counted as running even
         // with no `prompt_sent` in state to estimate from at all
-        // (DESIGN.md §1.4) -- the trailing `+` says the estimate is a
-        // lower bound, same as "effects planned" already does in the
-        // header, rather than silently under-reporting it as exact.
-        let lower_bound = if token_bar.estimated_input_is_lower_bound {
-            "+"
+        // (DESIGN.md §1.4), so the estimate is a lower bound, same as
+        // "effects planned" already does in the header -- a trailing
+        // `+` says so when it's still a real, nonzero estimate
+        // (`≈5+`, some known and some not). When *none* of the running
+        // prompts has a known `prompt_sent` at all, the estimate isn't
+        // merely low, it's entirely unknown -- `≈0+` reads as a
+        // broken number (zero tokens, running?), so this shows a
+        // plain `?` instead, the same glyph the header's own
+        // innermost-loop ETA uses for "unknown", not "zero".
+        let estimate = if token_bar.estimated_input_is_lower_bound {
+            if token_bar.estimated_input == 0 {
+                "?".to_string()
+            } else {
+                format!("≈{}+", with_thousands_separators(token_bar.estimated_input))
+            }
         } else {
-            ""
+            format!("≈{}", with_thousands_separators(token_bar.estimated_input))
         };
         Line::from(format!(
-            "now in ≈{}{lower_bound}   ({} prompt{plural} running)",
-            with_thousands_separators(token_bar.estimated_input),
+            "now in {estimate}   ({} prompt{plural} running)",
             token_bar.prompts_running
         ))
     };
@@ -2006,6 +2015,14 @@ mod golden_tests {
         assert!(
             !text.contains("nothing in flight"),
             "a running tree-loop prompt must show in the token bar:\n{text}"
+        );
+        // The orchestrator's own finding: with no running prompt's
+        // `prompt_sent` known at all, the estimate isn't merely low,
+        // it's unknown -- `now in ≈0+` reads as a broken number (zero
+        // tokens, running?); this shows a plain `?` instead.
+        assert!(
+            text.contains("now in ?"),
+            "an estimate with nothing known at all must read as unknown (`?`), not `≈0+`:\n{text}"
         );
         insta::assert_snapshot!(text);
     }

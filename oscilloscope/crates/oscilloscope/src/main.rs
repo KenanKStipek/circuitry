@@ -790,6 +790,48 @@ fn cancel_for_lost_terminal(
     }
 }
 
+/// The orchestrator's own follow-up finding: a pty slave whose master
+/// has closed, but which was never osp's own *controlling* terminal
+/// (no `setsid`-then-`TIOCSCTTY` acquisition, as a driver using
+/// `start_new_session=True` alone never gives it one) raises no
+/// SIGHUP at all -- yet `event::poll`/`event::read` (checked above)
+/// never error for it either. The reason lives in crossterm's own
+/// event source (`event::source::unix::tty::try_read`, crossterm
+/// 0.29): it `poll(2)`s the tty fd checking only `revents & POLLIN`,
+/// never `POLLHUP`/`POLLERR`/`POLLNVAL` -- and a hung-up pty slave
+/// sets `POLLIN` right alongside `POLLHUP` (EOF counts as
+/// "readable"), so crossterm keeps calling a `read()` that returns 0
+/// bytes in a tight inner loop until its own timeout budget runs out,
+/// then returns cleanly with nothing to show for it. Every
+/// `KEY_POLL_INTERVAL` tick spends its *entire* budget spinning on
+/// that 0-byte read instead of actually blocking for up to it, which
+/// is the real source of the CPU this bug burns -- `event::poll`
+/// itself never seeing an error is just a symptom of that inner loop
+/// having already given up by the time it returns.
+///
+/// A direct, non-blocking `poll(2)` of our own on the same fd, before
+/// ever calling into crossterm at all, sees the `POLLHUP` crossterm's
+/// own check throws away -- `fd: libc::STDIN_FILENO` matches
+/// crossterm's own `tty_fd()` exactly: it uses stdin directly
+/// whenever stdin is itself a tty (`isatty(STDIN_FILENO)`, never a
+/// separate `/dev/tty` open), which is always true for an `osp`
+/// spawned the way every caller here does, with its own stdin
+/// already pointed at the pty slave.
+fn stdin_hung_up() -> bool {
+    let mut fds = [libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    // `poll` itself erroring on fd 0 (EBADF, most plausibly) means
+    // there is no usable terminal fd left either, same conclusion as
+    // a hang-up bit actually being set.
+    if unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) } < 0 {
+        return true;
+    }
+    fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+}
+
 /// `print_line`'s own formatting, into the TUI's own log buffer
 /// instead of straight to stdout (DESIGN.md §6.3's log pane: "the
 /// same lines as `--log`").
@@ -1045,49 +1087,36 @@ fn run_tui(
         let state_visible: Vec<&oscilloscope_core::render::StateRow> =
             render_state.state_rows.iter().collect();
 
-        let mut terminal_gone = false;
-        match event::poll(KEY_POLL_INTERVAL) {
-            Err(_) => terminal_gone = true,
-            Ok(false) => {}
-            Ok(true) => match event::read() {
+        // The orchestrator's own second finding: checked *before*
+        // ever calling into crossterm at all -- see `stdin_hung_up`'s
+        // own doc comment for why crossterm's own poll/read never
+        // error for this case on their own.
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event::poll(KEY_POLL_INTERVAL) {
                 Err(_) => terminal_gone = true,
-                Ok(ev) => match ev {
-                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                        let running = exit_status.is_none();
-                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
-                            oscilloscope_core::render::full_value(
-                                p,
-                                oscilloscope_core::render::FullValueField::PromptSent,
-                                current_state.as_ref(),
-                            )
-                            .is_some()
-                        });
-                        match app.handle_key(
-                            key,
-                            &visible,
-                            &state_visible,
-                            running,
-                            has_prompt_sent,
-                        ) {
-                            keys::Action::Cancel => {
-                                cancel_once(
-                                    &child,
-                                    ForwardSignal::Int,
-                                    &mut signal_count,
-                                    &mut kill_deadline,
-                                    &mut log_lines,
-                                    &mut clock,
-                                );
-                                // K1: only a *confirmed* `q` leaves on
-                                // its own once the engine exits — a
-                                // plain `c` cancels but still shows
-                                // the finished screen afterwards.
-                                if app.quit_when_finished {
-                                    leave_once_exited = true;
-                                }
-                            }
-                            keys::Action::CtrlC => {
-                                if running {
+                Ok(false) => {}
+                Ok(true) => match event::read() {
+                    Err(_) => terminal_gone = true,
+                    Ok(ev) => match ev {
+                        CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                            let running = exit_status.is_none();
+                            let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                                oscilloscope_core::render::full_value(
+                                    p,
+                                    oscilloscope_core::render::FullValueField::PromptSent,
+                                    current_state.as_ref(),
+                                )
+                                .is_some()
+                            });
+                            match app.handle_key(
+                                key,
+                                &visible,
+                                &state_visible,
+                                running,
+                                has_prompt_sent,
+                            ) {
+                                keys::Action::Cancel => {
                                     cancel_once(
                                         &child,
                                         ForwardSignal::Int,
@@ -1096,21 +1125,40 @@ fn run_tui(
                                         &mut log_lines,
                                         &mut clock,
                                     );
-                                    leave_once_exited = true;
-                                } else {
-                                    // K3: "with nothing running: quit".
-                                    break 'tui;
+                                    // K1: only a *confirmed* `q` leaves on
+                                    // its own once the engine exits — a
+                                    // plain `c` cancels but still shows
+                                    // the finished screen afterwards.
+                                    if app.quit_when_finished {
+                                        leave_once_exited = true;
+                                    }
                                 }
+                                keys::Action::CtrlC => {
+                                    if running {
+                                        cancel_once(
+                                            &child,
+                                            ForwardSignal::Int,
+                                            &mut signal_count,
+                                            &mut kill_deadline,
+                                            &mut log_lines,
+                                            &mut clock,
+                                        );
+                                        leave_once_exited = true;
+                                    } else {
+                                        // K3: "with nothing running: quit".
+                                        break 'tui;
+                                    }
+                                }
+                                keys::Action::Quit => break 'tui,
+                                keys::Action::None => {}
                             }
-                            keys::Action::Quit => break 'tui,
-                            keys::Action::None => {}
+                            dirty = true;
                         }
-                        dirty = true;
-                    }
-                    CEvent::Resize(_, _) => dirty = true,
-                    _ => {}
+                        CEvent::Resize(_, _) => dirty = true,
+                        _ => {}
+                    },
                 },
-            },
+            }
         }
         if terminal_gone {
             cancel_for_lost_terminal(
@@ -1861,55 +1909,66 @@ fn run_tui_watch(
         let state_visible: Vec<&oscilloscope_core::render::StateRow> =
             render_state.state_rows.iter().collect();
 
-        let mut terminal_gone = false;
-        match event::poll(KEY_POLL_INTERVAL) {
-            Err(_) => terminal_gone = true,
-            Ok(false) => {}
-            Ok(true) => match event::read() {
+        // The orchestrator's own second finding: checked *before*
+        // ever calling into crossterm at all -- see `stdin_hung_up`'s
+        // own doc comment for why crossterm's own poll/read never
+        // error for this case on their own.
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event::poll(KEY_POLL_INTERVAL) {
                 Err(_) => terminal_gone = true,
-                Ok(ev) => match ev {
-                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                        // Watch owns no engine to cancel (DESIGN.md
-                        // §6.3), so `running` is always false here:
-                        // `c` does nothing, and `q` detaches at once,
-                        // with no confirm, whether the watched run is
-                        // still going or not.
-                        let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
-                            oscilloscope_core::render::full_value(
-                                p,
-                                oscilloscope_core::render::FullValueField::PromptSent,
-                                last_state.as_ref(),
-                            )
-                            .is_some()
-                        });
-                        match app.handle_key(key, &visible, &state_visible, false, has_prompt_sent)
-                        {
-                            keys::Action::Quit => {
-                                // Finding 15: `q` while the watched
-                                // run is still going is a voluntary
-                                // detach, not an abort — the run
-                                // already having ended (K1's own
-                                // finished screen) still gets the
-                                // normal ok/failed/aborted summary.
-                                detached_while_live = !ended;
-                                break 'tui;
+                Ok(false) => {}
+                Ok(true) => match event::read() {
+                    Err(_) => terminal_gone = true,
+                    Ok(ev) => match ev {
+                        CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                            // Watch owns no engine to cancel (DESIGN.md
+                            // §6.3), so `running` is always false here:
+                            // `c` does nothing, and `q` detaches at once,
+                            // with no confirm, whether the watched run is
+                            // still going or not.
+                            let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
+                                oscilloscope_core::render::full_value(
+                                    p,
+                                    oscilloscope_core::render::FullValueField::PromptSent,
+                                    last_state.as_ref(),
+                                )
+                                .is_some()
+                            });
+                            match app.handle_key(
+                                key,
+                                &visible,
+                                &state_visible,
+                                false,
+                                has_prompt_sent,
+                            ) {
+                                keys::Action::Quit => {
+                                    // Finding 15: `q` while the watched
+                                    // run is still going is a voluntary
+                                    // detach, not an abort — the run
+                                    // already having ended (K1's own
+                                    // finished screen) still gets the
+                                    // normal ok/failed/aborted summary.
+                                    detached_while_live = !ended;
+                                    break 'tui;
+                                }
+                                // K3: Ctrl-C in `osp watch` always just
+                                // detaches too, same as `q` — but reports
+                                // the same 130 a real forwarded SIGINT
+                                // would, not the final state's own code.
+                                keys::Action::CtrlC => {
+                                    local_signal = Some(ForwardSignal::Int);
+                                    break 'tui;
+                                }
+                                keys::Action::Cancel | keys::Action::None => {}
                             }
-                            // K3: Ctrl-C in `osp watch` always just
-                            // detaches too, same as `q` — but reports
-                            // the same 130 a real forwarded SIGINT
-                            // would, not the final state's own code.
-                            keys::Action::CtrlC => {
-                                local_signal = Some(ForwardSignal::Int);
-                                break 'tui;
-                            }
-                            keys::Action::Cancel | keys::Action::None => {}
+                            dirty = true;
                         }
-                        dirty = true;
-                    }
-                    CEvent::Resize(_, _) => dirty = true,
-                    _ => {}
+                        CEvent::Resize(_, _) => dirty = true,
+                        _ => {}
+                    },
                 },
-            },
+            }
         }
         if terminal_gone {
             // The orchestrator's own finding, `osp watch`'s own shape

@@ -7,8 +7,8 @@
 //! credentials, a hard per-test timeout.
 //!
 //! No extra pty crate: `posix_openpt`/`grantpt`/`unlockpt`/`ptsname`
-//! are already available through `libc`, already a dev-dependency of
-//! this crate.
+//! are already available through `libc`, a dependency of this crate's
+//! own binary too (`main.rs`'s own `stdin_hung_up`).
 
 mod support;
 
@@ -16,7 +16,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -217,9 +217,23 @@ fn send_bytes(master: &mut File, bytes: &[u8]) {
 }
 
 fn open_slave(path: &std::path::Path) -> OwnedFd {
+    // The orchestrator's own finding: on Linux, a process that has
+    // called `setsid()` (no controlling terminal of its own yet) and
+    // then opens a tty device *by path* auto-acquires it as its
+    // controlling terminal, same as a bare `open()` + no `O_NOCTTY`
+    // always has on historical SysV ttys -- `osp` itself never asks
+    // for one (`TerminalGuard::enter` only `tcgetattr`/`tcsetattr`s an
+    // already-open fd), so the three slave opens below, each handed
+    // to the spawned `osp` as a *fresh* stdio fd rather than a dup of
+    // one already-open one, must say so explicitly: a real SIGHUP
+    // test (`a_forwarded_sighup_in_the_tui_exits_129`) sends the
+    // signal directly to osp's own pid regardless, but the whole
+    // *point* of the lost-terminal tests below is a slave that was
+    // never, ever a controlling terminal for anyone.
     let file = File::options()
         .read(true)
         .write(true)
+        .custom_flags(libc::O_NOCTTY)
         .open(path)
         .unwrap_or_else(|e| panic!("opening pty slave {path:?}: {e}"));
     OwnedFd::from(file)
@@ -280,22 +294,29 @@ fn spawn_osp_on_pty_with_env(
     cmd.stdin(stdio_from_slave(slave_path));
     cmd.stdout(stdio_from_slave(slave_path));
     cmd.stderr(stdio_from_slave(slave_path));
-    // Only `setpgid` (not `setsid`): a `setsid` call from a `pre_exec`
-    // closure was tried here and found to make the spawned child
-    // permanently unreapable by this test's own `std::process::Child`
-    // (`try_wait`/`wait` never see it exit, confirmed with a minimal
-    // repro with no osp involved at all -- a macOS-specific quirk of
-    // `waitpid` on a child that called `setsid`). A plain tty slave
-    // fd (no explicit `TIOCSCTTY`) is still enough for
-    // `crossterm::terminal::enable_raw_mode`'s own `tcgetattr`/
-    // `tcsetattr`, which only need an open fd referring to some tty
-    // device, not a controlling-terminal relationship -- this process
-    // group isolation is here for the same reason `osp` itself gives
+    // The orchestrator's own finding: `setsid()`, not merely
+    // `setpgid(0, 0)` -- matching how a real terminal-launching
+    // driver spawns its own child (Python's own `start_new_session=
+    // True`, which this orchestrator's own repro used), and the only
+    // way osp ends up with *no controlling terminal at all* rather
+    // than merely its own process group within the test harness's
+    // own session. A `setsid` call from a `pre_exec` closure was once
+    // suspected of making the spawned child permanently unreapable by
+    // this test's own `std::process::Child` on macOS; re-checked
+    // directly (a minimal repro spawning `/bin/sleep` this same way,
+    // `try_wait`-polled to completion) and found to reap normally --
+    // every pty test in this file below still reaps `osp` the same
+    // way regardless. A plain tty slave fd (no explicit `TIOCSCTTY`,
+    // and now `O_NOCTTY` on top, `open_slave`'s own doc comment) is
+    // still enough for `crossterm::terminal::enable_raw_mode`'s own
+    // `tcgetattr`/`tcsetattr`, which only need an open fd referring
+    // to some tty device, not a controlling-terminal relationship --
+    // this isolation is here for the same reason `osp` itself gives
     // `cof` its own (DESIGN.md §4.1), so a signal sent to just this
-    // pid never reaches the test harness's own process group either.
+    // pid never reaches the test harness's own session either.
     unsafe {
         cmd.pre_exec(|| {
-            if libc::setpgid(0, 0) != 0 {
+            if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -644,18 +665,26 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
 /// The orchestrator's own finding: a driver that merely closes its
 /// end of the pty and exits, with no signal sent at all, leaves osp
 /// without even a SIGHUP -- the slave was never its own *controlling*
-/// terminal (`spawn_osp_on_pty`'s own `setpgid`, with no `TIOCSCTTY`),
-/// so nothing tells the kernel to send one. Before the fix, every
-/// further `event::poll`/`read` and `terminal.draw` call against the
-/// now-gone master kept failing at once, forever, with no blocking
-/// read left to cap the loop's own pace -- a whole CPU core spun for
-/// as long as the engine (here, a `tail -f` that never finishes on
-/// its own) kept running, and every signal sent at it, SIGTERM
-/// included, went unanswered. osp must now notice the dead terminal
-/// on its own: cancel the engine, and exit promptly -- in practice
-/// within a couple of redraw ticks, never minutes.
+/// terminal (`spawn_osp_on_pty`'s own `setsid`, with no `TIOCSCTTY`
+/// and, on top, `open_slave`'s own `O_NOCTTY`), so nothing tells the
+/// kernel to send one. Before the fix, `event::poll`/`read` never
+/// actually errored at all (the orchestrator's own second finding):
+/// crossterm's own event source checks only `POLLIN` on the tty fd,
+/// never `POLLHUP`, and a hung-up pty slave sets both at once (EOF
+/// counts as "readable") -- so crossterm just kept calling a 0-byte
+/// `read()` in a tight inner loop until its own poll timeout ran out,
+/// then returned cleanly with nothing to show for it, over and over.
+/// A whole CPU core spun for as long as the engine (here, a `tail -f`
+/// that never finishes on its own) kept running, and every signal
+/// sent at it, SIGTERM included, went unanswered -- not because the
+/// loop ever stopped reaching its own top, but because nothing in it
+/// ever noticed anything was wrong. osp must now notice the dead
+/// terminal on its own (`stdin_hung_up`'s own raw, non-blocking
+/// `poll(2)`, checked before ever calling into crossterm at all):
+/// cancel the engine, and exit promptly -- in practice within a
+/// couple of redraw ticks, never minutes.
 #[test]
-fn a_closed_pty_master_with_no_signal_still_exits_promptly_with_no_leftovers() {
+fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_leftovers() {
     if !e2e_enabled() {
         eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
         return;
@@ -706,10 +735,71 @@ fn a_closed_pty_master_with_no_signal_still_exits_promptly_with_no_leftovers() {
         status.code().is_some(),
         "osp should have exited on its own, got {status:?}"
     );
+    // The orchestrator's own acceptance bound ("within 3s"), with a
+    // little slack for a loaded CI runner.
     assert!(
-        elapsed < Duration::from_secs(5),
+        elapsed < Duration::from_secs(4),
         "osp took {elapsed:?} to notice its terminal was gone -- it should be a couple of \
          redraw ticks, not spinning"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// [`a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_leftovers`],
+/// on the *finished* screen instead -- the run already ended on its
+/// own (DESIGN.md §6.3's "the engine exiting does not, on its own,
+/// end this loop"), so there is no engine left to cancel at all, only
+/// the TUI's own loop still polling a long-gone terminal for a `q`
+/// that will now never come. The orchestrator's own second
+/// combination (`mid`/`finished`), and the one case `cancel_for_lost_
+/// terminal`'s own `exit_status.is_none()` check has nothing to do.
+#[test]
+fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptly() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (mut master, slave_path) = open_pty();
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern_on_master(&mut master, b"\x1b[?1049h", Duration::from_secs(20));
+    // The `echo` finishes almost at once -- well inside `SIGNAL_DELAY`,
+    // the TUI is on the finished screen already, never having been
+    // asked to leave it yet.
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let closed_at = Instant::now();
+    drop(master);
+
+    let status = wait_with_timeout(child, Duration::from_secs(15));
+    let elapsed = closed_at.elapsed();
+    assert!(
+        status.code().is_some(),
+        "osp should have exited on its own, got {status:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "osp took {elapsed:?} to notice its terminal was gone on the finished screen -- it \
+         should be a couple of redraw ticks, not spinning"
     );
 
     assert_no_leftover_process(work.path());

@@ -2387,6 +2387,46 @@ mod tests {
         );
     }
 
+    /// The orchestrator's own wording finding: when *some* running
+    /// prompts have a known `prompt_sent` and *some* don't, the
+    /// estimate is a nonzero lower bound (`≈5+`, not the `?` a wholly
+    /// unknown one gets) -- one known prompt (`ready`, counted
+    /// straight from its own state node) running alongside one
+    /// confirmed only by events (the tree-loop pass, no node of its
+    /// own at all) pins that mixed case.
+    #[test]
+    fn the_token_bar_estimate_is_a_nonzero_lower_bound_when_only_some_running_prompts_are_known() {
+        let plan = PlanTree::from_program(&named_loop_with_one_prompt_program());
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.ask".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "1234567890ABCD", "waiting_for": null}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.prompts_running, 2);
+        // ceil(14 / 4) = 4, from `ready` alone -- `fan.iter_0.ask` has
+        // no `prompt_sent` to add anything.
+        assert_eq!(rendered.token_bar.estimated_input, 4);
+        assert!(
+            rendered.token_bar.estimated_input_is_lower_bound,
+            "one of the two running prompts has no prompt_sent known -- the total is still a lower bound"
+        );
+    }
+
     /// A row confirmed running purely by events, with no state node
     /// and no plan entry either (a `use: inline:` child, which has no
     /// static plan at all, DESIGN.md §5) cannot be told apart from a
