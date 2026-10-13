@@ -34,7 +34,7 @@
       ],
       [
         "content-length",
-        "78"
+        "93"
       ],
       [
         "content-type",
@@ -45,7 +45,7 @@
         "127.0.0.1:<MOCK_PORT>"
       ]
     ],
-    "body": "{\"model\": \"small-model\", \"messages\": [{\"role\": \"user\", \"content\": \"chunk a\"}]}"
+    "body": "{\"model\": \"big-model\", \"messages\": [{\"role\": \"user\", \"content\": \"chunk a for widgets (hi)\"}]}"
   },
   {
     "method": "POST",
@@ -70,5 +70,29 @@
       ]
     ],
     "body": "{\"model\": \"small-model\", \"messages\": [{\"role\": \"user\", \"content\": \"chunk b\"}]}"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "115"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\": \"big-model\", \"messages\": [{\"role\": \"user\", \"content\": \"merge chunk a reply / chunk b reply on widgets\"}]}"
   }
 ]

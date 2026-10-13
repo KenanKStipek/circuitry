@@ -22,7 +22,7 @@ use crate::exec::use_::{
 use crate::exec::{CtxChain, live_ctx};
 use crate::{CancellationToken, Frame, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::effects::{PromptContent, PromptOp};
-use electricity_bytecode::{Op, first_unsupported};
+use electricity_bytecode::{EffectPath, Op, first_unsupported};
 use electricity_compiler::DocumentOrigin;
 use electricity_config::{ComplexitySettings, DecompositionSettings};
 use electricity_value::pycompat::py_strip;
@@ -613,6 +613,57 @@ fn rejected_payload_text(err: &VmError) -> Option<String> {
     }
 }
 
+/// The planner's and the plan's own `Frame`, one level deeper than the
+/// triggering prompt's -- `Frame::nested` doesn't apply
+/// `with_display_depth` itself (callers chain it, same convention `use`
+/// children already follow), so this helper does both steps for
+/// either child. No `push_use`: only the plan's own frame needs one
+/// (issue #522's Settled question 6's cycle guard), chained onto this
+/// helper's result by the one caller that needs it.
+fn child_frame(frame: &Frame, op_path: &EffectPath) -> Frame {
+    frame
+        .nested(op_path)
+        .with_display_depth(crate::complexity::depth::use_child_root(
+            frame.display_depth(),
+        ))
+}
+
+/// The planner's and the plan's own `RunContext` -- the caller's own,
+/// except always unlocked (`core/decompose.py::_run_isolated`'s own
+/// `DynamicRuntime(model_locked=False)` default, issue #522's Settled
+/// question 2) and never a dry run, with *complexity*/*decomposition_depth*
+/// and the child program's own declared-prompts/effect-names tables
+/// supplied by the one caller that knows which child this is (the
+/// planner keeps the run's own `decomposition_depth` unchanged; the
+/// plan increments it, issue #522's own Scope section 2 steps 4/7).
+fn child_run_ctx<'a>(
+    run_ctx: &RunContext<'a>,
+    complexity: &'a ComplexitySettings,
+    decomposition_depth: u32,
+    declared_prompts: &'a indexmap::IndexMap<String, String>,
+    effect_names: &'a std::collections::BTreeSet<String>,
+) -> RunContext<'a> {
+    RunContext {
+        registry: run_ctx.registry,
+        limiter: run_ctx.limiter,
+        model: run_ctx.model,
+        adapter: run_ctx.adapter,
+        runtime_config: run_ctx.runtime_config,
+        dry_run: false,
+        armed: run_ctx.armed,
+        adapters: run_ctx.adapters,
+        default_adapter: Rc::clone(&run_ctx.default_adapter),
+        model_locked: false,
+        adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
+        complexity,
+        decomposition_depth,
+        orchestration_dir: run_ctx.orchestration_dir,
+        declared_prompts,
+        effect_names,
+        supported: run_ctx.supported,
+    }
+}
+
 /// `core/prompt.py::_maybe_decompose` + `core/decompose.py::
 /// maybe_decompose`, merged into this one call site (issue #522,
 /// M1-L2b): `exec::prompt::execute_prompt` calls this once, right
@@ -705,31 +756,14 @@ pub(crate) async fn maybe_decompose(
     };
 
     let planner_settings_value = planner_settings(settings);
-    let planner_frame =
-        frame
-            .nested(&op.path)
-            .with_display_depth(crate::complexity::depth::use_child_root(
-                frame.display_depth(),
-            ));
-    let planner_run_ctx = RunContext {
-        registry: run_ctx.registry,
-        limiter: run_ctx.limiter,
-        model: run_ctx.model,
-        adapter: run_ctx.adapter,
-        runtime_config: run_ctx.runtime_config,
-        dry_run: false,
-        armed: run_ctx.armed,
-        adapters: run_ctx.adapters,
-        default_adapter: Rc::clone(&run_ctx.default_adapter),
-        model_locked: false,
-        adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
-        complexity: &planner_settings_value,
-        decomposition_depth: run_ctx.decomposition_depth,
-        orchestration_dir: run_ctx.orchestration_dir,
-        declared_prompts: &planner_program.prompts,
-        effect_names: &planner_program.effect_names,
-        supported: run_ctx.supported,
-    };
+    let planner_frame = child_frame(frame, &op.path);
+    let planner_run_ctx = child_run_ctx(
+        run_ctx,
+        &planner_settings_value,
+        run_ctx.decomposition_depth,
+        &planner_program.prompts,
+        &planner_program.effect_names,
+    );
 
     let planner_store = match run_isolated(
         &planner_program,
@@ -845,31 +879,14 @@ pub(crate) async fn maybe_decompose(
     let seed_ctx = live_ctx(render_chain, store);
     let seed_state = child_seed_state(&seed_ctx, &plan.result_path);
 
-    let plan_frame = frame
-        .nested(&op.path)
-        .with_display_depth(crate::complexity::depth::use_child_root(
-            frame.display_depth(),
-        ))
-        .push_use(identity);
-    let plan_run_ctx = RunContext {
-        registry: run_ctx.registry,
-        limiter: run_ctx.limiter,
-        model: run_ctx.model,
-        adapter: run_ctx.adapter,
-        runtime_config: run_ctx.runtime_config,
-        dry_run: false,
-        armed: run_ctx.armed,
-        adapters: run_ctx.adapters,
-        default_adapter: Rc::clone(&run_ctx.default_adapter),
-        model_locked: false,
-        adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
-        complexity: run_ctx.complexity,
-        decomposition_depth: depth + 1,
-        orchestration_dir: run_ctx.orchestration_dir,
-        declared_prompts: &plan_program.prompts,
-        effect_names: &plan_program.effect_names,
-        supported: run_ctx.supported,
-    };
+    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    let plan_run_ctx = child_run_ctx(
+        run_ctx,
+        run_ctx.complexity,
+        depth + 1,
+        &plan_program.prompts,
+        &plan_program.effect_names,
+    );
 
     let child_store = match run_isolated(
         &plan_program,
@@ -881,6 +898,16 @@ pub(crate) async fn maybe_decompose(
     )
     .await
     {
+        Err(VmError::Refused {
+            refusal,
+            child_label,
+        }) => {
+            return Err(VmError::Refused {
+                refusal,
+                child_label: child_label
+                    .or_else(|| Some(format!("decomposition plan of '{name}'"))),
+            });
+        }
         Err(err) if err.is_fatal() => return Err(err),
         Err(err) => {
             child_warning();
@@ -1631,5 +1658,133 @@ mod tests {
             rejected_payload_text(&err),
             Some("still here after a wrap".to_string())
         );
+    }
+
+    fn minimal_run_ctx_parts() -> (
+        electricity_tools::ToolRegistry,
+        crate::Limiter,
+        Value,
+        crate::adapter::AdapterRegistry,
+        std::path::PathBuf,
+        indexmap::IndexMap<String, String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        (
+            electricity_tools::ToolRegistry::new(),
+            crate::Limiter::new(),
+            Value::None,
+            crate::adapter::AdapterRegistry::new(),
+            std::path::PathBuf::from("."),
+            indexmap::IndexMap::new(),
+            std::collections::BTreeSet::new(),
+        )
+    }
+
+    #[test]
+    fn child_run_ctx_is_unlocked_and_never_a_dry_run_whatever_the_caller_was() {
+        // `_run_isolated`'s own `DynamicRuntime(model_locked=False)`
+        // default (issue #522's Settled question 2) -- even a caller
+        // locked by a profile's run-level `model:`, mid-dry-run, hands
+        // the planner/plan an unlocked, non-dry-run context.
+        let (registry, limiter, runtime_config, adapters, dir, prompts, names) =
+            minimal_run_ctx_parts();
+        let complexity = ComplexitySettings::default();
+        let caller = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: true,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: true,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 3,
+            orchestration_dir: &dir,
+            declared_prompts: &prompts,
+            effect_names: &names,
+            supported: electricity_bytecode::Supported::current(&[]),
+        };
+        let child_complexity = ComplexitySettings::default();
+        let child = child_run_ctx(
+            &caller,
+            &child_complexity,
+            caller.decomposition_depth,
+            &prompts,
+            &names,
+        );
+        assert!(!child.model_locked);
+        assert!(!child.dry_run);
+        // Every other field is the caller's own, unchanged.
+        assert_eq!(child.model, "m");
+        assert_eq!(child.adapter_timeout_seconds, 120);
+    }
+
+    #[test]
+    fn child_run_ctx_takes_the_decomposition_depth_the_caller_passes_in() {
+        // The planner keeps the run's own depth unchanged; the plan
+        // increments it (issue #522's own Scope section 2 steps 4/7) --
+        // this helper just takes whatever the caller computed, so both
+        // calls go through the one assertion here.
+        let (registry, limiter, runtime_config, adapters, dir, prompts, names) =
+            minimal_run_ctx_parts();
+        let complexity = ComplexitySettings::default();
+        let caller = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 5,
+            orchestration_dir: &dir,
+            declared_prompts: &prompts,
+            effect_names: &names,
+            supported: electricity_bytecode::Supported::current(&[]),
+        };
+        let planner_child = child_run_ctx(
+            &caller,
+            &complexity,
+            caller.decomposition_depth,
+            &prompts,
+            &names,
+        );
+        assert_eq!(planner_child.decomposition_depth, 5);
+        let plan_child = child_run_ctx(
+            &caller,
+            &complexity,
+            caller.decomposition_depth + 1,
+            &prompts,
+            &names,
+        );
+        assert_eq!(plan_child.decomposition_depth, 6);
+    }
+
+    #[test]
+    fn child_frame_bumps_display_depth_by_one_and_composes_the_path() {
+        let frame = Frame::root().with_display_depth(2);
+        let op_path = electricity_bytecode::EffectPath::root().push_name("big");
+        let child = child_frame(&frame, &op_path);
+        assert_eq!(child.display_depth(), 3);
+        assert_eq!(child.use_call_stack(), frame.use_call_stack());
+    }
+
+    #[test]
+    fn only_the_plans_own_frame_pushes_a_use_call_stack_entry() {
+        let frame = Frame::root();
+        let op_path = electricity_bytecode::EffectPath::root().push_name("big");
+        let planner_frame = child_frame(&frame, &op_path);
+        assert!(planner_frame.use_call_stack().is_empty());
+        let plan_frame = child_frame(&frame, &op_path).push_use("inline:abc".to_string());
+        assert_eq!(plan_frame.use_call_stack(), &["inline:abc".to_string()]);
     }
 }

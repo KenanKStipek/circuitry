@@ -343,6 +343,19 @@ async fn a_successful_decomposition_writes_the_merged_value_and_the_record() {
             >= 3,
         "expected record_totals from the planner's plan, and the plan's own a/b: {events:?}"
     );
+
+    // The triggering prompt `big` itself calls `record_totals` exactly
+    // once -- issue #522's own Scope section 1's `Decomposed(value)`
+    // arm, never once per child effect. Only `big`'s own meta snapshot
+    // carries a `decomposition` key (the planner's own prompt and the
+    // plan's chunks never decompose themselves at this threshold), so
+    // filtering the recorded `Totals` events on that key isolates it
+    // from the child effects' own totals counted above.
+    let bigs_own_totals = events
+        .iter()
+        .filter(|e| matches!(e, Event::Totals(meta) if meta.contains("\"decomposition\"")))
+        .count();
+    assert_eq!(bigs_own_totals, 1, "{events:?}");
 }
 
 #[tokio::test]
@@ -512,6 +525,52 @@ effects:\n\
     }
     // Nothing is written to `meta.decomposition` at all for a refused
     // plan -- the store isn't even touched past the pre-dispatch block.
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let big = as_dict(get(prime, "big").unwrap());
+    let meta = as_dict(get(big, "meta").unwrap());
+    assert_eq!(get(meta, "decomposition"), None);
+}
+
+#[tokio::test]
+async fn a_dispatch_time_refusal_inside_the_plan_carries_the_decomposition_label() {
+    // The plan compiles clean and passes `first_unsupported` (a
+    // prompt's own `provider:` isn't a static check, and
+    // `validate_plan` doesn't reject it either) -- the refusal only
+    // fires once chunk `a` actually dispatches and `is_unbuildable`
+    // sees `litellm`, Circuitry-known but unbuilt in this registry
+    // (`registry_with_scripted` only registers `scripted`). That
+    // refusal's own `child_label` starts `None` (`exec/prompt.rs`'s
+    // dispatch-time check names no child document of its own); the
+    // plan's run arm must claim it with the same label the static
+    // check above uses.
+    let plan_yaml = "\
+effects:\n\
+\x20\x20- type: prompt\n\
+\x20\x20\x20\x20name: a\n\
+\x20\x20\x20\x20provider: litellm\n\
+\x20\x20\x20\x20template: \"chunk a\"\n\
+\x20\x20- type: tool\n\
+\x20\x20\x20\x20name: merge\n\
+\x20\x20\x20\x20provider: json\n\
+\x20\x20\x20\x20params: {mode: parse, input: '\"merged\"'}\n\
+";
+    let complexity = decomposing_complexity(-1.0, 2, 5);
+    let replies = vec![planner_reply(plan_yaml, &["a", "merge"])];
+    let (store, _observer, result) = run_decomposing_prompt(
+        template_prompt("hi"),
+        OnError::Continue,
+        &complexity,
+        replies,
+    )
+    .await;
+    let err = result.expect_err("a dispatch-time refusal inside the plan must be a fatal Err");
+    match &err {
+        VmError::Refused { child_label, .. } => {
+            assert_eq!(child_label.as_deref(), Some("decomposition plan of 'big'"));
+        }
+        other => panic!("expected VmError::Refused, got {other:?}"),
+    }
     let snapshot = store.snapshot(&store.root);
     let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
     let big = as_dict(get(prime, "big").unwrap());

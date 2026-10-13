@@ -1378,4 +1378,13 @@ mod urlencode_tests {
         assert_eq!(urlencode(&params, true).unwrap(), "a=bytes+val");
         assert_eq!(urlencode(&params, false).unwrap(), "a=bytes+val");
     }
+
+    #[test]
+    fn decomposition_error_displays_as_its_bare_class_name_and_is_not_a_value_error() {
+        // Issue #522 §4: a `RuntimeError` subclass, never a `ValueError`
+        // one -- #442's tree text prints it as `[i] DecompositionError: ...`.
+        assert_eq!(PyExc::DecompositionError.name(), "DecompositionError");
+        assert_eq!(PyExc::DecompositionError.to_string(), "DecompositionError");
+        assert!(!PyExc::DecompositionError.is_value_error_class());
+    }
 }

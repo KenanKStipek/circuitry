@@ -1244,7 +1244,7 @@ other prompt. The one documented exception belongs to a different planner
 entirely: `core/decompose.py`'s own decomposition planner explicitly disables
 decomposition for *itself* (its planning prompt is deliberately huge and
 would otherwise trigger the very feature it's generating) — never the
-reflector's planning prompt, which this paragraph used to say incorrectly.
+reflector's planning prompt.
 
 ### 5.8 Decomposition, routing, scoring
 
