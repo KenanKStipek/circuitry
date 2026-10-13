@@ -1,0 +1,11 @@
+{
+  "runtime": {
+    "complexity": {
+      "scoring": {"enabled": true},
+      "decomposition": {"enabled": true, "threshold": 80}
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}

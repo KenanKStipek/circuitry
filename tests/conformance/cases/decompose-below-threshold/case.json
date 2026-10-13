@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 1: decomposition below threshold",
+  "description": "threshold above the prompt's score: no meta.decomposition, no planner reply. A prompt whose scoring fails (K2's 400-digit num_predict) gets neither key; K2's WARNING line appears.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
