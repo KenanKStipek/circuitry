@@ -80,8 +80,14 @@ def redact_host_url(url: str) -> str:
     credential-like query parameter masked — so a configured ``base_url``
     carrying a secret never reaches ``missing``, ``cof doctor``, or anything
     else that prints a preflight check's text.
+
+    ``url`` is coerced with ``str()`` first: a misconfigured non-string
+    ``base_url``/``expo_url`` (``runtime.adapters.ollama.base_url: 5``)
+    must still produce a ``host:`` requirement, not crash a ``check()``
+    that is already reporting a problem (``urlsplit`` requires a string
+    or bytes and raises ``AttributeError`` on anything else).
     """
-    return _strip_url_userinfo(_mask_credential_query_params(url))
+    return _strip_url_userinfo(_mask_credential_query_params(str(url)))
 
 
 def _mask_secrets(text: str, secrets: Iterable[str]) -> str:

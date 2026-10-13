@@ -63,8 +63,11 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("host_claude", Box::new(host_claude::build_host_claude));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
-    // `replicate`/`watsonx` last. The unbuildable set after this lane
-    // is exactly `claude_code`, `cyberdiner`, `litellm` and `pi`.
+    // `replicate`/`watsonx` last. Issue #515 (N1) ports `cyberdiner`
+    // too, so the unbuildable set is now exactly `claude_code`,
+    // `litellm` and `pi` (`host_claude`'s own builder always fails,
+    // deliberately -- see this file's own module doc comment -- so it
+    // is never part of that set).
     registry.register("ollama", Box::new(ollama::build_ollama));
     registry.register("openai", Box::new(openai::build_openai));
     registry.register("anthropic", Box::new(anthropic::build_anthropic));

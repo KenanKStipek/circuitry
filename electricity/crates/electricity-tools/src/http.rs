@@ -134,7 +134,7 @@ fn unsupported_in_electricity_failure(original_url: &str, scheme: &str) -> ToolE
 /// a `data:`/non-`http` scheme's own opaque-path handling) -- a hand
 /// port of the same, narrow RFC 3986 algorithm CPython itself runs
 /// stays predictable where the two would otherwise diverge.
-mod http_url {
+pub mod http_url {
     /// A `urllib.parse.SplitResult` -- *netloc* keeps any userinfo
     /// (`user:pass@host:port`) verbatim; this plugin never uses it for
     /// authentication (plain `urlopen()` doesn't either, with no
@@ -1130,7 +1130,12 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
 /// environment lookup/`no_proxy` bypass, then [`parse_proxy`] for the
 /// proxy value itself, unquoting both the hostport and (when both a
 /// user and a password are present) the `Basic` credentials.
-fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
+/// `pub` (not `pub(crate)`): `electricity-adapters::cyberdiner` --
+/// the one adapter that speaks urllib's own wire shape instead of
+/// curl's -- reuses this directly for its own proxy resolution
+/// (issue #515 review finding F3), rather than re-deriving urllib's
+/// proxy-URL/auth parsing a second time.
+pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
     let host_for_bypass = netloc_host_as_written(netloc);
     let proxy_value = http_client::resolve_proxy(scheme, host_for_bypass)?;
     let parsed = parse_proxy(&proxy_value);

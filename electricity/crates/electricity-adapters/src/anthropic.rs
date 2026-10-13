@@ -2,7 +2,7 @@
 //! API, over [`crate::transport`]: system-turn hoisting, image blocks
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
-use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
+use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -34,6 +34,18 @@ fn truncate_chars(text: &str, max_chars: usize) -> &str {
         Some((byte_index, _)) => &text[..byte_index],
         None => text,
     }
+}
+
+/// `generate()`'s own request headers -- `pub` (review finding F6)
+/// so `tests/adapter_corpus.rs` compares the recorded corpus headers
+/// against the adapter's own header-building code, not a list written
+/// by hand in the test a second time.
+pub fn request_headers(api_key: &str) -> Vec<(String, String)> {
+    vec![
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("x-api-key".to_string(), api_key.to_string()),
+        ("anthropic-version".to_string(), "2023-06-01".to_string()),
+    ]
 }
 
 fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
@@ -326,7 +338,9 @@ pub fn interpret_outcome(
 
 /// `adapters/anthropic.py::AnthropicAdapter`.
 pub struct AnthropicAdapter {
-    pub base_url: String,
+    /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
+    /// comment (review finding F5).
+    pub base_url: Value,
     pub default_model: String,
     pub max_tokens: i64,
 }
@@ -361,7 +375,7 @@ impl Adapter for AnthropicAdapter {
             });
         }
 
-        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/v1/messages", rstrip_base_url(&self.base_url)?);
         let payload = build_request_body(model, prompt, self.max_tokens, options);
         let body =
             // `json.dumps(payload)` raises Python's own `TypeError` for a
@@ -374,11 +388,7 @@ impl Adapter for AnthropicAdapter {
                 }
             })?;
 
-        let headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("x-api-key".to_string(), api_key.clone()),
-            ("anthropic-version".to_string(), "2023-06-01".to_string()),
-        ];
+        let headers = request_headers(&api_key);
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
@@ -422,7 +432,7 @@ pub fn build_anthropic(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
         py_class: e.py_class,
     })?;
     Ok(Box::new(AnthropicAdapter {
-        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "https://api.anthropic.com")?,
+        base_url: cfg_value_or(cfg, "base_url", "https://api.anthropic.com"),
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
     }))
@@ -432,6 +442,15 @@ pub fn build_anthropic(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 mod tests {
     use super::*;
     use electricity_vm::adapter::ChatMessage;
+    use std::sync::{Mutex, OnceLock};
+
+    /// `ANTHROPIC_API_KEY` is process environment, shared by every
+    /// test in this module (`watsonx.rs`'s own `env_guard`, same
+    /// reason).
+    fn env_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn system_turns_are_hoisted_into_the_system_field() {
@@ -543,14 +562,32 @@ mod tests {
         assert_eq!(adapter.name(), "anthropic");
     }
 
-    #[test]
-    fn build_anthropic_fails_like_python_for_a_non_string_base_url() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
+        // Review finding F5: Python raises inside `generate()`, after
+        // the API-key check, not when the adapter is built.
+        let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let err = match build_anthropic(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_anthropic to fail"),
+        let adapter = build_anthropic(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+        }
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
         };
+        let err = adapter
+            .generate("m", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }

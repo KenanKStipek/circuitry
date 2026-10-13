@@ -6,7 +6,7 @@
 //! `nvidia-nim`, `openrouter`, `perplexity`, `qwen-dashscope`, `tgi`,
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
-use crate::config::{cfg_get, cfg_str_or, cfg_str_or_rstrip_target};
+use crate::config::{cfg_get, cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -47,6 +47,21 @@ fn non_json_error(prefix: &str, stdout: &str) -> AdapterError {
         retry: RetryInfo::not_retryable(),
         py_class: PyExc::RuntimeError,
     }
+}
+
+/// `chat_completion()`'s own request headers -- `pub` (review
+/// finding F6) so `tests/adapter_corpus.rs` compares the recorded
+/// corpus headers against the adapter's own header-building code,
+/// not a list written by hand in the test a second time.
+pub fn request_headers(api_key: &str, extra_headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+    if !api_key.is_empty() {
+        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    }
+    for (name, value) in extra_headers {
+        headers.push((name.clone(), value.clone()));
+    }
+    headers
 }
 
 fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
@@ -277,7 +292,11 @@ pub fn parse_chat_response(raw: &Value) -> Result<(String, Option<String>), Adap
 /// `_openai_compat.py::OpenAICompatibleConfig`.
 #[derive(Debug, Clone)]
 pub struct OpenAiCompatibleConfig {
-    pub base_url: String,
+    /// Raw -- see `openai.rs::OpenAiAdapter::base_url`'s own doc
+    /// comment (review finding F5): `.rstrip("/")`'d in
+    /// [`chat_completion`] itself, at the same point Python calls it
+    /// (after the API-key check), never at build time.
+    pub base_url: Value,
     pub api_key_env: String,
     pub default_model: String,
     pub chat_completions_path: String,
@@ -285,7 +304,7 @@ pub struct OpenAiCompatibleConfig {
 
 impl OpenAiCompatibleConfig {
     fn new(
-        base_url: impl Into<String>,
+        base_url: impl Into<Value>,
         api_key_env: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
@@ -335,7 +354,7 @@ pub async fn chat_completion(
     }
 
     let path = cfg.chat_completions_path.replace("{model}", model);
-    let url = format!("{}{path}", cfg.base_url.trim_end_matches('/'));
+    let url = format!("{}{path}", rstrip_base_url(&cfg.base_url)?);
 
     let payload = build_request(model, prompt, options);
     // `json.dumps(payload)` raises Python's own `TypeError` for a value it
@@ -348,13 +367,7 @@ pub async fn chat_completion(
         }
     })?;
 
-    let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
-    if !api_key.is_empty() {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-    }
-    for (name, value) in extra_headers {
-        headers.push((name.clone(), value.clone()));
-    }
+    let headers = request_headers(&api_key, extra_headers);
 
     let outcome = run_curl(&url, &headers, Some(&body), timeout_seconds)
         .await
@@ -524,7 +537,7 @@ pub fn build_ai21(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "ai21",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.ai21.com/studio/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.ai21.com/studio/v1"),
             "AI21_API_KEY",
             cfg_str_or(cfg, "default_model", "jamba-large"),
         ),
@@ -535,7 +548,7 @@ pub fn build_cohere(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "cohere",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.cohere.com")?,
+            cfg_value_or(cfg, "base_url", "https://api.cohere.com"),
             "COHERE_API_KEY",
             cfg_str_or(cfg, "default_model", "command-r-plus"),
         )
@@ -547,7 +560,7 @@ pub fn build_deepseek(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "deepseek",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.deepseek.com/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.deepseek.com/v1"),
             "DEEPSEEK_API_KEY",
             cfg_str_or(cfg, "default_model", "deepseek-chat"),
         ),
@@ -558,7 +571,7 @@ pub fn build_fireworks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "fireworks",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.fireworks.ai/inference/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.fireworks.ai/inference/v1"),
             "FIREWORKS_API_KEY",
             cfg_str_or(
                 cfg,
@@ -573,7 +586,7 @@ pub fn build_gemini(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "gemini",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(
+            cfg_value_or(
                 cfg,
                 "base_url",
                 "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -588,7 +601,7 @@ pub fn build_groq(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "groq",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.groq.com/openai/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.groq.com/openai/v1"),
             "GROQ_API_KEY",
             cfg_str_or(cfg, "default_model", "llama-3.3-70b-versatile"),
         ),
@@ -599,7 +612,7 @@ pub fn build_huggingface_inference(cfg: &Value) -> Result<Box<dyn Adapter>, Adap
     Ok(simple_adapter(
         "huggingface-inference",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://router.huggingface.co/v1")?,
+            cfg_value_or(cfg, "base_url", "https://router.huggingface.co/v1"),
             "HF_TOKEN",
             cfg_str_or(cfg, "default_model", "meta-llama/Llama-3.3-70B-Instruct"),
         ),
@@ -610,7 +623,7 @@ pub fn build_llamacpp(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "llamacpp",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:8080/v1")?,
+            cfg_value_or(cfg, "base_url", "http://localhost:8080/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -621,7 +634,7 @@ pub fn build_lmstudio(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "lmstudio",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:1234/v1")?,
+            cfg_value_or(cfg, "base_url", "http://localhost:1234/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -632,7 +645,7 @@ pub fn build_mistral(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "mistral",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.mistral.ai/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.mistral.ai/v1"),
             "MISTRAL_API_KEY",
             cfg_str_or(cfg, "default_model", "mistral-large-latest"),
         ),
@@ -648,7 +661,7 @@ pub fn build_nvidia_nim(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "nvidia-nim",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://integrate.api.nvidia.com/v1")?,
+            cfg_value_or(cfg, "base_url", "https://integrate.api.nvidia.com/v1"),
             api_key_env,
             cfg_str_or(cfg, "default_model", "meta/llama-3.3-70b-instruct"),
         ),
@@ -659,7 +672,7 @@ pub fn build_openrouter(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "openrouter",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://openrouter.ai/api/v1")?,
+            cfg_value_or(cfg, "base_url", "https://openrouter.ai/api/v1"),
             "OPENROUTER_API_KEY",
             cfg_str_or(cfg, "default_model", "openai/gpt-4o-mini"),
         ),
@@ -670,7 +683,7 @@ pub fn build_perplexity(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "perplexity",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.perplexity.ai")?,
+            cfg_value_or(cfg, "base_url", "https://api.perplexity.ai"),
             "PERPLEXITY_API_KEY",
             cfg_str_or(cfg, "default_model", "sonar"),
         ),
@@ -681,7 +694,7 @@ pub fn build_qwen_dashscope(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterErro
     Ok(simple_adapter(
         "qwen-dashscope",
         OpenAiCompatibleConfig::new(
-            cfg_str_or(
+            cfg_value_or(
                 cfg,
                 "base_url",
                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -701,7 +714,7 @@ pub fn build_tgi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "tgi",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:3000/v1")?,
+            cfg_value_or(cfg, "base_url", "http://localhost:3000/v1"),
             api_key_env,
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -712,7 +725,7 @@ pub fn build_together(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "together",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.together.xyz/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.together.xyz/v1"),
             "TOGETHER_API_KEY",
             cfg_str_or(
                 cfg,
@@ -727,7 +740,7 @@ pub fn build_vllm(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "vllm",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "http://localhost:8000/v1")?,
+            cfg_value_or(cfg, "base_url", "http://localhost:8000/v1"),
             "",
             cfg_str_or(cfg, "default_model", ""),
         ),
@@ -738,7 +751,7 @@ pub fn build_xai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(simple_adapter(
         "xai",
         OpenAiCompatibleConfig::new(
-            cfg_str_or_rstrip_target(cfg, "base_url", "https://api.x.ai/v1")?,
+            cfg_value_or(cfg, "base_url", "https://api.x.ai/v1"),
             "XAI_API_KEY",
             cfg_str_or(cfg, "default_model", "grok-2-latest"),
         ),
@@ -750,7 +763,11 @@ pub fn build_xai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 fn azure_openai_precheck(
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
-    if cfg.base_url.is_empty() {
+    // `self._cfg()` is the first thing Python's own `generate()` does --
+    // the deferred `.rstrip("/")` failure above must surface before
+    // either check below.
+    let endpoint = azure_resolve_endpoint(&cfg.base_url)?;
+    if endpoint.is_empty() {
         return Err(AdapterError {
             message: "azure-openai: endpoint not configured. Set AZURE_OPENAI_ENDPOINT or \
                       runtime.adapters.azure-openai.endpoint."
@@ -770,42 +787,72 @@ fn azure_openai_precheck(
     Ok(vec![("api-key".to_string(), api_key)])
 }
 
+/// `azure_openai.py::AzureOpenAIAdapter::_cfg`'s own `self.
+/// _resolve_endpoint().rstrip("/")` -- unlike every other member of
+/// this family, Azure's own `.rstrip("/")` happens unconditionally
+/// (never only when the value is already known to be a string), so a
+/// truthy non-string `endpoint`/`base_url` raises here *before* either
+/// `generate()`'s or `check()`'s own API-key/endpoint-configured
+/// checks run (confirmed by running `AzureOpenAIAdapter(endpoint=5)
+/// .generate(...)` directly: the `AttributeError` is the very first
+/// thing raised). A falsy raw value resolves through
+/// `AZURE_OPENAI_ENDPOINT` instead, always a string, so `.rstrip("/")`
+/// on *that* branch never fails.
+fn azure_resolve_endpoint(raw_endpoint: &Value) -> Result<String, AdapterError> {
+    if value_is_truthy(raw_endpoint) {
+        return rstrip_base_url(raw_endpoint);
+    }
+    let env = std::env::var("AZURE_OPENAI_ENDPOINT").unwrap_or_default();
+    Ok(env.trim_end_matches('/').to_string())
+}
+
 fn azure_openai_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
-    let mut missing = Vec::new();
-    if std::env::var("AZURE_OPENAI_API_KEY")
-        .unwrap_or_default()
-        .is_empty()
-    {
-        missing.push("env:AZURE_OPENAI_API_KEY".to_string());
-    }
-    if cfg.base_url.is_empty() {
-        missing.push("env:AZURE_OPENAI_ENDPOINT".to_string());
-    }
-    CheckResult {
-        ok: missing.is_empty(),
-        missing,
-        message: None,
+    match azure_resolve_endpoint(&cfg.base_url) {
+        Err(err) => CheckResult {
+            ok: false,
+            missing: Vec::new(),
+            message: Some(format!(
+                "check() raised {}: {}",
+                err.py_class.name(),
+                err.message
+            )),
+        },
+        Ok(endpoint) => {
+            let mut missing = Vec::new();
+            if std::env::var("AZURE_OPENAI_API_KEY")
+                .unwrap_or_default()
+                .is_empty()
+            {
+                missing.push("env:AZURE_OPENAI_API_KEY".to_string());
+            }
+            if endpoint.is_empty() {
+                missing.push("env:AZURE_OPENAI_ENDPOINT".to_string());
+            }
+            CheckResult {
+                ok: missing.is_empty(),
+                missing,
+                message: None,
+            }
+        }
     }
 }
 
 pub fn build_azure_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let endpoint = cfg_str_or_rstrip_target(cfg, "endpoint", "")?;
-    let endpoint = if endpoint.is_empty() {
-        let fallback = cfg_str_or_rstrip_target(cfg, "base_url", "")?;
-        if fallback.is_empty() {
-            std::env::var("AZURE_OPENAI_ENDPOINT").unwrap_or_default()
-        } else {
-            fallback
-        }
-    } else {
-        endpoint
-    };
+    // `adapters/factory.py::_build_azure_openai`: `cfg.get("endpoint")
+    // or cfg.get("base_url") or ""` -- the first truthy value wins,
+    // kept raw (never pre-stripped: `azure_resolve_endpoint` above
+    // defers that to the actual Python call site).
+    let raw_endpoint = cfg_get(cfg, "endpoint")
+        .filter(|v| value_is_truthy(v))
+        .or_else(|| cfg_get(cfg, "base_url").filter(|v| value_is_truthy(v)))
+        .cloned()
+        .unwrap_or_else(|| Value::Str(String::new()));
     let api_version = cfg_str_or(cfg, "api_version", "2024-10-21");
-    let base_url = endpoint.trim_end_matches('/').to_string();
     let openai_cfg =
-        OpenAiCompatibleConfig::new(base_url, "", cfg_str_or(cfg, "default_model", "")).with_path(
-            format!("/openai/deployments/{{model}}/chat/completions?api-version={api_version}"),
-        );
+        OpenAiCompatibleConfig::new(raw_endpoint, "", cfg_str_or(cfg, "default_model", ""))
+            .with_path(format!(
+                "/openai/deployments/{{model}}/chat/completions?api-version={api_version}"
+            ));
     Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: "azure-openai".to_string(),
         cfg: openai_cfg,
@@ -814,20 +861,22 @@ pub fn build_azure_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError>
     }))
 }
 
-fn cloudflare_resolve_base_url(explicit: &str, account_id: &str) -> String {
-    if !explicit.is_empty() {
-        return explicit.to_string();
+fn cloudflare_resolve_base_url(explicit: &Value, account_id: &str) -> Value {
+    if value_is_truthy(explicit) {
+        return explicit.clone();
     }
     if account_id.is_empty() {
-        return String::new();
+        return Value::Str(String::new());
     }
-    format!("https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1")
+    Value::Str(format!(
+        "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+    ))
 }
 
 fn cloudflare_precheck(
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
-    if cfg.base_url.is_empty() {
+    if !value_is_truthy(&cfg.base_url) {
         return Err(AdapterError {
             message: "cloudflare-workers-ai: account_id not configured. Set CF_ACCOUNT_ID or \
                       runtime.adapters.cloudflare-workers-ai.account_id (or supply a \
@@ -842,7 +891,7 @@ fn cloudflare_precheck(
 
 fn cloudflare_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
     let base = check_dependencies(cfg);
-    if cfg.base_url.is_empty() {
+    if !value_is_truthy(&cfg.base_url) {
         let mut missing = base.missing;
         missing.push("env:CF_ACCOUNT_ID".to_string());
         return CheckResult {
@@ -855,7 +904,7 @@ fn cloudflare_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 pub fn build_cloudflare_workers_ai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let explicit_base_url = cfg_str_or_rstrip_target(cfg, "base_url", "")?;
+    let explicit_base_url = cfg_value_or(cfg, "base_url", "");
     let account_id = {
         let configured = cfg_str_or(cfg, "account_id", "");
         if configured.is_empty() {
@@ -882,27 +931,27 @@ pub fn build_cloudflare_workers_ai(cfg: &Value) -> Result<Box<dyn Adapter>, Adap
     }))
 }
 
-fn databricks_resolve_base_url(explicit: &str) -> String {
-    if !explicit.is_empty() {
-        return explicit.to_string();
+fn databricks_resolve_base_url(explicit: &Value) -> Value {
+    if value_is_truthy(explicit) {
+        return explicit.clone();
     }
     let host = std::env::var("DATABRICKS_HOST").unwrap_or_default();
     let host = host.trim_end_matches('/');
     if host.is_empty() {
-        return String::new();
+        return Value::Str(String::new());
     }
     let host = if host.starts_with("http://") || host.starts_with("https://") {
         host.to_string()
     } else {
         format!("https://{host}")
     };
-    format!("{host}/serving-endpoints")
+    Value::Str(format!("{host}/serving-endpoints"))
 }
 
 fn databricks_precheck(
     cfg: &OpenAiCompatibleConfig,
 ) -> Result<Vec<(String, String)>, AdapterError> {
-    if cfg.base_url.is_empty() {
+    if !value_is_truthy(&cfg.base_url) {
         return Err(AdapterError {
             message: "databricks: workspace host not configured. Set DATABRICKS_HOST or \
                       runtime.adapters.databricks.base_url to your workspace URL."
@@ -916,7 +965,7 @@ fn databricks_precheck(
 
 fn databricks_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
     let base = check_dependencies(cfg);
-    if cfg.base_url.is_empty() {
+    if !value_is_truthy(&cfg.base_url) {
         let mut missing = base.missing;
         missing.push("env:DATABRICKS_HOST".to_string());
         return CheckResult {
@@ -929,7 +978,7 @@ fn databricks_check(cfg: &OpenAiCompatibleConfig) -> CheckResult {
 }
 
 pub fn build_databricks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let base_url = databricks_resolve_base_url(&cfg_str_or_rstrip_target(cfg, "base_url", "")?);
+    let base_url = databricks_resolve_base_url(&cfg_value_or(cfg, "base_url", ""));
     let openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
         "DATABRICKS_TOKEN",
@@ -950,7 +999,26 @@ pub fn build_databricks(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_bytecode::EffectPath;
+    use electricity_value::CancellationToken;
     use electricity_vm::adapter::ChatMessage;
+    use std::sync::{Mutex, OnceLock};
+
+    /// The provider API-key env vars this module's own tests set/
+    /// remove (`watsonx.rs`'s own `env_guard`, same reason: `cargo
+    /// test` runs them concurrently by default).
+    fn env_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
+
+    fn call_ctx<'a>(path: &'a EffectPath, token: &'a CancellationToken) -> CallContext<'a> {
+        CallContext {
+            path,
+            timeout_seconds: 5,
+            token,
+        }
+    }
 
     #[test]
     fn chat_messages_turns_a_tool_role_into_a_prefixed_user_turn() {
@@ -1044,67 +1112,177 @@ mod tests {
         assert_eq!(adapter.name(), "nvidia-nim");
     }
 
-    #[test]
-    fn build_mistral_fails_like_python_for_a_non_string_base_url() {
-        // Issue #515: a truthy non-string `base_url` must not silently
-        // fall back to the provider's default URL -- every OpenAI-
-        // compatible provider shares the one `_openai_compat.py::
-        // chat_completion` call that raises `AttributeError: '<type>'
-        // object has no attribute 'rstrip'` on it.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
+        // Review finding F5: every OpenAI-compatible provider shares
+        // the one `_openai_compat.py::chat_completion` call that
+        // raises `AttributeError` on `self.base_url.rstrip("/")`,
+        // *after* its own API-key check, not at build time.
+        let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::Bool(true));
-        let err = match build_mistral(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_mistral to fail"),
-        };
+        let adapter = build_mistral(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("MISTRAL_API_KEY", "test-key");
+        }
+        let path = EffectPath::root();
+        let token = CancellationToken::new();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("MISTRAL_API_KEY");
+        }
         assert_eq!(err.message, "'bool' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
-    #[test]
-    fn build_azure_openai_fails_like_python_for_a_non_string_endpoint() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn azure_generate_fails_like_python_for_a_non_string_endpoint_before_any_other_check() {
+        // Confirmed by running `AzureOpenAIAdapter(endpoint=5).generate(...)`
+        // directly: unlike every other member, Azure's own `_cfg()` --
+        // the very first thing `generate()` calls -- does an
+        // unconditional `.rstrip("/")`, so this raises before even the
+        // API-key check (which is why no env var is set here).
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::remove_var("AZURE_OPENAI_API_KEY");
+            std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        }
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "endpoint", Value::from(5i64));
-        let err = match build_azure_openai(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_azure_openai to fail"),
-        };
+        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let path = EffectPath::root();
+        let token = CancellationToken::new();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
-    #[test]
-    fn build_azure_openai_fails_like_python_for_a_non_string_base_url_fallback() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn azure_generate_fails_like_python_for_a_non_string_base_url_fallback() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::remove_var("AZURE_OPENAI_API_KEY");
+            std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        }
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let err = match build_azure_openai(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_azure_openai to fail"),
-        };
+        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let path = EffectPath::root();
+        let token = CancellationToken::new();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
-    #[test]
-    fn build_cloudflare_fails_like_python_for_a_non_string_base_url() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn azure_check_raised_text_for_a_non_string_endpoint() {
+        // Confirmed by running `call_check(AzureOpenAIAdapter(endpoint=5))`
+        // directly: `check()` has no guard around its own `self._cfg()`
+        // call either, so the `AttributeError` propagates out of
+        // `check()` uncaught, for `preflight.py::call_check`'s own
+        // "check() raised ..." fold -- `scripted.rs`'s own
+        // `check() raised {type}: {}` convention, reproduced directly
+        // here since Rust's `check()` returns `CheckResult`, never `Err`.
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::remove_var("AZURE_OPENAI_API_KEY");
+            std::env::remove_var("AZURE_OPENAI_ENDPOINT");
+        }
+        let mut cfg = Dict::new();
+        dict_insert(&mut cfg, "endpoint", Value::from(5i64));
+        let adapter = build_azure_openai(&Value::Dict(cfg)).unwrap();
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert_eq!(
+            result.message,
+            Some(
+                "check() raised AttributeError: 'int' object has no attribute 'rstrip'".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn cloudflare_generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check()
+     {
+        let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let err = match build_cloudflare_workers_ai(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_cloudflare_workers_ai to fail"),
-        };
+        let adapter = build_cloudflare_workers_ai(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("CF_API_TOKEN", "test-token");
+        }
+        let path = EffectPath::root();
+        let token = CancellationToken::new();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("CF_API_TOKEN");
+        }
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }
 
-    #[test]
-    fn build_databricks_fails_like_python_for_a_non_string_base_url() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn databricks_generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check()
+     {
+        let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         dict_insert(&mut cfg, "base_url", Value::from(5i64));
-        let err = match build_databricks(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_databricks to fail"),
-        };
+        let adapter = build_databricks(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("DATABRICKS_TOKEN", "test-token");
+        }
+        let path = EffectPath::root();
+        let token = CancellationToken::new();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("DATABRICKS_TOKEN");
+        }
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
     }

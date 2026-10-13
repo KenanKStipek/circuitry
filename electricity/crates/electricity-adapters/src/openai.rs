@@ -4,7 +4,7 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::{cfg_str_or, cfg_str_or_rstrip_target};
+use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
 use crate::transport::{TransportFailure, run_curl};
@@ -52,6 +52,17 @@ fn truncate_chars(text: &str, max_chars: usize) -> &str {
         Some((byte_index, _)) => &text[..byte_index],
         None => text,
     }
+}
+
+/// `generate()`'s own request headers -- `pub` (review finding F6)
+/// so `tests/adapter_corpus.rs` compares the recorded corpus headers
+/// against the adapter's own header-building code, not a list written
+/// by hand in the test a second time.
+pub fn request_headers(api_key: &str) -> Vec<(String, String)> {
+    vec![
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("Authorization".to_string(), format!("Bearer {api_key}")),
+    ]
 }
 
 fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
@@ -163,7 +174,11 @@ pub fn interpret_outcome(
 
 /// `adapters/openai.py::OpenAIAdapter`.
 pub struct OpenAiAdapter {
-    pub base_url: String,
+    /// Raw -- `cfg.get("base_url") or default`; `.rstrip("/")`'d in
+    /// [`Adapter::generate`] itself, the same point Python calls it
+    /// (after the API-key check, never at build time: review finding
+    /// F5, a non-string value must fail `generate()`, not preflight).
+    pub base_url: Value,
     pub default_model: String,
 }
 
@@ -196,7 +211,7 @@ impl Adapter for OpenAiAdapter {
             });
         }
 
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/chat/completions", rstrip_base_url(&self.base_url)?);
         let payload = build_request(model, prompt, options);
         let body =
             // `json.dumps(payload)` raises Python's own `TypeError` for a
@@ -209,10 +224,7 @@ impl Adapter for OpenAiAdapter {
                 }
             })?;
 
-        let headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Authorization".to_string(), format!("Bearer {api_key}")),
-        ];
+        let headers = request_headers(&api_key);
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
@@ -242,7 +254,7 @@ impl Adapter for OpenAiAdapter {
 /// `adapters/factory.py::_build_openai`.
 pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OpenAiAdapter {
-        base_url: cfg_str_or_rstrip_target(cfg, "base_url", "https://api.openai.com/v1")?,
+        base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
     }))
 }
@@ -250,6 +262,16 @@ pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// `OPENAI_API_KEY` is process environment, shared by every test in
+    /// this module; `cargo test` runs them concurrently by default, so
+    /// two tests setting and then removing it would race without this
+    /// (`watsonx.rs`'s own `env_guard`, same reason).
+    fn env_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn coerce_token_count_parses_a_numeric_string() {
@@ -294,15 +316,58 @@ mod tests {
         assert_eq!(adapter.name(), "openai");
     }
 
-    #[test]
-    fn build_openai_fails_like_python_for_a_non_string_base_url() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
+        // Review finding F5: the failure happens inside `generate()`,
+        // at the same point Python's own `self.base_url.rstrip("/")`
+        // runs (after the API-key check, which must still run first).
+        let _guard = env_guard().lock().unwrap();
         let mut cfg = Dict::new();
         cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
-        let err = match build_openai(&Value::Dict(cfg)) {
-            Err(err) => err,
-            Ok(_) => panic!("expected build_openai to fail"),
+        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
         };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
         assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
         assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_checks_the_api_key_before_touching_base_url() {
+        let _guard = env_guard().lock().unwrap();
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("OpenAI API key not found"));
     }
 }

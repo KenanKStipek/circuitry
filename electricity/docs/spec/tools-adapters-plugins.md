@@ -797,13 +797,19 @@ model adapter (the bridge is scoped to *tool* plugins per the project's plugin l
 include a generic "adapter" bridge).
 
 **Ported** (issue #515, `electricity-adapters::cyberdiner`): submit/poll, tier resolution,
-terminal-status folding, and `check()`/`list_models()` all match; built over
+terminal-status folding, `check()`/`list_models()`, retry classification (an HTTP error
+classifies by status the same way a curl-based adapter's own exit code does; a connect/timeout/
+remote-disconnect failure is unconditionally retryable, matching `urllib.error.URLError`/
+`TimeoutError`/`ConnectionError`), and the `max_in_flight` semaphore, all match; built over
 `electricity_tools::http_client` directly (urllib's own request shape -- Host/Accept-encoding/
-Connection headers, an absolute-URL-only redirect follow via `http_client::redirect_policy`),
-never `crate::transport::run_curl`'s curl convention, since the reference adapter is the one
-model adapter that never shells out to curl. The `max_in_flight` semaphore above is **not**
-ported: a Rust adapter is rebuilt fresh per call, so an instance-scoped semaphore would never
-coordinate anything.
+Connection headers, a `Location` redirect joined via the same `http` tool's own `urljoin`,
+urllib's own proxy-environment convention and per-operation timeout model), never
+`crate::transport::run_curl`'s curl convention, since the reference adapter is the one model
+adapter that never shells out to curl. The semaphore is a per-instance `tokio::sync::Semaphore`:
+the run's own default `cyberdiner` adapter is one shared instance reused for every call
+(`exec/prompt.rs`'s own doc comment), exactly like Python's long-lived `self`, so this
+coordinates the same way Python's own `threading.Semaphore` does; it is only ever inert for a
+`provider:` override, which rebuilds a fresh instance per call in both engines alike.
 
 ### 3.9 `host_claude`
 

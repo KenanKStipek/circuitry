@@ -783,10 +783,15 @@ async fn send_inner(
             }
         }
     }
-    let partial_body = body_bytes.clone();
-    if body_error.is_some() {
-        body_bytes.clear();
-    }
+    // Only a body-phase failure's own caller (`electricity-adapters::
+    // transport::body_error_outcome`) ever reads `partial_body` at all
+    // (review finding F11) -- the success path leaves it empty rather
+    // than cloning the whole body for nothing.
+    let partial_body = if body_error.is_some() {
+        std::mem::take(&mut body_bytes)
+    } else {
+        Vec::new()
+    };
 
     Ok(RawResponse {
         status,

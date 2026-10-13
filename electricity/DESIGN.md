@@ -1984,12 +1984,12 @@ cross-referenced to §3.8 for the literal field names.
   optional `max_in_flight` cap (0 = unbounded) enforced by a semaphore shared across the adapter
   instance — load-bearing specifically for a `flow: tree` loop that could otherwise submit more
   jobs than the broker's claim window can absorb, driving excess jobs into a server-side
-  timeout. **Not yet ported** (issue #515): a Rust adapter is rebuilt fresh for every call
-  (`electricity_vm::adapter::AdapterRegistry`'s own doc comment), so a semaphore scoped to one
-  instance would never coordinate across calls the way Python's long-lived instance does —
-  the same class of bug `watsonx`'s own IAM token cache had before issue #515 made it
-  process-wide. A `max_in_flight` config key is currently ignored by electricity's `cyberdiner`
-  builder.
+  timeout. Ported (issue #515): the run's own default `cyberdiner` adapter is one shared
+  instance reused for every call (`exec/prompt.rs`'s own doc comment), exactly like Python's
+  own long-lived `self` — the same observation that made `watsonx`'s own IAM token cache
+  process-wide applies here too, except a per-*instance* semaphore already coordinates
+  correctly for the shared default adapter; it is only ever inert for a `provider:` override,
+  which rebuilds a fresh instance per call in both engines alike.
 - **Model-to-tier mapping**: the orchestration's `model:` field is reinterpreted entirely as a
   tier name, not a model string.
 - **Terminal statuses**, normalized case/punctuation-insensitively (folding e.g. `TimedOut`/

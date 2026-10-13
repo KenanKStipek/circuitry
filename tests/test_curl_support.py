@@ -83,6 +83,15 @@ def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
     assert redact_host_url("http://localhost:11434") == "http://localhost:11434"
 
 
+def test_redact_host_url_coerces_a_non_string_value_with_str() -> None:
+    """Review finding F8 (issue #515): a misconfigured non-string
+    `base_url`/`expo_url` (`runtime.adapters.ollama.base_url: 5`) must
+    still produce a `host:` requirement, not crash the `check()` that is
+    already reporting a problem -- `urlsplit` requires a string or bytes
+    and raises `AttributeError` on anything else."""
+    assert redact_host_url(5) == "5"  # type: ignore[arg-type]
+
+
 def test_secret_split_by_truncation_is_still_masked() -> None:
     """A non-JSON body is truncated to 200 chars; if a secret straddled the
     cut, masking after truncation would leave a partial secret behind. The

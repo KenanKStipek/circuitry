@@ -327,10 +327,12 @@ fn ollama_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // Issue #515 finding 5's second item: the Rust replay must
-        // compare the recorded request headers, not discard them.
+        // Review finding F6: the recorded headers are compared
+        // against the adapter's own `ollama::request_headers()`, the
+        // same function `generate()` itself calls, never a list
+        // written by hand in the test a second time.
         assert_headers_match_expected(
-            &[("Content-Type".to_string(), "application/json".to_string())],
+            &ollama::request_headers(),
             case,
             &format!("ollama request {spec:?}"),
         );
@@ -368,14 +370,20 @@ fn openai_compat_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // `LMStudioAdapter` carries no `api_key_env`, so every case here
-        // sends only the one static header -- issue #515 finding 5's
-        // second item, the Rust replay comparing the recorded headers
-        // rather than discarding them.
+        // `LMStudioAdapter` carries no `api_key_env`, so every case
+        // here sends only the one static header -- compared against
+        // `openai_compat::request_headers`, the same function
+        // `chat_completion()` itself calls (review finding F6), plus
+        // the fixed URL every case here was recorded against.
         assert_headers_match_expected(
-            &[("Content-Type".to_string(), "application/json".to_string())],
+            &openai_compat::request_headers("", &[]),
             case,
             &format!("openai_compat request {spec:?}"),
+        );
+        assert_eq!(
+            get(case, "url").as_str().unwrap(),
+            "http://localhost:1234/v1/chat/completions",
+            "spec={spec:?}"
         );
     }
 }
@@ -418,16 +426,19 @@ fn openai_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
+        // Review finding F6: compared against `openai::
+        // request_headers`, the same function `generate()` itself
+        // calls, plus the fixed URL every case here was recorded
+        // against.
         assert_headers_match_expected(
-            &[
-                ("Content-Type".to_string(), "application/json".to_string()),
-                (
-                    "Authorization".to_string(),
-                    "Bearer circuitry-test-fake-key".to_string(),
-                ),
-            ],
+            &openai::request_headers("circuitry-test-fake-key"),
             case,
             &format!("openai request {spec:?}"),
+        );
+        assert_eq!(
+            get(case, "url").as_str().unwrap(),
+            "https://api.openai.com/v1/chat/completions",
+            "spec={spec:?}"
         );
     }
 }
@@ -463,19 +474,19 @@ fn anthropic_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // Issue #515 finding 5's second item: the Rust replay must
-        // compare the recorded request headers, not discard them.
+        // Review finding F6: compared against `anthropic::
+        // request_headers`, the same function `generate()` itself
+        // calls, plus the fixed URL every case here was recorded
+        // against.
         assert_headers_match_expected(
-            &[
-                ("Content-Type".to_string(), "application/json".to_string()),
-                (
-                    "x-api-key".to_string(),
-                    "circuitry-test-fake-key".to_string(),
-                ),
-                ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ],
+            &anthropic::request_headers("circuitry-test-fake-key"),
             case,
             &format!("anthropic request {spec:?}"),
+        );
+        assert_eq!(
+            get(case, "url").as_str().unwrap(),
+            "https://api.anthropic.com/v1/messages",
+            "spec={spec:?}"
         );
     }
 }
