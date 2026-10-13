@@ -298,11 +298,11 @@ impl<'a> Supported<'a> {
             tool_regex: true,
             // lane E (#448, #485)
             tool_http: true,
-            // lane L2 (#448)
-            tool_validate_yaml: false,
+            // lane L2a (#448, #521)
+            tool_validate_yaml: true,
             // lane K2 (#448, #516)
             complexity: true,
-            // lane L2 (#448)
+            // lane L2b (#448, #522)
             decomposition: false,
             providers,
         }
@@ -578,12 +578,15 @@ mod tests {
         // directly rather than against `m0.tool_http` (always `false`),
         // the one field this lane's own PR flips.
         assert!(current.tool_http);
-        assert_eq!(current.tool_validate_yaml, m0.tool_validate_yaml);
+        // lane L2a (#448, #521) -- `m0.tool_validate_yaml` is always
+        // `false`, so this asserts directly rather than against it, the
+        // same convention as `tool_http` above.
+        assert!(current.tool_validate_yaml);
         // lane K2 (#448, #516): `complexity` is `true` now -- asserted
         // directly rather than against `m0.complexity` (always
         // `false`), the one field this lane's own PR flips.
-        // `decomposition` (L2's own flag) stays unflipped, same as
-        // `m0.decomposition`.
+        // `decomposition` (L2b's own flag, #522) stays unflipped, same
+        // as `m0.decomposition`.
         assert!(current.complexity);
         assert!(!m0.complexity);
         assert_eq!(current.decomposition, m0.decomposition);

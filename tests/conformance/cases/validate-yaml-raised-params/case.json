@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #521's own acceptance section, validate-yaml-raised-params",
+  "description": "validate_yaml tools whose own param checks raise a ValueError, each with on_error: continue so the exact message lands at meta.error and the run still succeeds: a non-string yaml of two different types, three bad max_errors forms (a non-numeric string, a list, and a value below 1), and max_errors: 2.9 (accepted, truncating to 2). A tool with no yaml param at all gives Empty document (ok: false), never raised.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

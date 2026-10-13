@@ -147,24 +147,12 @@ fn validation_failed_text(label: &str, errors: &[String]) -> String {
     text
 }
 
-/// `core/use.py::_clean_yaml_fences` -- `text.splitlines()`/`line.strip()`,
-/// never Rust's own `str::lines()`/`str::trim()` (issue #506's own
-/// "Hazards" section: model output -- the one place this function
-/// ever runs against untrusted text, a reflector's generated plan
-/// included -- can carry `\x0c`, a lone `\r`, or a Unicode line/
-/// paragraph separator, which Python's `splitlines()` treats as a line
-/// boundary and Rust's `lines()` does not).
-pub fn clean_yaml_fences(text: &str) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    for line in electricity_value::pycompat::py_splitlines(text) {
-        let stripped = electricity_value::pycompat::py_strip(&line);
-        if stripped.starts_with("```") || stripped == "---" {
-            continue;
-        }
-        lines.push(line);
-    }
-    electricity_value::pycompat::py_strip(&lines.join("\n")).to_string()
-}
+/// `core/use.py::_clean_yaml_fences` -- moved to `electricity-yaml`
+/// (issue #521, §2): `electricity-tools`'s own `validate_yaml` tool
+/// needs it too, and that crate cannot depend on this one. Every
+/// existing caller of `exec::use_::clean_yaml_fences` (this file's own
+/// `resolve_path_child`, `tests/use_corpus.rs`) is unaffected.
+pub use electricity_yaml::clean_yaml_fences;
 
 /// `core/use.py::_validate_inline_yaml` -- `Ok(())` once *cleaned* (as
 /// a parsed [`Value`]) is confirmed a mapping with an `effects` key and
@@ -365,8 +353,10 @@ pub fn graft_child_record(node: &NodeRef, child_prime: &NodeRef) {
 
 /// `allowlist_gate.py::allowed_adapters`/`allowed_tools`, against
 /// `runtime_config._allowlists.{adapters,tools}` -- `None` (default
-/// open) unless that entry is a list.
-fn allowlist_names(runtime_config: &Value, key: &str) -> Option<Vec<String>> {
+/// open) unless that entry is a list. `pub(crate)` (issue #521, §5):
+/// `decompose::validate_plan`'s own allowlist check reads the same
+/// `runtime_config` entry `_check_allowlists` does.
+pub(crate) fn allowlist_names(runtime_config: &Value, key: &str) -> Option<Vec<String>> {
     let entry = runtime_config
         .as_dict()?
         .get(&Value::Str("_allowlists".to_string()))?
@@ -2423,34 +2413,6 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         assert_eq!(
             message,
             "inputs.greeting: '{{> nope}}' does not name a declared prompt or effect."
-        );
-    }
-
-    #[test]
-    fn clean_yaml_fences_drops_code_fences_and_document_separators() {
-        let text = "```yaml\neffects: []\n---\n```";
-        assert_eq!(clean_yaml_fences(text), "effects: []");
-    }
-
-    #[test]
-    fn clean_yaml_fences_keeps_original_indentation() {
-        let text = "effects:\n  - type: tool\n```\n";
-        assert_eq!(clean_yaml_fences(text), "effects:\n  - type: tool");
-    }
-
-    #[test]
-    fn clean_yaml_fences_splits_on_every_python_splitlines_separator() {
-        // Issue #506's own "Hazards" section: `str::lines()` only
-        // splits on `\n`/`\r\n` -- model output reaches this function
-        // first, so it has to split on every boundary Python's
-        // `str.splitlines()` does, not just those two.
-        assert_eq!(clean_yaml_fences("a\x0cb"), "a\nb");
-        assert_eq!(clean_yaml_fences("a\rb"), "a\nb");
-        assert_eq!(clean_yaml_fences("a\u{2028}b"), "a\nb");
-        assert_eq!(clean_yaml_fences("a\u{85}b"), "a\nb");
-        assert_eq!(
-            clean_yaml_fences("```\x0ceffects: []\x0c---\x0c```"),
-            "effects: []"
         );
     }
 

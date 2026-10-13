@@ -98,8 +98,11 @@ fn near_miss(key: &str, known: &BTreeSet<String>) -> Option<String> {
 /// across crates for other purposes, e.g. a comparison-type error),
 /// which spells a date/datetime's own name as `"datetime.date"`/
 /// `"datetime.datetime"` -- the module-qualified form `__name__` never
-/// produces.
-pub(crate) fn py_class_name(value: &Value) -> &'static str {
+/// produces. `pub` (issue #448's decision 6; issue #521): `electricity-
+/// tools::validate_yaml`'s own type-name error texts (`core/document_
+/// check.py`'s own `type(parsed).__name__`) share this exact mapping
+/// rather than keeping a second copy.
+pub fn py_class_name(value: &Value) -> &'static str {
     match value {
         Value::Date(_) => "date",
         Value::DateTime(..) => "datetime",

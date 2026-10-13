@@ -1266,12 +1266,15 @@ fn resolve_scalar_value(text: &str, tag: &str, mark: Mark) -> Result<Value, Yaml
                     mark,
                 })
         }
-        scalar::TAG_TIMESTAMP => {
-            scalar::construct_timestamp(text).ok_or(YamlError::InvalidScalar {
+        scalar::TAG_TIMESTAMP => scalar::construct_timestamp(text).map_err(|err| match err {
+            scalar::TimestampFailure::NotATimestamp => YamlError::InvalidScalar {
                 type_name: "datetime.datetime",
                 mark,
-            })
-        }
+            },
+            scalar::TimestampFailure::Invalid(message) => {
+                YamlError::InvalidTimestampValue { message, mark }
+            }
+        }),
         scalar::TAG_STR => Ok(Value::Str(text.to_string())),
         scalar::TAG_BINARY => {
             scalar::construct_binary(text)
