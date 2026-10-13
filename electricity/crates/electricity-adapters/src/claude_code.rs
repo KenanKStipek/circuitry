@@ -168,8 +168,7 @@ mod tests {
         )
     }
 
-    const CAPTURE_SUCCESS: &str =
-        "echo '{\"result\": \"hi\", \"is_error\": false}'";
+    const CAPTURE_SUCCESS: &str = "echo '{\"result\": \"hi\", \"is_error\": false}'";
     const CAPTURE_FAILURE: &str = "echo 'not json'\nexit 1";
     const CAPTURE_HANG: &str = "sleep 30";
 
@@ -373,8 +372,10 @@ mod tests {
 
     #[tokio::test]
     async fn generate_removes_the_temp_dir_after_success() {
-        let tmp =
-            std::env::temp_dir().join(format!("claude-code-test-tempdir-ok-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "claude-code-test-tempdir-ok-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_claude(&tmp, &capture_cwd_script(CAPTURE_SUCCESS));
         let capture = tmp.join("cwd.txt");

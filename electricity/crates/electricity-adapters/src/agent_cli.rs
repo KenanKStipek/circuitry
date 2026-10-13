@@ -310,9 +310,13 @@ mod tests {
         {
             let cfg = field(case, "cfg").clone();
             let expected_error = field(case, "expected_error").as_str().map(str::to_string);
-            let expected_value: Option<Vec<String>> = field(case, "expected_value")
-                .as_list()
-                .map(|items| items.iter().map(|v| v.as_str().unwrap().to_string()).collect());
+            let expected_value: Option<Vec<String>> =
+                field(case, "expected_value").as_list().map(|items| {
+                    items
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect()
+                });
 
             match crate::config::string_list(&cfg, "extra_args", "pi", &[]) {
                 Ok(value) => {
