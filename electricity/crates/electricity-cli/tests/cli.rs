@@ -515,24 +515,22 @@ fn an_unsupported_effect_is_refused_with_no_files_written() {
     assert!(!live_state.exists());
 }
 
-/// A document naming the `validate_yaml` provider (not yet ported to
-/// electricity) is refused the same way as any other unsupported
+/// A document naming the `mcp` provider (an M2 plugin, not yet ported
+/// to electricity) is refused the same way as any other unsupported
 /// content, with no file written at all. This probe used to name a
-/// `loop`'s own `while:` in `mode: model` before lane G2 (#513) landed;
-/// a model-mode condition is runnable now, so it was swapped for a
-/// provider that is still refused, keeping the "refused, nothing
-/// written" assertion covered.
+/// `loop`'s own `while:` in `mode: model`, then `validate_yaml`
+/// (before lanes G2/#513 and L2a/#521 each in turn made their own
+/// probe's provider runnable); it was swapped again to a provider that
+/// stays refused until the M2 plugin bridge, keeping the "refused,
+/// nothing written" assertion covered.
 #[test]
-fn a_validate_yaml_provider_is_refused_with_no_files_written() {
-    // `validate_yaml` (lane L2, issue #448) is still refused -- the
-    // model-mode/`reflector` effect types this probe used to name
-    // (issue #513 lane G2, issue #506 lane L1) are both runnable now.
-    let (mut cmd, home) = command("validate-yaml");
+fn an_mcp_provider_is_refused_with_no_files_written() {
+    let (mut cmd, home) = command("mcp-provider");
     let config = home.config("{}");
     let doc = home.path.join("doc.yml");
     fs::write(
         &doc,
-        "effects:\n  - name: step\n    type: tool\n    provider: validate_yaml\n    \
+        "effects:\n  - name: step\n    type: tool\n    provider: mcp\n    \
          params: {text: 'a: 1'}\n",
     )
     .unwrap();

@@ -1,0 +1,1487 @@
+{
+  "cases": [
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "valid_document",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "valid_document_fenced",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "strip_fences_false_on_fence_free_document",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "no"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "strip_fences_false_leaves_fences_for_the_parser",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "false"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Empty document — expected a Circuitry orchestration YAML."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "blank_document_python_whitespace",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "  \u001c "
+        }
+      },
+      "raised": false,
+      "stderr": "Empty document — expected a Circuitry orchestration YAML.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": ""
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Orchestration must be a YAML mapping with an 'effects' key, got date."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "not_a_mapping_date",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "2024-01-01"
+        }
+      },
+      "raised": false,
+      "stderr": "Orchestration must be a YAML mapping with an 'effects' key, got date.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "2024-01-01"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Orchestration must be a YAML mapping with an 'effects' key, got NoneType."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "not_a_mapping_comment_only",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "# only a comment"
+        }
+      },
+      "raised": false,
+      "stderr": "Orchestration must be a YAML mapping with an 'effects' key, got NoneType.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "# only a comment"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Orchestration must be a YAML mapping with an 'effects' key, got list."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "not_a_mapping_list",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "- a"
+        }
+      },
+      "raised": false,
+      "stderr": "Orchestration must be a YAML mapping with an 'effects' key, got list.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "- a"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Orchestration is missing the required top-level 'effects' key."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "missing_effects_key",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "name: x"
+        }
+      },
+      "raised": false,
+      "stderr": "Orchestration is missing the required top-level 'effects' key.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "name: x"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "near_miss_key_no_schema_error",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: oops\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: oops\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "group_on_non_empty_dynamic",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: dynamic\n    name: d\n    group: mygroup\n    effects:\n      - type: tool\n        name: a\n        provider: json\n        params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: dynamic\n    name: d\n    group: mygroup\n    effects:\n      - type: tool\n        name: a\n        provider: json\n        params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "interface.inputs.x.type: 'wat' is not a recognized type — expected one of string, number, integer, boolean, array, object."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "unknown_interface_type",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "interface:\n  inputs:\n    x:\n      type: wat\neffects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "interface.inputs.x.type: 'wat' is not a recognized type — expected one of string, number, integer, boolean, array, object.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "interface:\n  inputs:\n    x:\n      type: wat\neffects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "interface.inputs.x.default: declared type 'number' but '5' is str — quoting it makes it a string; remove the quotes to declare it as number."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "quoted_interface_default_unquote_hint",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "interface:\n  inputs:\n    x:\n      type: number\n      default: \"5\"\neffects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "interface.inputs.x.default: declared type 'number' but '5' is str — quoting it makes it a string; remove the quotes to declare it as number.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "interface:\n  inputs:\n    x:\n      type: number\n      default: \"5\"\neffects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "YAML parse error: duplicate key 'effects' at line 6, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+        }
+      ],
+      "name": "duplicate_key",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\neffects:\n  - type: tool\n    name: b\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: duplicate key 'effects' at line 6, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\neffects:\n  - type: tool\n    name: b\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "duplicate_sibling_names_compile_error",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "duplicate_sibling_names_compile_off",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "off"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Template at 'effects[0].template': bare '{{x}}' refers to declared interface input 'x'. Caller inputs live under the 'input' namespace; write '{{input.x}}'."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "bare_interface_input_reference_compile_error",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "interface:\n  inputs:\n    x: {type: string}\neffects:\n  - type: yield\n    name: a\n    template: \"{{x}}\""
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Template at 'effects[0].template': bare '{{x}}' refers to declared interface input 'x'. Caller inputs live under the 'input' namespace; write '{{input.x}}'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "interface:\n  inputs:\n    x: {type: string}\neffects:\n  - type: yield\n    name: a\n    template: \"{{x}}\""
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "pyyaml_scan_error",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects: [{a: [1, 2}]"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 15:\n    effects: [{a: [1, 2}]\n                  ^\nexpected ',' or ']', but got '}'\n  in \"<unicode string>\", line 1, column 20:\n    effects: [{a: [1, 2}]\n                       ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects: [{a: [1, 2}]"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "effects[0]: "
+        }
+      ],
+      "name": "jsonschema_error",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    provider: json"
+        }
+      },
+      "raised": false,
+      "stderr": "effects[0]: 'name' is a required property",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    provider: json"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "effects[0]: "
+        },
+        {
+          "kind": "third_party",
+          "prefix": "effects[1]: "
+        }
+      ],
+      "errors_unordered": true,
+      "name": "multiple_schema_errors_as_a_multiset",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    provider: json\n  - type: tool\n    provider: json"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    provider: json\n  - type: tool\n    provider: json"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        },
+        {
+          "kind": "exact",
+          "text": "effects[1]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        },
+        {
+          "kind": "exact",
+          "text": "effects[2]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        }
+      ],
+      "name": "cap_boundary_exactly_max_errors",
+      "params": {
+        "max_errors": {
+          "t": "int",
+          "v": "3"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: b\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: c\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.\neffects[1]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.\neffects[2]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: b\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: c\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        },
+        {
+          "kind": "exact",
+          "text": "effects[1]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+        },
+        {
+          "kind": "exact",
+          "text": "... and 1 more error(s)."
+        }
+      ],
+      "name": "cap_boundary_one_more_than_max_errors",
+      "params": {
+        "max_errors": {
+          "t": "int",
+          "v": "2"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: b\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: c\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.\neffects[1]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored.\n... and 1 more error(s).",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: b\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: c\n    provider: json\n    discription: x\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_strip_fences_'true'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "true"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_strip_fences_'True'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "True"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'false'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "false"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'False'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "False"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'0'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "0"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_strip_fences_'1'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "1"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'no'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "no"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'No'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "No"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'off'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "off"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'Off'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "Off"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'n'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "n"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'N'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "N"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_''",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": ""
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_strip_fences_'yes'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "yes"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_strip_fences_'anything-else'",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "anything-else"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'  false  '",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "  false  "
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "YAML parse error: "
+        }
+      ],
+      "name": "as_bool_strip_fences_'  FALSE  '",
+      "params": {
+        "strip_fences": {
+          "t": "str",
+          "v": "  FALSE  "
+        },
+        "yaml": {
+          "t": "str",
+          "v": "```yaml\neffects: []\n```"
+        }
+      },
+      "raised": false,
+      "stderr": "YAML parse error: while scanning for the next token\nfound character '`' that cannot start any token\n  in \"<unicode string>\", line 1, column 1:\n    ```yaml\n    ^",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "```yaml\neffects: []\n```"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'true'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "true"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'false'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "false"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'0'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "0"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'1'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "1"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'no'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "no"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'off'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "off"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'yes'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "yes"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'anything-else'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "anything-else"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'  false  '",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "  false  "
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": "ValidateYamlPlugin params['max_errors'] must be an integer: invalid literal for int() with base 10: 'x'",
+      "errors": null,
+      "name": "max_errors_string_x_raises",
+      "params": {
+        "max_errors": {
+          "t": "str",
+          "v": "x"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin params['max_errors'] must be an integer: int() argument must be a string, a bytes-like object or a real number, not 'list'",
+      "errors": null,
+      "name": "max_errors_list_one_raises",
+      "params": {
+        "max_errors": {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin params['max_errors'] must be >= 1.",
+      "errors": null,
+      "name": "max_errors_zero_raises",
+      "params": {
+        "max_errors": {
+          "t": "int",
+          "v": "0"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin params['max_errors'] must be >= 1.",
+      "errors": null,
+      "name": "max_errors_negative_raises",
+      "params": {
+        "max_errors": {
+          "t": "int",
+          "v": "-1"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "max_errors_string_3",
+      "params": {
+        "max_errors": {
+          "t": "str",
+          "v": "3"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "max_errors_string_padded_3",
+      "params": {
+        "max_errors": {
+          "t": "str",
+          "v": " 3 "
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "max_errors_float_truncates",
+      "params": {
+        "max_errors": {
+          "bits": "4007333333333333",
+          "t": "float"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "errors_unordered": false,
+      "name": "max_errors_bool_true",
+      "params": {
+        "max_errors": {
+          "t": "bool",
+          "v": true
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects: []"
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got int).",
+      "errors": null,
+      "name": "yaml_type_int_raises",
+      "params": {
+        "yaml": {
+          "t": "int",
+          "v": "5"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got float).",
+      "errors": null,
+      "name": "yaml_type_float_raises",
+      "params": {
+        "yaml": {
+          "bits": "4016000000000000",
+          "t": "float"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got bool).",
+      "errors": null,
+      "name": "yaml_type_bool_raises",
+      "params": {
+        "yaml": {
+          "t": "bool",
+          "v": true
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got list).",
+      "errors": null,
+      "name": "yaml_type_list_raises",
+      "params": {
+        "yaml": {
+          "t": "list",
+          "v": [
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ]
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got dict).",
+      "errors": null,
+      "name": "yaml_type_dict_raises",
+      "params": {
+        "yaml": {
+          "t": "dict",
+          "v": [
+            [
+              {
+                "t": "str",
+                "v": "a"
+              },
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          ]
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got bytes).",
+      "errors": null,
+      "name": "yaml_type_bytes_raises",
+      "params": {
+        "yaml": {
+          "hex": "656666656374733a205b5d",
+          "t": "bytes"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got date).",
+      "errors": null,
+      "name": "yaml_type_date_raises",
+      "params": {
+        "yaml": {
+          "t": "date",
+          "v": "2024-01-01"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got datetime).",
+      "errors": null,
+      "name": "yaml_type_datetime_raises",
+      "params": {
+        "yaml": {
+          "offset_seconds": null,
+          "t": "datetime",
+          "v": "2024-01-01T12:30:00"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "cannot convert float infinity to integer",
+      "errors": null,
+      "name": "max_errors_infinity_raises_overflow_error",
+      "params": {
+        "max_errors": {
+          "bits": "7ff0000000000000",
+          "t": "float"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "OverflowError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Empty document — expected a Circuitry orchestration YAML."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "no_yaml_param_is_empty_document",
+      "params": {},
+      "raised": false,
+      "stderr": "Empty document — expected a Circuitry orchestration YAML.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": ""
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Empty document — expected a Circuitry orchestration YAML."
+        }
+      ],
+      "errors_unordered": false,
+      "name": "null_yaml_param_is_empty_document",
+      "params": {
+        "yaml": {
+          "t": "none"
+        }
+      },
+      "raised": false,
+      "stderr": "Empty document — expected a Circuitry orchestration YAML.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": ""
+    }
+  ]
+}

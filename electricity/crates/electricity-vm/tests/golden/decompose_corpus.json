@@ -1,0 +1,4206 @@
+{
+  "cycle_error_cases": [
+    {
+      "expected": null,
+      "name": "no_cycle_on_empty_stack",
+      "stack": [],
+      "yaml": "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+    },
+    {
+      "expected": "decomposition of 'ask': cycle detected — inline:0308aab794ee6c57 → inline:0308aab794ee6c57",
+      "name": "cycle_detected",
+      "stack": [
+        "inline:0308aab794ee6c57"
+      ],
+      "yaml": "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+    }
+  ],
+  "describe_inputs_cases": [
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "expected": "(no declared inputs)",
+      "name": "empty_input_namespace"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "b"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "a with space"
+                  },
+                  {
+                    "t": "int",
+                    "v": "2"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected": "inputs:\n- a with space\n- b\n",
+      "name": "quoting_needing_keys"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "int",
+                    "v": "1"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "2"
+                  }
+                ],
+                [
+                  {
+                    "t": "none"
+                  },
+                  {
+                    "t": "str",
+                    "v": "y"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected": "inputs:\n- a\n",
+      "name": "non_string_keys_in_input_ignored"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "topic"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "runtime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "_private"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "expected": "inputs:\n- topic\n",
+      "name": "fallback_excludes_namespaces_and_underscored"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "str",
+              "v": "x"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "topic"
+            },
+            {
+              "t": "str",
+              "v": "y"
+            }
+          ]
+        ]
+      },
+      "expected": "inputs:\n- topic\n",
+      "name": "fallback_non_string_key_dropped"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "runtime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "expected": "(no declared inputs)",
+      "name": "fallback_no_keys_at_all"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "zeta"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "alpha"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "Beta"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ]
+        ]
+      },
+      "expected": "inputs:\n- Beta\n- alpha\n- zeta\n",
+      "name": "fallback_sorted_by_code_point"
+    }
+  ],
+  "failure_cases": [
+    {
+      "depth": 0,
+      "error": "boom",
+      "expected_error": "boom",
+      "expected_fail": false,
+      "expected_failure": "planner_failed",
+      "expected_fallback_model": "big",
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4056800000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "route_up"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "planner_failed"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "error"
+            },
+            {
+              "t": "str",
+              "v": "boom"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "str",
+              "v": "big"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "raw_payload"
+            },
+            {
+              "t": "str",
+              "v": "the raw text"
+            }
+          ]
+        ]
+      },
+      "fallback_model": "big",
+      "max_depth": 2,
+      "name": "route_up_with_fallback_and_raw_payload",
+      "on_failure": "route_up",
+      "raw_payload": "the raw text",
+      "reason": "planner_failed",
+      "score": 90.0,
+      "threshold": 80.0
+    },
+    {
+      "depth": 1,
+      "error": "bad plan",
+      "expected_error": "bad plan",
+      "expected_fail": false,
+      "expected_failure": "invalid_plan",
+      "expected_fallback_model": null,
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4056800000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "run_as_is"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "invalid_plan"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "error"
+            },
+            {
+              "t": "str",
+              "v": "bad plan"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "fallback_model": null,
+      "max_depth": 2,
+      "name": "run_as_is_with_no_fallback",
+      "on_failure": "route_up",
+      "raw_payload": null,
+      "reason": "invalid_plan",
+      "score": 90.0,
+      "threshold": 80.0
+    },
+    {
+      "depth": 0,
+      "error": "child blew up",
+      "expected_error": "child blew up",
+      "expected_fail": true,
+      "expected_failure": "execution_failed",
+      "expected_fallback_model": null,
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4056800000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "failed"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "execution_failed"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "error"
+            },
+            {
+              "t": "str",
+              "v": "child blew up"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "fallback_model": "big",
+      "max_depth": 2,
+      "name": "fail_forces_fallback_to_none_even_with_one",
+      "on_failure": "fail",
+      "raw_payload": null,
+      "reason": "execution_failed",
+      "score": 90.0,
+      "threshold": 80.0
+    },
+    {
+      "depth": 0,
+      "error": "bad",
+      "expected_error": "bad",
+      "expected_fail": false,
+      "expected_failure": "invalid_plan",
+      "expected_fallback_model": null,
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4056800000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "run_as_is"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "invalid_plan"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "error"
+            },
+            {
+              "t": "str",
+              "v": "bad"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "fallback_model": null,
+      "max_depth": 2,
+      "name": "empty_raw_payload_is_dropped",
+      "on_failure": "route_up",
+      "raw_payload": "",
+      "reason": "invalid_plan",
+      "score": 90.0,
+      "threshold": 80.0
+    }
+  ],
+  "max_depth_cases": [
+    {
+      "depth": 2,
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4057c00000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "route_up"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "max_depth"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "str",
+              "v": "big"
+            }
+          ]
+        ]
+      },
+      "fallback_model": "big",
+      "max_depth": 2,
+      "name": "with_fallback_routes_up",
+      "score": 95.0,
+      "threshold": 80.0
+    },
+    {
+      "depth": 2,
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4057c00000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "run_as_is"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "str",
+              "v": "max_depth"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "fallback_model"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "fallback_model": null,
+      "max_depth": 2,
+      "name": "without_fallback_runs_as_is",
+      "score": 95.0,
+      "threshold": 80.0
+    }
+  ],
+  "missing_result_cases": [
+    {
+      "expected_error": "the decomposition child completed but left nothing at result_path 'prime.merge.value'",
+      "name": "missing_result_at_result_path",
+      "result_path": "prime.merge.value",
+      "yaml": "effects:\n  - {type: tool, name: other, provider: json, params: {mode: parse, input: \"1\"}}\n"
+    }
+  ],
+  "route_up_model_cases": [
+    {
+      "expected": null,
+      "model": null,
+      "name": "routing_off",
+      "settings": {
+        "bands": [],
+        "respect_explicit": true,
+        "routing_enabled": false
+      }
+    },
+    {
+      "expected": null,
+      "model": null,
+      "name": "routing_on_no_bands",
+      "settings": {
+        "bands": [],
+        "respect_explicit": true,
+        "routing_enabled": true
+      }
+    },
+    {
+      "expected": null,
+      "model": "pinned",
+      "name": "respect_explicit_with_model",
+      "settings": {
+        "bands": [
+          {
+            "max": 10.0,
+            "model": "small",
+            "name": null
+          },
+          {
+            "max": null,
+            "model": "big",
+            "name": null
+          }
+        ],
+        "respect_explicit": true,
+        "routing_enabled": true
+      }
+    },
+    {
+      "expected": "big",
+      "model": null,
+      "name": "respect_explicit_no_model",
+      "settings": {
+        "bands": [
+          {
+            "max": 10.0,
+            "model": "small",
+            "name": null
+          },
+          {
+            "max": null,
+            "model": "big",
+            "name": null
+          }
+        ],
+        "respect_explicit": true,
+        "routing_enabled": true
+      }
+    },
+    {
+      "expected": "big",
+      "model": "pinned",
+      "name": "ignore_explicit_with_model",
+      "settings": {
+        "bands": [
+          {
+            "max": 10.0,
+            "model": "small",
+            "name": null
+          },
+          {
+            "max": null,
+            "model": "big",
+            "name": null
+          }
+        ],
+        "respect_explicit": false,
+        "routing_enabled": true
+      }
+    },
+    {
+      "expected": "big",
+      "model": null,
+      "name": "ignore_explicit_no_model",
+      "settings": {
+        "bands": [
+          {
+            "max": 10.0,
+            "model": "small",
+            "name": null
+          },
+          {
+            "max": null,
+            "model": "big",
+            "name": null
+          }
+        ],
+        "respect_explicit": false,
+        "routing_enabled": true
+      }
+    },
+    {
+      "expected": "big",
+      "model": "",
+      "name": "ignore_explicit_empty_string_model",
+      "settings": {
+        "bands": [
+          {
+            "max": 10.0,
+            "model": "small",
+            "name": null
+          },
+          {
+            "max": null,
+            "model": "big",
+            "name": null
+          }
+        ],
+        "respect_explicit": false,
+        "routing_enabled": true
+      }
+    }
+  ],
+  "run_planner_cases": [
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected_plan_chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "expected_plan_done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "str",
+        "v": "ok"
+      },
+      "expected_plan_yaml": {
+        "t": "str",
+        "v": "effects: []"
+      },
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Summarize {{input.topic}}"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "inputs:\n- topic\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: text\nschema: null\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "basic_round_trip",
+      "prompt_type": "text",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "list",
+                                "v": [
+                                  {
+                                    "t": "int",
+                                    "v": "1"
+                                  },
+                                  {
+                                    "t": "int",
+                                    "v": "2"
+                                  }
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "str",
+                                "v": "effects: []\n"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "prime.merge.value"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "none"
+      },
+      "source_template": "Summarize {{input.topic}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected_plan_chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "expected_plan_done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "str",
+        "v": "ok"
+      },
+      "expected_plan_yaml": {
+        "t": "str",
+        "v": "effects: []"
+      },
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "Summarize {{input.topic}}"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "inputs:\n- topic\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: object\nschema:\n  type: object\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "3"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 3,
+      "name": "yaml_output_needs_fence_cleaning",
+      "prompt_type": "object",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "list",
+                                "v": [
+                                  {
+                                    "t": "int",
+                                    "v": "1"
+                                  },
+                                  {
+                                    "t": "int",
+                                    "v": "2"
+                                  }
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "str",
+                                "v": "```yaml\neffects: []\n```"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "prime.merge.value"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "type"
+            },
+            {
+              "t": "str",
+              "v": "object"
+            }
+          ]
+        ]
+      },
+      "source_template": "Summarize {{input.topic}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "expected_plan_chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "expected_plan_done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "str",
+        "v": "ok"
+      },
+      "expected_plan_yaml": {
+        "t": "str",
+        "v": "effects: []"
+      },
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "t"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "(no declared inputs)"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: text\nschema: null\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "result_path_blank_defaults",
+      "prompt_type": "text",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "list",
+                                "v": [
+                                  {
+                                    "t": "int",
+                                    "v": "1"
+                                  },
+                                  {
+                                    "t": "int",
+                                    "v": "2"
+                                  }
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "str",
+                                "v": "effects: []\n"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "   "
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "none"
+      },
+      "source_template": "t"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "expected_plan_chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "expected_plan_done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "str",
+        "v": "ok"
+      },
+      "expected_plan_yaml": {
+        "t": "str",
+        "v": "effects: []"
+      },
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "t"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "(no declared inputs)"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: text\nschema: null\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "result_path_non_string_defaults",
+      "prompt_type": "text",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "str",
+                                "v": "ok"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "list",
+                                "v": [
+                                  {
+                                    "t": "int",
+                                    "v": "1"
+                                  },
+                                  {
+                                    "t": "int",
+                                    "v": "2"
+                                  }
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "str",
+                                "v": "effects: []\n"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "bool",
+                          "v": true
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "int",
+                          "v": "5"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "none"
+      },
+      "source_template": "t"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected_plan_chunks": {
+        "t": "none"
+      },
+      "expected_plan_done": {
+        "t": "none"
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "none"
+      },
+      "expected_plan_yaml": null,
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "t"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "inputs:\n- a\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: object\nschema:\n  type: object\n  description: \"caf\\xE9 \\u2014\\u65E5\\u672C\\u8A9E\"\n  properties:\n    a:\n      type: string\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "source_output_nested_non_ascii_schema",
+      "prompt_type": "object",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "type"
+            },
+            {
+              "t": "str",
+              "v": "object"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "description"
+            },
+            {
+              "t": "str",
+              "v": "café —日本語"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "properties"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "type"
+                        },
+                        {
+                          "t": "str",
+                          "v": "string"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "source_template": "t"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "expected_plan_chunks": {
+        "t": "none"
+      },
+      "expected_plan_done": {
+        "t": "none"
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "none"
+      },
+      "expected_plan_yaml": null,
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "t"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "(no declared inputs)"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: number\nschema:\n  minimum: .inf\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "source_output_infinity_schema",
+      "prompt_type": "number",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "minimum"
+            },
+            {
+              "bits": "7ff0000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "source_template": "t"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": []
+      },
+      "expected_plan_chunks": {
+        "t": "none"
+      },
+      "expected_plan_done": {
+        "t": "none"
+      },
+      "expected_plan_result_path": "prime.merge.value",
+      "expected_plan_say": {
+        "t": "none"
+      },
+      "expected_plan_yaml": null,
+      "expected_planner_input": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "source_template"
+                  },
+                  {
+                    "t": "str",
+                    "v": "t"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_interface"
+                  },
+                  {
+                    "t": "str",
+                    "v": "(no declared inputs)"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "source_output"
+                  },
+                  {
+                    "t": "str",
+                    "v": "prompt_type: boolean\nschema: null\n"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "max_chunks"
+                  },
+                  {
+                    "t": "int",
+                    "v": "5"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "max_chunks": 5,
+      "name": "source_output_none_schema",
+      "prompt_type": "boolean",
+      "returned_state": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "plan"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "say"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ],
+                            [
+                              {
+                                "t": "str",
+                                "v": "chunks"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "check"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "dict",
+                          "v": [
+                            [
+                              {
+                                "t": "str",
+                                "v": "yaml"
+                              },
+                              {
+                                "t": "none"
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "done"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "result_path"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "none"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "schema": {
+        "t": "none"
+      },
+      "source_template": "t"
+    }
+  ],
+  "seed_state_cases": [
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "merge"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "stale"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "other"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "keep"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "runtime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "_private"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "expected_seed": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "other"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "keep"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "runtime"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "_private"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      "name": "clears_only_the_result_paths_own_segment",
+      "result_path": "prime.merge.value"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "str",
+              "v": "dropped"
+            }
+          ]
+        ]
+      },
+      "expected_seed": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "name": "non_string_key_dropped",
+      "result_path": "prime.merge.value"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected_seed": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "input"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "topic"
+                  },
+                  {
+                    "t": "str",
+                    "v": "x"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "name": "no_prime_namespace_at_all",
+      "result_path": "prime.merge.value"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "merge"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "kept, single-segment path never matches"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "expected_seed": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "prime"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "merge"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "value"
+                        },
+                        {
+                          "t": "str",
+                          "v": "kept, single-segment path never matches"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "name": "result_path_single_segment_clears_nothing",
+      "result_path": "prime"
+    }
+  ],
+  "source_output_cases": [
+    {
+      "expected": "prompt_type: text\nschema: null\n",
+      "name": "text_no_schema",
+      "prompt_type": "text",
+      "schema": {
+        "t": "none"
+      }
+    },
+    {
+      "expected": "prompt_type: object\nschema:\n  type: object\n  properties:\n    a:\n      type: string\n",
+      "name": "object_nested_schema",
+      "prompt_type": "object",
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "type"
+            },
+            {
+              "t": "str",
+              "v": "object"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "properties"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "a"
+                  },
+                  {
+                    "t": "dict",
+                    "v": [
+                      [
+                        {
+                          "t": "str",
+                          "v": "type"
+                        },
+                        {
+                          "t": "str",
+                          "v": "string"
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "expected": "prompt_type: object\nschema:\n  type: object\n  description: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+      "name": "long_description",
+      "prompt_type": "object",
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "type"
+            },
+            {
+              "t": "str",
+              "v": "object"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "description"
+            },
+            {
+              "t": "str",
+              "v": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "expected": "prompt_type: text\nschema:\n  description: \"caf\\xE9 \\u2014\\u65E5\\u672C\\u8A9E\"\n",
+      "name": "non_ascii",
+      "prompt_type": "text",
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "description"
+            },
+            {
+              "t": "str",
+              "v": "café —日本語"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "expected": "prompt_type: text\nschema:\n  a: 'yes'\n  b: 'null'\n  c: '1.0'\n  d: '~'\n",
+      "name": "special_strings",
+      "prompt_type": "text",
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "str",
+              "v": "yes"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "str",
+              "v": "null"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "c"
+            },
+            {
+              "t": "str",
+              "v": "1.0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "str",
+              "v": "~"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "expected": "prompt_type: number\nschema:\n  minimum: .inf\n",
+      "name": "infinity",
+      "prompt_type": "number",
+      "schema": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "minimum"
+            },
+            {
+              "bits": "7ff0000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "expected": "prompt_type: object\nschema: {}\n",
+      "name": "empty_object",
+      "prompt_type": "object",
+      "schema": {
+        "t": "dict",
+        "v": []
+      }
+    },
+    {
+      "expected": "prompt_type: boolean\nschema: null\n",
+      "name": "none_schema_again",
+      "prompt_type": "boolean",
+      "schema": {
+        "t": "none"
+      }
+    }
+  ],
+  "success_cases": [
+    {
+      "chunk_count": 2,
+      "depth": 0,
+      "expected_key_order": [
+        "decomposed",
+        "score",
+        "threshold",
+        "depth",
+        "max_depth",
+        "plan",
+        "chunk_count",
+        "result_path",
+        "yaml",
+        "outcome",
+        "reason"
+      ],
+      "expected_meta": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "decomposed"
+            },
+            {
+              "t": "bool",
+              "v": true
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "score"
+            },
+            {
+              "bits": "4056800000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "threshold"
+            },
+            {
+              "bits": "4054000000000000",
+              "t": "float"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "depth"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "max_depth"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "plan"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "say"
+                  },
+                  {
+                    "t": "str",
+                    "v": "hi"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "chunks"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "int",
+                        "v": "1"
+                      },
+                      {
+                        "t": "int",
+                        "v": "2"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "chunk_count"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "result_path"
+            },
+            {
+              "t": "str",
+              "v": "prime.merge.value"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "yaml"
+            },
+            {
+              "t": "str",
+              "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "outcome"
+            },
+            {
+              "t": "str",
+              "v": "decomposed"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "reason"
+            },
+            {
+              "t": "none"
+            }
+          ]
+        ]
+      },
+      "max_depth": 2,
+      "name": "decomposed_in_place_first_key",
+      "plan_chunks": [
+        1,
+        2
+      ],
+      "plan_say": "hi",
+      "result_path": "prime.merge.value",
+      "score": 90.0,
+      "threshold": 80.0,
+      "yaml": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+    }
+  ],
+  "validate_plan_cases": [
+    {
+      "chunks": {
+        "t": "none"
+      },
+      "done": {
+        "t": "none"
+      },
+      "expected": [
+        "the planner returned no orchestration YAML"
+      ],
+      "max_chunks": 5,
+      "name": "blank_yaml_absent",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": null
+    },
+    {
+      "chunks": {
+        "t": "none"
+      },
+      "done": {
+        "t": "none"
+      },
+      "expected": [
+        "the planner returned no orchestration YAML"
+      ],
+      "max_chunks": 5,
+      "name": "blank_yaml_whitespace",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "   "
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": false
+      },
+      "expected": [
+        "the planner's own done gate is false (its output never validated within budget)",
+        "the plan has 1 chunk(s); a decomposition needs at least 2"
+      ],
+      "max_chunks": 5,
+      "name": "done_false_and_too_few_chunks",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "none"
+      },
+      "expected": [],
+      "max_chunks": 5,
+      "name": "done_none_is_not_rejected",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "int",
+        "v": "0"
+      },
+      "expected": [],
+      "max_chunks": 5,
+      "name": "done_zero_is_not_rejected",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "none"
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the planner returned no chunk list"
+      ],
+      "max_chunks": 5,
+      "name": "no_chunk_list_at_all",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "str",
+        "v": "oops"
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the planner returned no chunk list"
+      ],
+      "max_chunks": 5,
+      "name": "chunks_not_a_list",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": []
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the planner returned no chunk list"
+      ],
+      "max_chunks": 5,
+      "name": "chunks_empty_list",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the plan has 1 chunk(s); a decomposition needs at least 2"
+      ],
+      "max_chunks": 5,
+      "name": "one_chunk_too_few",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "int",
+            "v": "4"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          },
+          {
+            "t": "int",
+            "v": "6"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the plan has 6 chunks; the budget is 5"
+      ],
+      "max_chunks": 5,
+      "name": "six_chunks_over_budget_of_five",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "result_path 'input.merge.value' does not point into the emitted orchestration's own state (expected 'prime.<effect>...')"
+      ],
+      "max_chunks": 5,
+      "name": "result_path_not_under_prime",
+      "result_path": "input.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "result_path 'prime' does not point into the emitted orchestration's own state (expected 'prime.<effect>...')"
+      ],
+      "max_chunks": 5,
+      "name": "result_path_single_segment",
+      "result_path": "prime",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "the emitted orchestration has no top-level effect named 'nope', so nothing writes result_path 'prime.nope.value'"
+      ],
+      "max_chunks": 5,
+      "name": "no_top_level_effect_for_result_path",
+      "result_path": "prime.nope.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [],
+      "max_chunks": 5,
+      "name": "sound_plan",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: \"1\"}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: \"1\"}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "tool 'shell' not in enabled_tools allowlist (enabled: ['json'])"
+      ],
+      "max_chunks": 5,
+      "name": "allowlist_denies_the_tool",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "_allowlists"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "tools"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "str",
+                        "v": "json"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: merge, provider: shell, params: {cmd: echo}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [],
+      "max_chunks": 5,
+      "name": "allowlist_open_by_default",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - {type: tool, name: merge, provider: shell, params: {cmd: echo}}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "YAML parse error: while parsing a flow sequence\n  in \"<unicode string>\", line 1, column 15:\n    effects: [{a: [1, 2}]\n                  ^\nexpected ',' or ']', but got '}'\n  in \"<unicode string>\", line 1, column 20:\n    effects: [{a: [1, 2}]\n                       ^"
+      ],
+      "max_chunks": 5,
+      "name": "inline_check_yaml_scan_error",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": "YAML parse error: ",
+      "yaml": {
+        "t": "str",
+        "v": "effects: [{a: [1, 2}]"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "Inline orchestration must be a YAML mapping with an 'effects' key."
+      ],
+      "max_chunks": 5,
+      "name": "inline_check_non_mapping",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "- a"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "Inline orchestration is missing required 'effects' key."
+      ],
+      "max_chunks": 5,
+      "name": "inline_check_missing_effects_key",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "name: x"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
+      ],
+      "max_chunks": 5,
+      "name": "inline_check_near_miss_structural_error",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    discription: oops\n    params: {mode: parse, input: \"1\"}\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
+      "expected": [
+        "YAML parse error: duplicate key 'effects' at line 6, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one"
+      ],
+      "max_chunks": 5,
+      "name": "inline_check_duplicate_key",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\neffects:\n  - type: tool\n    name: b\n    provider: json\n    params: {mode: parse, input: \"1\"}\n"
+      }
+    }
+  ]
+}
