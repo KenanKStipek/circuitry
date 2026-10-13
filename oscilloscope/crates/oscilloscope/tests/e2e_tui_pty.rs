@@ -735,6 +735,13 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
         status.code().is_some(),
         "osp should have exited on its own, got {status:?}"
     );
+    // 101 is a Rust panic: ratatui's own `Terminal::drop` reporting a
+    // failed cursor restore with `eprintln!` on the dead terminal.
+    assert_ne!(
+        status.code(),
+        Some(101),
+        "osp panicked on its way out of a lost terminal"
+    );
     // The orchestrator's own acceptance bound ("within 3s"), with a
     // little slack for a loaded CI runner.
     assert!(
@@ -792,9 +799,12 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
 
     let status = wait_with_timeout(child, Duration::from_secs(15));
     let elapsed = closed_at.elapsed();
-    assert!(
-        status.code().is_some(),
-        "osp should have exited on its own, got {status:?}"
+    // The run itself finished fine before the terminal went away, so
+    // osp ends with the run's own exit code: 0, never a panic's 101.
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "osp should exit 0 after a successful run when its terminal is gone, got {status:?}"
     );
     assert!(
         elapsed < Duration::from_secs(4),
