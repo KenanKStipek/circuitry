@@ -1,0 +1,27 @@
+name: decompose-skips-options-and-assets
+adapter: scripted
+model: m
+effects:
+- type: prompt
+  name: a
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+  params:
+    temperature: hot
+  assets:
+  - kind: file
+    ref: notes.txt
+- type: prompt
+  name: b
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+  assets:
+  - kind: file
+    ref: notes.txt
+- type: prompt
+  name: c
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+  params:
+    temperature: hot
+  assets:
+  - kind: file
+    ref: notes.txt
+  on_error: continue

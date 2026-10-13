@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 3: a decomposed prompt skips options and assets",
+  "description": "A decomposes with params.temperature: \"hot\" and a non-image asset: no error, no warnings, no WARNING line. B's plan has no merge (so it runs as is) plus the asset: decomposition comes before warnings, and the asset WARNING line appears. C is like B but with temperature: \"hot\" and on_error: continue: the error comes after the record.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
