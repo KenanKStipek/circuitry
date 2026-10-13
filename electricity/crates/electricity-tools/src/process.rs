@@ -35,6 +35,15 @@ pub struct RunOpts {
     pub cwd: Option<std::path::PathBuf>,
     pub env: Option<HashMap<String, String>>,
     pub new_session: bool,
+    /// Variable names to drop from the child's inherited environment,
+    /// applied with `Command::env_remove` only while `env` is `None`
+    /// (`agent_cli.py::child_env`'s own removal set, ported) -- unlike
+    /// `env: Some(map)` ([`crate::subprocess_tool::merged_env`]'s own
+    /// job), this keeps every other variable byte for byte, including
+    /// one that isn't valid UTF-8 (Python's `os.environ`/`Popen` round
+    /// trip it with `surrogateescape`; a `HashMap<String, String>`
+    /// can't hold it at all).
+    pub env_remove: Vec<String>,
 }
 
 /// A finished child process -- text-mode stdout/stderr (universal-
@@ -174,6 +183,10 @@ pub async fn run_tracked(
     if let Some(env) = &opts.env {
         command.env_clear();
         command.envs(env);
+    } else {
+        for name in &opts.env_remove {
+            command.env_remove(name);
+        }
     }
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -636,12 +649,14 @@ pub fn resolve_binary(candidates: &[&str]) -> Option<String> {
 /// value).
 const DEFPATH: &str = "/bin:/usr/bin";
 
-/// `shutil.which`'s own POSIX semantics, as far as [`resolve_binary`]
-/// needs them: a name with a directory component is checked directly
-/// (no `PATH` search); otherwise every `PATH` entry is tried in order
-/// (falling back to [`DEFPATH`] when the variable is unset), requiring
-/// an existing, executable, non-directory file.
-fn which(name: &str) -> Option<String> {
+/// `shutil.which`'s own POSIX semantics -- a name with a directory
+/// component is checked directly (no `PATH` search); otherwise every
+/// `PATH` entry is tried in order (falling back to [`DEFPATH`] when the
+/// variable is unset), requiring an existing, executable, non-directory
+/// file. Public (issue #520's part A) for an adapter's own `check()`:
+/// unlike [`resolve_binary`], this never accepts a non-executable
+/// absolute path just because it exists.
+pub fn which(name: &str) -> Option<String> {
     let path = std::path::Path::new(name);
     if path
         .parent()

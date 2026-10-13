@@ -17,6 +17,7 @@ use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+pub mod agent_cli;
 pub mod awk;
 pub mod clock;
 pub mod env_vars;
