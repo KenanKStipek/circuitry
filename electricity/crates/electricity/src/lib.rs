@@ -367,11 +367,18 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
 }
 
 /// Issue #518 (lane J2), Scope §2: the first (in document order)
-/// *enabled* prompt under *op* whose own `provider:` (necessarily a
-/// profile override -- no orchestration YAML sets `PromptOp::provider`
-/// any other way once compiled) names an adapter Circuitry's own
-/// registry knows (`electricity_vm::adapter_names::ADAPTER_NAMES`) but
-/// this build has no builder for. Never recurses into a `use` leaf (its
+/// *enabled* prompt under *op* whose own `provider:` names an adapter
+/// Circuitry's own registry knows (`electricity_vm::adapter_names::
+/// ADAPTER_NAMES`) but this build has no builder for. A document can
+/// also set a prompt's `provider:` directly (`compile/leaves.rs`'s own
+/// `PromptOp::provider`), not only a profile override -- but that case
+/// is already caught earlier, by `unbuildable_known_adapter` walking
+/// the raw document (`allowlist.rs::walk_effects` collects a prompt's
+/// own `provider:` the same way it collects the document's top-level
+/// `adapter:`), so by the time this function runs on the overlaid
+/// *program*, the only way an unbuildable name reaches it unrefused is
+/// a profile override replacing a buildable (or absent) document value
+/// with an unbuildable one. Never recurses into a `use` leaf (its
 /// child is compiled, and so overlaid, independently at run time -- out
 /// of scope here, same as every other static walk in this file) nor
 /// into a disabled subtree (`op.enabled == false`): a disabled prompt's
@@ -1536,6 +1543,27 @@ pub async fn run_orchestration_with_config(
         };
     }
 
+    // Review finding 1 on PR #526's own review: the same refusal as
+    // just above, but for a *tool* plugin Circuitry knows
+    // (`electricity_tools::plugin_names::PLUGIN_NAMES`) but this build
+    // has no builder for -- read off the raw document, so a profile
+    // that disables the tool still refuses it, matching the same
+    // document-level `UnsupportedToolProvider` refusal an *enabled*
+    // instance of the same tool would already get from the walker
+    // below. Without this, a disabled tool naming such a plugin would
+    // reach preflight's own "Unknown plugin" failure instead, once the
+    // refusal walker started skipping disabled subtrees for issue #518.
+    if let Some(name) = preflight::unbuildable_known_tool_plugin(&loaded.document) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("tool provider '{name}'"))),
+            warnings,
+            signal: None,
+        };
+    }
+
     // Issue #518 (lane J2), Scope §2/settled ruling 6: the same refusal
     // as just above, but for a profile `provider:` override landing on
     // an *enabled* prompt -- read off the already-overlaid *program*,
@@ -1544,7 +1572,7 @@ pub async fn run_orchestration_with_config(
     // here: a tool's own swapped `provider:` is already caught by the
     // refusal walker's `UnsupportedToolProvider` check (settled ruling
     // 6's own second sentence), which walks the overlaid IR too
-    // (`first_unsupported` below). Without this check,
+    // (`first_unsupported` above). Without this check,
     // `generate_with_fallbacks` would instead refuse the run partway
     // through, after any earlier effect had already run.
     if let Some(name) = profile_provider_unbuildable(&program.root, &adapters) {

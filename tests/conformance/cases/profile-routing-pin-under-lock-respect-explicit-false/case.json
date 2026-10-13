@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 14b: profile-routing-pin-under-lock-respect-explicit-false",
+  "description": "The same locked profile and per-effect `routing: high` pin as profile-routing-pin-under-lock, but with `routing.respect_explicit: false`: the router now overrides the lock too, so meta.model becomes the natural scored band's model (\"low\"'s model-small), model_reason: \"router\" -- not the pinned \"high\" row, since the pin's own gate (`if not explicit and override is not None`) is still skipped while the effect is explicit (locked); only `route_model`'s own deference to that explicit flag is switched off by `respect_explicit: false`, and that only ever consults the score, never the pin.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 13: profile-routing-pin-explicit",
+  "description": "A profile sets both `model: profile-explicit-model` and a `routing: high` pin on the same effect: an effect's own or a profile's `model:` makes it explicit, and an explicit effect never consults its pin or opt-out (settled ruling 8). meta.model is the profile's model override, model_reason: \"explicit\", and meta.complexity.band is the effect's own scored band (\"low\"), not the pinned \"high\" row -- proving the pin was never looked at.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

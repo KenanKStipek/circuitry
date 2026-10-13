@@ -1339,19 +1339,26 @@ for how the file itself is located:
   and exits `1`, not nothing, exactly as the reference does. electricity matches
   that outcome (writes `--out`, exits `1`) for a profile path that doesn't resolve, rather than
   grouping it into the pre-run bucket the way an unreadable *config* path is (§6.9) — the two
-  look similar but the reference's own failure point for each is different. Every other profile
-  failure below — schema validation, an unknown effect path, an unresolvable routing pin — is an
-  in-run failure for the same reason, writing `--out` the same way. **A profile failure's own
-  `--out` is only ever the plain `--out` path given on this run, never the profile's own `out:`
-  or the resume default** — the reference's `resolved_out` (what the failure handler actually
-  writes to) starts as the caller's own `--out` and is only refined to include a profile's `out:`
-  once `resolve_effective_settings` runs, which is *after* the profile has already loaded
-  successfully; a profile that fails before that point never reaches its own refinement, so its
-  failure writes wherever `--out` alone pointed (or nowhere, if `--out` was never given) rather
-  than the profile's own `out:` or §6.8's resume default. electricity matches that: a profile
-  failure's `--out` resolution uses only the plain `--out` value, not the profile's own `out:` or
-  the resume default, the same narrower resolution the reference has at that point in its own
-  run.
+  look similar but the reference's own failure point for each is different. Schema validation and
+  an unknown effect path are both in-run failures for the same reason, and both happen while the
+  profile is still loading — *before* `resolve_effective_settings` has run at all. **A failure at
+  or before that point writes its `--out` record to only the plain `--out` path given on this
+  run, never the profile's own `out:` or the resume default** — the reference's `resolved_out`
+  (what the failure handler actually writes to) starts as the caller's own `--out` and is only
+  refined to include a profile's `out:` once `resolve_effective_settings` runs, which is *after*
+  the profile has already loaded successfully; a profile that fails before that point never
+  reaches its own refinement, so its failure writes wherever `--out` alone pointed (or nowhere, if
+  `--out` was never given) rather than the profile's own `out:` or §6.8's resume default.
+  electricity matches that: a load/schema/effect-path failure's `--out` resolution uses only the
+  plain `--out` value, the same narrower resolution the reference has at that point in its own
+  run. **An unresolvable routing pin or a denied profile `provider:` override is different**: both
+  are checked only once the run's full effective settings are known (§9.7, below), which is
+  *after* `resolved_out` has already been refined to the profile's own `out:` (lane R, issue
+  #495) — so a routing-pin or provider-denial failure's `--out` record goes to the profile's own
+  `out:` (or §6.8's resume default, if the profile set no `out:` of its own), exactly like any
+  other in-run failure once effective settings exist. electricity matches that ordering: its own
+  routing-pin/provider-denial checks run after `resolved_out` is set from `effective.out`, so
+  their failures write to the same place the reference's would.
 - **Schema and parsing.** electricity carries a synced copy of `schema/profile.schema.json`,
   checked the same way as the orchestration schema (§4 step 3);
   Draft7-validated the same way, word-for-word on Circuitry's own validation-failure message
@@ -1438,7 +1445,12 @@ for how the file itself is located:
   `routing: false` is the per-effect opt-out instead — it suppresses the router for that one
   effect without naming a band, leaving its model resolution to whatever the chain above it
   already decided. Targeting a container disables its entire subtree, matching the reference
-  exactly.
+  exactly. A disabled subtree is skipped by the capability-driven refusal walker that runs over
+  the overlaid IR, since it can never need a capability it will never run — but a disabled `use`
+  effect whose child orchestration electricity itself can't run is still refused: the separate
+  static `use`-child check (`first_refused_child`) walks the raw document, not the overlaid IR,
+  exactly as it already does for an *enabled* `use` child, so a profile disabling that effect
+  doesn't change whether electricity refuses it up front.
 - **The `effective_settings.profile` record** — written only when `--profile` resolved
   successfully, omitted otherwise, exactly reproducing `runtime_shim.py`'s own two-field shape
   (around its `state["runtime"]["effective_settings"]["profile"] = {...}` assignment):

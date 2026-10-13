@@ -44,7 +44,7 @@ pub mod validate_yaml;
 /// own doc comment; review finding 1 on PR #454: this crate and
 /// `electricity-vm::adapter` each used to keep their own copy.
 pub use electricity_value::pycompat::PyExc;
-pub use registry::build_plugin;
+pub use registry::{build_plugin, supported_names};
 
 /// `plugins/base.py::ToolResult`, field for field.
 #[derive(Debug, Clone, PartialEq, Eq)]

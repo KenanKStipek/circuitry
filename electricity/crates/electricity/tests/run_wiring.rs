@@ -862,3 +862,35 @@ async fn a_profile_swapping_a_tools_provider_to_an_unsupported_one_is_refused_by
     let error = result.error.unwrap();
     assert!(error.contains("mcp"));
 }
+
+/// Review finding 1 on PR #526's own review: a *disabled* tool naming
+/// a plugin Circuitry knows but this build can't build is still
+/// refused with the preview marker, no state written -- the refusal
+/// walker skips a disabled subtree entirely (issue #518 Scope §4), so
+/// this has to come from a check that reads the raw document instead.
+/// Before that check existed, this case reached preflight's own
+/// "Unknown plugin" failure, a hard failure with `--out` written.
+#[tokio::test]
+async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker() {
+    let dir = temp_dir("disabled-tool-unbuildable-plugin");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: t\n    provider: comfyui\n    params: {}\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  t:\n    enabled: false\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("comfyui"));
+}
