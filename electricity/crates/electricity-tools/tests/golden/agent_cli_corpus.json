@@ -1,0 +1,1553 @@
+{
+  "pi_command_cases": [
+    {
+      "kwargs": {},
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--no-session",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "model": "anthropic/claude-opus"
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--no-session",
+        "--model",
+        "anthropic/claude-opus",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "thinking": "high"
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--no-session",
+        "--thinking",
+        "high",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "tools": true
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-session",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "session_id": "sess-1"
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--session",
+        "sess-1",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "session_id": "sess-1",
+        "persist_session": true
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--session",
+        "sess-1",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "persist_session": true
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "extra_args": [
+          "--foo",
+          "bar"
+        ]
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--no-session",
+        "--foo",
+        "bar",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "model": "m",
+        "thinking": "low",
+        "session_id": "s",
+        "extra_args": [
+          "--x"
+        ]
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--session",
+        "s",
+        "--model",
+        "m",
+        "--thinking",
+        "low",
+        "--x",
+        "@/prompts/prompt.md",
+        "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
+      ]
+    },
+    {
+      "kwargs": {
+        "instruction": "custom instruction"
+      },
+      "expected": [
+        "pi",
+        "-p",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-tools",
+        "--no-session",
+        "@/prompts/prompt.md",
+        "custom instruction"
+      ]
+    }
+  ],
+  "claude_command_cases": [
+    {
+      "kwargs": {},
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence"
+      ]
+    },
+    {
+      "kwargs": {
+        "model": "claude-x"
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--model",
+        "claude-x"
+      ]
+    },
+    {
+      "kwargs": {
+        "tools": true
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--strict-mcp-config",
+        "--no-session-persistence"
+      ]
+    },
+    {
+      "kwargs": {
+        "session_id": "abc"
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--resume",
+        "abc"
+      ]
+    },
+    {
+      "kwargs": {
+        "session_id": "abc",
+        "persist_session": true
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--resume",
+        "abc"
+      ]
+    },
+    {
+      "kwargs": {
+        "persist_session": true
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config"
+      ]
+    },
+    {
+      "kwargs": {
+        "extra_args": [
+          "--extra"
+        ]
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--extra"
+      ]
+    },
+    {
+      "kwargs": {
+        "strict_mcp": false
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--no-session-persistence"
+      ]
+    },
+    {
+      "kwargs": {
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--json-schema",
+        "{\"type\": \"object\", \"properties\": {\"a\": {\"type\": \"string\"}}}"
+      ]
+    },
+    {
+      "kwargs": {
+        "json_schema": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--json-schema",
+        "{\"type\": \"object\", \"properties\": {\"value\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"value\"], \"additionalProperties\": false}"
+      ]
+    },
+    {
+      "kwargs": {
+        "model": "claude-x",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "expected": [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--model",
+        "claude-x",
+        "--json-schema",
+        "{\"type\": \"object\", \"properties\": {\"a\": {\"type\": \"string\"}}}"
+      ]
+    }
+  ],
+  "claude_json_schema_cases": [
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string"
+          }
+        }
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"a\": {\"type\": \"string\"}}}"
+    },
+    {
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"value\": {\"type\": \"array\", \"items\": {\"type\": \"integer\"}}}, \"required\": [\"value\"], \"additionalProperties\": false}"
+    },
+    {
+      "schema": {
+        "description": "no type at all"
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "no type at all"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"value\": {\"description\": \"no type at all\"}}, \"required\": [\"value\"], \"additionalProperties\": false}"
+    },
+    {
+      "schema": {
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"value\": {\"type\": [\"object\", \"null\"]}}, \"required\": [\"value\"], \"additionalProperties\": false}"
+    },
+    {
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/item"
+        },
+        "$defs": {
+          "item": {
+            "type": "string",
+            "description": "caf\u00e9 \u00e9t\u00e9"
+          }
+        }
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/item"
+            }
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false,
+        "$defs": {
+          "item": {
+            "type": "string",
+            "description": "caf\u00e9 \u00e9t\u00e9"
+          }
+        }
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"value\": {\"type\": \"array\", \"items\": {\"$ref\": \"#/$defs/item\"}}}, \"required\": [\"value\"], \"additionalProperties\": false, \"$defs\": {\"item\": {\"type\": \"string\", \"description\": \"caf\\u00e9 \\u00e9t\\u00e9\"}}}"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          }
+        },
+        "definitions": {
+          "old": {
+            "type": "string"
+          }
+        }
+      },
+      "expected_schema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          }
+        },
+        "definitions": {
+          "old": {
+            "type": "string"
+          }
+        }
+      },
+      "expected_dumps": "{\"type\": \"object\", \"properties\": {\"x\": {\"type\": \"integer\"}}, \"definitions\": {\"old\": {\"type\": \"string\"}}}"
+    }
+  ],
+  "child_env_cases": [
+    {
+      "base": {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_ENTRYPOINT": "cli",
+        "PI_SESSION_ID": "s1",
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_AUTH_TOKEN": "secret2",
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      },
+      "unset_env": [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "expected": {
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      }
+    },
+    {
+      "base": {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_ENTRYPOINT": "cli",
+        "PI_SESSION_ID": "s1",
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_AUTH_TOKEN": "secret2",
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      },
+      "unset_env": [],
+      "expected": {
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_AUTH_TOKEN": "secret2",
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      }
+    },
+    {
+      "base": {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_ENTRYPOINT": "cli",
+        "PI_SESSION_ID": "s1",
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_AUTH_TOKEN": "secret2",
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      },
+      "unset_env": [
+        "MY_VAR"
+      ],
+      "expected": {
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_AUTH_TOKEN": "secret2",
+        "PATH": "/bin",
+        "NEUTRAL_VAR": "kept"
+      }
+    },
+    {
+      "base": {
+        "ANTHROPIC_API_KEY": "secret",
+        "MY_VAR": "kept"
+      },
+      "unset_env": [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "expected": {
+        "MY_VAR": "kept"
+      }
+    },
+    {
+      "base": {
+        "ANTHROPIC_API_KEY": "secret",
+        "MY_VAR": "kept"
+      },
+      "unset_env": [],
+      "expected": {
+        "ANTHROPIC_API_KEY": "secret",
+        "MY_VAR": "kept"
+      }
+    },
+    {
+      "base": {
+        "ANTHROPIC_API_KEY": "secret",
+        "MY_VAR": "kept"
+      },
+      "unset_env": [
+        "MY_VAR"
+      ],
+      "expected": {
+        "ANTHROPIC_API_KEY": "secret"
+      }
+    },
+    {
+      "base": {},
+      "unset_env": [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "expected": {}
+    },
+    {
+      "base": {},
+      "unset_env": [],
+      "expected": {}
+    },
+    {
+      "base": {},
+      "unset_env": [
+        "MY_VAR"
+      ],
+      "expected": {}
+    }
+  ],
+  "parse_claude_output_cases": [
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"hello\", \"is_error\": false}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "hello",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"boom\", \"is_error\": true, \"subtype\": \"error_max_turns\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "error": "claude failed (error_max_turns): boom"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"\", \"is_error\": true, \"subtype\": \"\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "error": "claude failed: no message"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"one\", \"is_error\": 1, \"subtype\": \"error_max_turns\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "one",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"one point oh\", \"is_error\": 1.0}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "one point oh",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"\", \"is_error\": true, \"subtype\": \"success\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "error": "claude failed: no message"
+      }
+    },
+    {
+      "returncode": 2,
+      "stdout": "{\"result\": \"x\", \"is_error\": true, \"subtype\": \"error_during_execution\"}",
+      "stderr": "stderr ignored",
+      "json_schema": null,
+      "expected": {
+        "error": "claude failed (error_during_execution): x"
+      }
+    },
+    {
+      "returncode": 2,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false}",
+      "stderr": "oops",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code 2 without an answer: oops"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "not json at all",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code 0 without an answer"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "not json",
+      "stderr": "\u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur ",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code 1 without an answer: ...rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur \u00e9rreur"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "log line one\nlog line two\n{\"result\": \"final\", \"is_error\": false}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "final",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "[1, 2, 3]\n{\"result\": \"after array\", \"is_error\": false}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "after array",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ignored\", \"is_error\": false, \"structured_output\": null}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ignored",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ignored\", \"is_error\": false, \"structured_output\": false}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "false",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": false
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ignored\", \"is_error\": false, \"structured_output\": 0}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "0",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": 0
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"```json\\n[1,2]\\n```\", \"is_error\": false, \"structured_output\": {\"value\": [1, 2]}}",
+      "stderr": "",
+      "json_schema": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "expected": {
+        "ok": {
+          "text": "[1, 2]",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ignored\", \"is_error\": false, \"structured_output\": {\"value\": [1, 2]}}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "{\"value\": [1, 2]}",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": {
+            "value": [
+              1,
+              2
+            ]
+          }
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ignored\", \"is_error\": false, \"structured_output\": {\"other\": 1}}",
+      "stderr": "",
+      "json_schema": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "expected": {
+        "ok": {
+          "text": "{\"other\": 1}",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": {
+            "other": 1
+          }
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"usage\": {\"input_tokens\": 10, \"cache_read_input_tokens\": 5, \"cache_creation_input_tokens\": 2, \"output_tokens\": 7}, \"total_cost_usd\": 0.5, \"stop_reason\": \"end_turn\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": 17,
+          "tokens_received": 7,
+          "cost_usd": 0.5,
+          "finish_reason": "end_turn",
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"usage\": {\"input_tokens\": true, \"output_tokens\": 3}}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": 3,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"usage\": {\"input_tokens\": 1.9, \"output_tokens\": -2.9}}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": 1,
+          "tokens_received": -2,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"usage\": {\"input_tokens\": NaN}}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "numeric_error": {
+          "py_class": "ValueError",
+          "message": "cannot convert float NaN to integer"
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"usage\": {\"input_tokens\": Infinity}}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "numeric_error": {
+          "py_class": "OverflowError",
+          "message": "cannot convert float infinity to integer"
+        }
+      }
+    },
+    {
+      "returncode": -9,
+      "stdout": "",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code -9 without an answer"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"session_id\": 5}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"stop_reason\": \"max_tokens\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": "max_tokens",
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"ok\", \"is_error\": false, \"stop_reason\": 5}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "ok",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code 1 without an answer: \u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "json_schema": null,
+      "expected": {
+        "error": "claude exited with code 1 without an answer: ...\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"  spaced result  \", \"is_error\": false}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "spaced result",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    }
+  ],
+  "parse_pi_output_cases": [
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"hello\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "hello",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \" hello \"}, {\"type\": \"text\", \"text\": \"world \"}, {\"type\": \"other\", \"text\": \"ignored\"}]}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "hello world",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"first\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"user\", \"content\": \"ignored\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"second\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "second",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"\", \"stopReason\": \"error\", \"errorMessage\": \"auth failed\"}}",
+      "stderr": "",
+      "expected": {
+        "error": "pi failed (error): auth failed"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"\", \"stopReason\": \"error\"}}",
+      "stderr": "",
+      "expected": {
+        "error": "pi failed (error): no message"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"partial text\", \"stopReason\": \"aborted\"}}",
+      "stderr": "",
+      "expected": {
+        "error": "pi failed (aborted): partial text"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"\", \"stopReason\": \"aborted\"}}",
+      "stderr": "",
+      "expected": {
+        "error": "pi failed (aborted): no message"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "expected": {
+        "error": "pi exited with code 0 without an answer"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "nothing happened",
+      "expected": {
+        "error": "pi exited with code 0 without an answer: nothing happened"
+      }
+    },
+    {
+      "returncode": 1,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"ok\"}}",
+      "stderr": "crashed after answering",
+      "expected": {
+        "error": "pi exited with code 1 without an answer: crashed after answering"
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"truncated\", \"stopReason\": \"length\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "truncated",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": "length",
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "\n\n   \n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"hi\"}}\nnot json\n[1, 2]\n",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "hi",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"session\", \"id\": \"pi-session-1\"}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"with session\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "with session",
+          "session_id": "pi-session-1",
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"a\", \"usage\": {\"input\": 3, \"cacheRead\": 1, \"cacheWrite\": 1, \"output\": 2, \"cost\": {\"total\": 0.25}}}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"b\", \"usage\": {\"input\": 4, \"output\": 1, \"cost\": 0.25}}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "b",
+          "session_id": null,
+          "tokens_sent": 9,
+          "tokens_received": 3,
+          "cost_usd": 0.5,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"c\", \"usage\": {\"input\": true, \"output\": 3}}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "c",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": 3,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u2028line2\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "fallback",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u001cline2\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "fallback",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u0085line2\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "fallback",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"x\", \"usage\": {\"input\": NaN}}}",
+      "stderr": "",
+      "expected": {
+        "numeric_error": {
+          "py_class": "ValueError",
+          "message": "cannot convert float NaN to integer"
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"\\u00a0\\u001cstripped\\u001f\\u00a0\"}}",
+      "stderr": "",
+      "expected": {
+        "ok": {
+          "text": "stripped",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    }
+  ],
+  "timeout_text_cases": [
+    {
+      "binary": "claude",
+      "timeout_seconds": 1,
+      "expected": "claude did not finish within 1s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 120,
+      "expected": "claude did not finish within 120s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 999999,
+      "expected": "claude did not finish within 999999s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1000000,
+      "expected": "claude did not finish within 1e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 4294967295,
+      "expected": "claude did not finish within 4.29497e+09s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 9999995,
+      "expected": "claude did not finish within 1e+07s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1000015,
+      "expected": "claude did not finish within 1.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 2000025,
+      "expected": "claude did not finish within 2.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1500005,
+      "expected": "claude did not finish within 1.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 2500005,
+      "expected": "claude did not finish within 2.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1234565,
+      "expected": "claude did not finish within 1.23456e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1,
+      "expected": "pi did not finish within 1s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 120,
+      "expected": "pi did not finish within 120s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 999999,
+      "expected": "pi did not finish within 999999s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1000000,
+      "expected": "pi did not finish within 1e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 4294967295,
+      "expected": "pi did not finish within 4.29497e+09s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 9999995,
+      "expected": "pi did not finish within 1e+07s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1000015,
+      "expected": "pi did not finish within 1.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 2000025,
+      "expected": "pi did not finish within 2.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1500005,
+      "expected": "pi did not finish within 1.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 2500005,
+      "expected": "pi did not finish within 2.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1234565,
+      "expected": "pi did not finish within 1.23456e+06s; it was stopped with everything it started."
+    }
+  ],
+  "check_binary_cases": [
+    {
+      "adapter_name": "claude_code",
+      "binary": "circuitry-test-missing-claude",
+      "expected_ok": false,
+      "expected_missing": [
+        "binary:circuitry-test-missing-claude"
+      ],
+      "expected_message": "circuitry-test-missing-claude is not on PATH: install it and log in, or set runtime.adapters.claude_code.binary."
+    },
+    {
+      "adapter_name": "pi",
+      "binary": "circuitry-test-missing-pi",
+      "expected_ok": false,
+      "expected_missing": [
+        "binary:circuitry-test-missing-pi"
+      ],
+      "expected_message": "circuitry-test-missing-pi is not on PATH: install it and log in, or set runtime.adapters.pi.binary."
+    }
+  ],
+  "string_list_cases": [
+    {
+      "cfg": {
+        "extra_args": "not-a-list"
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got 'not-a-list'",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": 5
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got 5",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": [
+          1,
+          2
+        ]
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got [1, 2]",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": [
+          {
+            "a": 1
+          }
+        ]
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got [{'a': 1}]",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": {
+          "a": 1
+        }
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got {'a': 1}",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": null
+      },
+      "expected_error": null,
+      "expected_value": []
+    },
+    {
+      "cfg": {},
+      "expected_error": null,
+      "expected_value": []
+    },
+    {
+      "cfg": {
+        "extra_args": [
+          "--a",
+          "--b"
+        ]
+      },
+      "expected_error": null,
+      "expected_value": [
+        "--a",
+        "--b"
+      ]
+    }
+  ]
+}
