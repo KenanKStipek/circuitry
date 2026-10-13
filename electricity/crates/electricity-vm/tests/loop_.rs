@@ -2389,3 +2389,101 @@ async fn with_prev_overlay_shows_a_reused_loops_own_current_pass_iter_node() {
          fix must"
     );
 }
+
+#[tokio::test]
+async fn a_disabled_body_step_is_recorded_disabled_and_counted_but_never_dispatched() {
+    // Issue #518 (lane J2): `LoopRuntime._execute_body`'s own
+    // `effect_record` -- `{type, name, disabled: true}` for a disabled
+    // body op, included in `count`, and the step's own `json` tool
+    // dispatch never runs (it would otherwise fail, like every other
+    // `json` tool leaf here with no real params).
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let disabled_step = Op {
+        enabled: false,
+        ..stringify_from(body_prefix.push_name("step"), "step", "item", "0")
+    };
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![disabled_step],
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let value = as_dict(get(shots, "value").unwrap());
+    let by_iteration = as_list(get(value, "effects_by_iteration").unwrap());
+    assert_eq!(by_iteration.len(), 1);
+    let pass0 = as_dict(&by_iteration[0]);
+    let executed = as_list(get(pass0, "executed_effects").unwrap());
+    assert_eq!(executed.len(), 1);
+    let record = as_dict(&executed[0]);
+    assert_eq!(
+        get(record, "type"),
+        Some(&Value::Str("ToolDefinition".to_string()))
+    );
+    assert_eq!(get(record, "name"), Some(&Value::Str("step".to_string())));
+    assert_eq!(get(record, "disabled"), Some(&Value::Bool(true)));
+    assert_eq!(get(pass0, "count"), Some(&Value::from(1_i64)));
+
+    let iter0 = as_dict(get(shots, "iter_0").unwrap());
+    let step = as_dict(get(iter0, "step").unwrap());
+    assert_eq!(get(step, "value"), Some(&Value::None));
+    let step_meta = as_dict(get(step, "meta").unwrap());
+    assert_eq!(get(step_meta, "disabled"), Some(&Value::Bool(true)));
+}
+
+#[tokio::test]
+async fn collect_values_leaves_out_a_disabled_target_rather_than_a_null_entry() {
+    // Issue #518 (lane J2): `LoopRuntime._collect_values` skips a node
+    // whose `meta.disabled` is exactly `true` (`core/disabled.py::
+    // is_disabled_node`) -- the pass still completes (unlike an
+    // `on_error: continue` failure), but contributes nothing to
+    // `collected`.
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![Value::from(1_i64), Value::from(2_i64), Value::from(3_i64)],
+    );
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let disabled_step = Op {
+        enabled: false,
+        ..stringify_from(body_prefix.push_name("step"), "step", "item", "0")
+    };
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        Some("step"),
+        vec![disabled_step],
+    );
+
+    run(single(loop_op_), &store).await.unwrap();
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let collected = as_dict(get(shots, "collected").unwrap());
+    let values = as_list(get(collected, "value").unwrap());
+    assert_eq!(values, &Vec::new());
+}

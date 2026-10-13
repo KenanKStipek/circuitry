@@ -1,0 +1,50 @@
+effects:
+  - type: tool
+    name: yaml_is_an_int
+    provider: validate_yaml
+    on_error: continue
+    params:
+      yaml: 5
+
+  - type: tool
+    name: yaml_is_a_list
+    provider: validate_yaml
+    on_error: continue
+    params:
+      yaml: [a]
+
+  - type: tool
+    name: max_errors_non_numeric_string
+    provider: validate_yaml
+    on_error: continue
+    params:
+      yaml: "effects: []"
+      max_errors: "x"
+
+  - type: tool
+    name: max_errors_is_a_list
+    provider: validate_yaml
+    on_error: continue
+    params:
+      yaml: "effects: []"
+      max_errors: [1]
+
+  - type: tool
+    name: max_errors_below_one
+    provider: validate_yaml
+    on_error: continue
+    params:
+      yaml: "effects: []"
+      max_errors: 0
+
+  - type: tool
+    name: max_errors_float_truncates
+    provider: validate_yaml
+    params:
+      yaml: "effects: []"
+      max_errors: 2.9
+
+  - type: tool
+    name: no_yaml_param_at_all
+    provider: validate_yaml
+    params: {}

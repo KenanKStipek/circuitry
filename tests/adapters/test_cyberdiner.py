@@ -770,6 +770,20 @@ def test_check_unreachable_expo_reports_host(monkeypatch: pytest.MonkeyPatch) ->
     assert "host:https://expo.example.test" in r.missing
 
 
+def test_check_unreachable_expo_masks_userinfo_in_the_host_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise URLError("Connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    r = _adapter(expo_url="https://user:secret@expo.example.test").check()
+    assert r.ok is False
+    assert "host:https://expo.example.test" in r.missing
+    assert not any("secret" in m for m in r.missing)
+
+
 def test_check_ok_when_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     scripted = _ScriptedUrlopen([{"jobs": []}])
     monkeypatch.setattr("urllib.request.urlopen", scripted)

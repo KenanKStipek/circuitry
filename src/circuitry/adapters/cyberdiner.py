@@ -70,6 +70,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..core.cancellation import acquire_promptly
+from ..curl_support import redact_host_url
 from ..preflight import CheckResult
 from .base import GenerateOptions, GenerateResult, ignored_options_warning
 
@@ -390,6 +391,6 @@ class CyberdinerAdapter:
             # only connection-level failures count as unreachable.
             pass
         except Exception:
-            missing.append(f"host:{self.expo_url}")
+            missing.append(f"host:{redact_host_url(self.expo_url)}")
 
         return CheckResult(ok=not missing, missing=missing)

@@ -13,11 +13,13 @@
 mod compose;
 mod dump;
 mod error;
+mod fences;
 mod scalar;
 
 pub use compose::{load_yaml, load_yaml_last_key_wins};
 pub use dump::{DumpError, DumpOptions, dump};
 pub use error::{Mark, YamlError};
+pub use fences::clean_yaml_fences;
 
 /// The deepest a document's containers (sequences/mappings) may nest,
 /// counting the root as depth 1 -- checked both as the text is composed

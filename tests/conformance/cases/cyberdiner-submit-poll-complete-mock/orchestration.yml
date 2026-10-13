@@ -1,0 +1,7 @@
+name: cyberdiner-submit-poll-complete-mock
+adapter: cyberdiner
+model: cheap
+effects:
+  - type: prompt
+    name: ask
+    template: "say hello"

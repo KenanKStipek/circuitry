@@ -50,6 +50,15 @@ pub enum YamlError {
     /// An explicit `!!int`/`!!float`/`!!bool`/`!!timestamp`/`!!binary` tag
     /// whose scalar text doesn't parse under that type's constructor.
     InvalidScalar { type_name: &'static str, mark: Mark },
+    /// A `!!timestamp` scalar whose matched digits describe a calendar
+    /// date/time CPython's own `datetime.date`/`datetime.time`
+    /// constructors reject (`scalar::TimestampFailure::Invalid`'s own
+    /// doc comment) -- *message* is CPython's own `ValueError` text,
+    /// unchanged. `validate_yaml` (#521's lane L2a) is the only caller
+    /// that re-raises this one rather than returning it as an ordinary
+    /// parse error, matching `core/yaml_load.py::load_yaml`, which lets
+    /// this exact `ValueError` escape uncaught.
+    InvalidTimestampValue { message: String, mark: Mark },
     /// A mapping key that YAML/Python can't hash (a list or a mapping
     /// used as a key) — PyYAML's `SafeConstructor.construct_mapping`
     /// raises `found unhashable key`.
@@ -76,6 +85,7 @@ impl YamlError {
             | YamlError::MultipleDocuments { mark }
             | YamlError::UnresolvableTag { mark, .. }
             | YamlError::InvalidScalar { mark, .. }
+            | YamlError::InvalidTimestampValue { mark, .. }
             | YamlError::UnhashableKey { mark }
             | YamlError::InvalidMerge { mark }
             | YamlError::NestingTooDeep { mark }
@@ -115,6 +125,12 @@ impl fmt::Display for YamlError {
             YamlError::InvalidScalar { type_name, mark } => write!(
                 f,
                 "invalid {type_name} scalar at line {}, column {}",
+                mark.line + 1,
+                mark.column + 1
+            ),
+            YamlError::InvalidTimestampValue { message, mark } => write!(
+                f,
+                "{message} at line {}, column {}",
                 mark.line + 1,
                 mark.column + 1
             ),

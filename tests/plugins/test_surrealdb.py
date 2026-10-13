@@ -210,6 +210,16 @@ def test_check_reports_missing_library_and_host(monkeypatch: pytest.MonkeyPatch)
     assert "env:SURREAL_PASS" in result.missing
 
 
+def test_check_masks_userinfo_in_the_missing_host_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SURREAL_TOKEN", "jwt.token.value")
+
+    # Port 1 is reserved and never listening -- a deterministic unreachable host.
+    result = SurrealDBPlugin(url="ws://root:hunter2@127.0.0.1:1/rpc").check()
+
+    assert "host:ws://127.0.0.1:1/rpc" in result.missing
+    assert not any("hunter2" in m for m in result.missing)
+
+
 def test_check_token_satisfies_credential_requirement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

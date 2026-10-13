@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 11: profile-routing-pin-and-opt-out",
+  "description": "`pinned`'s own text scores into the \"low\" band, but a profile `routing: high` pin overrides that: meta.model becomes the \"high\" band's model, model_reason: \"router\", and meta.complexity.band is overwritten to the pinned row, not the scored one. `optout`'s text also scores into \"low\", but its profile `routing: false` opt-out leaves that score recorded without acting on it: meta.model stays the run default, model_reason: \"default\".",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

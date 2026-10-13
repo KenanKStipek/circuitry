@@ -1,0 +1,5 @@
+effects:
+  p1:
+    model: profile-p1-model
+  t1:
+    model: profile-t1-model

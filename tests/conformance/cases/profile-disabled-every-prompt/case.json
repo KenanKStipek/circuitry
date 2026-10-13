@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #518 (lane J2), case 7: profile-disabled-every-prompt",
+  "description": "The document's only prompt is disabled by the profile; no config, no document-level `adapter:`/`model:`. Proves the run still succeeds (the overlay applies before `has_prompt_effects`, so the run never needs a real adapter) with `meta.adapter: \"_noop\"` on `prime`.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

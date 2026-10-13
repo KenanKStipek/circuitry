@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 10: profile-provider-override",
+  "description": "A prompt with a profile `provider: \"scripted:override-model\"` override, scripted to fail (`unauthorized`) so the run falls back to its own default `scripted`/`m1`; a `json` tool (`mode: stringify`, `input: \"abc\"`) with a profile `provider: hash` override. Proves `fallback_attempts[0]`'s own adapter and model (the override, inserted ahead of the primary attempt, and never retried past its one failure), that `meta.adapter`/`meta.model` stay the run's own default once the override attempt fails and the fallback succeeds (settled question 10), and the tool's own `meta.provider` plus its hash value.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

@@ -1,0 +1,11 @@
+name: profile-provider-override
+adapter: scripted
+model: m1
+effects:
+  - type: prompt
+    name: p
+    template: "say hi"
+  - type: tool
+    name: t
+    provider: json
+    params: {mode: stringify, input: "abc"}

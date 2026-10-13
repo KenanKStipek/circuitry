@@ -144,6 +144,30 @@ pub fn unbuildable_known_adapter(document: &Value, adapters: &AdapterRegistry) -
     })
 }
 
+/// [`unbuildable_known_adapter`]'s own tool-side counterpart. Walks
+/// the raw document's tool references, *including a disabled one*
+/// (unlike the refusal walker, which skips a disabled subtree
+/// entirely, issue #518 lane J2's own Scope §4): a document can only
+/// ever disable an effect through a profile overlay, so this has to
+/// read the raw document, before any overlay exists, to see a tool a
+/// profile might disable. Without this, a disabled tool naming a
+/// plugin Circuitry knows (`electricity_tools::plugin_names::
+/// PLUGIN_NAMES`) but this build has no builder for would reach
+/// preflight's own "Unknown plugin" error instead of the preview
+/// refusal electricity would otherwise give an *enabled* one -- a
+/// silent divergence from `cof run`, which would call that plugin's
+/// real `check()`.
+pub fn unbuildable_known_tool_plugin(document: &Value) -> Option<String> {
+    let (_adapter_refs, mut tool_refs) = preflight::preflight_refs(document, true);
+    tool_refs.sort();
+    let buildable = electricity_tools::supported_names();
+    tool_refs.into_iter().find(|name| {
+        let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
+        electricity_tools::plugin_names::PLUGIN_NAMES.contains(&normalized.as_str())
+            && !buildable.contains(&normalized)
+    })
+}
+
 /// `cli/runtime_shim.py::preflight`, narrowed to what this milestone
 /// needs (issue #495's "Out of scope"): no `library_ref:`/
 /// `runtime_plugin:` preflight (`use: ref:` is always rejected at
@@ -482,6 +506,33 @@ mod tests {
         let document = doc_with_adapter("scripted", vec![]);
         let adapters = electricity_adapters::build_registry();
         assert_eq!(unbuildable_known_adapter(&document, &adapters), None);
+    }
+
+    fn doc_with_effects(effects: Vec<Value>) -> Value {
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("effects".to_string()), Value::List(effects));
+        Value::Dict(dict)
+    }
+
+    #[test]
+    fn unbuildable_known_tool_plugin_names_a_python_known_rust_unbuilt_plugin() {
+        let document = doc_with_effects(vec![tool_effect("comfyui")]);
+        assert_eq!(
+            unbuildable_known_tool_plugin(&document),
+            Some("comfyui".to_string())
+        );
+    }
+
+    #[test]
+    fn unbuildable_known_tool_plugin_is_none_for_a_buildable_name() {
+        let document = doc_with_effects(vec![tool_effect("json")]);
+        assert_eq!(unbuildable_known_tool_plugin(&document), None);
+    }
+
+    #[test]
+    fn unbuildable_known_tool_plugin_is_none_for_a_genuinely_unknown_name() {
+        let document = doc_with_effects(vec![tool_effect("bogus")]);
+        assert_eq!(unbuildable_known_tool_plugin(&document), None);
     }
 
     #[test]

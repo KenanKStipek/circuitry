@@ -526,7 +526,8 @@ fn select_branch_ops<'a>(
 
 /// `ConditionalRuntime._effect_record` -- `index`/`type`/`name`, in that
 /// order; `type` is the Python class name [`Op::python_type_name`]
-/// already reproduces.
+/// already reproduces. A disabled op's own record additionally carries
+/// `disabled: true` (`core/conditional.py:285-287`), always last.
 fn effect_record(op: &Op, index: usize) -> Value {
     let mut m = IndexMap::new();
     m.insert(key("index"), Value::from(index as i64));
@@ -538,6 +539,9 @@ fn effect_record(op: &Op, index: usize) -> Value {
             None => Value::None,
         },
     );
+    if !op.enabled {
+        m.insert(key("disabled"), Value::Bool(true));
+    }
     Value::Dict(m)
 }
 

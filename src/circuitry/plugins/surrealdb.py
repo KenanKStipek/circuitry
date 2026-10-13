@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from ..curl_support import redact_host_url
 from ..preflight import CheckResult
 from .base import ToolResult
 
@@ -366,7 +367,7 @@ class SurrealDBPlugin:
                 missing.append("env:SURREAL_PASS")
 
         if not _host_reachable(self.url):
-            missing.append(f"host:{self.url}")
+            missing.append(f"host:{redact_host_url(self.url)}")
 
         if missing:
             return CheckResult(

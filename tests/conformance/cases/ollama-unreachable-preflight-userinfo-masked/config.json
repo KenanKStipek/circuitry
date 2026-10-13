@@ -1,0 +1,9 @@
+{
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://canary_user:canary_pw@127.0.0.1:1"
+      }
+    }
+  }
+}

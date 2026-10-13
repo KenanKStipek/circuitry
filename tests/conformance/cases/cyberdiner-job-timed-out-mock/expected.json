@@ -1,0 +1,3 @@
+{
+  "error": "prime.ask: All adapter attempts failed: [{'adapter': 'cyberdiner', 'model': 'cheap', 'status': 'failed', 'error': \"cyberdiner: job job-4 timed out server-side before being claimed (reason=claim_timeout) \u2014 no cook served tier 'cheap' in time.\", 'tokens_sent': None, 'tokens_received': None}]"
+}

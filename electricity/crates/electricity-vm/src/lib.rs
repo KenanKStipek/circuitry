@@ -22,6 +22,7 @@ pub mod adapter;
 pub mod adapter_names;
 pub mod complexity;
 pub mod compose;
+pub mod decompose;
 pub mod exec;
 pub mod frame;
 pub mod limiter;

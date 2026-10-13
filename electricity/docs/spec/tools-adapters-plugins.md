@@ -95,9 +95,10 @@ whenever:
 
 HTTP-family plugins (`http`, `web_fetch`, `webhook`, `linear` — `_HTTP_FAMILY_PROVIDERS`,
 `:38-40`) set `ok=False` on a 4xx/5xx by default (opt-out per effect, see each plugin). Every
-other "soft-failure" plugin (`wikipedia`, `dns`, `port_check`, `validate_yaml` — not among
-the tools production documents use, noted for parity completeness) reports its own outcome in `value`/`raw` while
-keeping `ok=True`.
+other "soft-failure" plugin (`wikipedia`, `dns`, `port_check` — not among the tools production
+documents use, noted for parity completeness; `validate_yaml` — the bundled decomposition
+planner's own `check`/repair-loop steps call it, issue #448's decision 3) reports its own
+outcome in `value`/`raw` while keeping `ok=True`.
 
 `meta.raw` is always set for a tool effect that returned a result (never for prompts);
 `meta.binary` is set only when `result.raw` carries a `"binary"` key (the resolved absolute
@@ -696,9 +697,9 @@ functions, `api_key_env=` in each adapter file):
 | `databricks` | `DATABRICKS_TOKEN` | `DATABRICKS_HOST` env (no static default — per-workspace) or `base_url` cfg |
 
 electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
-(native, not through this family)/`replicate`/`watsonx` — the unbuildable set after that lane is
-exactly `claude_code`, `cyberdiner`, `litellm` and `pi` (`electricity/README.md`'s own preview
-paragraph).
+(native, not through this family)/`replicate`/`watsonx`, and (issue #515's follow-up) `cyberdiner`
+— the unbuildable set is now exactly `claude_code`, `litellm` and `pi` (`electricity/README.md`'s
+own preview paragraph).
 
 `check_dependencies` (`_openai_compat.py:212-220`): `binary:curl` if `curl` isn't on PATH;
 `env:<api_key_env>` if that var is required and unset. electricity, using a native HTTP client
@@ -795,6 +796,21 @@ mapping, terminal-status folding, semaphore backpressure) is small enough that e
 should implement it natively rather than defer to the external-plugin bridge, since it's a
 model adapter (the bridge is scoped to *tool* plugins per the project's plugin list, which does not
 include a generic "adapter" bridge).
+
+**Ported** (issue #515, `electricity-adapters::cyberdiner`): submit/poll, tier resolution,
+terminal-status folding, `check()`/`list_models()`, retry classification (an HTTP error
+classifies by status the same way a curl-based adapter's own exit code does; a connect/timeout/
+remote-disconnect failure is unconditionally retryable, matching `urllib.error.URLError`/
+`TimeoutError`/`ConnectionError`), and the `max_in_flight` semaphore, all match; built over
+`electricity_tools::http_client` directly (urllib's own request shape -- Host/Accept-encoding/
+Connection headers, a `Location` redirect joined via the same `http` tool's own `urljoin`,
+urllib's own proxy-environment convention and per-operation timeout model), never
+`crate::transport::run_curl`'s curl convention, since the reference adapter is the one model
+adapter that never shells out to curl. The semaphore is a per-instance `tokio::sync::Semaphore`:
+the run's own default `cyberdiner` adapter is one shared instance reused for every call
+(`exec/prompt.rs`'s own doc comment), exactly like Python's long-lived `self`, so this
+coordinates the same way Python's own `threading.Semaphore` does; it is only ever inert for a
+`provider:` override, which rebuilds a fresh instance per call in both engines alike.
 
 ### 3.9 `host_claude`
 

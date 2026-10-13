@@ -1,0 +1,52 @@
+name: profile-disabled-containers
+adapter: scripted
+model: test
+effects:
+  - type: dynamic
+    name: dyn
+    effects:
+      - type: tool
+        name: inner_body
+        provider: json
+        params: {mode: stringify, input: {x: 1}}
+    finally:
+      - type: tool
+        name: inner_cleanup
+        provider: json
+        params: {mode: stringify, input: {y: 2}}
+  - type: loop
+    name: lp
+    each: {in: "prime.nonexistent.value", as: item}
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {z: "{{item}}"}}
+  - type: if
+    name: gate
+    if: {mode: model, template: "ok?"}
+    then: []
+  - type: use
+    name: inline_use
+    inline: |
+      - type: tool
+        name: child_tool
+        provider: json
+        params: {mode: stringify, input: {never: true}}
+  - type: reflector
+    name: planit
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose"
+  - type: tool
+    name: after
+    provider: json
+    params:
+      mode: stringify
+      input:
+        dyn_disabled: "{{prime.dyn.meta.disabled}}"
+        lp_disabled: "{{prime.lp.meta.disabled}}"
+        gate_disabled: "{{prime.gate.meta.disabled}}"
+        inline_use_disabled: "{{prime.inline_use.meta.disabled}}"
+        planit_disabled: "{{prime.planit.meta.disabled}}"
