@@ -993,11 +993,12 @@ fn run_tui(
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.selected_path = Some(target.to_string());
+                    app.select_tree_path(Some(target.to_string()));
                 }
             }
             if app.selected_path.is_none() {
-                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+                let first = render_state.rows.first().map(|r| r.path.clone());
+                app.select_tree_path(first);
             }
         }
         // K4: computed every tick regardless (collapse/filter/errors-
@@ -1005,6 +1006,8 @@ fn run_tui(
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
         let visible = keys::visible_rows(&render_state.rows, &app);
+        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
+            render_state.state_rows.iter().collect();
 
         if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
             if let Ok(ev) = event::read() {
@@ -1019,7 +1022,13 @@ fn run_tui(
                             )
                             .is_some()
                         });
-                        match app.handle_key(key, &visible, running, has_prompt_sent) {
+                        match app.handle_key(
+                            key,
+                            &visible,
+                            &state_visible,
+                            running,
+                            has_prompt_sent,
+                        ) {
                             keys::Action::Cancel => {
                                 cancel_once(
                                     &child,
@@ -1075,7 +1084,7 @@ fn run_tui(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    &app,
+                    &mut app,
                     current_state.as_ref(),
                 );
             });
@@ -1776,14 +1785,17 @@ fn run_tui_watch(
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.selected_path = Some(target.to_string());
+                    app.select_tree_path(Some(target.to_string()));
                 }
             }
             if app.selected_path.is_none() {
-                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+                let first = render_state.rows.first().map(|r| r.path.clone());
+                app.select_tree_path(first);
             }
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
+        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
+            render_state.state_rows.iter().collect();
 
         if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
             if let Ok(ev) = event::read() {
@@ -1802,7 +1814,8 @@ fn run_tui_watch(
                             )
                             .is_some()
                         });
-                        match app.handle_key(key, &visible, false, has_prompt_sent) {
+                        match app.handle_key(key, &visible, &state_visible, false, has_prompt_sent)
+                        {
                             keys::Action::Quit => {
                                 // Finding 15: `q` while the watched
                                 // run is still going is a voluntary
@@ -1842,7 +1855,7 @@ fn run_tui_watch(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    &app,
+                    &mut app,
                     last_state.as_ref(),
                 );
             });

@@ -471,7 +471,8 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 00:05.7 ■ run ok  5.7s · 12 effects · ↑3 ↓1
 ```
 
-### 6.3 TUI (shipped, issue #434)
+### 6.3 TUI (shipped, issue #434; the layout, state pane, treemap and
+token bar below, issue #527)
 
 `ratatui` (`=0.30.0`, default features off, `crossterm` + `underline-color`
 only) and `crossterm` `0.29` (the version ratatui's own crossterm backend
@@ -479,46 +480,174 @@ uses), both building on the workspace MSRV (1.86). `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps §6.2's plain stream unchanged; a
 TTY gets this instead, for both `osp <doc>` and `osp watch`.
 
-The render model is `oscilloscope-core`'s own (`render.rs`): a `Header`, the
-plan tree flattened to depth-first `Row`s, and a selected row's `Details` —
-no terminal code, so a GUI front end could lay the same `RenderState` out
-its own way. Only `oscilloscope`'s `tui.rs` imports `ratatui` widgets.
+The render model is `oscilloscope-core`'s own (`render.rs` and `treemap.rs`):
+a `Header`, the plan tree flattened to depth-first `Row`s, the state pane's
+own `StateRow`s, the `tokens by key` treemap's own tree of `TreemapNode`s,
+the `TokenBar`'s totals and in-flight line, and a selected row's `Details`
+— no terminal code, so a GUI front end could lay the same `RenderState` out
+its own way. Only `oscilloscope`'s `tui.rs` imports `ratatui` widgets; the
+squarified treemap layout itself (`treemap::layout`, below) is pure
+integer geometry, deterministic for the same input, computed in
+`oscilloscope-core` and only ever drawn, never computed, by `tui.rs`.
 
-- **Header:** document, engine, run state (running / ok / failed /
-  cancelled / aborted), elapsed time, effects done out of planned, tokens
-  ↑↓, and the ETA of the innermost running loop. There is no run-level
-  ETA: plans have data-dependent loops. The run ID shows once `--events`
-  has carried a `run_start`; state alone never has one. "Planned"
-  multiplies a loop body's own leaf by that named loop's `meta.progress.
-  total` once it's known (so a four-pass loop's one-leaf body counts as
-  4, not 1), and "done" counts every finished pass separately; while any
-  crossed loop's own total isn't known yet, "planned" is a lower bound,
-  shown with a trailing `+` (`3/3+`).
-- **Left: the plan tree.** Each row shows:
+**Layout.** A header across the full width; a left column of the
+orchestration pane over the details pane; a right column of the state
+pane, the `tokens by key` treemap and the log pane; and the token bar
+across the full bottom width. On a terminal at least 120×40, every pane
+shows useful content. Below that, panes drop in this order until the rest
+fits — the header and the token bar never disappear:
+
+1. below 100 columns or 30 rows (`thresholds::TREEMAP_MIN_WIDTH`/
+   `_MIN_HEIGHT` in `tui.rs`): the treemap, leaving the right column as
+   the state pane over the log pane;
+2. below 90 columns or 24 rows (`STATE_PANE_MIN_WIDTH`/`_MIN_HEIGHT`): the
+   state pane too, leaving the right column as the log pane alone;
+3. below 80 columns or 20 rows (`TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`): the
+   two-column split itself, down to one column stacking the orchestration
+   pane, the details pane and the log pane (45%/25%/the rest).
+
+**Header (unchanged):** document, engine, run state (running / ok / failed
+/ cancelled / aborted), elapsed time, effects done out of planned, tokens
+↑↓, and the ETA of the innermost running loop. There is no run-level
+ETA: plans have data-dependent loops. The run ID shows once `--events`
+has carried a `run_start`; state alone never has one. "Planned"
+multiplies a loop body's own leaf by that named loop's `meta.progress.
+total` once it's known (so a four-pass loop's one-leaf body counts as
+4, not 1), and "done" counts every finished pass separately; while any
+crossed loop's own total isn't known yet, "planned" is a lower bound,
+shown with a trailing `+` (`3/3+`).
+
+**The orchestration pane** (formerly "plan"; `draw_tree` in `tui.rs`).
+Titled ` orchestration <name> `, `<name>` the top-level document's file
+name without its extension (orchestration documents have no `name:` of
+their own), with ` (following)` appended while follow is on. Each row
+shows:
   - a status glyph: `·` pending, `◐` running (also shown for a "likely
     running" guess), `◌` running/queued, `✓`, `✗`, `!` failed-handled,
     `↷` skipped, `⊘` cancelled, `?` aborted (no glyph of its own in the
     original table; `?` is the one status left with no better fit);
   - the duration, `n/total` for a loop's own progress, and the provider
     or model in a dim colour.
-- **Right: details for the selected row.** Type, path, plan summary, a
-  meta summary (provider/model, exit code, command, `waiting_for`,
-  tokens, retries, a stderr tail), and the error. `prompt_sent` and the
-  value are shown truncated (200 characters), with `v` showing either in
-  full in an overlay.
-- **Bottom: the log pane** — the same lines `--log` prints (§2.4), plus
-  the engine's own stderr, as a scrolling tail (no scrollback in this
-  milestone: always the most recent lines that fit).
-- **Keys:**
+
+Follow is **on when the TUI starts**: the selection tracks the running
+effect (`App::follow_target`, unchanged, now routed through
+`App::select_tree_path` so it also resets the details pane's own
+scroll), so the running effect's details are open with no key press.
+When nothing is running, the selection stays put. Any manual move
+(`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`) turns follow off; `f`
+toggles it, as before. The pane scrolls: the selected row is always kept
+in view (`tui.rs`'s own `clamp_scroll`, moving the top of the viewport
+the minimum amount needed rather than re-centring), and once any row is
+hidden above or below, the border shows a `12/48`-style position.
+Collapse/expand (`←`/`→`), `e` and `/` all act on the rows the pane
+already shows, same as before; the scroll position follows whatever
+those leave visible.
+
+**The details pane** moves under the orchestration pane; its own content
+is unchanged. It scrolls when it has focus (`↑↓`, `PgUp`/`PgDn`,
+`Home`/`End`, `g`/`G`, via `ratatui::widgets::Paragraph::scroll`), and
+returns to the top the instant the orchestration pane's own selection
+changes (`App::select_tree_path`).
+
+**Focus** (`tab`) cycles orchestration → details → state →
+orchestration, each highlighted with the existing cyan border. The
+treemap and the token bar have no pane of their own to focus.
+
+**The state pane** (`render::build_state_rows`, `tui.rs`'s `draw_state`).
+Lists `flatten_state`'s own `{value, meta}` paths (every one but `prime`
+itself), most recently updated first — a node's update time is its own
+`completed_at`, or `created_at` while it has none, parsed as a real
+instant (`diff::parse_instant`, now `pub`) rather than compared as a raw
+string, with ties broken by path. Each row shows the path relative to
+`prime`, then either: the start of its error, in red, if it has one; its
+own abbreviated value (one line, compact JSON for anything but a string, a
+quoted string for a string, its own newlines escaped) if it has one; or
+its status glyph, if it's running with no value yet. A second line shows
+`↑sent ↓received`, only when at least one is nonzero — a leaf's own
+tokens, or (for a container) the sum over its whole subtree
+(`model::subtree_tokens`). The pane scrolls when it has focus, with its
+own selection (`App::state_selected_path`) kept fully independent of the
+orchestration pane's own — selecting a row here never moves the
+orchestration selection, and vice versa.
+
+**The `tokens by key` treemap** (`oscilloscope-core/src/treemap.rs`,
+drawn by `tui.rs`'s `draw_treemap`). A proportional-area chart of the
+current state's token totals, built as a tree of `TreemapNode`s (one per
+state key under `prime`, each carrying its own subtree's `node_tokens`
+sum and its own children) and laid out by `treemap::layout`, the
+squarified algorithm (Bruls, Huizing & van Wijk, 2000): each row of
+cells is grown for as long as doing so keeps that row's worst aspect
+ratio no worse than before, then placed along whichever side of the
+current rectangle is shorter; row boundaries are computed once in `f64`
+so every cell in a row shares the exact boundary value its neighbour
+does, and only then rounded to the integer grid, which is what keeps the
+rectangles gap- and overlap-free. Sibling cells are always ordered
+largest-total-first, ties broken by key, so the picture doesn't jump
+between redraws when nothing changed. A key with no tokens anywhere in
+its own subtree gets no cell at all, at any depth; when nothing has
+tokens yet, the pane shows `(no tokens yet)`. A container is drawn as a
+bordered cell, titled with its own key, holding its children's cells
+recursively, but only once its own rect is at least 3×3 (room for a
+border plus at least one interior cell) — a smaller container is drawn
+as a plain, unbordered cell instead, same as a leaf. A cell under 2×1 is
+"too small to draw at all": every such cell under one parent is merged
+into a single `…` cell, sized by their combined total, and the parent is
+squarified a second time with that merged entry standing in for all of
+them. A cell's own label is cut with `…` to fit; a cell with `rect.w <
+2` draws no label at all, just its own background colour. Cells are
+coloured by status (running yellow, done green, failed red), and the
+cell for the row currently selected in the orchestration pane (matched
+by its own full path, which every `TreemapNode`/`TreemapCell` carries
+alongside its key) is drawn reversed.
+
+**The log pane** moves here from the bottom, otherwise unchanged — the
+same lines `--log` prints (§2.4), plus the engine's own stderr, as a
+scrolling tail (no scrollback in this milestone: always the most recent
+lines that fit).
+
+**The token bar** (`tui.rs`'s `draw_token_bar`), a bordered strip across
+the full bottom width, two content lines:
+  - **Totals:** `in`/`out` as horizontal bars (`█`), scaled to the larger
+    of the two, with exact counts (thousands separators) — always equal
+    to the header's own `↑`/`↓`, since both read the token rule below.
+  - **What's in flight:** the estimated input summed over every prompt
+    currently running, `≈ceil(chars(meta.prompt_sent) / 4)`, and how many
+    prompts that is. No output estimate: neither engine reports a
+    prompt's tokens before it finishes. A prompt counts as running
+    (`model::is_running_prompt`) exactly when it has `created_at` and no
+    `completed_at`, `meta.prompt_sent` has actually been written, and
+    `meta.waiting_for` is empty — a prompt merely queued behind a
+    concurrency slot isn't processing yet. With nothing running, the
+    line says so ("nothing in flight").
+
+**The token rule** (`model::node_tokens`): one node's own
+`tokens_sent_total`/`tokens_received_total` when present, falling back to
+`tokens_sent`/`tokens_received` otherwise. Confirmed by running both
+engines with the scripted adapter and a retried prompt: `cof`'s
+`cli/runtime_shim.py` (`_run_totals`/`_RunTotals.record`) and
+electricity's `electricity/src/lib.rs` (`RunTotals::record`) both build
+`runtime.last_run.totals` from exactly this pair, reading `_total` first
+and falling back to the plain field — the recorded run's `tokens_sent`/
+`tokens_received` on the winning attempt (11/22) equalled the `_total`
+pair exactly, since the scripted adapter's own failed attempt carried no
+tokens of its own. The header, the token bar, the state pane and the
+treemap all read tokens this same way (`model::node_tokens`/
+`subtree_tokens`), so a retried prompt can never make one surface
+disagree with another; `render::tests::subtree_tokens_matches_run_totals_
+for_a_retried_prompt` pins it against that same recorded shape.
+
+**Keys:**
 
 | Key | Action |
 |---|---|
-| `↑↓`/`jk` | move |
-| `←→` | collapse / expand |
-| `f` | follow the running row |
+| `↑↓`/`jk` | move (the focused pane's own selection, or the details pane's scroll) |
+| `PgUp`/`PgDn` | move a page (the focused pane's own last-rendered interior height) |
+| `Home`/`End`, `g`/`G` | jump to the first / last row |
+| `←→` | collapse / expand (orchestration pane) |
+| `f` | follow the running row (on by default) |
 | `e` | errors only (keeps a failed leaf's own ancestors so there's still a tree to show it under) |
 | `/` | filter (substring, on path or label; same ancestor-keeping rule) |
-| `tab` | switch pane |
+| `tab` | orchestration → details → state |
 | `v` | full value, in an overlay; `v` again cycles between `prompt_sent` and the value when the row has both (opening on `prompt_sent` first when there is one); any other key closes it |
 | `c` | cancel, with a confirm — the same as a *confirmed* `c`/`q` always has (`do_run`'s own signal-forwarding/kill-escalation path, not a separate one) |
 | `q` | quit; asks first if a run is going (confirming sends the same cancelling signal as `c`, and leaves the instant the engine exits — see "the finished screen" below); with nothing running, quits at once, no confirm; in `osp watch`, always just detaches, with no confirm — watch owns no engine to cancel |
@@ -567,11 +696,17 @@ can't start (an exotic CI pty, a stdout swapped out from under osp), both
 `osp <doc>` and `osp watch` fall back to their own plain supervise/watch
 loop rather than a bare, signal-blind wait. `osp` itself being
 `SIGKILL`ed is the one exception (§4.1): nothing can run cleanup code
-after that at all. A redraw, and the render state (plan-tree rows,
-header counts) it draws, are rebuilt at most once every `REDRAW_INTERVAL`
-and only when an observation, a key or a resize actually changed
-something — forced at least once a second regardless, so the header's own
-elapsed time still visibly ticks while the run is otherwise quiet.
+after that at all. A redraw, and the render state (plan-tree rows, state
+rows, the treemap's own tree, header counts) it draws, are rebuilt at
+most once every `REDRAW_INTERVAL` and only when an observation, a key or
+a resize actually changed something — forced at least once a second
+regardless, so the header's own elapsed time still visibly ticks while
+the run is otherwise quiet. The state pane and the treemap tree are both
+built from the one `flatten_state` call `render::build` already makes
+for the plan tree, not a second pass of their own; measured against a
+synthetic 2,000-node state, one redraw stays well under
+`REDRAW_INTERVAL` (`render::tests::redraw_from_a_2000_node_state_stays_
+well_under_the_redraw_interval`).
 
 ### 6.4 Tests
 
@@ -580,9 +715,10 @@ elapsed time still visibly ticks while the run is otherwise quiet.
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests (shipped, issue #434).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, failed, failed and handled, cancelled, aborted (no final state) and `osp watch`.
-- **Key handling (shipped, issue #434).** Unit tests in `oscilloscope/src/keys.rs`: navigation, collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow, errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), and Ctrl-C's own action (checked before, and never merely dismissing, a dialog) — pure, with no real terminal.
-- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever).
+- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, failed, failed and handled, cancelled, aborted (no final state) and `osp watch`, at 70×20 (below the two-column threshold, so these also cover the one-column fallback); `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the one golden with every pane populated, including a nested treemap cell (a nested container plus its own child).
+- **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle, the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal.
+- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation, error display and container token sums are covered on synthetic snapshots (a chain, a loop with two passes done, and a failed node); the token rule is pinned against a real recorded retried-prompt state from both engines (`subtree_tokens_matches_run_totals_for_a_retried_prompt`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too.
+- **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-token key gets no cell, many tiny children merge into one `…` cell sized by their combined total, a container lays its own children out inside its own border, and the same input always produces the same rectangles.
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
 - **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;

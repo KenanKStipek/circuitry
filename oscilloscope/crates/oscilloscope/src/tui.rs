@@ -6,7 +6,8 @@
 //! split one level up.
 
 use oscilloscope_core::model::{RunStatus, StatusKind};
-use oscilloscope_core::render::{Details, Row, RowKind};
+use oscilloscope_core::render::{Details, Header, Row, RowKind, StateRow, TokenBar};
+use oscilloscope_core::treemap::TreemapNode;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -14,6 +15,79 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::keys::{App, Dialog, Pane, visible_rows};
+
+/// Issue #527's own small-terminal fallback thresholds: below each,
+/// drop one more pane, in this order, until the rest fits. The header
+/// and the token bar never disappear.
+mod thresholds {
+    /// Below this, the `tokens by key` treemap is dropped first.
+    pub const TREEMAP_MIN_WIDTH: u16 = 100;
+    pub const TREEMAP_MIN_HEIGHT: u16 = 30;
+    /// Below this (with the treemap already gone), the state pane is
+    /// dropped too — the right column becomes the log pane alone.
+    pub const STATE_PANE_MIN_WIDTH: u16 = 90;
+    pub const STATE_PANE_MIN_HEIGHT: u16 = 24;
+    /// Below this, the two-column layout itself collapses to one:
+    /// orchestration, details and log stacked, with the state pane
+    /// and the treemap gone regardless of width/height.
+    pub const TWO_COLUMN_MIN_WIDTH: u16 = 80;
+    pub const TWO_COLUMN_MIN_HEIGHT: u16 = 20;
+}
+
+/// Keeps `scroll` (the top-of-viewport index into a list of `total`
+/// items) showing `selected` without moving it any more than it has
+/// to (issue #527: "the selected row is always kept in view") —
+/// jumping straight to the top or bottom only when the selection is
+/// already outside the current viewport, never re-centring it.
+fn clamp_scroll(scroll: usize, selected: Option<usize>, total: usize, viewport: usize) -> usize {
+    let viewport = viewport.max(1);
+    let mut top = scroll.min(total);
+    if let Some(idx) = selected {
+        if idx < top {
+            top = idx;
+        } else if idx + 1 > top + viewport {
+            top = idx + 1 - viewport;
+        }
+    }
+    top.min(total.saturating_sub(viewport))
+}
+
+/// A scroll position suffix for a pane's own border title (issue
+/// #527: "show a scroll indicator or a position ... in the border"),
+/// only when some row is actually hidden above or below.
+fn scroll_indicator(selected: Option<usize>, total: usize, viewport: usize) -> Option<String> {
+    if total <= viewport {
+        return None;
+    }
+    let position = selected.map(|idx| idx + 1).unwrap_or(1);
+    Some(format!(" {position}/{total} "))
+}
+
+/// The orchestration pane's own title (issue #527): ` orchestration
+/// <name> `, `<name>` the top-level document's file name without its
+/// extension — orchestration documents have no `name:` field of
+/// their own.
+fn orchestration_name(document: &str) -> &str {
+    std::path::Path::new(document)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(document)
+}
+
+/// Thousands separators for the token bar's exact counts (issue
+/// #527: "exact counts (thousands separators)") — `u64` only, so no
+/// sign or fractional part to worry about.
+fn with_thousands_separators(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
 
 /// DESIGN.md §6.3's own glyph table. `Aborted` and `LikelyRunning`/
 /// `RunningOrQueued` have no glyph of their own in that table — `?`
@@ -152,8 +226,21 @@ fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render
     frame.render_widget(paragraph, area);
 }
 
-fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &App) {
-    let items: Vec<ListItem> = rows
+/// The orchestration pane (issue #527, formerly "plan"): scrolls to
+/// keep the selected row in view, with the current position shown in
+/// the border once any row is hidden above or below.
+fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &mut App, document: &str) {
+    let viewport = area.height.saturating_sub(2) as usize;
+    app.tree_viewport = viewport;
+    let selected_idx = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| rows.iter().position(|r| r.path == p));
+    app.tree_scroll = clamp_scroll(app.tree_scroll, selected_idx, rows.len(), viewport);
+    let visible_slice =
+        &rows[app.tree_scroll.min(rows.len())..(app.tree_scroll + viewport).min(rows.len())];
+
+    let items: Vec<ListItem> = visible_slice
         .iter()
         .map(|row| {
             let selected = app.selected_path.as_deref() == Some(row.path.as_str());
@@ -165,11 +252,14 @@ fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &App) {
     } else {
         Style::default()
     };
-    let title = if app.follow {
-        " plan (following) "
-    } else {
-        " plan "
-    };
+    let mut title = format!(" orchestration {}", orchestration_name(document));
+    if app.follow {
+        title.push_str(" (following)");
+    }
+    match scroll_indicator(selected_idx, rows.len(), viewport) {
+        Some(indicator) => title.push_str(&indicator),
+        None => title.push(' '),
+    }
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
@@ -214,12 +304,16 @@ fn details_lines(details: &Details, kind: RowKind) -> Vec<Line<'static>> {
     lines
 }
 
+/// The details pane (issue #527): scrolls when it has focus
+/// (`↑↓`, `PgUp`/`PgDn`), and returns to the top whenever the
+/// selected row changes (`App::select_tree_path`'s own job, not
+/// this function's).
 fn draw_details(
     frame: &mut Frame,
     area: Rect,
     details: Option<&Details>,
     kind: RowKind,
-    app: &App,
+    app: &mut App,
 ) {
     let border_style = if app.pane == Pane::Details {
         Style::default().fg(Color::Cyan)
@@ -229,12 +323,21 @@ fn draw_details(
     let text = details
         .map(|d| details_lines(d, kind))
         .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" details ")
-            .border_style(border_style),
-    );
+    let viewport = area.height.saturating_sub(2) as usize;
+    app.details_viewport = viewport;
+    let max_scroll = text.len().saturating_sub(1);
+    if app.details_scroll > max_scroll {
+        app.details_scroll = max_scroll;
+    }
+    let paragraph = Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .scroll((app.details_scroll as u16, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" details ")
+                .border_style(border_style),
+        );
     frame.render_widget(paragraph, area);
 }
 
@@ -247,6 +350,197 @@ fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String]) {
         .collect();
     let paragraph =
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" log "));
+    frame.render_widget(paragraph, area);
+}
+
+const STATE_PANE_LABEL_WIDTH: usize = 12;
+
+fn truncate_label(label: &str, max: usize) -> String {
+    let count = label.chars().count();
+    if count <= max {
+        label.to_string()
+    } else {
+        format!(
+            "{}…",
+            label
+                .chars()
+                .take(max.saturating_sub(1))
+                .collect::<String>()
+        )
+    }
+}
+
+/// The state pane (issue #527): the state's effect nodes, most
+/// recently updated first (`render::build_state_rows`' own order),
+/// with an independent selection and scroll from the orchestration
+/// pane's.
+fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[StateRow], app: &mut App) {
+    let viewport = area.height.saturating_sub(2) as usize;
+    app.state_viewport = viewport;
+    let selected_idx = app
+        .state_selected_path
+        .as_deref()
+        .and_then(|p| state_rows.iter().position(|r| r.path == p));
+    app.state_scroll = clamp_scroll(app.state_scroll, selected_idx, state_rows.len(), viewport);
+    let visible_slice = &state_rows[app.state_scroll.min(state_rows.len())
+        ..(app.state_scroll + viewport).min(state_rows.len())];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in visible_slice {
+        let selected = app.state_selected_path.as_deref() == Some(row.path.as_str());
+        let (text, color) = if let Some(error) = &row.error_preview {
+            (error.clone(), Color::Red)
+        } else if let Some(value) = &row.value_preview {
+            (value.clone(), Color::Reset)
+        } else {
+            (
+                status_glyph(row.status.kind).to_string(),
+                status_color(row.status.kind),
+            )
+        };
+        let label = truncate_label(&row.path, STATE_PANE_LABEL_WIDTH);
+        let mut line = Line::from(vec![
+            Span::raw(format!("{label:<STATE_PANE_LABEL_WIDTH$} ")),
+            Span::styled(text, Style::default().fg(color)),
+        ]);
+        if selected {
+            line = line.style(Style::default().add_modifier(Modifier::REVERSED));
+        }
+        lines.push(line);
+        if let Some((sent, received)) = row.tokens {
+            lines.push(Line::styled(
+                format!("{:STATE_PANE_LABEL_WIDTH$}↑{sent} ↓{received}", ""),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    let border_style = if app.pane == Pane::State {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    let mut title = " state".to_string();
+    match scroll_indicator(selected_idx, state_rows.len(), viewport) {
+        Some(indicator) => title.push_str(&indicator),
+        None => title.push(' '),
+    }
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+/// The `tokens by key` treemap (issue #527): a nested, squarified
+/// treemap of the current state's token totals, laid out by
+/// `oscilloscope_core::treemap::layout` (pure integer geometry) and
+/// drawn here — this function never computes a rectangle of its own.
+fn draw_treemap(frame: &mut Frame, area: Rect, nodes: &[TreemapNode], selected_path: Option<&str>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" tokens by key ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if nodes.is_empty() || inner.width == 0 || inner.height == 0 {
+        let paragraph = Paragraph::new("(no tokens yet)");
+        frame.render_widget(paragraph, inner);
+        return;
+    }
+
+    let cells =
+        oscilloscope_core::treemap::layout(nodes, inner.x, inner.y, inner.width, inner.height);
+    for cell in &cells {
+        let rect = Rect::new(cell.rect.x, cell.rect.y, cell.rect.w, cell.rect.h);
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        let color = cell.status.map(status_color).unwrap_or(Color::DarkGray);
+        let is_selected = selected_path.is_some() && cell.path.as_deref() == selected_path;
+        let mut style = Style::default().fg(color);
+        if is_selected {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        if cell.has_children {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(truncate_label(
+                    &cell.label,
+                    rect.width.saturating_sub(2) as usize,
+                ))
+                .border_style(style);
+            frame.render_widget(block, rect);
+        } else {
+            // A leaf (or a merged `…` bucket, or a container too small
+            // for its own border, issue #527) gets no border, just a
+            // label where there's room for one — a 1x1 cell draws
+            // nothing but its own background colour.
+            if rect.width >= 2 {
+                let label = truncate_label(&cell.label, rect.width as usize);
+                let paragraph = Paragraph::new(Line::styled(label, style));
+                frame.render_widget(paragraph, rect);
+            } else {
+                frame.render_widget(Block::default().style(style), rect);
+            }
+        }
+    }
+}
+
+/// A bar of filled block characters, `value`'s own share of `max`
+/// (issue #527's "scaled to the larger of the two") — `max == 0`
+/// (nothing sent or received yet) draws an empty bar rather than
+/// dividing by zero.
+fn bar(value: u64, max: u64, width: usize) -> String {
+    if max == 0 || width == 0 {
+        return String::new();
+    }
+    let filled = ((value as f64 / max as f64) * width as f64).round() as usize;
+    "█".repeat(filled.min(width))
+}
+
+/// The token bar (issue #527): a bordered strip across the full
+/// bottom width, two content lines. Line 1's totals always equal the
+/// header's own `↑`/`↓` — both read the same token rule
+/// (`oscilloscope_core::model::node_tokens`).
+fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &TokenBar) {
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let bar_width = inner_width.saturating_sub(24).clamp(4, 40);
+    let max = header.tokens_sent.max(header.tokens_received);
+    let in_bar = bar(header.tokens_sent, max, bar_width);
+    let out_bar = bar(header.tokens_received, max, bar_width);
+    let line1 = Line::from(vec![
+        Span::raw("in  "),
+        Span::styled(in_bar, Style::default().fg(Color::Cyan)),
+        Span::raw(format!(
+            " {}   ",
+            with_thousands_separators(header.tokens_sent)
+        )),
+        Span::raw("out  "),
+        Span::styled(out_bar, Style::default().fg(Color::Yellow)),
+        Span::raw(format!(
+            " {}",
+            with_thousands_separators(header.tokens_received)
+        )),
+    ]);
+    let line2 = if token_bar.prompts_running == 0 {
+        Line::from("nothing in flight")
+    } else {
+        let plural = if token_bar.prompts_running == 1 {
+            ""
+        } else {
+            "s"
+        };
+        Line::from(format!(
+            "now in ≈{}   ({} prompt{plural} running)",
+            with_thousands_separators(token_bar.estimated_input),
+            token_bar.prompts_running
+        ))
+    };
+    let paragraph = Paragraph::new(vec![line1, line2])
+        .block(Block::default().borders(Borders::ALL).title(" tokens "));
     frame.render_widget(paragraph, area);
 }
 
@@ -276,16 +570,19 @@ fn draw_overlay(
 }
 
 const HELP_TEXT: &[&str] = &[
-    "↑↓ / j k   move",
-    "← →       collapse / expand",
-    "tab       switch pane",
-    "f         follow the running row",
-    "e         errors only",
-    "/         filter",
-    "v         show the full value",
-    "c         cancel (confirm)",
-    "q         quit (confirms while a run is going)",
-    "?         this help",
+    "↑↓ / j k        move (orchestration/state select, details scroll)",
+    "PgUp PgDn    move a page",
+    "Home End     jump to the first / last row",
+    "g G          same as Home / End",
+    "← →          collapse / expand (orchestration pane)",
+    "tab          orchestration → details → state",
+    "f            follow the running row (on by default)",
+    "e            errors only",
+    "/            filter",
+    "v            show the full value",
+    "c            cancel (confirm)",
+    "q            quit (confirms while a run is going)",
+    "?            this help",
     "",
     "press any key to close",
 ];
@@ -296,31 +593,35 @@ const HELP_TEXT: &[&str] = &[
 /// snapshot, untruncated — `details`' own `prompt_sent`/`value` are
 /// already cut to `DETAILS_PREVIEW_CHARS` for the details pane, which
 /// `v`'s own full-value overlay (finding 5) must not be.
+/// One redraw's whole layout (DESIGN.md §6.3, issue #527): the
+/// header; a left column of the orchestration pane over details; a
+/// right column of the state pane, the `tokens by key` treemap and
+/// the log pane; and the token bar across the full bottom width. On
+/// a small terminal, panes drop in the order `thresholds` documents
+/// until a one-column layout (orchestration, details, log) is all
+/// that's left — the header and the token bar never disappear.
 pub fn draw(
     frame: &mut Frame,
     state: &oscilloscope_core::render::RenderState,
     details: Option<&Details>,
     log_lines: &[String],
-    app: &App,
+    app: &mut App,
     raw_state: Option<&serde_json::Value>,
 ) {
     let area = frame.area();
-    let rows = Layout::default()
+    let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length((area.height / 4).max(5)),
+            Constraint::Length(4),
         ])
         .split(area);
 
-    draw_header(frame, rows[0], &state.header);
+    draw_header(frame, sections[0], &state.header);
+    draw_token_bar(frame, sections[2], &state.header, &state.token_bar);
 
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(rows[1]);
-
+    let body = sections[1];
     let visible = visible_rows(&state.rows, app);
     let selected_kind = app
         .selected_path
@@ -328,14 +629,75 @@ pub fn draw(
         .and_then(|p| state.rows.iter().find(|r| r.path == p))
         .map(|r| r.kind)
         .unwrap_or(RowKind::Unknown);
-    draw_tree(frame, body[0], &visible, app);
-    draw_details(frame, body[1], details, selected_kind, app);
-    draw_log(frame, rows[2], log_lines);
+
+    let two_column = body.width >= thresholds::TWO_COLUMN_MIN_WIDTH
+        && body.height >= thresholds::TWO_COLUMN_MIN_HEIGHT;
+
+    if !two_column {
+        app.state_viewport = 0;
+        let parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(45),
+                Constraint::Percentage(25),
+                Constraint::Min(5),
+            ])
+            .split(body);
+        draw_tree(frame, parts[0], &visible, app, &state.header.document);
+        draw_details(frame, parts[1], details, selected_kind, app);
+        draw_log(frame, parts[2], log_lines);
+    } else {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(body);
+
+        let left = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(columns[0]);
+        draw_tree(frame, left[0], &visible, app, &state.header.document);
+        draw_details(frame, left[1], details, selected_kind, app);
+
+        let show_treemap = body.width >= thresholds::TREEMAP_MIN_WIDTH
+            && body.height >= thresholds::TREEMAP_MIN_HEIGHT;
+        let show_state = body.width >= thresholds::STATE_PANE_MIN_WIDTH
+            && body.height >= thresholds::STATE_PANE_MIN_HEIGHT;
+
+        if show_state && show_treemap {
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(30),
+                    Constraint::Percentage(35),
+                    Constraint::Min(5),
+                ])
+                .split(columns[1]);
+            draw_state(frame, right[0], &state.state_rows, app);
+            draw_treemap(
+                frame,
+                right[1],
+                &state.treemap,
+                app.selected_path.as_deref(),
+            );
+            draw_log(frame, right[2], log_lines);
+        } else if show_state {
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(40), Constraint::Min(5)])
+                .split(columns[1]);
+            draw_state(frame, right[0], &state.state_rows, app);
+            draw_log(frame, right[1], log_lines);
+        } else {
+            app.state_viewport = 0;
+            draw_log(frame, columns[1], log_lines);
+        }
+    }
 
     match &app.dialog {
         Dialog::Help => {
             let text = HELP_TEXT.iter().map(|l| Line::from(*l)).collect();
-            draw_overlay(frame, area, " help ", text, 48, 14);
+            draw_overlay(frame, area, " help ", text, 60, HELP_TEXT.len() as u16 + 2);
         }
         Dialog::ConfirmCancel { .. } => {
             let text = vec![
@@ -572,7 +934,44 @@ mod golden_tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), log_lines, &app, state))
+            .draw(|f| draw(f, &rendered, Some(&details), log_lines, &mut app, state))
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// [`snapshot_with_log`], at a terminal big enough for every pane
+    /// (issue #527's own layout, "on a 120×40 terminal every pane
+    /// shows useful content") — the other goldens here stay at 70×20,
+    /// deliberately below [`thresholds::TWO_COLUMN_MIN_WIDTH`], which
+    /// is its own coverage of the one-column fallback.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_full_layout(
+        plan: &PlanTree,
+        model: &mut RunModel,
+        state: Option<&Value>,
+        process: ProcessState,
+        engine: &str,
+        selected: &str,
+        log_lines: &[String],
+    ) -> String {
+        let rendered = render::build(
+            "do-thing.yml",
+            engine,
+            plan,
+            model,
+            state,
+            process,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        let details = render::details_for(selected, plan, state);
+        let mut app = App::new(engine == "watch");
+        app.selected_path = Some(selected.to_string());
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, Some(&details), log_lines, &mut app, state))
             .unwrap();
         terminal.backend().to_string()
     }
@@ -870,6 +1269,34 @@ mod golden_tests {
             ProcessState::Running,
             "watch",
             "prime.a",
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    /// Issue #527's own full layout, on a terminal big enough for
+    /// every pane: the state pane, a nested `tokens by key` treemap
+    /// (`fan`'s own container cell holding `iter_0`), and the token
+    /// bar's totals and in-flight line, together with the
+    /// orchestration pane's `(following)` title.
+    #[test]
+    fn full_layout_with_state_treemap_and_token_bar() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "tokens_sent_total": 120, "tokens_received_total": 340}},
+            "b": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 4}},
+                "iter_0": {"value": "the first pass reply", "meta": {"created_at": "t2", "completed_at": null, "adapter": "scripted", "prompt_sent": "summarize the first pass", "waiting_for": null, "tokens_sent_total": 50, "tokens_received_total": 70}}
+            }
+        }});
+        let text = snapshot_full_layout(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &[],
         );
         insta::assert_snapshot!(text);
     }

@@ -161,6 +161,94 @@ pub fn run_totals(state: &Value) -> Option<Value> {
     state.pointer("/runtime/last_run/totals").cloned()
 }
 
+/// The token rule (DESIGN.md §6.3, issue #527): one node's own
+/// `tokens_sent`/`tokens_received`, read from the `_total` field when
+/// it is present and falling back to the plain one otherwise. Both
+/// `cof` (`cli/runtime_shim.py`'s `_run_totals`/`_RunTotals.record`)
+/// and electricity (`electricity/src/lib.rs`'s `RunTotals::record`)
+/// build `runtime.last_run.totals` from exactly this pair, confirmed
+/// by running each with the scripted adapter and a retried prompt
+/// (electricity/docs/spec, `_total` present and equal to the plain
+/// field there since a failed scripted attempt never carries tokens
+/// of its own) — so every surface that reports tokens (the header,
+/// the token bar, the state pane, the treemap) must read them the
+/// same way, or a retried prompt would make them disagree. A
+/// container's own `tokens_sent`/`tokens_received` are always `null`
+/// (DESIGN.md §1.2), so this is zero for every non-leaf node without
+/// any special-casing.
+pub fn node_tokens(meta: &Value) -> (u64, u64) {
+    let sent = meta
+        .get("tokens_sent_total")
+        .and_then(Value::as_u64)
+        .or_else(|| meta.get("tokens_sent").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let received = meta
+        .get("tokens_received_total")
+        .and_then(Value::as_u64)
+        .or_else(|| meta.get("tokens_received").and_then(Value::as_u64))
+        .unwrap_or(0);
+    (sent, received)
+}
+
+/// Every entry at `path` itself or under it, `path.*`— the same set
+/// a naive `flat.iter().filter(|(p, _)| p == path || p.starts_with(
+/// &prefix))` scan would find, but in `O(log n + matches)` instead of
+/// `O(n)`: this codebase's own path alphabet (effect names are ASCII
+/// letters/digits/underscore, loop passes are `iter_N`) never puts a
+/// character before `.` (0x2E) right after a complete segment, so in
+/// a `BTreeMap`'s sorted order every match is contiguous, starting
+/// exactly at `path` itself — nothing under a *different* child can
+/// ever sort between two of `path`'s own descendants, and nothing
+/// outside `path`'s subtree can sort between `path` and its first
+/// child. Issue #527's own redraw-cost acceptance ("measure a
+/// 2,000-node state") is what this exists for: called once per row,
+/// the naive scan above is quadratic in the state's own size.
+pub fn subtree_entries<'a, V>(
+    path: &str,
+    map: &'a BTreeMap<String, V>,
+) -> impl Iterator<Item = (&'a String, &'a V)> {
+    let prefix = format!("{path}.");
+    map.range(path.to_string()..)
+        .take_while(move |(p, _)| p.as_str() == path || p.starts_with(prefix.as_str()))
+}
+
+/// [`node_tokens`], summed over `path` and every one of its
+/// descendants (DESIGN.md §6.3's state pane and treemap: "a container
+/// ... shows the sum over its subtree"). For a leaf with no
+/// descendants this is just its own `node_tokens`; a container's own
+/// entry contributes nothing (its tokens are always `null`), so the
+/// sum is exactly its children's.
+pub fn subtree_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u64) {
+    subtree_entries(path, flat).fold((0u64, 0u64), |(sent, received), (_, node)| {
+        let (s, r) = node_tokens(&node.meta);
+        (sent + s, received + r)
+    })
+}
+
+/// The token bar's "what's in flight" line (DESIGN.md §6.3, issue
+/// #527): a prompt node counts as running only once its `prompt_sent`
+/// has actually been written and it isn't still queued behind a
+/// concurrency slot — a node that merely exists with `completed_at:
+/// null` can be a tool, or a prompt that hasn't reached the adapter
+/// call yet.
+pub fn is_running_prompt(node: &NodeMeta) -> bool {
+    node.created_at.is_some()
+        && node.completed_at.is_none()
+        && node
+            .meta
+            .get("prompt_sent")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        && node.meta.get("waiting_for").is_none_or(|v| v.is_null())
+}
+
+/// The estimated input for one running prompt (DESIGN.md §6.3):
+/// `ceil(chars(meta.prompt_sent) / 4)`.
+pub fn estimated_prompt_tokens(prompt_sent: &str) -> u64 {
+    let chars = prompt_sent.chars().count() as u64;
+    chars.div_ceil(4)
+}
+
 /// Why a plan node was skipped (DESIGN.md §2.2). `Unknown` covers every
 /// node osp infers as skipped without a more specific reason (e.g. one
 /// matched by several candidate plan ops with conflicting reasons).
@@ -1783,5 +1871,36 @@ mod tests {
             Some("prime.u_nap"),
             "the oldest id (1), not the newest (2), should have closed"
         );
+    }
+
+    /// The token rule (issue #527): the shape of `cof run`'s and
+    /// `electricity`'s actual final state for a retried prompt (the
+    /// scripted adapter's first attempt a retryable server error, the
+    /// second a success with `tokens_sent: 11`/`tokens_received: 22`,
+    /// `retries_used: 1`) — both engines wrote the identical
+    /// `tokens_sent_total`/`tokens_received_total` pair and the
+    /// identical `runtime.last_run.totals` from it, confirmed by
+    /// running each. `subtree_tokens` over the whole tree must equal
+    /// that recorded total exactly.
+    #[test]
+    fn subtree_tokens_matches_run_totals_for_a_retried_prompt() {
+        let state = json!({
+            "runtime": {"last_run": {"totals": {"tokens_sent": 11, "tokens_received": 22}}},
+            "prime": {"value": true, "meta": {
+                "completed_at": "t1", "error": null, "tokens_sent": null, "tokens_received": null
+            },
+            "ask": {"value": "the answer", "meta": {
+                "created_at": "t0", "completed_at": "t1", "error": null,
+                "retries_used": 1,
+                "tokens_sent": 11, "tokens_received": 22,
+                "tokens_sent_total": 11, "tokens_received_total": 22
+            }}}
+        });
+        let flat = flatten_state(&state);
+        let totals = run_totals(&state).unwrap();
+        let (sent, received) = subtree_tokens("prime", &flat);
+        assert_eq!(sent, totals["tokens_sent"].as_u64().unwrap());
+        assert_eq!(received, totals["tokens_received"].as_u64().unwrap());
+        assert_eq!((sent, received), (11, 22));
     }
 }

@@ -31,7 +31,7 @@ pub struct LogLine {
 /// after every digit, so an event's own millisecond-truncated
 /// timestamp can sort *after* a state timestamp in the very same
 /// millisecond (M1) -- so `sort_log_lines` must compare real instants.
-fn parse_instant(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+pub fn parse_instant(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     chrono::DateTime::parse_from_rfc3339(ts).ok()
 }
 

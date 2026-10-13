@@ -12,10 +12,12 @@ use serde_json::Value;
 
 use crate::diff::LogLine;
 use crate::model::{
-    NodeMeta, ProcessState, RowStatus, RunModel, RunStatus, flatten_state, run_status, run_totals,
+    NodeMeta, ProcessState, RowStatus, RunModel, RunStatus, StatusKind, estimated_prompt_tokens,
+    flatten_state, is_running_prompt, run_status, run_totals, subtree_tokens,
 };
 use crate::observe::duration_seconds;
 use crate::plan::{LeafEffectKind, PlanEntryKind, PlanTree};
+use crate::treemap::TreemapNode;
 
 /// A row's own effect type (§6.3's dim provider/model column, and the
 /// details pane's "type"): a leaf's own kind when the plan or the
@@ -170,9 +172,43 @@ pub struct Details {
     pub value: Option<String>,
 }
 
+/// One `state` pane entry (DESIGN.md §6.3, issue #527): one of
+/// `flatten_state`'s own `{value, meta}` paths, most recently updated
+/// first. `value_preview` is `None` exactly when there is nothing
+/// useful to show instead of the status glyph: a running node with no
+/// value yet, or (regardless of status) once `error_preview` already
+/// has something to show in its place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateRow {
+    /// Relative to `prime` (`"summarize"`, `"loop.iter_2.step"`) —
+    /// `prime` itself is never one of these rows.
+    pub path: String,
+    pub status: RowStatus,
+    pub value_preview: Option<String>,
+    pub error_preview: Option<String>,
+    /// `↑sent ↓received`, only when at least one is nonzero (issue
+    /// #527) — a leaf's own [`crate::model::node_tokens`], or a
+    /// container's sum over its subtree ([`subtree_tokens`]); the two
+    /// coincide for a node with no children of its own.
+    pub tokens: Option<(u64, u64)>,
+}
+
+/// The token bar's own second line (DESIGN.md §6.3, issue #527):
+/// what's in flight right now, from running prompts only — cof and
+/// electricity report a prompt's tokens only once it finishes, so
+/// there is no live output estimate, only input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TokenBar {
+    pub estimated_input: u64,
+    pub prompts_running: u64,
+}
+
 /// Everything one redraw needs (§6.3): the header, the plan tree
 /// (flattened to depth-first order, a front end collapses a subtree
-/// by skipping its descendants) and the log pane's lines so far.
+/// by skipping its descendants), the state pane's rows, the `tokens
+/// by key` treemap's own tree (laid out into rectangles only once a
+/// front end knows the pane's real size — DESIGN.md §6.1, `crate::
+/// treemap::layout`), the token bar, and the log pane's lines so far.
 /// `details_for` builds the right pane for whichever row is currently
 /// selected — kept separate from `rows` so selecting a different row
 /// never needs a fresh `RunModel::observe` call.
@@ -180,6 +216,9 @@ pub struct Details {
 pub struct RenderState {
     pub header: Header,
     pub rows: Vec<Row>,
+    pub state_rows: Vec<StateRow>,
+    pub treemap: Vec<TreemapNode>,
+    pub token_bar: TokenBar,
     pub log: Vec<LogLine>,
 }
 
@@ -227,11 +266,131 @@ pub fn build(
         &statuses,
     );
     let rows = build_rows(plan, &flat, &statuses, now);
+    let state_rows = build_state_rows(&flat, &statuses);
+    let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
+    let token_bar = build_token_bar(&flat);
 
     RenderState {
         header,
         rows,
+        state_rows,
+        treemap,
+        token_bar,
         log: log.to_vec(),
+    }
+}
+
+/// The state pane's own rows (DESIGN.md §6.3, issue #527): every
+/// path `flatten_state` returns, except `prime` itself, most recently
+/// updated first (§2.1's own real-instant parsing, never a raw string
+/// compare), ties broken by path.
+fn build_state_rows(
+    flat: &BTreeMap<String, NodeMeta>,
+    statuses: &BTreeMap<String, RowStatus>,
+) -> Vec<StateRow> {
+    let mut entries: Vec<(&String, &NodeMeta)> = flat
+        .iter()
+        .filter(|(path, _)| path.as_str() != "prime")
+        .collect();
+    entries.sort_by(|(path_a, node_a), (path_b, node_b)| {
+        let instant_a = node_a
+            .completed_at
+            .as_deref()
+            .or(node_a.created_at.as_deref())
+            .and_then(crate::diff::parse_instant);
+        let instant_b = node_b
+            .completed_at
+            .as_deref()
+            .or(node_b.created_at.as_deref())
+            .and_then(crate::diff::parse_instant);
+        match (instant_a, instant_b) {
+            (Some(a), Some(b)) => b.cmp(&a).then_with(|| path_a.cmp(path_b)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => path_a.cmp(path_b),
+        }
+    });
+
+    entries
+        .into_iter()
+        .map(|(path, node)| {
+            let relative = path
+                .strip_prefix("prime.")
+                .unwrap_or(path.as_str())
+                .to_string();
+            let status = statuses.get(path.as_str()).cloned().unwrap_or_else(|| {
+                let kind = if node.is_running() {
+                    StatusKind::Running
+                } else if node.is_ok() {
+                    StatusKind::Done
+                } else {
+                    StatusKind::Failed
+                };
+                RowStatus {
+                    kind,
+                    skip_reason: None,
+                    retrying: false,
+                }
+            });
+            let error_preview = node
+                .error
+                .as_deref()
+                .map(|e| preview(e, STATE_PANE_PREVIEW_CHARS));
+            let no_value_yet = node.is_running() && node.value.is_null();
+            let value_preview = if error_preview.is_some() || no_value_yet {
+                None
+            } else {
+                abbreviated_value(&node.value).map(|v| preview(&v, STATE_PANE_PREVIEW_CHARS))
+            };
+            let (sent, received) = subtree_tokens(path, flat);
+            let tokens = (sent > 0 || received > 0).then_some((sent, received));
+            StateRow {
+                path: relative,
+                status,
+                value_preview,
+                error_preview,
+                tokens,
+            }
+        })
+        .collect()
+}
+
+const STATE_PANE_PREVIEW_CHARS: usize = 120;
+
+/// One state node's own value, abbreviated (issue #527): compact JSON
+/// for anything but a string, a quoted string for a string (its own
+/// newlines escaped so the state pane's one-line-per-entry shape
+/// never breaks), `None` for `null` (nothing to show).
+fn abbreviated_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(s) => Some(format!("\"{}\"", s.replace('\n', "\\n"))),
+        other => Some(
+            serde_json::to_string(other)
+                .unwrap_or_default()
+                .replace('\n', " "),
+        ),
+    }
+}
+
+/// The token bar's "what's in flight" line (DESIGN.md §6.3, issue
+/// #527): the running-prompt criteria from [`is_running_prompt`],
+/// summed to an estimated input and a running count.
+fn build_token_bar(flat: &BTreeMap<String, NodeMeta>) -> TokenBar {
+    let mut estimated_input = 0u64;
+    let mut prompts_running = 0u64;
+    for node in flat.values() {
+        if !is_running_prompt(node) {
+            continue;
+        }
+        prompts_running += 1;
+        if let Some(prompt_sent) = node.meta.get("prompt_sent").and_then(Value::as_str) {
+            estimated_input += estimated_prompt_tokens(prompt_sent);
+        }
+    }
+    TokenBar {
+        estimated_input,
+        prompts_running,
     }
 }
 
@@ -398,17 +557,12 @@ fn build_header(
             )
         })
         .unwrap_or_else(|| {
+            // The token rule (DESIGN.md §6.3): the same `_total`-first
+            // pair `run_totals` itself is built from in both engines,
+            // so a retried prompt never makes this fallback disagree
+            // with `runtime.last_run.totals` once that lands.
             flat.values().fold((0, 0), |(sent, recv), node| {
-                let s = node
-                    .meta
-                    .get("tokens_sent")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let r = node
-                    .meta
-                    .get("tokens_received")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
+                let (s, r) = crate::model::node_tokens(&node.meta);
                 (sent + s, recv + r)
             })
         });
@@ -549,7 +703,11 @@ fn child_segments(
     let prefix = format!("{parent}.");
     let mut seen = std::collections::BTreeSet::new();
     let mut children: Vec<(String, String)> = Vec::new();
-    for path in paths.keys() {
+    // `crate::model::subtree_entries` bounds this to `parent`'s own
+    // subtree instead of scanning every path in the tree (issue
+    // #527's redraw-cost acceptance) — `walk_rows` calls this once
+    // per row, so a whole-map scan here is quadratic in state size.
+    for (path, ()) in crate::model::subtree_entries(parent, paths) {
         let Some(rest) = path.strip_prefix(&prefix) else {
             continue;
         };
@@ -596,11 +754,9 @@ fn earliest_created_at(
     paths: &BTreeMap<String, ()>,
     flat: &BTreeMap<String, NodeMeta>,
 ) -> Option<String> {
-    let prefix = format!("{prefix_path}.");
-    flat.iter()
-        .filter(|(p, _)| p.as_str() == prefix_path || p.starts_with(&prefix))
-        .filter(|(p, _)| paths.contains_key(p.as_str()))
-        .filter_map(|(_, node)| node.created_at.clone())
+    crate::model::subtree_entries(prefix_path, paths)
+        .filter_map(|(p, ())| flat.get(p.as_str()))
+        .filter_map(|node| node.created_at.clone())
         .min()
 }
 
@@ -1122,5 +1278,240 @@ mod tests {
         assert!(details.prompt_sent.as_ref().unwrap().len() < long_prompt.len());
         let full = full_value("prime.ask", FullValueField::PromptSent, Some(&state_json));
         assert_eq!(full, Some(long_prompt));
+    }
+
+    #[test]
+    fn state_rows_sort_most_recently_updated_first_with_path_as_tiebreak() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:03Z"}},
+            "b": {"value": "y", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z"}},
+            "c": {"value": null, "meta": {"created_at": "2026-01-01T00:00:05Z", "completed_at": null}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        let paths: Vec<&str> = rendered
+            .state_rows
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect();
+        // `c` is still running (no `completed_at`), so its own update
+        // time is `created_at` (00:05), tied with `b`'s own
+        // `completed_at` (00:05) -- the tie then breaks by path.
+        assert_eq!(paths, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn state_rows_abbreviate_strings_and_json_and_show_the_glyph_for_a_running_node_with_no_value()
+    {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "summarize": {"value": "The report covers everything", "meta": {"created_at": "t0", "completed_at": "t1"}},
+            "items": {"value": ["a", "b"], "meta": {"created_at": "t0", "completed_at": "t1"}},
+            "pending": {"value": null, "meta": {"created_at": "t2", "completed_at": null}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t2",
+            &[],
+        );
+        let summarize = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "summarize")
+            .unwrap();
+        assert_eq!(
+            summarize.value_preview.as_deref(),
+            Some("\"The report covers everything\"")
+        );
+        let items = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "items")
+            .unwrap();
+        assert_eq!(items.value_preview.as_deref(), Some(r#"["a","b"]"#));
+        let pending = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "pending")
+            .unwrap();
+        assert_eq!(
+            pending.value_preview, None,
+            "a running node with no value yet shows the glyph instead"
+        );
+        assert_eq!(pending.status.kind, StatusKind::Running);
+    }
+
+    #[test]
+    fn a_failed_state_row_shows_the_start_of_its_error_and_no_value() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "bad": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1): ls: no such file"}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        let bad = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "bad")
+            .unwrap();
+        assert_eq!(
+            bad.error_preview.as_deref(),
+            Some("/bin/ls failed (exit 1): ls: no such file")
+        );
+        assert_eq!(bad.value_preview, None);
+    }
+
+    #[test]
+    fn a_container_state_row_sums_tokens_over_its_whole_subtree() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "iter_0": {"ask": {"value": "a", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent_total": 10, "tokens_received_total": 20}}},
+                "iter_1": {"ask": {"value": "b", "meta": {"created_at": "t1", "completed_at": "t2", "tokens_sent_total": 5, "tokens_received_total": 7}}}
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            2.0,
+            "t2",
+            &[],
+        );
+        let fan = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "fan")
+            .unwrap();
+        assert_eq!(fan.tokens, Some((15, 27)));
+        let leaf = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "fan.iter_0.ask")
+            .unwrap();
+        assert_eq!(leaf.tokens, Some((10, 20)));
+    }
+
+    #[test]
+    fn the_token_bar_only_counts_prompts_that_have_actually_started_their_call() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ready": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "1234567890ABCD", "waiting_for": null}},
+            "queued": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "xx", "waiting_for": "concurrency"}},
+            "not_yet_called": {"value": null, "meta": {"created_at": "t0", "completed_at": null}},
+            "done": {"value": "ok", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hi"}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.prompts_running, 1);
+        // ceil(14 / 4) = 4
+        assert_eq!(rendered.token_bar.estimated_input, 4);
+    }
+
+    /// Issue #527's own redraw-cost acceptance: "measure a 2,000-node
+    /// state and keep it under the current redraw interval" (`osp`'s
+    /// own `REDRAW_INTERVAL`, 100ms). The state pane and the treemap
+    /// tree are both built here, inside `build`, from the one `flat`
+    /// this test's own single `flatten_state` call already produced
+    /// -- not recomputed per pane.
+    #[test]
+    fn redraw_from_a_2000_node_state_stays_well_under_the_redraw_interval() {
+        use serde_json::Map;
+
+        let mut prime: Map<String, Value> = Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        let mut prime_meta = Map::new();
+        prime_meta.insert("completed_at".to_string(), Value::Null);
+        prime.insert("meta".to_string(), Value::Object(prime_meta));
+        for i in 0..2000 {
+            let mut meta = Map::new();
+            meta.insert("created_at".to_string(), Value::String(format!("t{i}")));
+            meta.insert(
+                "completed_at".to_string(),
+                Value::String(format!("t{}", i + 1)),
+            );
+            meta.insert("provider".to_string(), Value::String("shell".to_string()));
+            meta.insert("tokens_sent_total".to_string(), Value::from(1));
+            meta.insert("tokens_received_total".to_string(), Value::from(2));
+            let mut node = Map::new();
+            node.insert("value".to_string(), Value::String(format!("ok{i}\n")));
+            node.insert("meta".to_string(), Value::Object(meta));
+            prime.insert(format!("n{i}"), Value::Object(node));
+        }
+        let mut root = Map::new();
+        root.insert("prime".to_string(), Value::Object(prime));
+        let state = Value::Object(root);
+
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let start = std::time::Instant::now();
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            10.0,
+            "t2001",
+            &[],
+        );
+        let elapsed = start.elapsed();
+        assert_eq!(rendered.state_rows.len(), 2000);
+        assert_eq!(rendered.rows.len(), 2001);
+        // A generous multiple of the 100ms `REDRAW_INTERVAL` itself
+        // (measured well under 60ms alone on this machine, debug
+        // build) — shared-machine CPU contention can slow a wall-
+        // clock measurement like this one down without the code
+        // actually regressing, and this is specifically here to
+        // catch an accidental quadratic scan again (one shaved this
+        // same test from 2.27s to under 60ms), not to pin an exact
+        // budget.
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "one redraw of a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
     }
 }
