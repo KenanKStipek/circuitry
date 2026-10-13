@@ -16,7 +16,7 @@
 use electricity_tools::agent_cli::{
     AgentCliParseError, ClaudeCommandOpts, PI_ATTACHED_PROMPT_INSTRUCTION, PiCommandOpts,
     child_env, claude_command, claude_json_schema, parse_claude_output, parse_pi_output,
-    pi_command,
+    pi_command, timeout_message,
 };
 use electricity_tools::process::Completed;
 use electricity_value::Value;
@@ -46,6 +46,10 @@ fn as_i64(value: &Value) -> Option<i64> {
     value
         .as_int()
         .and_then(|i| i.to_string().parse::<i64>().ok())
+}
+
+fn as_f64(value: &Value) -> Option<f64> {
+    value.as_float().or_else(|| as_i64(value).map(|i| i as f64))
 }
 
 fn str_list_field(dict: &Value, name: &str) -> Option<Vec<String>> {
@@ -90,7 +94,7 @@ fn replays_pi_command_cases() {
             instruction: str_field(kwargs, "instruction")
                 .unwrap_or_else(|| PI_ATTACHED_PROMPT_INSTRUCTION.to_string()),
         };
-        let argv = pi_command("pi", "/tmp/prompt.md", &opts);
+        let argv = pi_command("pi", "/prompts/prompt.md", &opts);
         assert_eq!(argv, list_of_str(field(case, "expected")));
     }
 }
@@ -236,5 +240,22 @@ fn replays_parse_pi_output_cases() {
         };
         let result = parse_pi_output(&proc);
         assert_matches_expected(result, field(case, "expected"));
+    }
+}
+
+#[test]
+fn replays_timeout_text_cases() {
+    // `run_agent_cli`'s own timeout text is built inline, not through a
+    // function this crate exposes for a direct call -- `timeout_message`
+    // is that text's own extraction, so this corpus (real output from
+    // `run_agent_cli` itself, generated via a mocked `run_tracked`) can
+    // be replayed without spawning a process (review finding 3 on PR
+    // #525: the corpus carried this data, but nothing in Rust replayed it).
+    let corpus = corpus();
+    for case in cases(&corpus, "timeout_text_cases") {
+        let binary = str_field(case, "binary").unwrap();
+        let timeout_seconds = as_f64(field(case, "timeout_seconds")).unwrap();
+        let got = timeout_message(&binary, timeout_seconds);
+        assert_eq!(got, str_field(case, "expected").unwrap());
     }
 }

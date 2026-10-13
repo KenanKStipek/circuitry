@@ -29,7 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
+from circuitry import agent_cli as agent_cli_module
 from circuitry.adapters._agent_cli import check_binary
 from circuitry.adapters.factory import _string_list
 from circuitry.agent_cli import (
@@ -41,6 +43,7 @@ from circuitry.agent_cli import (
     parse_claude_output,
     parse_pi_output,
     pi_command,
+    run_agent_cli,
 )
 
 CORPUS = (
@@ -83,7 +86,7 @@ def _pi_command_cases() -> list[dict[str, Any]]:
     ]
     cases = []
     for kwargs in scenarios:
-        argv = pi_command(binary="pi", prompt_file="/tmp/prompt.md", **kwargs)
+        argv = pi_command(binary="pi", prompt_file="/prompts/prompt.md", **kwargs)
         cases.append({"kwargs": kwargs, "expected": argv})
     return cases
 
@@ -334,6 +337,20 @@ def _message_end(message: dict[str, Any]) -> str:
     return json.dumps({"type": "message_end", "message": message})
 
 
+# `json.dumps` always escapes a control character (`\x00`-`\x1f`)
+# regardless of `ensure_ascii`, and with `ensure_ascii=False` leaves every
+# other character -- including the Unicode line separators -- raw. Either
+# way the escaped text, if any, is exactly what dumping the one character
+# alone produces, so replacing that substring reinjects the raw character
+# for a case that needs `py_splitlines` to see it literally in the full
+# stdout text (issue #520 settled question 8), never a re-derivation of
+# which characters `json.dumps` escapes.
+def _message_end_with_raw_char(content: str, char: str) -> str:
+    dumped = json.dumps({"type": "message_end", "message": {"role": "assistant", "content": content}}, ensure_ascii=False)
+    escaped = json.dumps(char)[1:-1]
+    return dumped.replace(escaped, char)
+
+
 def _pi_case(stdout: str, returncode: int = 0, stderr: str = "") -> dict[str, Any]:
     proc = subprocess.CompletedProcess(args=["pi"], returncode=returncode, stdout=stdout, stderr=stderr)
     try:
@@ -422,17 +439,17 @@ def _parse_pi_output_cases() -> list[dict[str, Any]]:
         _pi_case(
             _message_end(assistant("fallback"))
             + "\n"
-            + _message_end({"role": "assistant", "content": "line1\u2028line2"})
+            + _message_end_with_raw_char("line1\u2028line2", "\u2028")
         ),
         _pi_case(
             _message_end(assistant("fallback"))
             + "\n"
-            + _message_end({"role": "assistant", "content": "line1\x1cline2"})
+            + _message_end_with_raw_char("line1\x1cline2", "\x1c")
         ),
         _pi_case(
             _message_end(assistant("fallback"))
             + "\n"
-            + _message_end({"role": "assistant", "content": "line1\x85line2"})
+            + _message_end_with_raw_char("line1\x85line2", "\x85")
         ),
         _pi_case(
             _message_end(
@@ -453,14 +470,42 @@ def _parse_pi_output_cases() -> list[dict[str, Any]]:
 
 
 def _timeout_text(binary: str, timeout_seconds: float) -> str:
-    import os
+    """`run_agent_cli`'s own timeout text, never a copied f-string: a
+    `run_tracked` that always raises `subprocess.TimeoutExpired` makes
+    `run_agent_cli` build the real sentence itself (review finding 6 on
+    PR #525 -- the docstring above already promised this, but the
+    `:g}s` text used to be re-derived here instead).
+    """
+    cmd = [binary]
 
-    name = os.path.basename(binary)
-    return f"{name} did not finish within {timeout_seconds:g}s; it was stopped with everything it started."
+    def fake_run_tracked(*_args: Any, **_kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_seconds)
+
+    with mock.patch.object(agent_cli_module, "run_tracked", fake_run_tracked):
+        try:
+            run_agent_cli(cmd, env={}, timeout_seconds=timeout_seconds)
+        except AgentCliError as exc:
+            return str(exc)
+    raise AssertionError("run_agent_cli must raise on a timeout")
 
 
 def _timeout_text_cases() -> list[dict[str, Any]]:
-    seconds = [1, 120, 999999, 1000000, 4294967295]
+    seconds = [
+        1,
+        120,
+        999999,
+        1000000,
+        4294967295,
+        # Ties at the 6th significant digit, where a mantissa computed by
+        # dividing by `10 ** exponent` can round the wrong way or miss a
+        # carry into the next exponent (review finding 7 on PR #525).
+        9999995,
+        1000015,
+        2000025,
+        1500005,
+        2500005,
+        1234565,
+    ]
     binaries = ["claude", "/usr/local/bin/pi"]
     return [
         {
@@ -499,8 +544,10 @@ def _check_binary_cases() -> list[dict[str, Any]]:
 def _string_list_cases() -> list[dict[str, Any]]:
     configs: list[dict[str, Any]] = [
         {"extra_args": "not-a-list"},
+        {"extra_args": 5},
         {"extra_args": [1, 2]},
         {"extra_args": [{"a": 1}]},
+        {"extra_args": {"a": 1}},
         {"extra_args": None},
         {},
         {"extra_args": ["--a", "--b"]},

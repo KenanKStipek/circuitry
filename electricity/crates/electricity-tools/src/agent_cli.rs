@@ -17,6 +17,21 @@
 //! process group through `process::run_tracked`'s own drop guard. This
 //! module never checks cancellation after the fact the way
 //! `agent_cli.py::run_agent_cli`'s own `get_token().check()` does.
+//!
+//! Two narrow gaps against `agent_cli.py`, both unreachable through
+//! part B's `u32` timeout and a freshly created temporary `cwd` (so no
+//! case or test pins either):
+//!
+//! - **The start-failure text names `cmd[0]`, never the `cwd`.** CPython's
+//!   `_posixsubprocess` reports the working directory instead of the
+//!   executable when *that* is what doesn't exist (a `cwd` deleted or
+//!   never created between a build and a run). This module always names
+//!   `cmd[0]`, matching Python only when the executable itself is the
+//!   missing path.
+//! - **`float()`'s `OverflowError` on an astronomically large cost
+//!   integer isn't reproduced.** [`UsageTotals::add`]'s cost sum stays an
+//!   infallible `f64` add; Python's `float()` on a huge `int` can raise.
+//!   No real CLI-reported cost reaches this.
 
 use crate::process::{self, ProcError, RunOpts};
 use electricity_value::pycompat::{PyIntError, py_int, py_splitlines, py_strip};
@@ -345,7 +360,7 @@ pub async fn run_agent_cli(
 ) -> Result<process::Completed, AgentCliRunError> {
     let name = os_path_basename(&cmd[0]);
     let opts = RunOpts {
-        timeout: Some(Duration::from_secs_f64(timeout_seconds.max(0.0))),
+        timeout: Some(timeout_duration(timeout_seconds)),
         input: Some(input),
         cwd,
         env: None,
@@ -354,9 +369,9 @@ pub async fn run_agent_cli(
     };
     match process::run_tracked(cmd, &opts, token).await {
         Ok(completed) => Ok(completed),
-        Err(ProcError::Timeout { .. }) => Err(AgentCliRunError::Timeout(format!(
-            "{name} did not finish within {}s; it was stopped with everything it started.",
-            py_format_g(timeout_seconds)
+        Err(ProcError::Timeout { .. }) => Err(AgentCliRunError::Timeout(timeout_message(
+            &cmd[0],
+            timeout_seconds,
         ))),
         Err(ProcError::NotFound(_)) => Err(AgentCliRunError::StartFailed(format!(
             "{name} could not be started ({}): [Errno 2] No such file or directory: {}",
@@ -380,6 +395,31 @@ fn os_path_basename(path: &str) -> &str {
         Some(index) => &path[index + 1..],
         None => path,
     }
+}
+
+/// [`run_agent_cli`]'s own timeout text (`agent_cli.py:258-262`), pulled
+/// out so the differential corpus's `timeout_text_cases` can replay it
+/// directly rather than only through a hand-written `py_format_g` check
+/// (review finding 3 on PR #525: the corpus generated this text but
+/// nothing in Rust ever called the function that builds the sentence
+/// `run_agent_cli` actually raises). Takes the *binary* as configured,
+/// not its basename, the same as [`run_agent_cli`]'s own `cmd[0]`.
+pub fn timeout_message(binary: &str, timeout_seconds: f64) -> String {
+    let name = os_path_basename(binary);
+    format!(
+        "{name} did not finish within {}s; it was stopped with everything it started.",
+        py_format_g(timeout_seconds)
+    )
+}
+
+/// A `Duration` for [`RunOpts::timeout`] that never panics the way
+/// `Duration::from_secs_f64` does on a non-finite or too-large `f64`
+/// (review finding 8 on PR #525) -- `timeout_seconds` reaches here from
+/// run-time config, so `inf`/`NaN`/an out-of-range value must saturate,
+/// never crash the call. `f64::max` already turns `NaN` into `0.0`
+/// (`NaN.max(y)` returns `y` in Rust, unlike Python's `max`).
+fn timeout_duration(timeout_seconds: f64) -> Duration {
+    Duration::try_from_secs_f64(timeout_seconds.max(0.0)).unwrap_or(Duration::MAX)
 }
 
 /// `agent_cli.py::parse_pi_output`.
@@ -529,7 +569,13 @@ pub fn parse_claude_output(
         Some(Value::Str(s)) => s.clone(),
         _ => String::new(),
     };
-    if raw.get(&Value::Str("is_error".to_string())) == Some(&Value::Bool(true)) {
+    // `is True`, never Python `==` (`Value`'s own `PartialEq` is `py_eq`,
+    // under which `True == 1 == 1.0` -- issue #520's A4.3 wants `is_error`
+    // treated as an error only for the exact bool `true`, never `1`/`1.0`).
+    if matches!(
+        raw.get(&Value::Str("is_error".to_string())),
+        Some(Value::Bool(true))
+    ) {
         let subtype = raw.get(&Value::Str("subtype".to_string()));
         let label = match subtype {
             Some(Value::Str(s)) if !s.is_empty() && s != "success" => format!(" ({s})"),
@@ -615,6 +661,11 @@ pub fn parse_claude_output(
 /// through a non-failing `float()` (Python can raise `OverflowError`
 /// converting an astronomically large int to `float`, an edge case no
 /// real CLI usage figure reaches and this module does not reproduce).
+/// The running `i64` sums use `checked_add`, saturating at the bound
+/// rather than panicking in debug or silently wrapping to a negative
+/// number in release (review finding 8 on PR #525) -- Python's own `int`
+/// never overflows, so this is a safety net against an implausible
+/// CLI-reported figure, not a text Python output ever pins.
 #[derive(Debug, Default, Clone, PartialEq)]
 struct UsageTotals {
     sent: Option<i64>,
@@ -632,13 +683,13 @@ impl UsageTotals {
         for part in sent_parts.iter().flatten() {
             if is_number(part) {
                 let value = py_int(part)?;
-                self.sent = Some(self.sent.unwrap_or(0) + value);
+                self.sent = Some(self.sent.unwrap_or(0).saturating_add(value));
             }
         }
         if let Some(value) = received {
             if is_number(value) {
                 let value = py_int(value)?;
-                self.received = Some(self.received.unwrap_or(0) + value);
+                self.received = Some(self.received.unwrap_or(0).saturating_add(value));
             }
         }
         if let Some(value) = cost {
@@ -719,17 +770,25 @@ fn py_format_g(x: f64) -> String {
     let negative = x < 0.0;
     let ax = x.abs();
     let precision: i32 = 6;
-    let exp = ax.log10().floor() as i32;
-    let exp = adjust_exponent(ax, exp);
+    // The exponent comes from Rust's own correctly-rounded scientific
+    // formatter, never a `log10().floor()` estimate refined by a
+    // division (review finding 7 on PR #525): `ax / 10f64.powi(exp)` is
+    // itself an inexact float, so a 7+-digit value that rounds up at the
+    // 6th significant digit (`9999995.0`, which Python's `%g` carries to
+    // `1e+07`) could round the wrong way, and the division approach
+    // never notices the carry shifting the exponent by one.
+    let scientific = format!("{:.*e}", (precision - 1).max(0) as usize, ax);
+    let (mantissa, exp_str) = scientific
+        .split_once('e')
+        .expect("Rust's `{:e}` formatter always includes an exponent");
+    let exp: i32 = exp_str.parse().expect("Rust's exponent is a plain integer");
     if (-4..precision).contains(&exp) {
         let decimals = (precision - 1 - exp).max(0) as usize;
         let mut s = format!("{ax:.decimals$}");
         strip_trailing_zeros(&mut s);
         if negative { format!("-{s}") } else { s }
     } else {
-        let mantissa = ax / 10f64.powi(exp);
-        let decimals = (precision - 1).max(0) as usize;
-        let mut mant_s = format!("{mantissa:.decimals$}");
+        let mut mant_s = mantissa.to_string();
         strip_trailing_zeros(&mut mant_s);
         let sign = if exp >= 0 { "+" } else { "-" };
         format!(
@@ -737,16 +796,6 @@ fn py_format_g(x: f64) -> String {
             if negative { "-" } else { "" },
             exp.abs()
         )
-    }
-}
-
-fn adjust_exponent(ax: f64, exp: i32) -> i32 {
-    if ax >= 10f64.powi(exp + 1) {
-        exp + 1
-    } else if ax < 10f64.powi(exp) {
-        exp - 1
-    } else {
-        exp
     }
 }
 
@@ -1409,6 +1458,33 @@ mod tests {
         assert_eq!(result.text, "fallback");
     }
 
+    #[test]
+    fn parse_pi_output_a_raw_c0_line_separator_inside_an_event_splits_that_line() {
+        // `\x1c` (one of the four C0 "other line/paragraph separator"
+        // controls `str.splitlines()` treats as a boundary) is the same
+        // quirk as U+2028, pinned separately since nothing covered it
+        // (review finding 2 on PR #525).
+        let event = assistant_message_end("ok");
+        let truncated = event.replace("ok", "line1\x1cline2");
+        let stdout = format!("{}\n{}\n", assistant_message_end("fallback"), truncated);
+        let proc = completed(&stdout, "", 0);
+        let result = parse_pi_output(&proc).unwrap();
+        assert_eq!(result.text, "fallback");
+    }
+
+    #[test]
+    fn parse_pi_output_a_raw_c1_next_line_separator_inside_an_event_splits_that_line() {
+        // `\x85` (NEL, a C1 control `str.splitlines()` also treats as a
+        // boundary) -- the same quirk as U+2028, pinned separately since
+        // nothing covered it (review finding 2 on PR #525).
+        let event = assistant_message_end("ok");
+        let truncated = event.replace("ok", "line1\u{85}line2");
+        let stdout = format!("{}\n{}\n", assistant_message_end("fallback"), truncated);
+        let proc = completed(&stdout, "", 0);
+        let result = parse_pi_output(&proc).unwrap();
+        assert_eq!(result.text, "fallback");
+    }
+
     // --- _no_answer_message --------------------------------------------
 
     #[test]
@@ -1456,11 +1532,22 @@ mod tests {
 
     #[tokio::test]
     async fn run_agent_cli_pi_style_empty_stdin_is_a_closed_pipe() {
-        let cmd = vec!["cat".to_string()];
+        // With `cat` alone, electricity's own inherited stdin (CI runs
+        // with `/dev/null` attached) would also make `cat` print nothing,
+        // so an empty `result.stdout` can't by itself prove a pipe was
+        // ever attached (review finding 9 on PR #525). `test -p
+        // /dev/stdin` fails on an inherited `/dev/null` (a character
+        // device) and succeeds on a real pipe, closed or not, so its exit
+        // code pins the shape of the fd `run_agent_cli` wired up.
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "test -p /dev/stdin && cat; echo \"rc=$?\"".to_string(),
+        ];
         let result = run_agent_cli(&cmd, &[], 5.0, Vec::new(), None, &token())
             .await
             .unwrap();
-        assert_eq!(result.stdout, "");
+        assert_eq!(result.stdout, "rc=0\n");
     }
 
     #[tokio::test]
@@ -1499,8 +1586,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_agent_cli_a_dropped_future_kills_the_child() {
-        let cmd = vec!["sleep".to_string(), "8522".to_string()];
+    async fn run_agent_cli_a_dropped_future_kills_the_child_and_its_grandchild() {
+        // The issue asks for "the CLI and a child it started" (review
+        // finding 9 on PR #525): a bare `sleep 8522` has no grandchild to
+        // prove the whole process group dies, only the direct child.
+        // `sh -c 'sleep 8522 & wait'` makes `sh` the direct child and the
+        // backgrounded `sleep 8522` its grandchild.
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8522 & wait".to_string(),
+        ];
         let token = token();
         let mut fut = Box::pin(run_agent_cli(&cmd, &[], 30.0, Vec::new(), None, &token));
         tokio::select! {
@@ -1516,7 +1612,7 @@ mod tests {
             .unwrap_or(false);
         assert!(
             !still_running,
-            "dropping run_agent_cli's future must kill its child"
+            "dropping run_agent_cli's future must kill its grandchild too"
         );
     }
 
@@ -1548,8 +1644,13 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AgentCliRunError::StartFailed(_)));
-        assert!(err.to_string().contains("could not be started"));
-        assert!(err.to_string().contains("Errno 13"));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "claude could not be started ({path}): [Errno 13] Permission denied: '{path}'",
+                path = path.to_string_lossy()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1608,6 +1709,76 @@ mod tests {
         assert!(result.stdout.contains("NEUTRAL_VAR=set"));
     }
 
+    #[tokio::test]
+    async fn run_agent_cli_env_remove_keeps_a_non_utf8_inherited_variable_byte_for_byte() {
+        // `env_remove` (never an `env` map, issue #520's settled question
+        // 3) exists precisely because a `HashMap<String, String>` can't
+        // hold a variable that isn't valid UTF-8 at all -- unlike
+        // `merged_env`, which would drop it (review finding 5 on PR #525).
+        // `od` turns the inherited bytes into plain ASCII hex so this
+        // test's own stdout stays valid UTF-8 for `run_tracked`'s decode.
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-agent-cli-test-nonutf8-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("report-bytes");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintenv AGENT_CLI_TEST_BAD_UTF8 | od -An -tx1 | tr -d ' \\n'\necho\nif printenv AGENT_CLI_TEST_TO_REMOVE >/dev/null 2>&1; then echo \"removed=set\"; else echo \"removed=unset\"; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: this test doesn't run in parallel with another test
+        // reading these specific variable names; both are removed on
+        // teardown before any other test can observe them.
+        unsafe {
+            std::env::set_var(
+                "AGENT_CLI_TEST_BAD_UTF8",
+                std::ffi::OsStr::from_bytes(&[0x66, 0x6f, 0xff, 0x6f]),
+            );
+            std::env::set_var("AGENT_CLI_TEST_TO_REMOVE", "secret");
+        }
+        let cmd = vec![script.to_string_lossy().into_owned()];
+        let unset = vec!["AGENT_CLI_TEST_TO_REMOVE".to_string()];
+        let result = run_agent_cli(&cmd, &unset, 5.0, Vec::new(), None, &token())
+            .await
+            .unwrap();
+        unsafe {
+            std::env::remove_var("AGENT_CLI_TEST_BAD_UTF8");
+            std::env::remove_var("AGENT_CLI_TEST_TO_REMOVE");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.stdout.contains("666fff6f"));
+        assert!(result.stdout.contains("removed=unset"));
+    }
+
+    // --- timeout_duration ------------------------------------------
+
+    #[test]
+    fn timeout_duration_saturates_instead_of_panicking_on_infinity() {
+        assert_eq!(timeout_duration(f64::INFINITY), Duration::MAX);
+    }
+
+    #[test]
+    fn timeout_duration_treats_nan_as_zero_rather_than_panicking() {
+        assert_eq!(timeout_duration(f64::NAN), Duration::ZERO);
+    }
+
+    // --- UsageTotals::add -------------------------------------------
+
+    #[test]
+    fn usage_totals_add_saturates_instead_of_panicking_on_i64_overflow() {
+        let mut totals = UsageTotals {
+            sent: Some(i64::MAX),
+            received: None,
+            cost: None,
+        };
+        totals.add(&[Some(&Value::from(1i64))], None, None).unwrap();
+        assert_eq!(totals.sent, Some(i64::MAX));
+    }
+
     // --- py_format_g ------------------------------------------------
 
     #[test]
@@ -1617,5 +1788,19 @@ mod tests {
         assert_eq!(py_format_g(999999.0), "999999");
         assert_eq!(py_format_g(1000000.0), "1e+06");
         assert_eq!(py_format_g(4294967295.0), "4.29497e+09");
+    }
+
+    #[test]
+    fn py_format_g_handles_a_round_trip_carry_into_the_next_exponent() {
+        // The naive `ax / 10f64.powi(exp)` division this replaced (review
+        // finding 7 on PR #525) rounds `9999995.0`'s mantissa to
+        // `10.00000`, never reshaping the exponent the way Python's `%g`
+        // carries it to `1e+07`.
+        assert_eq!(py_format_g(9999995.0), "1e+07");
+        assert_eq!(py_format_g(1000015.0), "1.00002e+06");
+        assert_eq!(py_format_g(2000025.0), "2.00002e+06");
+        assert_eq!(py_format_g(1500005.0), "1.5e+06");
+        assert_eq!(py_format_g(2500005.0), "2.5e+06");
+        assert_eq!(py_format_g(1234565.0), "1.23456e+06");
     }
 }

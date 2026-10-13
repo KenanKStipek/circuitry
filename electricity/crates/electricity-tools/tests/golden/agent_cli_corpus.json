@@ -10,7 +10,7 @@
         "--no-approve",
         "--no-tools",
         "--no-session",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -28,7 +28,7 @@
         "--no-session",
         "--model",
         "anthropic/claude-opus",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -46,7 +46,7 @@
         "--no-session",
         "--thinking",
         "high",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -61,7 +61,7 @@
         "json",
         "--no-approve",
         "--no-session",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -78,7 +78,7 @@
         "--no-tools",
         "--session",
         "sess-1",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -96,7 +96,7 @@
         "--no-tools",
         "--session",
         "sess-1",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -111,7 +111,7 @@
         "json",
         "--no-approve",
         "--no-tools",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -132,7 +132,7 @@
         "--no-session",
         "--foo",
         "bar",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -159,7 +159,7 @@
         "--thinking",
         "low",
         "--x",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "The attached file is the prompt. Reply to it as if its contents had been sent as this message."
       ]
     },
@@ -175,7 +175,7 @@
         "--no-approve",
         "--no-tools",
         "--no-session",
-        "@/tmp/prompt.md",
+        "@/prompts/prompt.md",
         "custom instruction"
       ]
     }
@@ -1239,11 +1239,11 @@
     },
     {
       "returncode": 0,
-      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\\u2028line2\"}}",
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u2028line2\"}}",
       "stderr": "",
       "expected": {
         "ok": {
-          "text": "line1\u2028line2",
+          "text": "fallback",
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
@@ -1255,11 +1255,11 @@
     },
     {
       "returncode": 0,
-      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\\u001cline2\"}}",
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u001cline2\"}}",
       "stderr": "",
       "expected": {
         "ok": {
-          "text": "line1\u001cline2",
+          "text": "fallback",
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
@@ -1271,11 +1271,11 @@
     },
     {
       "returncode": 0,
-      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\\u0085line2\"}}",
+      "stdout": "{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"fallback\"}}\n{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"line1\u0085line2\"}}",
       "stderr": "",
       "expected": {
         "ok": {
-          "text": "line1\u0085line2",
+          "text": "fallback",
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
@@ -1340,6 +1340,36 @@
       "expected": "claude did not finish within 4.29497e+09s; it was stopped with everything it started."
     },
     {
+      "binary": "claude",
+      "timeout_seconds": 9999995,
+      "expected": "claude did not finish within 1e+07s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1000015,
+      "expected": "claude did not finish within 1.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 2000025,
+      "expected": "claude did not finish within 2.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1500005,
+      "expected": "claude did not finish within 1.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 2500005,
+      "expected": "claude did not finish within 2.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "claude",
+      "timeout_seconds": 1234565,
+      "expected": "claude did not finish within 1.23456e+06s; it was stopped with everything it started."
+    },
+    {
       "binary": "/usr/local/bin/pi",
       "timeout_seconds": 1,
       "expected": "pi did not finish within 1s; it was stopped with everything it started."
@@ -1363,6 +1393,36 @@
       "binary": "/usr/local/bin/pi",
       "timeout_seconds": 4294967295,
       "expected": "pi did not finish within 4.29497e+09s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 9999995,
+      "expected": "pi did not finish within 1e+07s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1000015,
+      "expected": "pi did not finish within 1.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 2000025,
+      "expected": "pi did not finish within 2.00002e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1500005,
+      "expected": "pi did not finish within 1.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 2500005,
+      "expected": "pi did not finish within 2.5e+06s; it was stopped with everything it started."
+    },
+    {
+      "binary": "/usr/local/bin/pi",
+      "timeout_seconds": 1234565,
+      "expected": "pi did not finish within 1.23456e+06s; it was stopped with everything it started."
     }
   ],
   "check_binary_cases": [
@@ -1395,6 +1455,13 @@
     },
     {
       "cfg": {
+        "extra_args": 5
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got 5",
+      "expected_value": null
+    },
+    {
+      "cfg": {
         "extra_args": [
           1,
           2
@@ -1412,6 +1479,15 @@
         ]
       },
       "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got [{'a': 1}]",
+      "expected_value": null
+    },
+    {
+      "cfg": {
+        "extra_args": {
+          "a": 1
+        }
+      },
+      "expected_error": "runtime.adapters.pi.extra_args must be a list of strings, got {'a': 1}",
       "expected_value": null
     },
     {
