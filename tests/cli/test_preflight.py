@@ -128,6 +128,15 @@ def test_ollama_adapter_reports_unreachable_host() -> None:
     assert any(m.startswith("host:http://127.0.0.1:9") for m in r.missing)
 
 
+def test_ollama_adapter_masks_userinfo_in_the_host_text() -> None:
+    from circuitry.adapters.ollama import OllamaAdapter
+
+    r = OllamaAdapter(base_url="http://user:secret@127.0.0.1:9").check()
+    assert r.ok is False
+    assert any(m.startswith("host:http://127.0.0.1:9") for m in r.missing)
+    assert not any("secret" in m for m in r.missing)
+
+
 # ---------- tool plugin check() impls ----------
 
 

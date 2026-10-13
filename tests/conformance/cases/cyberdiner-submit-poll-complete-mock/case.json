@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #515 (cyberdiner adapter in electricity: submit, one poll while running, then completed)",
+  "description": "A mock expo server answers submit with a pending job, one poll with running, then a completed job carrying a result and tokensProcessed -- confirms the submit+poll loop, status folding, and token accounting all match.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

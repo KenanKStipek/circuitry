@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /beta/jobs
+  response:
+    status: 401
+    reason: Unauthorized
+    headers:
+      Content-Type: application/json
+    body: '{"error": "invalid token"}'
