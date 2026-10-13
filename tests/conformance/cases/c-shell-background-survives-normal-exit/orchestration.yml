@@ -1,0 +1,23 @@
+name: c-shell-background-survives-normal-exit
+effects:
+  - type: tool
+    name: start
+    provider: shell
+    params:
+      command: sh
+      allowed_commands: [sh]
+      args: ["-c", "nohup sleep 37.519 >/dev/null 2>&1 & echo started"]
+  - type: tool
+    name: check
+    provider: shell
+    params:
+      command: sh
+      allowed_commands: [sh]
+      args: ["-c", "if pgrep -f 'slee[p] 37\\.519' >/dev/null; then echo alive; else echo gone; fi"]
+  - type: tool
+    name: cleanup
+    provider: shell
+    params:
+      command: sh
+      allowed_commands: [sh]
+      args: ["-c", "pkill -f 'slee[p] 37\\.519' >/dev/null 2>&1; echo done"]

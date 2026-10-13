@@ -135,6 +135,22 @@ struct KillGroupOnDrop {
     reaped: Rc<Cell<bool>>,
 }
 
+impl KillGroupOnDrop {
+    /// Takes this guard out of service -- `run_tracked`'s own normal-exit
+    /// return path (`core/cancellation.py::run_tracked` has no
+    /// `except`/`finally` of its own at all once `_communicate_promptly`
+    /// returns without raising, `:874-896`, so nothing there ever calls
+    /// `kill_process_group` on this path) calls this right before
+    /// returning `Ok`, so the group a background process joined keeps
+    /// running past the step that started it (#519) -- while every
+    /// other return path (timeout, cancellation, any other unwind,
+    /// including a dropped future) leaves the guard armed, so its own
+    /// `Drop` below still fires.
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
         let Some(pid) = self.pid else { return };
@@ -263,8 +279,9 @@ pub async fn run_tracked(
     let reaped = Rc::new(Cell::new(false));
     // Lives for the rest of this function -- its own `Drop` is this
     // call's safety net against being torn down mid-await from outside
-    // (see the struct's own doc comment above).
-    let _kill_on_drop = KillGroupOnDrop {
+    // (see the struct's own doc comment above). `mut`: the normal-exit
+    // path below calls `disarm()` on it before returning `Ok`.
+    let mut kill_on_drop = KillGroupOnDrop {
         pid,
         isolated: opts.new_session,
         reaped: reaped.clone(),
@@ -364,6 +381,8 @@ pub async fn run_tracked(
                 // targets *pgid* directly (never re-derives it from
                 // *pid*, and never fires at all when this run isn't
                 // isolated) -- see `repeat_group_kill`'s own doc comment.
+                // Mirrors `core/cancellation.py::_communicate_promptly`'s
+                // own repeat-kill-while-cancelled branch, `:806-810`.
                 if token.is_set() {
                     if let Some(pgid) = pgid {
                         repeat_group_kill(pgid);
@@ -376,7 +395,8 @@ pub async fn run_tracked(
     if timed_out {
         // The first kill, same as `core/cancellation.py::kill_process_group`
         // itself: a no-op once the child (not necessarily the whole
-        // group) has already exited.
+        // group) has already exited. Mirrors `run_tracked`'s own
+        // `except subprocess.TimeoutExpired:` branch, `:879-887`.
         if let Some(pid) = pid {
             kill_process_group(pid);
         }
@@ -403,9 +423,20 @@ pub async fn run_tracked(
     let status = child_status.expect("loop only breaks `false` once child_status is Some");
     let stdout_bytes = stdout_bytes.unwrap_or_default();
     let stderr_bytes = stderr_bytes.unwrap_or_default();
+    // A decode failure here still leaves the guard armed (the `?`
+    // below returns before `disarm()` runs) -- it mirrors Python's own
+    // decode, which happens inside `proc.communicate()`, so a
+    // `UnicodeDecodeError` there unwinds through `run_tracked`'s own
+    // `except BaseException:` and still kills the group, `:888-895`.
     let stdout = decode_text(&stdout_bytes)?;
     let stderr = decode_text(&stderr_bytes)?;
 
+    // The one path with no kill at all in `core/cancellation.py::
+    // run_tracked` (#519): a normal exit disarms the guard instead of
+    // letting its `Drop` run `repeat_group_kill`/`kill_process_group`
+    // on the whole group, so a background process it started keeps
+    // running past this step.
+    kill_on_drop.disarm();
     Ok(Completed {
         stdout,
         stderr,
@@ -927,6 +958,52 @@ mod tests {
             !still_running,
             "the dropped run_tracked future must have killed its own child"
         );
+    }
+
+    #[tokio::test]
+    async fn a_background_process_survives_a_step_that_finishes_normally() {
+        // Issue #519: `sh`'s own `sleep 8473 &` keeps running in the
+        // isolated group after `sh` itself has exited and this call
+        // has returned `Ok` -- the guard must be disarmed on this path,
+        // not left to `killpg` the whole group the way its `Drop`
+        // would on every other return path.
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            new_session: true,
+            ..RunOpts::default()
+        };
+        // The background `sleep`'s own stdout/stderr are redirected
+        // away, not inherited -- a process that keeps this step's own
+        // stdout pipe open is the *other* case the issue names, which
+        // both engines already handle the same way (both wait for the
+        // pipe to close); this test is about the group surviving a
+        // normal exit, so the background process must not also hold
+        // this call's own pipe open.
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8473 >/dev/null 2>&1 & echo $!".to_string(),
+        ];
+        let completed = run_tracked(&cmd, &opts, &token).await.unwrap();
+        assert_eq!(completed.exit_code, 0);
+        let bg_pid: u32 = completed.stdout.trim().parse().expect("sh printed $!");
+        assert!(
+            pid_is_alive(bg_pid),
+            "the background process must still be running right after the step returned"
+        );
+        // Clean it up ourselves -- by pid, never a bare name, so this
+        // never reaches another lane's own processes on this machine.
+        unsafe {
+            libc::kill(bg_pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: u32) -> bool {
+        // `kill(pid, 0)`: no signal sent, just an existence check --
+        // `ESRCH` means gone, anything else (including success) means
+        // the pid is still live.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
 
     #[tokio::test]
