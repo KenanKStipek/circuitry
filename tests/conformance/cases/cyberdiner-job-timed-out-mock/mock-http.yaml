@@ -1,0 +1,18 @@
+- request:
+    method: POST
+    path: /beta/jobs
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-4", "status": "pending", "tierName": "cheap"}}'
+- request:
+    method: GET
+    path: /beta/jobs/job-4
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"data": {"jobId": "job-4", "status": "timedOut", "tierName": "cheap"}}'

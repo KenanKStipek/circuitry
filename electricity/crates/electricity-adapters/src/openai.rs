@@ -4,7 +4,7 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::cfg_str_or;
+use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome, curl_failure_message};
 use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
 use crate::transport::{TransportFailure, run_curl};
@@ -18,11 +18,51 @@ use electricity_vm::retry::RetryInfo;
 
 const DETERMINISTIC_SEED: i64 = 0;
 
+/// `adapters/openai.py::OpenAIAdapter.generate`'s own payload assembly
+/// -- `model`/`messages` first, then `sampling_fields` (with
+/// `max_completion_tokens`, not `max_tokens`), then a deterministic
+/// `seed` only if one wasn't already set via `params`. `pub` so
+/// `tests/adapter_corpus.rs` replays `generate_adapter_corpus.py`'s
+/// own request-building cases through this exact function (issue
+/// #515 finding 5's first item -- `openai` had no request-building
+/// case at all).
+pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
+    let mut payload = Dict::new();
+    payload.insert(
+        Value::Str("model".to_string()),
+        Value::Str(model.to_string()),
+    );
+    payload.insert(
+        Value::Str("messages".to_string()),
+        Value::List(chat_messages(prompt, options)),
+    );
+    for (key, value) in sampling_fields(options, "max_completion_tokens") {
+        payload.insert(key, value);
+    }
+    if options.deterministic {
+        payload
+            .entry(Value::Str("seed".to_string()))
+            .or_insert(Value::from(DETERMINISTIC_SEED));
+    }
+    payload
+}
+
 fn truncate_chars(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {
         Some((byte_index, _)) => &text[..byte_index],
         None => text,
     }
+}
+
+/// `generate()`'s own request headers -- `pub` (review finding F6)
+/// so `tests/adapter_corpus.rs` compares the recorded corpus headers
+/// against the adapter's own header-building code, not a list written
+/// by hand in the test a second time.
+pub fn request_headers(api_key: &str) -> Vec<(String, String)> {
+    vec![
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("Authorization".to_string(), format!("Bearer {api_key}")),
+    ]
 }
 
 fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
@@ -134,7 +174,11 @@ pub fn interpret_outcome(
 
 /// `adapters/openai.py::OpenAIAdapter`.
 pub struct OpenAiAdapter {
-    pub base_url: String,
+    /// Raw -- `cfg.get("base_url") or default`; `.rstrip("/")`'d in
+    /// [`Adapter::generate`] itself, the same point Python calls it
+    /// (after the API-key check, never at build time: review finding
+    /// F5, a non-string value must fail `generate()`, not preflight).
+    pub base_url: Value,
     pub default_model: String,
 }
 
@@ -167,38 +211,20 @@ impl Adapter for OpenAiAdapter {
             });
         }
 
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-
-        let mut payload = Dict::new();
-        payload.insert(
-            Value::Str("model".to_string()),
-            Value::Str(model.to_string()),
-        );
-        payload.insert(
-            Value::Str("messages".to_string()),
-            Value::List(chat_messages(prompt, options)),
-        );
-        for (key, value) in sampling_fields(options, "max_completion_tokens") {
-            payload.insert(key, value);
-        }
-        if options.deterministic {
-            payload
-                .entry(Value::Str("seed".to_string()))
-                .or_insert(Value::from(DETERMINISTIC_SEED));
-        }
+        let url = format!("{}/chat/completions", rstrip_base_url(&self.base_url)?);
+        let payload = build_request(model, prompt, options);
         let body =
+            // `json.dumps(payload)` raises Python's own `TypeError` for a
+            // value it can't serialize, uncaught -- never `RuntimeError`.
             electricity_json::dumps(&Value::Dict(payload), WriteMode::COMPACT).map_err(|e| {
                 AdapterError {
                     message: e.to_string(),
                     retry: RetryInfo::not_retryable(),
-                    py_class: PyExc::RuntimeError,
+                    py_class: PyExc::TypeError,
                 }
             })?;
 
-        let headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Authorization".to_string(), format!("Bearer {api_key}")),
-        ];
+        let headers = request_headers(&api_key);
         let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
             .await
             .map_err(transport_failure_error)?;
@@ -228,7 +254,7 @@ impl Adapter for OpenAiAdapter {
 /// `adapters/factory.py::_build_openai`.
 pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
     Ok(Box::new(OpenAiAdapter {
-        base_url: cfg_str_or(cfg, "base_url", "https://api.openai.com/v1"),
+        base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
     }))
 }
@@ -236,6 +262,16 @@ pub fn build_openai(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// `OPENAI_API_KEY` is process environment, shared by every test in
+    /// this module; `cargo test` runs them concurrently by default, so
+    /// two tests setting and then removing it would race without this
+    /// (`watsonx.rs`'s own `env_guard`, same reason).
+    fn env_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn coerce_token_count_parses_a_numeric_string() {
@@ -278,5 +314,60 @@ mod tests {
     fn build_openai_defaults_base_url_and_model() {
         let adapter = build_openai(&Value::None).unwrap();
         assert_eq!(adapter.name(), "openai");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
+        // Review finding F5: the failure happens inside `generate()`,
+        // at the same point Python's own `self.base_url.rstrip("/")`
+        // runs (after the API-key check, which must still run first).
+        let _guard = env_guard().lock().unwrap();
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert_eq!(err.message, "'int' object has no attribute 'rstrip'");
+        assert_eq!(err.py_class, PyExc::AttributeError);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_checks_the_api_key_before_touching_base_url() {
+        let _guard = env_guard().lock().unwrap();
+        let mut cfg = Dict::new();
+        cfg.insert(Value::Str("base_url".to_string()), Value::from(5i64));
+        let adapter = build_openai(&Value::Dict(cfg)).unwrap();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("OpenAI API key not found"));
     }
 }

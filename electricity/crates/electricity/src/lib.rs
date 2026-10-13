@@ -366,6 +366,75 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
     }
 }
 
+/// Issue #518 (lane J2), Scope §2: the first (in document order)
+/// *enabled* prompt under *op* whose own `provider:` names an adapter
+/// Circuitry's own registry knows (`electricity_vm::adapter_names::
+/// ADAPTER_NAMES`) but this build has no builder for. A document can
+/// also set a prompt's `provider:` directly (`compile/leaves.rs`'s own
+/// `PromptOp::provider`), not only a profile override -- but that case
+/// is already caught earlier, by `unbuildable_known_adapter` walking
+/// the raw document (`allowlist.rs::walk_effects` collects a prompt's
+/// own `provider:` the same way it collects the document's top-level
+/// `adapter:`), so by the time this function runs on the overlaid
+/// *program*, the only way an unbuildable name reaches it unrefused is
+/// a profile override replacing a buildable (or absent) document value
+/// with an unbuildable one. Never recurses into a `use` leaf (its
+/// child is compiled, and so overlaid, independently at run time -- out
+/// of scope here, same as every other static walk in this file) nor
+/// into a disabled subtree (`op.enabled == false`): a disabled prompt's
+/// provider, overridden or not, is never dispatched.
+fn profile_provider_unbuildable(
+    op: &electricity_bytecode::Op,
+    adapters: &electricity_vm::adapter::AdapterRegistry,
+) -> Option<String> {
+    use electricity_bytecode::{LeafKind, NodeKind, Region};
+
+    fn region_find(
+        region: &Region,
+        adapters: &electricity_vm::adapter::AdapterRegistry,
+    ) -> Option<String> {
+        match region {
+            Region::Block { ops, .. } => ops
+                .iter()
+                .find_map(|op| profile_provider_unbuildable(op, adapters)),
+            Region::Parallel { branches, .. } => branches
+                .iter()
+                .find_map(|op| profile_provider_unbuildable(op, adapters)),
+            Region::TryFinally { body, finally } => {
+                region_find(body, adapters).or_else(|| region_find(finally, adapters))
+            }
+            Region::If { then_, else_, .. } => region_find(then_, adapters)
+                .or_else(|| else_.as_deref().and_then(|r| region_find(r, adapters))),
+            Region::Loop { body, .. } => region_find(body, adapters),
+        }
+    }
+
+    if !op.enabled {
+        return None;
+    }
+    match &op.kind {
+        NodeKind::Leaf(leaf) => match leaf.as_ref() {
+            LeafKind::Prompt(prompt_op) => {
+                let provider = prompt_op.provider.as_deref()?;
+                let adapter_name = electricity_config::provider_token_to_adapter(provider)?;
+                let normalized =
+                    electricity_value::pycompat::py_strip(&adapter_name).to_lowercase();
+                let buildable = adapters.supported_names();
+                if electricity_vm::adapter_names::ADAPTER_NAMES.contains(&normalized.as_str())
+                    && !buildable.contains(&normalized)
+                {
+                    Some(normalized)
+                } else {
+                    None
+                }
+            }
+            LeafKind::Reflector(reflector) => region_find(&reflector.inner, adapters),
+            LeafKind::Tool(_) | LeafKind::Use(_) | LeafKind::Yield(_) => None,
+        },
+        NodeKind::Control(region) => region_find(region, adapters),
+    }
+}
+
 /// The preview-marker refusal for a document/config that configures
 /// persistence or runtime plugins (issue #431's "Out of scope"
 /// section: "refused with the preview marker, after the step-6/9
@@ -1355,11 +1424,24 @@ pub async fn run_orchestration_with_config(
     // `last_run.completed_at`/`totals` (`fail!`'s own job), keeping
     // every field already written intact, matching `run()`'s own
     // `setdefault`-only except-block behaviour for a failure this late.
-    let program = match electricity_compiler::post_state_checks(&loaded, effective.runtime.as_ref())
-    {
-        Ok(program) => program,
-        Err(err) => fail!(err.to_string()),
-    };
+    let mut program =
+        match electricity_compiler::post_state_checks(&loaded, effective.runtime.as_ref()) {
+            Ok(program) => program,
+            Err(err) => fail!(err.to_string()),
+        };
+
+    // Lane J2's own per-effect profile overlay (issue #518, settled
+    // ruling 1): applied directly onto the compiled IR, right after
+    // `post_state_checks` and before the refusal walker below -- so
+    // that walker, `has_prompt_effects` and `default_adapter_called_
+    // directly` (further down) all see the overlaid program, never
+    // the raw one. A no-op when the loaded profile has no `effects:`
+    // entries at all (including no `--profile` at all).
+    if let Some(profile) = &profile {
+        if !profile.effects.is_empty() {
+            electricity_compiler::overrides::apply_effect_overrides(&mut program, &profile.effects);
+        }
+    }
 
     // Resolved before the refusal walker below needs it (review P2-10
     // on PR #454's second review: whether this run's own effective
@@ -1419,26 +1501,6 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Lane J2's own per-effect profile overrides stand-in (issue
-    // #495, settled ruling 2): until that lane lands, a profile whose
-    // `effects` map is non-empty is refused (preview marker, no
-    // state) here -- the same relative position Python's own profile-
-    // effect-overrides step (#448's run-order list, step 11) sits at,
-    // after the structural/refusal walkers above and before
-    // `needs_real_adapter` below.
-    if let Some(profile) = &profile {
-        if !profile.effects.is_empty() {
-            return RunResult {
-                ok: false,
-                out_path: None,
-                state: None,
-                error: Some(format_config_refusal("a profile with per-effect overrides")),
-                warnings,
-                signal: None,
-            };
-        }
-    }
-
     // Step 12: `needs_real_adapter`/`resolved_adapter` -- a *lenient*
     // name only (`effective.adapter or ""`, Python's own `:842-856`):
     // the strict check (`_require_resolved_settings`) is deferred past
@@ -1471,6 +1533,49 @@ pub async fn run_orchestration_with_config(
     // walked here (preflight never checks it either); that case is
     // [`preflight::PlaceholderAdapter`]'s own job, below.
     if let Some(name) = preflight::unbuildable_known_adapter(&loaded.document, &adapters) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("adapter '{name}'"))),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Review finding 1 on PR #526's own review: the same refusal as
+    // just above, but for a *tool* plugin Circuitry knows
+    // (`electricity_tools::plugin_names::PLUGIN_NAMES`) but this build
+    // has no builder for -- read off the raw document, so a profile
+    // that disables the tool still refuses it, matching the same
+    // document-level `UnsupportedToolProvider` refusal an *enabled*
+    // instance of the same tool would already get from the walker
+    // below. Without this, a disabled tool naming such a plugin would
+    // reach preflight's own "Unknown plugin" failure instead, once the
+    // refusal walker started skipping disabled subtrees for issue #518.
+    if let Some(name) = preflight::unbuildable_known_tool_plugin(&loaded.document) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("tool provider '{name}'"))),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Issue #518 (lane J2), Scope §2/settled ruling 6: the same refusal
+    // as just above, but for a profile `provider:` override landing on
+    // an *enabled* prompt -- read off the already-overlaid *program*,
+    // never the raw document, since the override itself only exists
+    // once the overlay above has applied it. Only a prompt is checked
+    // here: a tool's own swapped `provider:` is already caught by the
+    // refusal walker's `UnsupportedToolProvider` check (settled ruling
+    // 6's own second sentence), which walks the overlaid IR too
+    // (`first_unsupported` above). Without this check,
+    // `generate_with_fallbacks` would instead refuse the run partway
+    // through, after any earlier effect had already run.
+    if let Some(name) = profile_provider_unbuildable(&program.root, &adapters) {
         return RunResult {
             ok: false,
             out_path: None,

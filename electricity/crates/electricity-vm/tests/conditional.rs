@@ -1357,3 +1357,53 @@ async fn a_model_mode_if_reaches_condition_models_real_dispatch() {
         "prime.gate: _noop adapter: no real adapter is configured for this run"
     );
 }
+
+#[tokio::test]
+async fn a_disabled_branch_step_writes_a_skip_node_and_its_own_effect_record_is_marked() {
+    // Issue #518 (lane J2): `ConditionalRuntime._effect_record` --
+    // `{index, type, name, disabled: true}` for a disabled branch step,
+    // and the step's own node is a skip node (never real `json` tool
+    // dispatch -- `x` would fail with `TOOL_FAIL_TEXT` otherwise).
+    let disabled_x = electricity_bytecode::Op {
+        enabled: false,
+        ..tool_leaf(root_path().push_name("gate").push_name("x"), "x")
+    };
+    let root = chain_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        vec![cel_if(
+            root_path().push_name("gate"),
+            Some("gate"),
+            "true",
+            OnError::Fail,
+            vec![disabled_x],
+            None,
+        )],
+    );
+    let (store, _, result) = run(root).await;
+    result.unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let gate = as_dict(get(prime, "gate").unwrap());
+    let value = as_dict(get(gate, "value").unwrap());
+    let Value::List(effects) = get(value, "effects").unwrap() else {
+        panic!("expected a list")
+    };
+    assert_eq!(effects.len(), 1);
+    let record = as_dict(&effects[0]);
+    assert_eq!(get(record, "index"), Some(&Value::from(0i64)));
+    assert_eq!(
+        get(record, "type"),
+        Some(&Value::Str("ToolDefinition".to_string()))
+    );
+    assert_eq!(get(record, "name"), Some(&Value::Str("x".to_string())));
+    assert_eq!(get(record, "disabled"), Some(&Value::Bool(true)));
+
+    let x = as_dict(get(gate, "x").unwrap());
+    assert_eq!(get(x, "value"), Some(&Value::None));
+    let x_meta = as_dict(get(x, "meta").unwrap());
+    assert_eq!(get(x_meta, "disabled"), Some(&Value::Bool(true)));
+}

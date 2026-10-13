@@ -78,8 +78,11 @@ pub(crate) fn format_list(items: &[String]) -> String {
     format!("[{inner}]")
 }
 
-/// `allowlist.py::_provider_token_to_adapter`.
-pub(crate) fn provider_token_to_adapter(token: &str) -> Option<String> {
+/// `allowlist.py::_provider_token_to_adapter` -- also the per-effect
+/// read issue #518 (lane J2) uses to judge whether a profile
+/// `provider:` override on an enabled prompt names an adapter
+/// Circuitry knows but this build cannot build.
+pub fn provider_token_to_adapter(token: &str) -> Option<String> {
     let parsed = token.trim();
     if parsed.is_empty() {
         return None;

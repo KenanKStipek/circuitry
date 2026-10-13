@@ -1,0 +1,13 @@
+name: profile-disabled-effect-still-preflighted
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: a
+    provider: scripted
+    template: "say hello"
+  - type: prompt
+    name: b
+    provider: scripted
+    on_error: skip
+    template: "say goodbye"

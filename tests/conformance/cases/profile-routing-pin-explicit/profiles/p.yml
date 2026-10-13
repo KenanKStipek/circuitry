@@ -1,0 +1,4 @@
+effects:
+  ask:
+    model: profile-explicit-model
+    routing: high

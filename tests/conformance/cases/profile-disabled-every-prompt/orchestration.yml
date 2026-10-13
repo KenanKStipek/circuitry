@@ -1,0 +1,5 @@
+name: profile-disabled-every-prompt
+effects:
+  - type: prompt
+    name: p
+    template: "say hello"

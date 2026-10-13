@@ -200,11 +200,11 @@ fn unknown_band_error(name: &str, override_repr: &str, settings: &ComplexitySett
 /// meta, routed model)`. Both halves are independent (K1's own crate
 /// docs, "K2's calling contract"); see issue #516 §3/§7 for the full
 /// rule set this follows. The `?` this can fail with is only ever the
-/// unknown-pinned-band `ValueError` (§3 finding 7) -- reachable only
-/// once a later lane (J2) populates [`PromptOp::routing_override`];
-/// this lane's own callers can only ever observe the always-`None`
-/// case, but the whole branch is ported and unit-tested now so J2 has
-/// nothing left to do here but set the field.
+/// unknown-pinned-band `ValueError` (§3 finding 7) -- reachable now
+/// that J2 (issue #518) populates [`PromptOp::routing_override`] from
+/// a profile's per-effect `routing:` override; `validate_profile_
+/// routing_pins` already rejects an unknown band before the run, so
+/// this `?` stays a backstop.
 ///
 /// `resolve_complexity_settings`'s own failure branch (`core/prompt.py:
 /// 914-926`) is not ported: `run_ctx.complexity` is already resolved
