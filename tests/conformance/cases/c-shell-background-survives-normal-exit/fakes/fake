@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""A fake process-backed binary for the conformance suite (issue #450, item
+4), extended for issue #519 with three flags that stand in for the
+`nohup ... &` pattern a real shell step uses to start a server for later
+steps -- a pidfile, the same idiom a real long-running server would use, so
+nothing here needs to flow a freshly-allocated OS pid back through the
+orchestration's own state as a step value (that's a different pid on every
+run, which `expected.json` can't commit to) or shell out to a real
+`pgrep`/`pkill` (whose own match pattern risks a false hit on another
+process on a shared machine):
+
+    --spawn-background --pidfile PATH
+                         start a detached grandchild that just sleeps, left
+                         in this process's own process group (no
+                         `start_new_session`, unlike this process itself)
+                         -- exactly how a shell step's own `foo &`
+                         backgrounds something in the step's own group --
+                         and write its pid to PATH
+    --check-pidfile PATH print "alive" if the pid PATH names still exists,
+                         else "gone" (including when PATH itself doesn't)
+    --kill-pidfile PATH  SIGKILL the pid PATH names (quietly a no-op if
+                         it's already gone, or PATH doesn't exist), then
+                         remove PATH; print "done"
+
+Plus the four original fake behaviours item 4 asked for; a case passes the
+matching flag(s) as the `shell` tool's own `params.args`:
+
+    --stdout TEXT      write TEXT (plus a trailing newline if it has none)
+    --stderr TEXT      write TEXT to stderr the same way
+    --exit N           exit with code N (default 0)
+    --sleep            ignore SIGTERM and sleep until killed (SIGKILL) --
+                        for a subprocess-timeout/cancellation case
+    --crlf             ignore every other flag; write two CRLF-terminated
+                        stdout lines
+    --invalid-utf8     ignore every other flag; write a fixed, deliberately
+                        invalid UTF-8 byte sequence to stdout
+    --cat              ignore every other flag; copy stdin to stdout
+                        verbatim -- for a case that checks `params.stdin`
+                        actually reaches the child
+    --print-env NAME   ignore every other flag; write the named environment
+                        variable's own value (or the literal text
+                        "<unset>" if it isn't set) -- for a case that
+                        checks a configured `runtime.plugins.<name>.env`
+                        override actually reaches the child
+
+Each case keeps its own copy of this exact file (the suite's `fakes/`
+contract is per-case, not a shared library -- `harness._sandboxed_env`
+only ever puts one case's own directory on `PATH`).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stdout")
+    parser.add_argument("--stderr")
+    parser.add_argument("--exit", type=int, default=0)
+    parser.add_argument("--sleep", action="store_true")
+    parser.add_argument("--crlf", action="store_true")
+    parser.add_argument("--invalid-utf8", action="store_true")
+    parser.add_argument("--cat", action="store_true")
+    parser.add_argument("--print-env")
+    parser.add_argument("--spawn-background", action="store_true")
+    parser.add_argument("--pidfile")
+    parser.add_argument("--check-pidfile")
+    parser.add_argument("--kill-pidfile")
+    args = parser.parse_args()
+
+    if args.spawn_background:
+        # No `start_new_session`: the grandchild stays in *this* process's
+        # own process group (the one `run_tracked`'s own isolation already
+        # put this process in), the same as a plain `foo &` inside a real
+        # shell step backgrounds something into the step's own group.
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with open(args.pidfile, "w") as f:
+            f.write(str(child.pid))
+        print("started")
+        return 0
+
+    if args.check_pidfile is not None:
+        try:
+            with open(args.check_pidfile) as f:
+                pid = int(f.read())
+        except FileNotFoundError:
+            print("gone")
+            return 0
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            print("gone")
+        else:
+            print("alive")
+        return 0
+
+    if args.kill_pidfile is not None:
+        try:
+            with open(args.kill_pidfile) as f:
+                pid = int(f.read())
+        except FileNotFoundError:
+            pid = None
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.remove(args.kill_pidfile)
+        print("done")
+        return 0
+
+    if args.sleep:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(3600)
+
+    if args.cat:
+        data = sys.stdin.buffer.read()
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        return args.exit
+
+    if args.print_env is not None:
+        value = os.environ.get(args.print_env, "<unset>")
+        sys.stdout.write(value if value.endswith("\n") else value + "\n")
+        return args.exit
+
+    if args.invalid_utf8:
+        sys.stdout.buffer.write(b"invalid utf-8 follows: \xff\xfe\n")
+        sys.stdout.buffer.flush()
+        return args.exit
+
+    if args.crlf:
+        sys.stdout.buffer.write(b"line one\r\nline two\r\n")
+        sys.stdout.buffer.flush()
+        return args.exit
+
+    if args.stdout is not None:
+        sys.stdout.write(args.stdout if args.stdout.endswith("\n") else args.stdout + "\n")
+    if args.stderr is not None:
+        sys.stderr.write(args.stderr if args.stderr.endswith("\n") else args.stderr + "\n")
+    return args.exit
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

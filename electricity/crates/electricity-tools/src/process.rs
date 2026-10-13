@@ -135,7 +135,24 @@ struct KillGroupOnDrop {
     reaped: Rc<Cell<bool>>,
 }
 
+impl KillGroupOnDrop {
+    /// Takes this guard out of service -- `run_tracked`'s own normal-exit
+    /// return path (`core/cancellation.py::run_tracked` has no
+    /// `except`/`finally` of its own at all once `_communicate_promptly`
+    /// returns without raising, `:874-896`, so nothing there ever calls
+    /// `kill_process_group` on this path) calls this right before
+    /// returning `Ok`, so the group a background process joined keeps
+    /// running past the step that started it (#519) -- while every
+    /// other return path (timeout, cancellation, any other unwind,
+    /// including a dropped future) leaves the guard armed, so its own
+    /// `Drop` below still fires.
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
 impl Drop for KillGroupOnDrop {
+    // This guard's own version of `run_tracked`'s `except BaseException:` fallback kill (`core/cancellation.py:888-895`).
     fn drop(&mut self) {
         let Some(pid) = self.pid else { return };
         if self.isolated {
@@ -263,8 +280,9 @@ pub async fn run_tracked(
     let reaped = Rc::new(Cell::new(false));
     // Lives for the rest of this function -- its own `Drop` is this
     // call's safety net against being torn down mid-await from outside
-    // (see the struct's own doc comment above).
-    let _kill_on_drop = KillGroupOnDrop {
+    // (see the struct's own doc comment above). `mut`: the normal-exit
+    // path below calls `disarm()` on it before returning `Ok`.
+    let mut kill_on_drop = KillGroupOnDrop {
         pid,
         isolated: opts.new_session,
         reaped: reaped.clone(),
@@ -364,6 +382,8 @@ pub async fn run_tracked(
                 // targets *pgid* directly (never re-derives it from
                 // *pid*, and never fires at all when this run isn't
                 // isolated) -- see `repeat_group_kill`'s own doc comment.
+                // Mirrors `core/cancellation.py::_communicate_promptly`'s
+                // own repeat-kill-while-cancelled branch, `:806-810`.
                 if token.is_set() {
                     if let Some(pgid) = pgid {
                         repeat_group_kill(pgid);
@@ -376,7 +396,8 @@ pub async fn run_tracked(
     if timed_out {
         // The first kill, same as `core/cancellation.py::kill_process_group`
         // itself: a no-op once the child (not necessarily the whole
-        // group) has already exited.
+        // group) has already exited. Mirrors `run_tracked`'s own
+        // `except subprocess.TimeoutExpired:` branch, `:879-887`.
         if let Some(pid) = pid {
             kill_process_group(pid);
         }
@@ -403,9 +424,20 @@ pub async fn run_tracked(
     let status = child_status.expect("loop only breaks `false` once child_status is Some");
     let stdout_bytes = stdout_bytes.unwrap_or_default();
     let stderr_bytes = stderr_bytes.unwrap_or_default();
+    // A decode failure here still leaves the guard armed (the `?`
+    // below returns before `disarm()` runs) -- it mirrors Python's own
+    // decode, which happens inside `proc.communicate()`, so a
+    // `UnicodeDecodeError` there unwinds through `run_tracked`'s own
+    // `except BaseException:` and still kills the group, `:888-895`.
     let stdout = decode_text(&stdout_bytes)?;
     let stderr = decode_text(&stderr_bytes)?;
 
+    // The one path with no kill at all in `core/cancellation.py::
+    // run_tracked` (#519): a normal exit disarms the guard instead of
+    // letting its `Drop` run `repeat_group_kill`/`kill_process_group`
+    // on the whole group, so a background process it started keeps
+    // running past this step.
+    kill_on_drop.disarm();
     Ok(Completed {
         stdout,
         stderr,
@@ -926,6 +958,160 @@ mod tests {
         assert!(
             !still_running,
             "the dropped run_tracked future must have killed its own child"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_background_process_survives_a_step_that_finishes_normally() {
+        // Issue #519: `sh`'s own `sleep 8473 &` keeps running in the
+        // isolated group after `sh` itself has exited and this call
+        // has returned `Ok` -- the guard must be disarmed on this path,
+        // not left to `killpg` the whole group the way its `Drop`
+        // would on every other return path. `#[cfg(unix)]` (not just
+        // the `pid_is_alive`/`libc::kill` calls below): on Linux a
+        // killed orphan is reaped within a few milliseconds, well
+        // under the first liveness check's own timing, so without the
+        // second check below this test could pass even with the fix
+        // reverted.
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            new_session: true,
+            ..RunOpts::default()
+        };
+        // The background `sleep`'s own stdout/stderr are redirected
+        // away, not inherited -- a process that keeps this step's own
+        // stdout pipe open is the *other* case the issue names, which
+        // both engines already handle the same way (both wait for the
+        // pipe to close); this test is about the group surviving a
+        // normal exit, so the background process must not also hold
+        // this call's own pipe open.
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 8473 >/dev/null 2>&1 & echo $!".to_string(),
+        ];
+        let completed = run_tracked(&cmd, &opts, &token).await.unwrap();
+        assert_eq!(completed.exit_code, 0);
+        let bg_pid: u32 = completed.stdout.trim().parse().expect("sh printed $!");
+        assert!(
+            pid_is_alive(bg_pid),
+            "the background process must still be running right after the step returned"
+        );
+        // A second check, ~300ms later: a killed orphan is reaped long
+        // before that on every platform this crate runs on, so this is
+        // what actually catches the bug on Linux (where the first
+        // check alone can observe the pid as still-alive-but-zombie
+        // even on the buggy path, for a window too short to be a
+        // reliable signal on its own).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            pid_is_alive(bg_pid),
+            "the background process must still be running 300ms after the step returned"
+        );
+        // Clean it up ourselves -- by pid, never a bare name, so this
+        // never reaches another lane's own processes on this machine.
+        unsafe {
+            libc::kill(bg_pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: u32) -> bool {
+        // `kill(pid, 0)`: no signal sent, just an existence check --
+        // `ESRCH` means gone, anything else (including success) means
+        // the pid is still live.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    /// A scratch directory for a single test's own pidfile, removed on
+    /// drop -- same shape as [`ScratchBinDir`] above, kept separate
+    /// because this one holds a pidfile a background shell writes into,
+    /// not a `PATH` candidate.
+    struct ScratchPidDir {
+        dir: std::path::PathBuf,
+    }
+
+    impl ScratchPidDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "electricity-tools-process-test-{}-{}",
+                std::process::id(),
+                name
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            ScratchPidDir { dir }
+        }
+
+        fn pidfile(&self) -> std::path::PathBuf {
+            self.dir.join("bg.pid")
+        }
+    }
+
+    impl Drop for ScratchPidDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn in_loop_cancellation_kills_a_background_process_when_new_session_is_set() {
+        // Unlike `dropping_the_future_mid_run_kills_the_child_the_drop_guard`
+        // above (which tears the future down from *outside*, never
+        // giving `run_tracked`'s own wait loop another poll), this
+        // awaits the call to completion after requesting cancellation --
+        // exercising the *other* kill path: the wait loop's own
+        // `token.is_set()` branch, which repeats `killpg` on the
+        // isolated group until the pipes reach EOF.
+        let scratch = ScratchPidDir::new("in-loop-cancellation");
+        let pidfile = scratch.pidfile();
+        let token = CancellationToken::new();
+        let opts = RunOpts {
+            new_session: true,
+            ..RunOpts::default()
+        };
+        // A duration unique to this test (never used by any other
+        // sleep-based test in this module) so the cleanup below, and
+        // `pgrep`, can never touch a sibling test's own child.
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "sleep 8474 >/dev/null 2>&1 & echo $! > {}; sleep 30",
+                pidfile.display()
+            ),
+        ];
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token));
+        // One poll (via `select!`, not a bare `.await` sitting on an
+        // un-started future) is enough to actually spawn the shell and
+        // its background child before cancellation is requested.
+        tokio::select! {
+            _ = &mut fut => panic!("must not finish before cancellation is requested"),
+            () = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+        token.request(2);
+        // Awaited to completion here (unlike the drop-guard test above,
+        // which drops the future outright) -- this exercises the wait
+        // loop's own `token.is_set()` branch, not `KillGroupOnDrop`.
+        let _ = fut.await;
+
+        let bg_pid: u32 = std::fs::read_to_string(&pidfile)
+            .expect("the background sleep must have written its own pid")
+            .trim()
+            .parse()
+            .expect("pidfile must contain a plain pid");
+        // Poll rather than a single hard sleep -- faster on a quiet
+        // machine, still tolerant of load on a shared one, but never
+        // waits longer than the ~300ms budget before failing.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        while pid_is_alive(bg_pid) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !pid_is_alive(bg_pid),
+            "cancellation requested mid-run must kill the isolated group's \
+             background process within ~300ms, not just the tracked child"
         );
     }
 

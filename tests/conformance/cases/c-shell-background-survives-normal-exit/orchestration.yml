@@ -1,0 +1,23 @@
+name: c-shell-background-survives-normal-exit
+effects:
+  - type: tool
+    name: start
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--spawn-background", "--pidfile", "bg.pid"]
+  - type: tool
+    name: check
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--check-pidfile", "bg.pid"]
+  - type: tool
+    name: cleanup
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--kill-pidfile", "bg.pid"]
