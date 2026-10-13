@@ -1,0 +1,19 @@
+{
+  "enabled_tools": ["json", "validate_yaml"],
+  "runtime": {
+    "complexity": {
+      "scoring": {"enabled": true},
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {"max": 50, "model": "small"},
+          {"model": "big"}
+        ]
+      },
+      "decomposition": {"enabled": true, "threshold": 10, "max_depth": 2, "max_chunks": 5}
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}

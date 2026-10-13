@@ -1,0 +1,10 @@
+name: decompose-invalid-plan
+adapter: scripted
+model: m
+effects:
+- type: prompt
+  name: bad_allowlist
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+- type: prompt
+  name: bad_chunks
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
