@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #522 acceptance case 5: decomposition route-up ignores a run-level model lock",
+  "description": "As decompose-route-up-max-depth, plus a profile with a run-level model:. model_reason stays \"default\" and the band is still recorded, yet meta.model is the catch-all -- decompose::route_up_model never reads the run-level lock.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "config": "config.json",
+  "expect": "success"
+}

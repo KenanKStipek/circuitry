@@ -1,0 +1,7 @@
+name: decompose-route-up-model-lock
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: a
+    template: "hi"
