@@ -1,0 +1,12 @@
+name: decompose-openai-mock-requests
+adapter: lmstudio
+model: test-model
+interface:
+  inputs:
+    topic:
+      type: string
+      required: true
+effects:
+- type: prompt
+  name: big
+  template: Analyze and critique {{input.topic}} in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.

@@ -1,0 +1,20 @@
+{"v":1,"seq":0,"ts":"2026-10-13T21:54:22.921Z","ev":"run_start","run_id":"0a3e6d66-b6b2-4e50-acd9-1bfbf02bde63","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":76106}
+{"v":1,"seq":1,"ts":"2026-10-13T21:54:22.925Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T21:54:22.927Z","ev":"start","id":1,"path":"prime.big"}
+{"v":1,"seq":3,"ts":"2026-10-13T21:54:22.950Z","ev":"start","id":2,"path":"prime.big.plan"}
+{"v":1,"seq":4,"ts":"2026-10-13T21:54:22.976Z","ev":"end","id":2,"path":"prime.big.plan","ok":true,"ms":26}
+{"v":1,"seq":5,"ts":"2026-10-13T21:54:22.976Z","ev":"start","id":3,"path":"prime.big.check"}
+{"v":1,"seq":6,"ts":"2026-10-13T21:54:22.978Z","ev":"end","id":3,"path":"prime.big.check","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-10-13T21:54:22.979Z","ev":"start","id":4,"path":"prime.big.result_path"}
+{"v":1,"seq":8,"ts":"2026-10-13T21:54:22.979Z","ev":"end","id":4,"path":"prime.big.result_path","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-13T21:54:22.979Z","ev":"start","id":5,"path":"prime.big.done"}
+{"v":1,"seq":10,"ts":"2026-10-13T21:54:22.979Z","ev":"end","id":5,"path":"prime.big.done","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-10-13T21:54:22.982Z","ev":"start","id":6,"path":"prime.big.a"}
+{"v":1,"seq":12,"ts":"2026-10-13T21:54:22.995Z","ev":"end","id":6,"path":"prime.big.a","ok":true,"ms":12}
+{"v":1,"seq":13,"ts":"2026-10-13T21:54:22.995Z","ev":"start","id":7,"path":"prime.big.b"}
+{"v":1,"seq":14,"ts":"2026-10-13T21:54:23.008Z","ev":"end","id":7,"path":"prime.big.b","ok":true,"ms":13}
+{"v":1,"seq":15,"ts":"2026-10-13T21:54:23.008Z","ev":"start","id":8,"path":"prime.big.merge"}
+{"v":1,"seq":16,"ts":"2026-10-13T21:54:23.008Z","ev":"end","id":8,"path":"prime.big.merge","ok":true,"ms":0}
+{"v":1,"seq":17,"ts":"2026-10-13T21:54:23.008Z","ev":"end","id":1,"path":"prime.big","ok":true,"ms":82}
+{"v":1,"seq":18,"ts":"2026-10-13T21:54:23.009Z","ev":"end","id":0,"path":"prime","ok":true,"ms":84}
+{"v":1,"seq":19,"ts":"2026-10-13T21:54:23.009Z","ev":"run_end","ok":true}
