@@ -559,46 +559,70 @@ itself), most recently updated first — a node's update time is its own
 `completed_at`, or `created_at` while it has none, parsed as a real
 instant (`diff::parse_instant`, now `pub`) rather than compared as a raw
 string, with ties broken by path. Each row shows the path relative to
-`prime`, then either: the start of its error, in red, if it has one; its
-own abbreviated value (one line, compact JSON for anything but a string, a
-quoted string for a string, its own newlines escaped) if it has one; or
-its status glyph, if it's running with no value yet. A second line shows
-`↑sent ↓received`, only when at least one is nonzero — a leaf's own
-tokens, or (for a container) the sum over its whole subtree
-(`model::subtree_tokens`). The pane scrolls when it has focus, with its
-own selection (`App::state_selected_path`) kept fully independent of the
-orchestration pane's own — selecting a row here never moves the
-orchestration selection, and vice versa.
+`prime`, then either: the first line of its error, in red, if it has one
+(a multi-line stderr tail would otherwise break the pane's own
+one-line-per-entry shape); its own abbreviated value (one line, compact
+JSON for anything but a string, a quoted string for a string, its own
+newlines escaped) if it has one; or its status glyph, if it's running
+with no value yet. A second line shows `↑sent ↓received`, only when at
+least one is nonzero — a leaf's own tokens, or (for a container) the sum
+over its whole subtree (`model::subtree_tokens`). The pane scrolls when
+it has focus, with its own selection (`App::state_selected_path`) kept
+fully independent of the orchestration pane's own — selecting a row here
+never moves the orchestration selection, and vice versa.
+
+Both the path label and the value/error are cut to the pane's own real
+width with `…` (`tui.rs`'s own job, not `render.rs`'s — the pane's
+width is a terminal concern): the label gets a *left*-truncated share of
+it (`tui::truncate_label_left`, `state_pane_label_width`, scaling with
+the pane), so two entries sharing a long common prefix (`loop.iter_2.
+step`/`loop.iter_2.other`) stay distinct — a right-truncated `loop.
+iter_2…` would show identical text for both; the value/error gets
+whatever's left, truncated from the right (`tui::truncate_label`), since
+its own start is usually the more identifying part.
 
 **The `tokens by key` treemap** (`oscilloscope-core/src/treemap.rs`,
 drawn by `tui.rs`'s `draw_treemap`). A proportional-area chart of the
-current state's token totals, built as a tree of `TreemapNode`s (one per
-state key under `prime`, each carrying its own subtree's `node_tokens`
-sum and its own children) and laid out by `treemap::layout`, the
-squarified algorithm (Bruls, Huizing & van Wijk, 2000): each row of
-cells is grown for as long as doing so keeps that row's worst aspect
-ratio no worse than before, then placed along whichever side of the
-current rectangle is shorter; row boundaries are computed once in `f64`
-so every cell in a row shares the exact boundary value its neighbour
-does, and only then rounded to the integer grid, which is what keeps the
-rectangles gap- and overlap-free. Sibling cells are always ordered
-largest-total-first, ties broken by key, so the picture doesn't jump
-between redraws when nothing changed. A key with no tokens anywhere in
-its own subtree gets no cell at all, at any depth; when nothing has
-tokens yet, the pane shows `(no tokens yet)`. A container is drawn as a
-bordered cell, titled with its own key, holding its children's cells
-recursively, but only once its own rect is at least 3×3 (room for a
-border plus at least one interior cell) — a smaller container is drawn
-as a plain, unbordered cell instead, same as a leaf. A cell under 2×1 is
-"too small to draw at all": every such cell under one parent is merged
-into a single `…` cell, sized by their combined total, and the parent is
-squarified a second time with that merged entry standing in for all of
-them. A cell's own label is cut with `…` to fit; a cell with `rect.w <
-2` draws no label at all, just its own background colour. Cells are
-coloured by status (running yellow, done green, failed red), and the
-cell for the row currently selected in the orchestration pane (matched
-by its own full path, which every `TreemapNode`/`TreemapCell` carries
-alongside its key) is drawn reversed.
+current state's token totals. The root cell is `prime` itself
+(`treemap::build_tree` is just `build_node("prime", ...)` — the root
+gets no special case at all, since `build_node` already treats any
+container and its own children identically): a single `TreemapNode`
+carrying the whole tree's `node_tokens` sum and its own children,
+laid out by `treemap::layout`, the squarified algorithm (Bruls, Huizing
+& van Wijk, 2000): each row of cells is grown for as long as doing so
+keeps that row's worst aspect ratio no worse than before, then placed
+along whichever side of the current rectangle is shorter; row
+boundaries are computed once in `f64` so every cell in a row shares the
+exact boundary value its neighbour does, and only then rounded to the
+integer grid, which is what keeps the rectangles gap- and overlap-free.
+Sibling cells are always ordered largest-total-first, ties broken by
+key, so the picture doesn't jump between redraws when nothing changed.
+A key with no tokens anywhere in its own subtree gets no cell at all, at
+any depth; when nothing has tokens yet (including a zero-total root),
+the pane shows `(no tokens yet)` instead of drawing an empty root cell.
+A container is drawn as a bordered cell, titled with its own key,
+holding its children's cells recursively, but only once its own rect is
+at least 3×3 (room for a border plus at least one interior cell) — a
+smaller container is drawn as a plain, unbordered cell instead, same as
+a leaf. A leaf (or a too-small container, or a merged `…` bucket) has no
+border of its own, so its *background* fill is what makes it read as an
+area at all against its neighbours — an `fg`-only label over the
+default terminal background, the previous behaviour, left two adjacent
+cells with no visible edge between them whatsoever. A cell's own label
+is cut with `…` to fit, drawn in a contrasting foreground over that same
+fill; a cell with `rect.w < 2` draws no label at all, just its own
+background colour (`Style::bg`, not `fg` — styling with `fg` alone draws
+nothing when there's no text to colour). A cell under 2×1 is "too small
+to draw at all": every such cell under one parent is merged into a
+single `…` cell, sized by their combined total, and the parent is
+squarified again with that merged entry standing in for all of them —
+repeated, folding in whatever is newly too small each time, until a pass
+leaves nothing new to fold in (a second pass can itself still produce a
+survivor, or the merged bucket's own cell, under 2×1 one level removed).
+Cells are coloured by status (running yellow, done green, failed red),
+and the cell for the row currently selected in the orchestration pane
+(matched by its own full path, which every `TreemapNode`/`TreemapCell`
+carries alongside its key) is drawn reversed.
 
 **The log pane** moves here from the bottom, otherwise unchanged — the
 same lines `--log` prints (§2.4), plus the engine's own stderr, as a
@@ -610,6 +634,11 @@ the full bottom width, two content lines:
   - **Totals:** `in`/`out` as horizontal bars (`█`), scaled to the larger
     of the two, with exact counts (thousands separators) — always equal
     to the header's own `↑`/`↓`, since both read the token rule below.
+    Each bar's own width is what's left of the line after its label and
+    *both* counts' own measured width, halved between the two bars — a
+    bar sized without first reserving room for the counts could leave
+    one of them (the whole reason the line exists) cut off entirely on
+    an ordinary terminal width.
   - **What's in flight:** the estimated input summed over every prompt
     currently running, `≈ceil(chars(meta.prompt_sent) / 4)`, and how many
     prompts that is. No output estimate: neither engine reports a
@@ -623,18 +652,32 @@ the full bottom width, two content lines:
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
 `tokens_sent`/`tokens_received` otherwise. Confirmed by running both
-engines with the scripted adapter and a retried prompt: `cof`'s
-`cli/runtime_shim.py` (`_run_totals`/`_RunTotals.record`) and
-electricity's `electricity/src/lib.rs` (`RunTotals::record`) both build
-`runtime.last_run.totals` from exactly this pair, reading `_total` first
-and falling back to the plain field — the recorded run's `tokens_sent`/
-`tokens_received` on the winning attempt (11/22) equalled the `_total`
-pair exactly, since the scripted adapter's own failed attempt carried no
-tokens of its own. The header, the token bar, the state pane and the
+engines with the scripted adapter: `cof`'s `cli/runtime_shim.py`
+(`_run_totals`/`_RunTotals.record`) and electricity's
+`electricity/crates/electricity/src/lib.rs` (`RunTotals::record`) both
+build `runtime.last_run.totals` from exactly this pair, reading `_total`
+first and falling back to the plain field. The first retried-prompt
+scenario tried (a scripted adapter error, then a success) turned out not
+to tell the two rules apart at all: the scripted adapter's own failed
+attempt carries no tokens of its own, so the winning attempt's plain
+`tokens_sent`/`tokens_received` equalled the `_total` pair exactly
+either way. A `prompt_type: json` prompt whose first reply is syntactically
+invalid JSON does: decoding it fails (retryable, since a decode failure
+is treated the same as a classified-retryable adapter error —
+`core/prompt.py`'s own `_generate_with_fallbacks`), but that attempt
+still spent real tokens, so they still accumulate into `_total`
+regardless of whether the attempt won. Run against both engines (a first
+reply of `5`/`7` tokens, a second, valid one of `11`/`22`), `cof` and
+electricity wrote the byte-identical `tokens_sent_total: 16`/
+`tokens_received_total: 29` and the identical `runtime.last_run.totals`
+from it — the plain pair (`11`/`22`, the winning attempt alone) does
+*not* equal those totals, so this scenario is what actually tells the
+two rules apart. The header, the token bar, the state pane and the
 treemap all read tokens this same way (`model::node_tokens`/
 `subtree_tokens`), so a retried prompt can never make one surface
-disagree with another; `render::tests::subtree_tokens_matches_run_totals_
-for_a_retried_prompt` pins it against that same recorded shape.
+disagree with another; `model::tests::subtree_tokens_matches_run_totals_
+for_a_retried_prompt_on_cof`/`_on_electricity` pin it against that same
+recorded shape from each engine.
 
 **Keys:**
 
@@ -706,7 +749,10 @@ built from the one `flatten_state` call `render::build` already makes
 for the plan tree, not a second pass of their own; measured against a
 synthetic 2,000-node state, one redraw stays well under
 `REDRAW_INTERVAL` (`render::tests::redraw_from_a_2000_node_state_stays_
-well_under_the_redraw_interval`).
+well_under_the_redraw_interval`). That measurement times `render::build`
+alone, which leaves out the treemap's own layout and the ratatui draw
+itself; `tui::golden_tests::drawing_a_2000_node_state_stays_well_under_
+the_redraw_interval` times one `TestBackend` draw of the same state too.
 
 ### 6.4 Tests
 
@@ -715,10 +761,10 @@ well_under_the_redraw_interval`).
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, failed, failed and handled, cancelled, aborted (no final state) and `osp watch`, at 70×20 (below the two-column threshold, so these also cover the one-column fallback); `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the one golden with every pane populated, including a nested treemap cell (a nested container plus its own child).
-- **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle, the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal.
-- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation, error display and container token sums are covered on synthetic snapshots (a chain, a loop with two passes done, and a failed node); the token rule is pinned against a real recorded retried-prompt state from both engines (`subtree_tokens_matches_run_totals_for_a_retried_prompt`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too.
-- **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-token key gets no cell, many tiny children merge into one `…` cell sized by their combined total, a container lays its own children out inside its own border, and the same input always produces the same rectangles.
+- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osp watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the orchestration review found the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_treemap_and_the_state_pane` and `fallback_at_100x30_is_the_smallest_full_layout` cover the two further thresholds boundary-adjacent to those: 80×24 is two-column with both the treemap and the state pane dropped, and 100×30 is the smallest size at which nothing is dropped at all. `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the most comfortable size, with every pane populated, including a nested treemap cell under the `prime` root cell. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
+- **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
+- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too.
+- **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-token key gets no cell (including a zero-total root, which produces an empty tree, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, and the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout).
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
 - **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
   - the scripted adapter;

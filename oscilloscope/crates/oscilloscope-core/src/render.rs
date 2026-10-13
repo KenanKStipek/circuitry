@@ -332,9 +332,14 @@ fn build_state_rows(
                     retrying: false,
                 }
             });
+            // Finding 9: the first line only — a multi-line error (a
+            // shell's own stderr tail, say) would otherwise break the
+            // state pane's one-line-per-entry shape just as badly as an
+            // untruncated value would.
             let error_preview = node
                 .error
                 .as_deref()
+                .map(|e| e.lines().next().unwrap_or(e))
                 .map(|e| preview(e, STATE_PANE_PREVIEW_CHARS));
             let no_value_yet = node.is_running() && node.value.is_null();
             let value_preview = if error_preview.is_some() || no_value_yet {
@@ -1387,6 +1392,99 @@ mod tests {
             Some("/bin/ls failed (exit 1): ls: no such file")
         );
         assert_eq!(bad.value_preview, None);
+    }
+
+    /// Finding 9: only an error's first line — a shell's own
+    /// multi-line stderr tail must not break the state pane's
+    /// one-line-per-entry shape.
+    #[test]
+    fn a_multiline_error_only_shows_its_first_line() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "bad": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1)\nls: no such file\nmore detail"}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        let bad = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "bad")
+            .unwrap();
+        assert_eq!(
+            bad.error_preview.as_deref(),
+            Some("/bin/ls failed (exit 1)")
+        );
+    }
+
+    /// Acceptance list: a tree container's own sum, not just a named
+    /// loop's — a dynamic (unnamed tree block) with two prompt leaves.
+    #[test]
+    fn a_tree_containers_state_row_sums_tokens_over_both_branches() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "left": {"value": "a", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent_total": 3, "tokens_received_total": 4}},
+                "right": {"value": "b", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent_total": 6, "tokens_received_total": 9}}
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        let fan = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "fan")
+            .unwrap();
+        assert_eq!(fan.tokens, Some((9, 13)));
+    }
+
+    /// Acceptance list: a `use` child's own tokens roll up into the
+    /// `use` node's own sum, the same as any other container.
+    #[test]
+    fn a_use_childs_tokens_roll_up_into_the_use_nodes_sum() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "first": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "orchestration": "child.yml"},
+                "c_ask": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent_total": 2, "tokens_received_total": 5}}
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+        let first = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "first")
+            .unwrap();
+        assert_eq!(first.tokens, Some((2, 5)));
     }
 
     #[test]

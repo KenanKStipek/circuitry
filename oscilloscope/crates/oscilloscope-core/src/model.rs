@@ -1873,34 +1873,83 @@ mod tests {
         );
     }
 
-    /// The token rule (issue #527): the shape of `cof run`'s and
-    /// `electricity`'s actual final state for a retried prompt (the
-    /// scripted adapter's first attempt a retryable server error, the
-    /// second a success with `tokens_sent: 11`/`tokens_received: 22`,
-    /// `retries_used: 1`) — both engines wrote the identical
-    /// `tokens_sent_total`/`tokens_received_total` pair and the
-    /// identical `runtime.last_run.totals` from it, confirmed by
-    /// running each. `subtree_tokens` over the whole tree must equal
-    /// that recorded total exactly.
+    /// The token rule (issue #527, orchestrator finding F4): a
+    /// retried prompt where the two candidate pairs actually
+    /// *disagree*, so the test can tell them apart — unlike a
+    /// retryable adapter error (which carries no tokens of its own),
+    /// a `prompt_type: json` reply that fails to *decode* still
+    /// spends real tokens on that attempt (`core/prompt.py`'s
+    /// `_generate_with_fallbacks`: a decode failure is retryable, and
+    /// every attempt's tokens accumulate into `_total` regardless of
+    /// whether it won). This state is `cof run`'s and electricity's
+    /// own real final state (not hand-written) for the identical
+    /// scenario: a first reply of invalid JSON with `tokens_sent: 5`/
+    /// `tokens_received: 7`, then a valid one with `11`/`22` —
+    /// confirmed by running both engines with the scripted adapter.
+    /// Both wrote the identical `tokens_sent_total: 16`/
+    /// `tokens_received_total: 29` and the identical
+    /// `runtime.last_run.totals` from it — the plain pair
+    /// (`tokens_sent: 11`/`tokens_received: 22`, the winning attempt
+    /// only) does not match those totals, so a rule that read the
+    /// plain pair instead would fail this test.
     #[test]
-    fn subtree_tokens_matches_run_totals_for_a_retried_prompt() {
+    fn subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof() {
         let state = json!({
-            "runtime": {"last_run": {"totals": {"tokens_sent": 11, "tokens_received": 22}}},
+            "runtime": {"last_run": {"totals": {"tokens_sent": 16, "tokens_received": 29}}},
             "prime": {"value": true, "meta": {
                 "completed_at": "t1", "error": null, "tokens_sent": null, "tokens_received": null
             },
-            "ask": {"value": "the answer", "meta": {
+            "ask": {"value": {"ans": "ok"}, "meta": {
                 "created_at": "t0", "completed_at": "t1", "error": null,
+                "prompt_type": "json",
                 "retries_used": 1,
                 "tokens_sent": 11, "tokens_received": 22,
-                "tokens_sent_total": 11, "tokens_received_total": 22
+                "tokens_sent_total": 16, "tokens_received_total": 29,
+                "fallback_attempts": [
+                    {"adapter": "scripted", "model": "scripted-model", "status": "succeeded",
+                     "error": null, "tokens_sent": 11, "tokens_received": 22}
+                ]
             }}}
         });
-        let flat = flatten_state(&state);
-        let totals = run_totals(&state).unwrap();
+        assert_token_rule_holds(&state);
+    }
+
+    /// [`subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`],
+    /// electricity's own final state for the identical scenario and
+    /// identical replies file — the two engines agree byte-for-byte
+    /// on both the `_total` pair and `runtime.last_run.totals`.
+    #[test]
+    fn subtree_tokens_matches_run_totals_for_a_retried_prompt_on_electricity() {
+        let state = json!({
+            "runtime": {"last_run": {"totals": {"tokens_sent": 16, "tokens_received": 29}}},
+            "prime": {"value": true, "meta": {
+                "completed_at": "t1", "error": null, "tokens_sent": null, "tokens_received": null
+            },
+            "ask": {"value": {"ans": "ok"}, "meta": {
+                "created_at": "t0", "completed_at": "t1", "error": null,
+                "prompt_type": "json",
+                "retries_used": 1,
+                "tokens_sent": 11, "tokens_received": 22,
+                "tokens_sent_total": 16, "tokens_received_total": 29,
+                "fallback_attempts": [
+                    {"adapter": "scripted", "model": "scripted-model", "status": "succeeded",
+                     "error": null, "tokens_sent": 11, "tokens_received": 22}
+                ]
+            }}}
+        });
+        assert_token_rule_holds(&state);
+    }
+
+    fn assert_token_rule_holds(state: &Value) {
+        let flat = flatten_state(state);
+        let totals = run_totals(state).unwrap();
         let (sent, received) = subtree_tokens("prime", &flat);
         assert_eq!(sent, totals["tokens_sent"].as_u64().unwrap());
         assert_eq!(received, totals["tokens_received"].as_u64().unwrap());
-        assert_eq!((sent, received), (11, 22));
+        assert_eq!((sent, received), (16, 29));
+        // The plain pair (the winning attempt only) must *not* match —
+        // otherwise this test could not actually tell the two rules
+        // apart (finding F4).
+        assert_ne!((sent, received), (11, 22));
     }
 }

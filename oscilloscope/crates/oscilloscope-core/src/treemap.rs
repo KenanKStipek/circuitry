@@ -126,53 +126,65 @@ fn layout_into(
         return;
     }
 
-    let weights: Vec<f64> = items.iter().map(|n| n.total as f64).collect();
-    let rects = squarify(&weights, x as f64, y as f64, w as f64, h as f64);
-    let int_rects: Vec<Rect> = rects.into_iter().map(round_rect).collect();
-
     // Issue #527: a rect too small to draw at all gets folded into
     // one merged `…` cell per parent, sized by the combined total of
-    // everything folded into it. A second squarify pass places that
-    // merged cell (if any) alongside whatever survived the first
-    // pass unmerged — its own area then comes from the same packing
-    // algorithm as everything else, rather than whatever scraps are
-    // left over.
-    let mut surviving: Vec<(&TreemapNode, Rect)> = Vec::new();
+    // everything folded into it, and the parent is squarified again
+    // with that merged entry standing in for all of them. Finding
+    // F10: that second pass can itself still leave a survivor (or the
+    // merged bucket's own cell) under 2×1 — rarer, but the same
+    // problem one level removed — so this repeats, folding in
+    // whatever is newly too small each time, until a pass leaves
+    // nothing new to fold in. Bounded by `items.len()` iterations:
+    // each one either converges, or strictly shrinks the survivor
+    // count by at least one.
+    let mut survivors: Vec<(&TreemapNode, u64)> = items.iter().map(|n| (*n, n.total)).collect();
     let mut merged_total: u64 = 0;
-    for (node, rect) in items.iter().zip(int_rects.iter()) {
-        if too_small(rect.w, rect.h) {
-            merged_total += node.total;
-        } else {
-            surviving.push((node, *rect));
-        }
-    }
 
-    if merged_total == 0 {
-        for (node, rect) in surviving {
-            emit_cell(node, rect, depth, false, out);
+    let (weights, int_rects) = loop {
+        let mut weights: Vec<(Option<&TreemapNode>, u64)> =
+            survivors.iter().map(|(n, t)| (Some(*n), *t)).collect();
+        if merged_total > 0 {
+            weights.push((None, merged_total));
         }
-        return;
-    }
+        weights.sort_by(|(a_node, a_total), (b_node, b_total)| {
+            b_total
+                .cmp(a_total)
+                .then_with(|| sort_key(*a_node).cmp(sort_key(*b_node)))
+        });
+        let weight_values: Vec<f64> = weights.iter().map(|(_, t)| *t as f64).collect();
+        let rects = squarify(&weight_values, x as f64, y as f64, w as f64, h as f64);
+        let int_rects: Vec<Rect> = rects.into_iter().map(round_rect).collect();
 
-    let mut weights: Vec<(Option<&TreemapNode>, u64)> =
-        surviving.iter().map(|(n, _)| (Some(*n), n.total)).collect();
-    weights.push((None, merged_total));
-    weights.sort_by(|(a_node, a_total), (b_node, b_total)| {
-        b_total
-            .cmp(a_total)
-            .then_with(|| sort_key(*a_node).cmp(sort_key(*b_node)))
-    });
-    let weight_values: Vec<f64> = weights.iter().map(|(_, t)| *t as f64).collect();
-    let rects = squarify(&weight_values, x as f64, y as f64, w as f64, h as f64);
-    let int_rects: Vec<Rect> = rects.into_iter().map(round_rect).collect();
-    for ((node, _), rect) in weights.iter().zip(int_rects.iter()) {
+        let mut newly_too_small: u64 = 0;
+        let mut next_survivors: Vec<(&TreemapNode, u64)> = Vec::new();
+        for ((node, total), rect) in weights.iter().zip(int_rects.iter()) {
+            if too_small(rect.w, rect.h) {
+                // The merged bucket (`node: None`) itself coming up
+                // too small contributes nothing further to fold in —
+                // there is nothing smaller left than the bucket that
+                // already holds everything too small to draw.
+                if node.is_some() {
+                    newly_too_small += total;
+                }
+            } else if let Some(n) = node {
+                next_survivors.push((*n, *total));
+            }
+        }
+        if newly_too_small == 0 {
+            break (weights, int_rects);
+        }
+        survivors = next_survivors;
+        merged_total += newly_too_small;
+    };
+
+    for ((node, total), rect) in weights.iter().zip(int_rects.iter()) {
         match node {
             Some(node) => emit_cell(node, *rect, depth, false, out),
             None => out.push(TreemapCell {
                 label: "…".to_string(),
                 path: None,
                 rect: *rect,
-                total: merged_total,
+                total: *total,
                 status: None,
                 has_children: false,
                 merged: true,
@@ -330,42 +342,19 @@ fn round_rect((x, y, w, h): (f64, f64, f64, f64)) -> Rect {
 }
 
 /// Builds the `tokens by key` tree (DESIGN.md §6.3) from flattened
-/// state: one [`TreemapNode`] per immediate child of `root_path`
-/// (normally `"prime"`), each carrying its own subtree's token total
-/// and recursing into its own children the same way. A key with no
-/// tokens anywhere in its subtree is omitted entirely, at every depth
-/// (issue #527) — the caller still calls [`layout`] even when this
-/// returns an empty list; an empty list is exactly "nothing has
-/// tokens yet".
+/// state: issue #527's own "the root cell is `prime`" — a single
+/// [`TreemapNode`] for `root_path` itself (normally `"prime"`),
+/// carrying its own subtree's token total and recursing into its
+/// children exactly the way any other container does ([`build_node`]
+/// makes no distinction between the root and a nested container at
+/// all). "Nothing has tokens yet" is an empty list, not a zero-area
+/// root cell — the caller still calls [`layout`] on it either way.
 pub fn build_tree(
     root_path: &str,
     flat: &BTreeMap<String, crate::model::NodeMeta>,
     statuses: &BTreeMap<String, crate::model::RowStatus>,
 ) -> Vec<TreemapNode> {
-    // Direct children of `root_path`; every deeper path is discovered
-    // again from each child's own `build_node` call, which only ever
-    // looks at paths starting with its own prefix.
-    // `flat.keys()` is already sorted, so every path sharing one
-    // direct child's own prefix is contiguous — checking only the
-    // last pushed entry (not `Vec::contains`'s own full scan) is
-    // enough to de-duplicate without becoming quadratic in the child
-    // count (issue #527's redraw-cost acceptance).
-    let mut direct_children: Vec<&str> = Vec::new();
-    let prefix = format!("{root_path}.");
-    for path in flat.keys() {
-        let Some(rest) = path.strip_prefix(prefix.as_str()) else {
-            continue;
-        };
-        let segment = rest.split('.').next().unwrap_or(rest);
-        let child_path = &path[..prefix.len() + segment.len()];
-        if direct_children.last() != Some(&child_path) {
-            direct_children.push(child_path);
-        }
-    }
-    direct_children
-        .into_iter()
-        .filter_map(|child_path| build_node(child_path, flat, statuses))
-        .collect()
+    build_node(root_path, flat, statuses).into_iter().collect()
 }
 
 fn build_node(
@@ -478,9 +467,21 @@ mod tests {
             leaf("fetch", 400),
             leaf("draft", 90),
         ];
+        // Finding F12: the same three nodes, given in a different
+        // order, must still lay out identically -- `sorted_children`'s
+        // own largest-total-first/tie-by-key order is what "the same
+        // input" actually means here, not "the same `Vec` order",
+        // which a call site's own observation order never guarantees.
+        let shuffled = vec![
+            leaf("draft", 90),
+            leaf("summarize", 1052),
+            leaf("fetch", 400),
+        ];
         let first = layout(&children, 0, 0, 60, 20);
         let second = layout(&children, 0, 0, 60, 20);
+        let from_shuffled = layout(&shuffled, 0, 0, 60, 20);
         assert_eq!(first, second);
+        assert_eq!(first, from_shuffled);
     }
 
     #[test]
@@ -517,8 +518,27 @@ mod tests {
         let flat = flatten_state(&state);
         let statuses = BTreeMap::new();
         let tree = build_tree("prime", &flat, &statuses);
-        let keys: Vec<&str> = tree.iter().map(|n| n.key.as_str()).collect();
+        // Issue #527: the root cell is `prime` itself, wrapping
+        // whichever of its children actually have tokens.
+        assert_eq!(tree.len(), 1);
+        let root = &tree[0];
+        assert_eq!(root.key, "prime");
+        assert_eq!(root.total, 30);
+        let keys: Vec<&str> = root.children.iter().map(|n| n.key.as_str()).collect();
         assert_eq!(keys, vec!["summarize"]);
-        assert_eq!(tree[0].total, 30);
+    }
+
+    #[test]
+    fn build_tree_returns_empty_when_nothing_has_tokens_yet() {
+        use crate::model::flatten_state;
+        use serde_json::json;
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fetch": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "shell"}}
+        }});
+        let flat = flatten_state(&state);
+        let statuses = BTreeMap::new();
+        let tree = build_tree("prime", &flat, &statuses);
+        assert!(tree.is_empty());
     }
 }

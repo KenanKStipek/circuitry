@@ -273,10 +273,14 @@ impl App {
                 }
             }
             KeyCode::Tab => {
+                // Finding 12: on a small terminal the state pane isn't
+                // drawn at all (`tui::draw` zeroes `state_viewport` the
+                // same frame) — `tab` must not focus a pane with nothing
+                // to show or scroll.
                 self.pane = match self.pane {
                     Pane::Tree => Pane::Details,
-                    Pane::Details => Pane::State,
-                    Pane::State => Pane::Tree,
+                    Pane::Details if self.state_viewport > 0 => Pane::State,
+                    Pane::Details | Pane::State => Pane::Tree,
                 };
             }
             KeyCode::Char('f') => self.follow = !self.follow,
@@ -848,6 +852,7 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
+        app.state_viewport = 8;
         assert_eq!(app.pane, Pane::Tree);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
         assert_eq!(app.pane, Pane::Details);
@@ -855,6 +860,21 @@ mod tests {
         assert_eq!(app.pane, Pane::State);
         app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
         assert_eq!(app.pane, Pane::Tree);
+    }
+
+    /// Finding 12: a small terminal drops the state pane entirely
+    /// (`tui::draw` zeroes `state_viewport` that same frame) — `tab`
+    /// must skip straight from details back to the orchestration pane.
+    #[test]
+    fn tab_skips_the_state_pane_when_it_is_not_drawn() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.state_viewport = 0;
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        assert_eq!(app.pane, Pane::Details);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], false, false);
+        assert_eq!(app.pane, Pane::Tree, "the state pane has nothing to focus");
     }
 
     #[test]
