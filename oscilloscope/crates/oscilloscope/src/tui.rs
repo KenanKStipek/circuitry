@@ -739,8 +739,19 @@ fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &To
         } else {
             "s"
         };
+        // The orchestrator's own finding: a tree-loop pass's prompt,
+        // and a `use: path:` child's, are counted as running even
+        // with no `prompt_sent` in state to estimate from at all
+        // (DESIGN.md §1.4) -- the trailing `+` says the estimate is a
+        // lower bound, same as "effects planned" already does in the
+        // header, rather than silently under-reporting it as exact.
+        let lower_bound = if token_bar.estimated_input_is_lower_bound {
+            "+"
+        } else {
+            ""
+        };
         Line::from(format!(
-            "now in ≈{}   ({} prompt{plural} running)",
+            "now in ≈{}{lower_bound}   ({} prompt{plural} running)",
             with_thousands_separators(token_bar.estimated_input),
             token_bar.prompts_running
         ))
@@ -964,8 +975,8 @@ pub fn draw(
 mod golden_tests {
     use super::*;
     use electricity_bytecode::{
-        EffectPath, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
-        Program, Region, ToolOp,
+        EffectPath, Escape, LeafKind, LoopFlow, LoopId, LoopSpec, NodeKind, OnError, Op, ParamNode,
+        Program, PromptContent, PromptOp, PromptType, Region, TemplateText, ToolOp,
     };
     use oscilloscope_core::model::{ProcessState, RunModel};
     use oscilloscope_core::observe::Event;
@@ -997,6 +1008,90 @@ mod golden_tests {
             labels: None,
             enabled: true,
         }
+    }
+
+    fn prompt(path: EffectPath, name: &str) -> Op {
+        Op {
+            path,
+            name: Some(name.to_string()),
+            kind: NodeKind::Leaf(Box::new(LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: None,
+                provider: None,
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+            }))),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        }
+    }
+
+    /// A named tree loop (`fan`) whose body is a single prompt leaf
+    /// (`ask`) -- the orchestrator's own finding: a tree-loop pass's
+    /// prompt is confirmed `Running` by events while never once
+    /// appearing in live state at all (DESIGN.md §1.4), which
+    /// `full_layout_with_a_running_tree_loop_prompt` below exercises.
+    fn tree_loop_with_prompt_plan() -> PlanTree {
+        let root_path = EffectPath::root();
+        let loop_path = root_path.clone().push_name("fan");
+        let pass_path = loop_path.clone().push_pass(LoopId(0));
+        let ask_path = pass_path.push_name("ask");
+        let root = Op {
+            path: root_path,
+            name: Some("prime".to_string()),
+            kind: NodeKind::Control(Region::Block {
+                ops: vec![Op {
+                    path: loop_path,
+                    name: Some("fan".to_string()),
+                    kind: NodeKind::Control(Region::Loop {
+                        name: Some("fan".to_string()),
+                        spec: LoopSpec::Each {
+                            in_path: "prime.items".to_string(),
+                            as_name: "item".to_string(),
+                            truncate: false,
+                        },
+                        body: Box::new(Region::Block {
+                            ops: vec![prompt(ask_path, "ask")],
+                            overlay: true,
+                        }),
+                        flow: LoopFlow::Tree,
+                        max_concurrency: Some(2),
+                        max_iterations: None,
+                        min_iterations: 0,
+                        collect: None,
+                    }),
+                    on_error: OnError::Fail,
+                    labels: None,
+                    enabled: true,
+                }],
+                overlay: false,
+            }),
+            on_error: OnError::Fail,
+            labels: None,
+            enabled: true,
+        };
+        let program = Program {
+            root,
+            prompts: Default::default(),
+            effect_names: Default::default(),
+            document: None,
+            runtime_block: None,
+            interface: None,
+            adapter: None,
+            model: None,
+        };
+        PlanTree::from_program(&program)
     }
 
     /// A plan shared by every golden test below (DESIGN.md §6.3): a
@@ -1859,5 +1954,59 @@ mod golden_tests {
             elapsed < std::time::Duration::from_millis(500),
             "one TestBackend draw of a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
+    }
+
+    /// The orchestrator's own finding: a tree-loop pass's prompt never
+    /// appears in live state at all while it runs (DESIGN.md §1.4), on
+    /// either engine -- `fan.iter_0.ask` here has no node of its own in
+    /// `state`, confirmed running only by its own `start` event. The
+    /// token bar must still show it running, as a lower-bound estimate
+    /// (no `prompt_sent` to measure from), rather than "nothing in
+    /// flight".
+    #[test]
+    fn full_layout_with_a_running_tree_loop_prompt() {
+        let plan = tree_loop_with_prompt_plan();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Dispatch {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            path: "prime.fan".to_string(),
+            branches: 2,
+            concurrency: Some(2),
+        });
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.fan.iter_0.ask".to_string(),
+        });
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let rendered = render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.prompts_running, 1);
+        assert!(rendered.token_bar.estimated_input_is_lower_bound);
+
+        let details = render::details_for("prime.fan.iter_0.ask", &plan, Some(&state));
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.fan.iter_0.ask".to_string());
+        app.follow = false;
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, Some(&details), &[], &mut app, Some(&state)))
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            !text.contains("nothing in flight"),
+            "a running tree-loop prompt must show in the token bar:\n{text}"
+        );
+        insta::assert_snapshot!(text);
     }
 }

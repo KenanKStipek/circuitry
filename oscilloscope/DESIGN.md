@@ -517,6 +517,22 @@ total` once it's known (so a four-pass loop's one-leaf body counts as
 crossed loop's own total isn't known yet, "planned" is a lower bound,
 shown with a trailing `+` (`3/3+`).
 
+A `use` leaf's own children, not the `use` node itself, are the real
+planned/done units (the orchestrator's own finding: counting both, for
+a `use: path:` child whose children are separately grafted into the
+plan, or neither, for a `use: inline:`/`ref:` child, which has no
+static plan at all, let "done" outrun "planned" once a `use` child's
+effects actually landed in state). A `path:` child's children are
+statically known (grafted, §5), so "planned" is exact for it from the
+start; an `inline:`/`ref:` child's are only known once discovered in
+state, so "planned"/"done" count whatever of its children have
+actually appeared so far, falling back to the `use` node itself (as
+before this fix) only while nothing under it has ever been discovered
+at all — a declared-outputs child's own children are dropped from the
+final state even once it succeeds (§1.2), so without that fallback such
+a `use` would count toward neither side, ever. "Done" never exceeds
+"planned".
+
 **The orchestration pane** (formerly "plan"; `draw_tree` in `tui.rs`).
 Titled ` orchestration <name> `, `<name>` the top-level document's file
 name without its extension (orchestration documents have no `name:` of
@@ -528,6 +544,17 @@ shows:
     original table; `?` is the one status left with no better fit);
   - the duration, `n/total` for a loop's own progress, and the provider
     or model in a dim colour.
+
+A named loop's own pass container (`prime.fan.iter_N`) never has a
+`{value, meta}` node of its own (§1.3) — only its own steps do — so its
+row's status is derived from its leaf descendants, at any depth, rather
+than defaulting to pending regardless of how they actually finished
+(the orchestrator's own finding, reproduced with a multi-step tree-loop
+pass): any descendant still running makes the pass row running; else
+any unhandled failure makes it failed; else, once every descendant has
+reached a terminal status, it reads done; otherwise it stays pending.
+The same rule applies to a chain-flow loop's own pass container, which
+has the identical no-node-of-its-own shape.
 
 Follow is **on when the TUI starts**: the selection tracks the running
 effect (`App::follow_target`, unchanged, now routed through
@@ -639,15 +666,37 @@ the full bottom width, two content lines:
     bar sized without first reserving room for the counts could leave
     one of them (the whole reason the line exists) cut off entirely on
     an ordinary terminal width.
-  - **What's in flight:** the estimated input summed over every prompt
-    currently running, `≈ceil(chars(meta.prompt_sent) / 4)`, and how many
-    prompts that is. No output estimate: neither engine reports a
-    prompt's tokens before it finishes. A prompt counts as running
-    (`model::is_running_prompt`) exactly when it has `created_at` and no
-    `completed_at`, `meta.prompt_sent` has actually been written, and
-    `meta.waiting_for` is empty — a prompt merely queued behind a
-    concurrency slot isn't processing yet. With nothing running, the
-    line says so ("nothing in flight").
+  - **What's in flight:** how many prompts are running, and an
+    estimated input for them, `≈ceil(chars(meta.prompt_sent) / 4)`. No
+    output estimate: neither engine reports a prompt's tokens before it
+    finishes.
+
+    The *count* comes from `render::Row`, not from the live state
+    alone (the orchestrator's own finding on issue #527's own PR): a
+    tree-loop pass's prompt, and (on `cof`) a `use` child's, are
+    confirmed `Running` by `--events` while never once appearing in
+    live state at all for as long as they run (DESIGN.md §1.4) — a
+    row with no state node of its own still counts when its own
+    `kind` is known to be [`Prompt`], which a tree-loop pass's is (its
+    plan entry is matched through the loop's own `iter_*` placeholder)
+    and a `use: path:` child's is too (its plan is grafted under the
+    `use` node, §5) — but a `use: inline:`/`ref:` child's is not: it
+    has no static plan at all, and `--events` carries no effect kind
+    (§3), so such a row cannot be told apart from a running *tool* by
+    path and events alone. A row that *does* have a state node applies
+    `model::is_running_prompt`'s full criteria instead: `created_at`
+    and no `completed_at`, `meta.prompt_sent` actually written, and
+    `meta.waiting_for` empty — a prompt merely queued behind a
+    concurrency slot isn't processing yet (an event-only row can never
+    be merely queued in the first place: `on_effect_start` fires only
+    once a pass or branch actually begins).
+
+    The *estimate* only sums a running prompt's own `ceil(chars(meta.
+    prompt_sent) / 4)` when its `prompt_sent` is actually in state —
+    for one confirmed running by events alone, with no state node to
+    read at all, that can never be known, so the total is shown as a
+    lower bound (`≈52+`) rather than silently reading too low. With
+    nothing running, the line says so ("nothing in flight").
 
 **The token rule** (`model::node_tokens`): one node's own
 `tokens_sent_total`/`tokens_received_total` when present, falling back to
@@ -763,7 +812,7 @@ the_redraw_interval` times one `TestBackend` draw of the same state too.
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
 - **TUI render tests (shipped, issue #434; the new layout and panes, issue #527).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osp watch` — at 100×24 (two-column: the right side is the state pane over the log pane, no treemap), since that is what most of these actually want to show (the orchestration review found the previous blanket 70×20 lost the details pane's own type/plan/provider lines and the state pane entirely). `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_treemap_and_the_state_pane` and `fallback_at_100x30_is_the_smallest_full_layout` cover the two further thresholds boundary-adjacent to those: 80×24 is two-column with both the treemap and the state pane dropped, and 100×30 is the smallest size at which nothing is dropped at all. `full_layout_with_state_treemap_and_token_bar`, at 120×40, is the most comfortable size, with every pane populated, including a nested treemap cell under the `prime` root cell. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position.
 - **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
-- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too.
+- **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-token key gets no cell (including a zero-total root, which produces an empty tree, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, and the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout).
 - **Terminal restore (shipped, issue #434).** Unit tests in `oscilloscope/src/terminal.rs` prove `TerminalGuard`'s own entered/restored bookkeeping, and that the installed panic hook itself (not a direct `restore()` call) clears it through a real `catch_unwind`; `oscilloscope/tests/e2e_tui_pty.rs`'s `a_forwarded_sigint_still_restores_the_terminal` proves the real escape sequences on a real pseudo-terminal, after a forwarded SIGINT.
 - **End-to-end with `cof`** (`tests/e2e_cof.rs`, plain mode; `tests/e2e_tui_pty.rs`, the TUI on a real pseudo-terminal via `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` — no pty crate dependency), gated on `OSP_E2E_COF=1` (`cof` on `PATH` required once set):
