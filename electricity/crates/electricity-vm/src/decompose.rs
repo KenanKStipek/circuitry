@@ -1518,4 +1518,118 @@ mod tests {
             "the decomposition child completed but left nothing at result_path 'prime.merge.value'"
         );
     }
+
+    #[test]
+    fn complexity_score_reads_a_float_or_small_int_score_key() {
+        let meta = dict(vec![("score", Value::Float(12.5))]);
+        assert_eq!(complexity_score(Some(&meta)), Some(12.5));
+        let meta = dict(vec![("score", Value::from(7i64))]);
+        assert_eq!(complexity_score(Some(&meta)), Some(7.0));
+    }
+
+    #[test]
+    fn complexity_score_is_none_without_a_numeric_score() {
+        assert_eq!(complexity_score(None), None);
+        let meta = dict(vec![("no_score", Value::Float(1.0))]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        let meta = dict(vec![("score", Value::Str("nope".to_string()))]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        let meta = dict(vec![("score", Value::None)]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        assert_eq!(complexity_score(Some(&Value::None)), None);
+    }
+
+    fn template_op(source: &str) -> PromptOp {
+        PromptOp {
+            content: PromptContent::Template(electricity_bytecode::template::TemplateText::new(
+                source,
+                true,
+                electricity_bytecode::template::Escape::None,
+            )),
+            prompt_type: electricity_bytecode::effects::PromptType::Text,
+            schema: None,
+            model: None,
+            provider: None,
+            provider_fallbacks: Vec::new(),
+            routing_override: None,
+            model_params: None,
+            timeout_ms: None,
+            deterministic: false,
+            inputs: None,
+            assets: Vec::new(),
+            retries: None,
+            description: None,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn planner_source_template_prefers_the_raw_template_source() {
+        let op = template_op("hi {{input.topic}}");
+        assert_eq!(
+            planner_source_template(&op, "hi topic-rendered"),
+            "hi {{input.topic}}"
+        );
+    }
+
+    #[test]
+    fn planner_source_template_falls_back_to_prompt_sent_when_the_template_is_empty() {
+        let op = template_op("");
+        assert_eq!(planner_source_template(&op, "materialized"), "materialized");
+    }
+
+    #[test]
+    fn planner_source_template_falls_back_to_prompt_sent_for_a_messages_prompt() {
+        let mut op = template_op("unused");
+        op.content = PromptContent::Messages(Vec::new());
+        assert_eq!(planner_source_template(&op, "materialized"), "materialized");
+    }
+
+    #[test]
+    fn rejected_payload_text_reads_the_schema_rejected_cause() {
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::SchemaValidationError,
+            message: "bad".to_string(),
+            cause: electricity_tools::ErrorCause::SchemaRejected {
+                raw_response_text: "the whole rejected reply".to_string(),
+            },
+            cause_class: None,
+        };
+        assert_eq!(
+            rejected_payload_text(&err),
+            Some("the whole rejected reply".to_string())
+        );
+    }
+
+    #[test]
+    fn rejected_payload_text_is_none_without_that_cause() {
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: "boom".to_string(),
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        };
+        assert_eq!(rejected_payload_text(&err), None);
+        assert_eq!(rejected_payload_text(&VmError::Cancelled), None);
+    }
+
+    #[test]
+    fn rejected_payload_text_survives_a_wrap_since_cause_passes_through_unchanged() {
+        // `exec::wrap_effect_error` rewrites `py_class` to `RuntimeError`
+        // and sets `cause_class`, but never touches `cause` itself --
+        // the same shape a chain/tree wrap of the planner's own
+        // rejected reply would carry.
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: "prime.plan: bad".to_string(),
+            cause: electricity_tools::ErrorCause::SchemaRejected {
+                raw_response_text: "still here after a wrap".to_string(),
+            },
+            cause_class: Some(electricity_tools::PyExc::SchemaValidationError),
+        };
+        assert_eq!(
+            rejected_payload_text(&err),
+            Some("still here after a wrap".to_string())
+        );
+    }
 }
