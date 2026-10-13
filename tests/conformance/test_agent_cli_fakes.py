@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from circuitry.cli.allowlist import walk_orchestration_refs
 from circuitry.cli.orchestration_loader import load_orchestration_file
 
