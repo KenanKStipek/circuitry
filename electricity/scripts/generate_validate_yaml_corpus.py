@@ -19,6 +19,7 @@ Usage: python3 generate_validate_yaml_corpus.py [--check]
 
 from __future__ import annotations
 
+import datetime
 import json
 import struct
 import sys
@@ -58,6 +59,17 @@ def encode(value: object) -> dict:
         return {"t": "str", "v": value}
     if isinstance(value, bytes):
         return {"t": "bytes", "hex": value.hex()}
+    # `datetime.datetime` is a `datetime.date` subclass -- checked first,
+    # or every datetime would also match the `date` branch below.
+    if isinstance(value, datetime.datetime):
+        offset = value.utcoffset()
+        return {
+            "t": "datetime",
+            "v": value.replace(tzinfo=None).isoformat(),
+            "offset_seconds": int(offset.total_seconds()) if offset is not None else None,
+        }
+    if isinstance(value, datetime.date):
+        return {"t": "date", "v": value.isoformat()}
     if isinstance(value, list):
         return {"t": "list", "v": [encode(item) for item in value]}
     if isinstance(value, dict):
@@ -104,7 +116,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     try:
         result = ValidateYamlPlugin().execute(params=params)
     except Exception as exc:
-        return {"raised": True, "error": str(exc)}
+        return {"raised": True, "error": str(exc), "py_class": type(exc).__name__}
     return {
         "raised": False,
         "tool_ok": result.ok,
@@ -116,11 +128,32 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def succeeding_case(
-    name: str, params: dict[str, Any], *, expect_ok: bool, errors_tagged: list[dict[str, str]]
+    name: str,
+    params: dict[str, Any],
+    *,
+    expect_ok: bool,
+    errors_tagged: list[dict[str, str]],
+    unordered: bool = False,
 ) -> dict[str, Any]:
     outcome = run(params)
     assert not outcome["raised"], f"{name}: expected success, raised {outcome.get('error')!r}"
     assert outcome["value_ok"] is expect_ok, f"{name}: value['ok'] mismatch: {outcome}"
+    # The generator asserts its own expected texts directly (never only via
+    # the Rust replay's comparison, per DESIGN.md's own L2 standard,
+    # reviewed as missing on PR #524's finding 3): an `exact` tag's own
+    # *text* must equal the real plugin's own output, word for word, not
+    # just a hand-typed guess that happens to look right.
+    assert len(errors_tagged) == len(outcome["errors"]), (
+        f"{name}: errors_tagged has {len(errors_tagged)} entries, outcome has "
+        f"{len(outcome['errors'])}: {outcome['errors']!r}"
+    )
+    if not unordered:
+        for tag, actual in zip(errors_tagged, outcome["errors"], strict=True):
+            if tag["kind"] == "exact":
+                assert tag["text"] == actual, (
+                    f"{name}: hand-typed text {tag['text']!r} does not match the plugin's own "
+                    f"output {actual!r}"
+                )
     return {
         "name": name,
         "params": encode_params(params),
@@ -131,6 +164,7 @@ def succeeding_case(
         "yaml_echo": outcome["yaml_echo"],
         "stderr": outcome["stderr"],
         "errors": errors_tagged,
+        "errors_unordered": unordered,
     }
 
 
@@ -142,6 +176,7 @@ def raising_case(name: str, params: dict[str, Any]) -> dict[str, Any]:
         "params": encode_params(params),
         "raised": True,
         "error": outcome["error"],
+        "py_class": outcome["py_class"],
         "tool_ok": None,
         "value_ok": None,
         "yaml_echo": None,
@@ -235,6 +270,14 @@ _SCAN_ERROR_DOC = "effects: [{a: [1, 2}]"
 
 _SCHEMA_ERROR_DOC = """
 effects:
+  - type: tool
+    provider: json
+""".strip()
+
+_SCHEMA_ERRORS_MULTI = """
+effects:
+  - type: tool
+    provider: json
   - type: tool
     provider: json
 """.strip()
@@ -465,6 +508,27 @@ def build_cases() -> list[dict[str, Any]]:
             "errors": [tag_schema_error(outcome["errors"][0])],
         }
     )
+    # Several schema errors: compared as a multiset of locations, since
+    # Python sorts by `str(err)` and electricity sorts by `(location,
+    # message)` -- the kept order (and, under a low `max_errors`, the kept
+    # *subset*) can differ even though the error set itself agrees
+    # (DESIGN.md's own Hazards section; review finding 3 on PR #524).
+    outcome = run({"yaml": _SCHEMA_ERRORS_MULTI})
+    assert not outcome["raised"] and len(outcome["errors"]) == 2
+    cases.append(
+        {
+            "name": "multiple_schema_errors_as_a_multiset",
+            "params": encode_params({"yaml": _SCHEMA_ERRORS_MULTI}),
+            "raised": False,
+            "error": None,
+            "tool_ok": outcome["tool_ok"],
+            "value_ok": outcome["value_ok"],
+            "yaml_echo": outcome["yaml_echo"],
+            "stderr": None,
+            "errors": [tag_schema_error(e) for e in outcome["errors"]],
+            "errors_unordered": True,
+        }
+    )
 
     # --- the cap boundary: exactly max_errors, and one more -----------
     outcome = run({"yaml": _THREE_NEAR_MISS_ERRORS, "max_errors": 3})
@@ -539,6 +603,49 @@ def build_cases() -> list[dict[str, Any]]:
             }
         )
 
+    # --- `_as_bool` string forms for `compile` too (review finding 3 on
+    # PR #524: only `strip_fences` was covered) -- `_DUPLICATE_SIBLING_NAMES`
+    # only fails under compile, so a truthy/falsy form flips `ok` the same
+    # way `strip_fences`'s own loop does for a fence-free/fenced document.
+    for form, expected_bool in [
+        ("true", True),
+        ("false", False),
+        ("0", False),
+        ("1", True),
+        ("no", False),
+        ("off", False),
+        ("yes", True),
+        ("anything-else", True),
+        ("  false  ", False),
+    ]:
+        outcome = run({"yaml": _DUPLICATE_SIBLING_NAMES, "compile": form})
+        assert not outcome["raised"], (form, outcome)
+        expect_ok = not bool(expected_bool)
+        assert outcome["value_ok"] is expect_ok, (form, outcome)
+        errors_tagged = (
+            []
+            if expect_ok
+            else [
+                exact(
+                    "Compile error: Duplicate effect name 'a' in scope 'prime'. "
+                    "Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+                )
+            ]
+        )
+        cases.append(
+            {
+                "name": f"as_bool_compile_{form!r}",
+                "params": encode_params({"yaml": _DUPLICATE_SIBLING_NAMES, "compile": form}),
+                "raised": False,
+                "error": None,
+                "tool_ok": outcome["tool_ok"],
+                "value_ok": outcome["value_ok"],
+                "yaml_echo": outcome["yaml_echo"],
+                "stderr": outcome["stderr"],
+                "errors": errors_tagged,
+            }
+        )
+
     # --- `max_errors` non-integer/wrong-type/below-one forms -----------
     for label, value in [
         ("string_x", "x"),
@@ -572,8 +679,24 @@ def build_cases() -> list[dict[str, Any]]:
         ("list", ["a"]),
         ("dict", {"a": 1}),
         ("bytes", b"effects: []"),
+        # Settled 6 singles out `date`/`datetime` for `type(x).__name__`
+        # (never `datetime.date`/`datetime.datetime`) -- review finding 3
+        # on PR #524: these two were missing from this loop.
+        ("date", datetime.date(2024, 1, 1)),
+        # Deliberately naive (no `tzinfo`) -- `yaml.dump`'s own implicit
+        # timestamp resolver produces a naive `datetime.datetime` just the
+        # same for a scalar with no explicit offset (DESIGN.md §3.2), the
+        # one shape this corpus needs to exercise `type(x).__name__`'s own
+        # "datetime" branch.
+        ("datetime", datetime.datetime(2024, 1, 1, 12, 30, 0, tzinfo=None)),  # noqa: DTZ001
     ]:
         cases.append(raising_case(f"yaml_type_{label}_raises", {"yaml": value}))
+    cases.append(
+        raising_case(
+            "max_errors_infinity_raises_overflow_error",
+            {"yaml": "effects: []", "max_errors": float("inf")},
+        )
+    )
 
     # --- no `yaml` param at all: empty document, not raised -------------
     cases.append(

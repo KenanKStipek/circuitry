@@ -14,7 +14,7 @@
 //! prompt source is a compile error here too.
 
 use crate::fs::{as_bool, get, value_error};
-use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_compiler::structural::py_class_name;
 use electricity_compiler::{DocumentOrigin, compile_document, structural_errors};
@@ -26,40 +26,52 @@ const DEFAULT_MAX_ERRORS: i64 = 20;
 /// `plugins/validate_yaml.py::_validate_document`: the first branch
 /// that applies returns its own error list; an empty list means the
 /// document (as cleaned, in *document*) validated.
-fn validate_document(document: &str, run_compile: bool) -> Vec<String> {
+///
+/// A calendar-invalid timestamp (`x: 2024-02-30`) is the one way this
+/// can raise rather than return: `core/yaml_load.py::load_yaml` lets
+/// CPython's own `ValueError` (`day is out of range for month`, ...)
+/// escape uncaught, since it is never a `yaml.YAMLError` that
+/// `_validate_document`'s `except yaml.YAMLError` could catch
+/// (review finding 5 on PR #524).
+fn validate_document(document: &str, run_compile: bool) -> Result<Vec<String>, ToolError> {
     if electricity_value::pycompat::py_strip(document).is_empty() {
-        return vec![
+        return Ok(vec![
             "Empty document \u{2014} expected a Circuitry orchestration YAML.".to_string(),
-        ];
+        ]);
     }
 
     let parsed = match electricity_yaml::load_yaml(document) {
         Ok(value) => value,
-        Err(err) => return vec![format!("YAML parse error: {err}")],
+        Err(electricity_yaml::YamlError::InvalidTimestampValue { message, .. }) => {
+            return Err(value_error(message));
+        }
+        Err(err) => return Ok(vec![format!("YAML parse error: {err}")]),
     };
 
     let Some(dict) = parsed.as_dict() else {
-        return vec![format!(
+        return Ok(vec![format!(
             "Orchestration must be a YAML mapping with an 'effects' key, got {}.",
             py_class_name(&parsed)
-        )];
+        )]);
     };
     if !dict.contains_key(&Value::Str("effects".to_string())) {
-        return vec!["Orchestration is missing the required top-level 'effects' key.".to_string()];
+        return Ok(vec![
+            "Orchestration is missing the required top-level 'effects' key.".to_string(),
+        ]);
     }
 
     let errors = structural_errors(&parsed);
     if !errors.is_empty() {
-        return errors;
+        return Ok(errors);
     }
 
     if run_compile {
         if let Err(err) = compile_document(&parsed, &DocumentOrigin::Generated) {
-            return vec![format!("Compile error: {err}")];
+            return Ok(vec![format!("Compile error: {err}")]);
         }
     }
 
-    Vec::new()
+    Ok(Vec::new())
 }
 
 pub struct ValidateYamlPlugin;
@@ -96,6 +108,19 @@ impl ToolPlugin for ValidateYamlPlugin {
             None | Some(Value::None) => DEFAULT_MAX_ERRORS,
             Some(other) => match py_int(other) {
                 Ok(n) => n,
+                // `int(float("inf"))`/`int(float("nan"))` raise
+                // `OverflowError`/`ValueError` CPython never catches here
+                // (`except (TypeError, ValueError)` doesn't name
+                // `OverflowError`) -- it escapes bare, unwrapped, with no
+                // "must be an integer:" prefix (review finding 4 on PR
+                // #524).
+                Err(err) if err.py_class == PyExc::OverflowError => {
+                    return Err(ToolError {
+                        py_class: PyExc::OverflowError,
+                        message: err.message,
+                        cause: crate::ErrorCause::None,
+                    });
+                }
                 Err(err) => {
                     return Err(value_error(format!(
                         "ValidateYamlPlugin params['max_errors'] must be an integer: {}",
@@ -114,7 +139,7 @@ impl ToolPlugin for ValidateYamlPlugin {
         let run_compile = as_bool(get(&params, "compile"), true);
 
         // 5. Validate.
-        let mut errors = validate_document(&document, run_compile);
+        let mut errors = validate_document(&document, run_compile)?;
 
         // 6. The cap.
         let limit = limit as usize;
@@ -378,6 +403,43 @@ mod tests {
             err.message,
             "ValidateYamlPlugin params['max_errors'] must be >= 1."
         );
+    }
+
+    #[tokio::test]
+    async fn max_errors_infinity_raises_bare_overflow_error() {
+        // `int(float("inf"))` raises `OverflowError`, which Python's own
+        // `except (TypeError, ValueError)` doesn't catch -- it escapes
+        // unwrapped, with no "must be an integer:" prefix.
+        let err = run(params(vec![
+            ("yaml", Value::Str("effects: []".to_string())),
+            ("max_errors", Value::Float(f64::INFINITY)),
+        ]))
+        .await
+        .unwrap_err();
+        assert_eq!(err.py_class, PyExc::OverflowError);
+        assert_eq!(err.message, "cannot convert float infinity to integer");
+        assert_eq!(err.cause, ErrorCause::None);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_timestamp_raises_pythons_own_value_error() {
+        // `x: 2024-02-30` parses the key fine but the implicit
+        // `!!timestamp` value fails CPython's own `datetime.date`
+        // construction -- a bare, uncaught `ValueError`
+        // `core/yaml_load.py::load_yaml` never catches, so
+        // `ValidateYamlPlugin` raises instead of returning `ok: false`.
+        for (yaml, message) in [
+            ("x: 2024-02-30", "day is out of range for month"),
+            ("x: 2024-13-01", "month must be in 1..12"),
+            ("x: 2024-01-01 25:00:00", "hour must be in 0..23"),
+        ] {
+            let err = run(params(vec![("yaml", Value::Str(yaml.to_string()))]))
+                .await
+                .unwrap_err();
+            assert_eq!(err.py_class, PyExc::ValueError, "yaml={yaml}");
+            assert_eq!(err.message, message, "yaml={yaml}");
+            assert_eq!(err.cause, ErrorCause::None, "yaml={yaml}");
+        }
     }
 
     #[tokio::test]

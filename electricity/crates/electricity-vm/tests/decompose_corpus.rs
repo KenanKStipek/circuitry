@@ -159,6 +159,92 @@ fn golden_corpus_source_output() {
 }
 
 // ---------------------------------------------------------------------
+// run_planner -- `planner_input`'s own round trip (the captured
+// `initial_state` `_run_isolated` was actually given) and `read_plan`'s
+// own round trip (a chosen planner state, read back through the real
+// bundled planner's own canonical output paths).
+// ---------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct RunPlannerCase {
+    name: String,
+    source_template: String,
+    ctx: TaggedValue,
+    prompt_type: String,
+    schema: TaggedValue,
+    max_chunks: i64,
+    returned_state: TaggedValue,
+    expected_planner_input: TaggedValue,
+    expected_plan_say: TaggedValue,
+    expected_plan_chunks: TaggedValue,
+    expected_plan_yaml: Option<TaggedValue>,
+    expected_plan_done: TaggedValue,
+    expected_plan_result_path: String,
+}
+
+#[test]
+fn golden_corpus_run_planner() {
+    let corpus = corpus();
+    assert!(!corpus.run_planner_cases.is_empty());
+    for case in corpus.run_planner_cases {
+        let ctx = Value::from(case.ctx);
+        let schema = Value::from(case.schema);
+        let schema_ref = if schema == Value::None {
+            None
+        } else {
+            Some(&schema)
+        };
+        let got_input = decompose::planner_input(
+            &case.source_template,
+            &ctx,
+            &case.prompt_type,
+            schema_ref,
+            case.max_chunks,
+        )
+        .expect("planner_input succeeds");
+        assert_eq!(
+            got_input,
+            Value::from(case.expected_planner_input),
+            "case {}",
+            case.name
+        );
+
+        let planner_state = Value::from(case.returned_state);
+        let plan = decompose::read_plan(&planner_state);
+        assert_eq!(
+            plan.say,
+            Value::from(case.expected_plan_say),
+            "case {} (say)",
+            case.name
+        );
+        assert_eq!(
+            plan.chunks,
+            Value::from(case.expected_plan_chunks),
+            "case {} (chunks)",
+            case.name
+        );
+        let expected_yaml = case.expected_plan_yaml.map(|tagged| {
+            Value::from(tagged)
+                .as_str()
+                .expect("yaml is a str")
+                .to_string()
+        });
+        assert_eq!(plan.yaml, expected_yaml, "case {} (yaml)", case.name);
+        assert_eq!(
+            plan.done,
+            Value::from(case.expected_plan_done),
+            "case {} (done)",
+            case.name
+        );
+        assert_eq!(
+            plan.result_path, case.expected_plan_result_path,
+            "case {} (result_path)",
+            case.name
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
 // validate_plan
 // ---------------------------------------------------------------------
 
@@ -172,6 +258,12 @@ struct ValidatePlanCase {
     max_chunks: i64,
     runtime_config: TaggedValue,
     expected: Vec<String>,
+    /// Set for the one inline-check case that is a raw PyYAML scan error
+    /// (DESIGN.md §1, §12): compared by this fixed prefix and a non-empty
+    /// rest only, never `expected`'s own exact wording, which came out of
+    /// Python's own (different) scanner.
+    #[serde(default)]
+    third_party_prefix: Option<String>,
 }
 
 #[test]
@@ -194,7 +286,18 @@ fn golden_corpus_validate_plan() {
         };
         let runtime_config = Value::from(case.runtime_config);
         let got = decompose::validate_plan(&plan, case.max_chunks, &runtime_config);
-        assert_eq!(got, case.expected, "case {}", case.name);
+        match &case.third_party_prefix {
+            Some(prefix) => {
+                assert_eq!(got.len(), 1, "case {}: {got:?}", case.name);
+                assert!(
+                    got[0].starts_with(prefix.as_str()) && got[0].len() > prefix.len(),
+                    "case {}: {:?} does not start with {prefix:?} with a non-empty rest",
+                    case.name,
+                    got[0]
+                );
+            }
+            None => assert_eq!(got, case.expected, "case {}", case.name),
+        }
     }
 }
 
@@ -443,6 +546,7 @@ struct Corpus {
     route_up_model_cases: Vec<RouteUpModelCase>,
     describe_inputs_cases: Vec<DescribeInputsCase>,
     source_output_cases: Vec<SourceOutputCase>,
+    run_planner_cases: Vec<RunPlannerCase>,
     validate_plan_cases: Vec<ValidatePlanCase>,
     failure_cases: Vec<FailureCase>,
     max_depth_cases: Vec<MaxDepthCase>,

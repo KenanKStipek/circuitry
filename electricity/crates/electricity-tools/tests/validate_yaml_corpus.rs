@@ -14,6 +14,7 @@
 //! JSON-Schema violation) is compared by its fixed prefix only, with a
 //! non-empty rest (DESIGN.md §1, §12) -- never the exact wording.
 
+use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
 use electricity_tools::{ToolCall, ToolPlugin, validate_yaml::ValidateYamlPlugin};
 use electricity_value::{CancellationToken, Dict, Value};
 use serde::Deserialize;
@@ -33,10 +34,25 @@ enum TaggedValue {
     Str { v: String },
     #[serde(rename = "bytes")]
     Bytes { hex: String },
+    #[serde(rename = "date")]
+    Date { v: String },
+    #[serde(rename = "datetime")]
+    DateTime {
+        v: String,
+        offset_seconds: Option<i64>,
+    },
     #[serde(rename = "list")]
     List { v: Vec<TaggedValue> },
     #[serde(rename = "dict")]
     Dict { v: Vec<(TaggedValue, TaggedValue)> },
+}
+
+fn naive_date(v: &str) -> NaiveDate {
+    NaiveDate::parse_from_str(v, "%Y-%m-%d").expect("valid ISO date")
+}
+
+fn naive_datetime(v: &str) -> NaiveDateTime {
+    NaiveDateTime::parse_from_str(v, "%Y-%m-%dT%H:%M:%S%.f").expect("valid ISO datetime")
 }
 
 impl From<TaggedValue> for Value {
@@ -62,6 +78,11 @@ impl From<TaggedValue> for Value {
                 }
                 Value::Bytes(bytes)
             }
+            TaggedValue::Date { v } => Value::Date(naive_date(&v)),
+            TaggedValue::DateTime { v, offset_seconds } => Value::DateTime(
+                naive_datetime(&v),
+                offset_seconds.map(|s| FixedOffset::east_opt(s as i32).expect("valid UTC offset")),
+            ),
             TaggedValue::List { v } => Value::List(v.into_iter().map(Value::from).collect()),
             TaggedValue::Dict { v } => {
                 let mut dict = Dict::new();
@@ -87,11 +108,22 @@ struct Case {
     params: std::collections::BTreeMap<String, TaggedValue>,
     raised: bool,
     error: Option<String>,
+    /// Only present when `raised`: `type(exc).__name__` (review finding 3
+    /// on PR #524 -- previously only the message text was recorded, so a
+    /// `ValueError` and the `OverflowError` finding 4 adds couldn't be
+    /// told apart here).
+    #[serde(default)]
+    py_class: Option<String>,
     tool_ok: Option<bool>,
     value_ok: Option<bool>,
     yaml_echo: Option<String>,
     stderr: Option<String>,
     errors: Option<Vec<ErrorTag>>,
+    /// Several schema errors compare as a multiset of locations (DESIGN.md's
+    /// own Hazards section: Python sorts by `str(err)`, electricity by
+    /// `(location, message)`) -- review finding 3 on PR #524.
+    #[serde(default)]
+    errors_unordered: bool,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +168,11 @@ fn clone_tagged(value: &TaggedValue) -> Value {
             }
             Value::Bytes(bytes)
         }
+        TaggedValue::Date { v } => Value::Date(naive_date(v)),
+        TaggedValue::DateTime { v, offset_seconds } => Value::DateTime(
+            naive_datetime(v),
+            offset_seconds.map(|s| FixedOffset::east_opt(s as i32).expect("valid UTC offset")),
+        ),
         TaggedValue::List { v } => Value::List(v.iter().map(clone_tagged).collect()),
         TaggedValue::Dict { v } => {
             let mut dict = Dict::new();
@@ -183,6 +220,15 @@ async fn golden_corpus_validate_yaml() {
                         "{}: expected error {expected:?}, got {:?}",
                         case.name, err.message
                     ));
+                }
+                if let Some(expected_class) = case.py_class.as_deref() {
+                    if err.py_class.name() != expected_class {
+                        failures.push(format!(
+                            "{}: expected py_class {expected_class:?}, got {:?}",
+                            case.name,
+                            err.py_class.name()
+                        ));
+                    }
                 }
             }
             Ok(got) => {
@@ -242,7 +288,7 @@ async fn golden_corpus_validate_yaml() {
                     ));
                     continue;
                 }
-                for (got_text, tag) in got_errors.iter().zip(expected_tags) {
+                let check_one = |got_text: &str, tag: &ErrorTag, failures: &mut Vec<String>| {
                     match tag.kind.as_str() {
                         "exact" => {
                             let expected = tag.text.as_deref().unwrap_or_default();
@@ -266,6 +312,26 @@ async fn golden_corpus_validate_yaml() {
                         }
                         other => failures
                             .push(format!("{}: unknown error tag kind {other:?}", case.name)),
+                    }
+                };
+                if case.errors_unordered {
+                    // Several schema errors compare as a multiset of
+                    // locations (DESIGN.md's own Hazards section): sort
+                    // both sides by their own comparison key before
+                    // pairing them up, rather than by position.
+                    let mut got_sorted = got_errors.clone();
+                    got_sorted.sort();
+                    let mut tags_sorted: Vec<&ErrorTag> = expected_tags.iter().collect();
+                    tags_sorted.sort_by_key(|tag| match tag.kind.as_str() {
+                        "exact" => tag.text.clone().unwrap_or_default(),
+                        _ => tag.prefix.clone().unwrap_or_default(),
+                    });
+                    for (got_text, tag) in got_sorted.iter().zip(tags_sorted) {
+                        check_one(got_text, tag, &mut failures);
+                    }
+                } else {
+                    for (got_text, tag) in got_errors.iter().zip(expected_tags) {
+                        check_one(got_text, tag, &mut failures);
                     }
                 }
 

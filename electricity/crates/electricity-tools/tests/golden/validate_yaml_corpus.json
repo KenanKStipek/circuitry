@@ -3,6 +3,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "valid_document",
       "params": {
         "yaml": {
@@ -19,6 +20,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "valid_document_fenced",
       "params": {
         "yaml": {
@@ -35,6 +37,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "strip_fences_false_on_fence_free_document",
       "params": {
         "strip_fences": {
@@ -85,6 +88,7 @@
           "text": "Empty document — expected a Circuitry orchestration YAML."
         }
       ],
+      "errors_unordered": false,
       "name": "blank_document_python_whitespace",
       "params": {
         "yaml": {
@@ -106,6 +110,7 @@
           "text": "Orchestration must be a YAML mapping with an 'effects' key, got date."
         }
       ],
+      "errors_unordered": false,
       "name": "not_a_mapping_date",
       "params": {
         "yaml": {
@@ -127,6 +132,7 @@
           "text": "Orchestration must be a YAML mapping with an 'effects' key, got NoneType."
         }
       ],
+      "errors_unordered": false,
       "name": "not_a_mapping_comment_only",
       "params": {
         "yaml": {
@@ -148,6 +154,7 @@
           "text": "Orchestration must be a YAML mapping with an 'effects' key, got list."
         }
       ],
+      "errors_unordered": false,
       "name": "not_a_mapping_list",
       "params": {
         "yaml": {
@@ -169,6 +176,7 @@
           "text": "Orchestration is missing the required top-level 'effects' key."
         }
       ],
+      "errors_unordered": false,
       "name": "missing_effects_key",
       "params": {
         "yaml": {
@@ -190,6 +198,7 @@
           "text": "effects[0]: unknown key 'discription' on a 'tool' effect — did you mean 'description'? As written it is ignored."
         }
       ],
+      "errors_unordered": false,
       "name": "near_miss_key_no_schema_error",
       "params": {
         "yaml": {
@@ -211,6 +220,7 @@
           "text": "effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect."
         }
       ],
+      "errors_unordered": false,
       "name": "group_on_non_empty_dynamic",
       "params": {
         "yaml": {
@@ -232,6 +242,7 @@
           "text": "interface.inputs.x.type: 'wat' is not a recognized type — expected one of string, number, integer, boolean, array, object."
         }
       ],
+      "errors_unordered": false,
       "name": "unknown_interface_type",
       "params": {
         "yaml": {
@@ -253,6 +264,7 @@
           "text": "interface.inputs.x.default: declared type 'number' but '5' is str — quoting it makes it a string; remove the quotes to declare it as number."
         }
       ],
+      "errors_unordered": false,
       "name": "quoted_interface_default_unquote_hint",
       "params": {
         "yaml": {
@@ -295,6 +307,7 @@
           "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
         }
       ],
+      "errors_unordered": false,
       "name": "duplicate_sibling_names_compile_error",
       "params": {
         "yaml": {
@@ -311,6 +324,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "duplicate_sibling_names_compile_off",
       "params": {
         "compile": {
@@ -336,6 +350,7 @@
           "text": "Compile error: Template at 'effects[0].template': bare '{{x}}' refers to declared interface input 'x'. Caller inputs live under the 'input' namespace; write '{{input.x}}'."
         }
       ],
+      "errors_unordered": false,
       "name": "bare_interface_input_reference_compile_error",
       "params": {
         "yaml": {
@@ -390,6 +405,32 @@
       "tool_ok": true,
       "value_ok": false,
       "yaml_echo": "effects:\n  - type: tool\n    provider: json"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "third_party",
+          "prefix": "effects[0]: "
+        },
+        {
+          "kind": "third_party",
+          "prefix": "effects[1]: "
+        }
+      ],
+      "errors_unordered": true,
+      "name": "multiple_schema_errors_as_a_multiset",
+      "params": {
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    provider: json\n  - type: tool\n    provider: json"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    provider: json\n  - type: tool\n    provider: json"
     },
     {
       "error": null,
@@ -858,6 +899,206 @@
       "yaml_echo": "```yaml\neffects: []\n```"
     },
     {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'true'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "true"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'false'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "false"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'0'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "0"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'1'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "1"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'no'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "no"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'off'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "off"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'yes'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "yes"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [
+        {
+          "kind": "exact",
+          "text": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'."
+        }
+      ],
+      "name": "as_bool_compile_'anything-else'",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "anything-else"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": "Compile error: Duplicate effect name 'a' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
+      "tool_ok": true,
+      "value_ok": false,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
+      "error": null,
+      "errors": [],
+      "name": "as_bool_compile_'  false  '",
+      "params": {
+        "compile": {
+          "t": "str",
+          "v": "  false  "
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+        }
+      },
+      "raised": false,
+      "stderr": null,
+      "tool_ok": true,
+      "value_ok": true,
+      "yaml_echo": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"1\"}"
+    },
+    {
       "error": "ValidateYamlPlugin params['max_errors'] must be an integer: invalid literal for int() with base 10: 'x'",
       "errors": null,
       "name": "max_errors_string_x_raises",
@@ -871,6 +1112,7 @@
           "v": "effects: []"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -896,6 +1138,7 @@
           "v": "effects: []"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -916,6 +1159,7 @@
           "v": "effects: []"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -936,6 +1180,7 @@
           "v": "effects: []"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -945,6 +1190,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "max_errors_string_3",
       "params": {
         "max_errors": {
@@ -965,6 +1211,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "max_errors_string_padded_3",
       "params": {
         "max_errors": {
@@ -985,6 +1232,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "max_errors_float_truncates",
       "params": {
         "max_errors": {
@@ -1005,6 +1253,7 @@
     {
       "error": null,
       "errors": [],
+      "errors_unordered": false,
       "name": "max_errors_bool_true",
       "params": {
         "max_errors": {
@@ -1032,6 +1281,7 @@
           "v": "5"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1048,6 +1298,7 @@
           "t": "float"
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1064,6 +1315,7 @@
           "v": true
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1085,6 +1337,7 @@
           ]
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1112,6 +1365,7 @@
           ]
         }
       },
+      "py_class": "ValueError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1128,6 +1382,63 @@
           "t": "bytes"
         }
       },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got date).",
+      "errors": null,
+      "name": "yaml_type_date_raises",
+      "params": {
+        "yaml": {
+          "t": "date",
+          "v": "2024-01-01"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "ValidateYamlPlugin requires params['yaml'] as a string (got datetime).",
+      "errors": null,
+      "name": "yaml_type_datetime_raises",
+      "params": {
+        "yaml": {
+          "offset_seconds": null,
+          "t": "datetime",
+          "v": "2024-01-01T12:30:00"
+        }
+      },
+      "py_class": "ValueError",
+      "raised": true,
+      "stderr": null,
+      "tool_ok": null,
+      "value_ok": null,
+      "yaml_echo": null
+    },
+    {
+      "error": "cannot convert float infinity to integer",
+      "errors": null,
+      "name": "max_errors_infinity_raises_overflow_error",
+      "params": {
+        "max_errors": {
+          "bits": "7ff0000000000000",
+          "t": "float"
+        },
+        "yaml": {
+          "t": "str",
+          "v": "effects: []"
+        }
+      },
+      "py_class": "OverflowError",
       "raised": true,
       "stderr": null,
       "tool_ok": null,
@@ -1142,6 +1453,7 @@
           "text": "Empty document — expected a Circuitry orchestration YAML."
         }
       ],
+      "errors_unordered": false,
       "name": "no_yaml_param_is_empty_document",
       "params": {},
       "raised": false,
@@ -1158,6 +1470,7 @@
           "text": "Empty document — expected a Circuitry orchestration YAML."
         }
       ],
+      "errors_unordered": false,
       "name": "null_yaml_param_is_empty_document",
       "params": {
         "yaml": {

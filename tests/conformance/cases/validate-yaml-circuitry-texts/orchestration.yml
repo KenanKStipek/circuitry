@@ -169,12 +169,19 @@ effects:
             params: {mode: parse, input: "1"}
       compile: "off"
 
+  # A set-delimiter tag (`{{=<% %>=}}`) switches this params template's own
+  # Mustache delimiters away from `{{ }}` before the first real line, so the
+  # literal `{{x}}` inside the embedded document survives this effect's own
+  # params render unexpanded (otherwise, with `x` undeclared at this scope,
+  # Mustache would already have rendered it to "", and `validate_yaml` would
+  # see a *different* error -- an empty `template:` -- never the bare
+  # interface-input-reference compile error this case means to pin).
   - type: tool
     name: bare_interface_input_reference
     provider: validate_yaml
     params:
       yaml: |-
-        interface:
+        {{=<% %>=}}interface:
           inputs:
             x: {type: string}
         effects:

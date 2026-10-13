@@ -265,29 +265,95 @@ pub fn construct_float(text: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok().map(|v| sign * v)
 }
 
+/// Why [`construct_timestamp`] didn't return a value: the text isn't
+/// shaped like PyYAML's `timestamp_regexp` at all (`InvalidScalar`'s
+/// own caller keeps its existing, electricity-authored wording for
+/// this branch), or the matched digits parse but describe a calendar
+/// date/time CPython's own `datetime.date`/`datetime.time`
+/// constructors reject (`day is out of range for month`, ...) --
+/// `validate_yaml` (issue #521's lane L2a, the only caller that
+/// distinguishes it) re-raises this one as a bare, uncaught Python
+/// `ValueError`, exactly as `core/yaml_load.py::load_yaml` does,
+/// rather than returning it as an ordinary parse error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimestampFailure {
+    NotATimestamp,
+    Invalid(String),
+}
+
 /// `SafeConstructor.construct_yaml_timestamp`: a date, or a naive/offset
 /// date-time, from PyYAML's `timestamp_regexp`. Returns `Value::Date` for
 /// a date-only match, `Value::DateTime` otherwise — `None` (`tzinfo`)
 /// when the scalar carries no explicit offset, matching PyYAML's naive
 /// `datetime.datetime` (DESIGN.md §3.2).
-pub fn construct_timestamp(text: &str) -> Option<Value> {
-    let caps = timestamp_re().captures(text)?;
-    let year: i32 = caps.name("year")?.as_str().parse().ok()?;
+///
+/// A calendar-range failure (an invalid day, month, hour, minute or
+/// second, or year 0) is [`TimestampFailure::Invalid`] with CPython's
+/// own `ValueError` text (verified against Python 3.11's `datetime`
+/// module) -- not [`TimestampFailure::NotATimestamp`], since PyYAML's
+/// own loader doesn't catch this either: it is a bare, uncaught
+/// `ValueError`, never a `yaml.YAMLError`. A timezone offset of 24
+/// hours or more raises a similar but value-dependent CPython message
+/// this function doesn't reproduce; that narrow case still returns
+/// `NotATimestamp` (a documented, pre-existing gap).
+pub fn construct_timestamp(text: &str) -> Result<Value, TimestampFailure> {
+    use TimestampFailure::{Invalid, NotATimestamp};
+
+    let caps = timestamp_re().captures(text).ok_or(NotATimestamp)?;
+    let year: i32 = caps
+        .name("year")
+        .ok_or(NotATimestamp)?
+        .as_str()
+        .parse()
+        .map_err(|_| NotATimestamp)?;
     // Python's `datetime.date`/`datetime.datetime` reject year 0 (`MINYEAR
     // == 1`); `chrono::NaiveDate` has no such floor, so without this check
     // `0000-01-01` would load here where Circuitry's real loader raises.
     if year < 1 {
-        return None;
+        return Err(Invalid(format!("year {year} is out of range")));
     }
-    let month: u32 = caps.name("month")?.as_str().parse().ok()?;
-    let day: u32 = caps.name("day")?.as_str().parse().ok()?;
-    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    let month: u32 = caps
+        .name("month")
+        .ok_or(NotATimestamp)?
+        .as_str()
+        .parse()
+        .map_err(|_| NotATimestamp)?;
+    if !(1..=12).contains(&month) {
+        return Err(Invalid("month must be in 1..12".to_string()));
+    }
+    let day: u32 = caps
+        .name("day")
+        .ok_or(NotATimestamp)?
+        .as_str()
+        .parse()
+        .map_err(|_| NotATimestamp)?;
+    let date = NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| Invalid("day is out of range for month".to_string()))?;
     let Some(hour_m) = caps.name("hour") else {
-        return Some(Value::Date(date));
+        return Ok(Value::Date(date));
     };
-    let hour: u32 = hour_m.as_str().parse().ok()?;
-    let minute: u32 = caps.name("minute")?.as_str().parse().ok()?;
-    let second: u32 = caps.name("second")?.as_str().parse().ok()?;
+    let hour: u32 = hour_m.as_str().parse().map_err(|_| NotATimestamp)?;
+    if hour > 23 {
+        return Err(Invalid("hour must be in 0..23".to_string()));
+    }
+    let minute: u32 = caps
+        .name("minute")
+        .ok_or(NotATimestamp)?
+        .as_str()
+        .parse()
+        .map_err(|_| NotATimestamp)?;
+    if minute > 59 {
+        return Err(Invalid("minute must be in 0..59".to_string()));
+    }
+    let second: u32 = caps
+        .name("second")
+        .ok_or(NotATimestamp)?
+        .as_str()
+        .parse()
+        .map_err(|_| NotATimestamp)?;
+    if second > 59 {
+        return Err(Invalid("second must be in 0..59".to_string()));
+    }
     let micros: u32 = match caps.name("fraction") {
         Some(m) => {
             let mut digits = m.as_str().to_string();
@@ -295,31 +361,36 @@ pub fn construct_timestamp(text: &str) -> Option<Value> {
             while digits.len() < 6 {
                 digits.push('0');
             }
-            digits.parse().ok()?
+            digits.parse().map_err(|_| NotATimestamp)?
         }
         None => 0,
     };
-    let time = NaiveTime::from_hms_micro_opt(hour, minute, second, micros)?;
+    let time = NaiveTime::from_hms_micro_opt(hour, minute, second, micros).ok_or(NotATimestamp)?;
     let naive = NaiveDateTime::new(date, time);
     let offset = if caps.name("tz_sign").is_some() {
-        let tz_hour: i32 = caps.name("tz_hour")?.as_str().parse().ok()?;
-        let tz_minute: i32 = caps
-            .name("tz_minute")
-            .map(|m| m.as_str().parse().ok())
-            .unwrap_or(Some(0))?;
+        let tz_hour: i32 = caps
+            .name("tz_hour")
+            .ok_or(NotATimestamp)?
+            .as_str()
+            .parse()
+            .map_err(|_| NotATimestamp)?;
+        let tz_minute: i32 = match caps.name("tz_minute") {
+            Some(m) => m.as_str().parse().map_err(|_| NotATimestamp)?,
+            None => 0,
+        };
         let total_seconds = (tz_hour * 3600 + tz_minute * 60)
             * if caps.name("tz_sign").unwrap().as_str() == "-" {
                 -1
             } else {
                 1
             };
-        Some(FixedOffset::east_opt(total_seconds)?)
+        Some(FixedOffset::east_opt(total_seconds).ok_or(NotATimestamp)?)
     } else if caps.name("tz").is_some() {
-        Some(FixedOffset::east_opt(0)?)
+        Some(FixedOffset::east_opt(0).ok_or(NotATimestamp)?)
     } else {
         None
     };
-    Some(Value::DateTime(naive, offset))
+    Ok(Value::DateTime(naive, offset))
 }
 
 /// `SafeConstructor.construct_yaml_binary`: base64-decodes the scalar

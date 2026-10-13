@@ -40,7 +40,9 @@ from circuitry.core.decompose import (
     _failure,
     _Plan,
     _route_up_model,
+    _run_planner,
     _validate_plan,
+    maybe_decompose,
 )
 from circuitry.core.prompt import PromptDefinition
 from circuitry.core.store import Store
@@ -180,6 +182,171 @@ def build_source_output_cases() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
+# _run_planner -- `_run_isolated` patched (the same pattern
+# `build_seed_state_cases` already uses below) to capture the planner
+# input it was actually given (`planner_input`'s own round trip) and to
+# hand back a chosen planner state, read back through the real
+# `_planner_outputs`/the bundled planner's own interface (`read_plan`'s
+# own round trip) -- reviewed on PR #524 as the one section the issue
+# names that this corpus was missing entirely.
+# ---------------------------------------------------------------------
+
+
+def _planner_returned_state(
+    say: Any, chunks: Any, yaml_text: Any, done: Any, result_path: Any
+) -> dict[str, Any]:
+    return {
+        "prime": {
+            "plan": {"value": {"say": say, "chunks": chunks}},
+            "check": {"value": {"yaml": yaml_text}},
+            "done": {"value": done},
+            "result_path": {"value": result_path},
+        }
+    }
+
+
+def build_run_planner_cases() -> list[dict[str, Any]]:
+    cases = []
+
+    def case(
+        name: str,
+        *,
+        source_template: str,
+        ctx: dict[str, Any],
+        prompt_type: str,
+        schema: Any,
+        max_chunks: int,
+        returned_state: dict[str, Any],
+    ) -> None:
+        defn = PromptDefinition(name="ask", prompt_type=prompt_type, schema=schema)
+        store = Store(state={})
+        captured: dict[str, Any] = {}
+
+        def fake_run_isolated(
+            orch: Any,
+            *,
+            initial_state: Any,
+            parent_store: Any,
+            node: Any,
+            node_path: Any,
+            adapter: Any,
+            model: Any,
+            runtime_config: Any,
+            timeout_seconds: Any,
+            verbose: Any,
+            display_depth: Any,
+        ) -> Store:
+            captured["initial_state"] = initial_state
+            return Store(state=returned_state)
+
+        with mock.patch("circuitry.core.decompose._run_isolated", fake_run_isolated):
+            plan = _run_planner(
+                defn,
+                store=store,
+                node={},
+                node_path="prime.ask",
+                ctx=ctx,
+                source_template=source_template,
+                adapter=None,
+                model="x",
+                runtime_config={},
+                max_chunks=max_chunks,
+                timeout_seconds=5,
+                verbose=False,
+                display_depth=0,
+            )
+        cases.append(
+            {
+                "name": name,
+                "source_template": source_template,
+                "ctx": encode(ctx),
+                "prompt_type": prompt_type,
+                "schema": encode(schema),
+                "max_chunks": max_chunks,
+                "returned_state": encode(returned_state),
+                "expected_planner_input": encode(captured["initial_state"]),
+                "expected_plan_say": encode(plan.say),
+                "expected_plan_chunks": encode(plan.chunks),
+                "expected_plan_yaml": encode_opt_str(plan.yaml),
+                "expected_plan_done": encode(plan.done),
+                "expected_plan_result_path": plan.result_path,
+            }
+        )
+
+    case(
+        "basic_round_trip",
+        source_template="Summarize {{input.topic}}",
+        ctx={"input": {"topic": "x"}},
+        prompt_type="text",
+        schema=None,
+        max_chunks=5,
+        returned_state=_planner_returned_state("ok", [1, 2], "effects: []\n", True, "prime.merge.value"),
+    )
+    case(
+        "yaml_output_needs_fence_cleaning",
+        source_template="Summarize {{input.topic}}",
+        ctx={"input": {"topic": "x"}},
+        prompt_type="object",
+        schema={"type": "object"},
+        max_chunks=3,
+        returned_state=_planner_returned_state(
+            "ok", [1, 2], "```yaml\neffects: []\n```", True, "prime.merge.value"
+        ),
+    )
+    case(
+        "result_path_blank_defaults",
+        source_template="t",
+        ctx={},
+        prompt_type="text",
+        schema=None,
+        max_chunks=5,
+        returned_state=_planner_returned_state("ok", [1, 2], "effects: []\n", True, "   "),
+    )
+    case(
+        "result_path_non_string_defaults",
+        source_template="t",
+        ctx={},
+        prompt_type="text",
+        schema=None,
+        max_chunks=5,
+        returned_state=_planner_returned_state("ok", [1, 2], "effects: []\n", True, 5),
+    )
+    case(
+        "source_output_nested_non_ascii_schema",
+        source_template="t",
+        ctx={"input": {"a": 1}},
+        prompt_type="object",
+        schema={
+            "type": "object",
+            "description": "caf\u00e9 \u2014\u65e5\u672c\u8a9e",
+            "properties": {"a": {"type": "string"}},
+        },
+        max_chunks=5,
+        returned_state=_planner_returned_state(None, None, None, None, None),
+    )
+    case(
+        "source_output_infinity_schema",
+        source_template="t",
+        ctx={},
+        prompt_type="number",
+        schema={"minimum": float("inf")},
+        max_chunks=5,
+        returned_state=_planner_returned_state(None, None, None, None, None),
+    )
+    case(
+        "source_output_none_schema",
+        source_template="t",
+        ctx={},
+        prompt_type="boolean",
+        schema=None,
+        max_chunks=5,
+        returned_state=_planner_returned_state(None, None, None, None, None),
+    )
+
+    return cases
+
+
+# ---------------------------------------------------------------------
 # validate_plan
 # ---------------------------------------------------------------------
 
@@ -190,6 +357,32 @@ _YAML_OK = (
 )
 _YAML_ONE_EFFECT = 'effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: "1"}}\n'
 _YAML_SHELL = 'effects:\n  - {type: tool, name: merge, provider: shell, params: {cmd: echo}}\n'
+
+# `_validate_plan`'s inline-check branch (step 4, `_validate_inline_yaml`) --
+# every way it can fail, reviewed on PR #524 as missing from this corpus.
+_YAML_SCAN_ERROR = "effects: [{a: [1, 2}]"
+_YAML_NON_MAPPING = "- a"
+_YAML_MISSING_EFFECTS_KEY = "name: x"
+_YAML_NEAR_MISS_STRUCTURAL_ERROR = (
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: a\n"
+    "    provider: json\n"
+    "    discription: oops\n"
+    '    params: {mode: parse, input: "1"}\n'
+)
+_YAML_DUPLICATE_KEY = (
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: a\n"
+    "    provider: json\n"
+    '    params: {mode: parse, input: "1"}\n'
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: b\n"
+    "    provider: json\n"
+    '    params: {mode: parse, input: "1"}\n'
+)
 
 
 def build_validate_plan_cases() -> list[dict[str, Any]]:
@@ -204,9 +397,18 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
         result_path: str = "prime.merge.value",
         max_chunks: int = 5,
         runtime_config: dict[str, Any] | None = None,
+        third_party_prefix: str | None = None,
     ) -> None:
         plan = _Plan(say=None, chunks=chunks, yaml=yaml_text, done=done, result_path=result_path)
         problems = _validate_plan(plan, max_chunks=max_chunks, runtime_config=runtime_config or {})
+        if third_party_prefix is not None:
+            # A PyYAML scan error (DESIGN.md §1, §12): compared by prefix and
+            # location only on the Rust side, never the exact wording.
+            assert len(problems) == 1, f"{name}: expected exactly one problem, got {problems}"
+            assert problems[0].startswith(third_party_prefix), (
+                f"{name}: {problems[0]!r} does not start with {third_party_prefix!r}"
+            )
+            assert len(problems[0]) > len(third_party_prefix), f"{name}: empty rest after prefix"
         cases.append(
             {
                 "name": name,
@@ -217,6 +419,7 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
                 "max_chunks": max_chunks,
                 "runtime_config": encode(runtime_config or {}),
                 "expected": problems,
+                "third_party_prefix": third_party_prefix,
             }
         )
 
@@ -259,6 +462,40 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
         yaml_text=_YAML_SHELL,
         done=True,
         runtime_config={},
+    )
+
+    # The inline check (step 4) -- every way it can fail, run through the
+    # real `_validate_plan` rather than re-typed (review finding 2 on PR
+    # #524): a PyYAML scan error, a non-mapping document, a document
+    # missing the required `effects` key, a near-miss key (a Circuitry-own
+    # structural error), and the "two loaders" hazard's own duplicate key
+    # (caught here by the same duplicate-key loader the merge contract and
+    # allowlist check don't use).
+    case(
+        "inline_check_yaml_scan_error",
+        chunks=[1, 2],
+        yaml_text=_YAML_SCAN_ERROR,
+        done=True,
+        third_party_prefix="YAML parse error: ",
+    )
+    case("inline_check_non_mapping", chunks=[1, 2], yaml_text=_YAML_NON_MAPPING, done=True)
+    case(
+        "inline_check_missing_effects_key",
+        chunks=[1, 2],
+        yaml_text=_YAML_MISSING_EFFECTS_KEY,
+        done=True,
+    )
+    case(
+        "inline_check_near_miss_structural_error",
+        chunks=[1, 2],
+        yaml_text=_YAML_NEAR_MISS_STRUCTURAL_ERROR,
+        done=True,
+    )
+    case(
+        "inline_check_duplicate_key",
+        chunks=[1, 2],
+        yaml_text=_YAML_DUPLICATE_KEY,
+        done=True,
     )
 
     return cases
@@ -364,46 +601,92 @@ def build_failure_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def build_max_depth_and_success_cases() -> list[dict[str, Any]]:
-    """`maybe_decompose`'s own two inline record constructions
-    (`:195-203`, `:259-263`) -- not separate functions, so this
-    reproduces their exact dict-merge expressions directly, the same
-    literal Python the real function executes."""
+def build_max_depth_and_success_cases() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """`maybe_decompose`'s own two inline record constructions (`:195-203`,
+    `:259-263`), reached by actually running the real function end to end
+    (review finding 7 on PR #524: these were re-typed dict expressions
+    before, never the real function's own output) -- the depth ceiling
+    (`_run_planner`/`_execute_plan` never even called, since the ceiling is
+    checked first) and a full plan/validate/execute pass with
+    `_run_planner`/`_execute_plan` patched, the way the review's own fix
+    suggests, the real `_validate_plan` still in the loop in between."""
+
+    def run(
+        *,
+        score: float,
+        dset: dict[str, Any],
+        routing: dict[str, Any] | None,
+        depth: int,
+        planned: _Plan | None,
+        executed_value: Any = None,
+    ) -> Any:
+        complexity: dict[str, Any] = {"scoring": {"enabled": True}, "decomposition": dset}
+        if routing is not None:
+            complexity["routing"] = routing
+        runtime_config: dict[str, Any] = {"complexity": complexity, "_decomposition_depth": depth}
+        defn = PromptDefinition(name="ask")
+        store = Store(state={})
+
+        def fake_run_planner(*args: Any, **kwargs: Any) -> _Plan:
+            assert planned is not None, "the ceiling must fire before the planner ever runs"
+            return planned
+
+        def fake_execute_plan(*args: Any, **kwargs: Any) -> Any:
+            return executed_value
+
+        with (
+            mock.patch("circuitry.core.decompose._run_planner", fake_run_planner),
+            mock.patch("circuitry.core.decompose._execute_plan", fake_execute_plan),
+        ):
+            return maybe_decompose(
+                defn,
+                store=store,
+                node={},
+                ctx={},
+                score=score,
+                source_template="Summarize {{input.topic}}",
+                adapter=None,
+                model="x",
+                runtime_config=runtime_config,
+                timeout_seconds=5,
+                verbose=False,
+                display_depth=0,
+            )
+
     max_depth_cases = []
-    for name, score, threshold, depth, max_depth, fallback in [
-        ("with_fallback_routes_up", 95.0, 80.0, 2, 2, "big"),
-        ("without_fallback_runs_as_is", 95.0, 80.0, 2, 2, None),
+    dset = {"enabled": True, "threshold": 80.0, "max_depth": 2, "max_chunks": 5, "on_failure": "route_up"}
+    for name, bands in [
+        ("with_fallback_routes_up", [{"model": "small", "max": 10.0}, {"model": "big", "max": None}]),
+        ("without_fallback_runs_as_is", None),
     ]:
-        base = {"decomposed": False, "score": score, "threshold": threshold, "depth": depth, "max_depth": max_depth}
-        record = {
-            **base,
-            "outcome": "route_up" if fallback else "run_as_is",
-            "reason": "max_depth",
-            "fallback_model": fallback,
-        }
+        routing = {"enabled": True, "bands": bands, "respect_explicit": True} if bands else None
+        result = run(score=95.0, dset=dset, routing=routing, depth=2, planned=None)
+        assert result is not None and not result.succeeded and result.failure is None and not result.fail, (
+            name,
+            result,
+        )
+        fallback_model = bands[-1]["model"] if bands else None
+        assert result.fallback_model == fallback_model, (name, result)
         max_depth_cases.append(
             {
                 "name": name,
-                "score": score,
-                "threshold": threshold,
-                "depth": depth,
-                "max_depth": max_depth,
-                "fallback_model": fallback,
-                "expected_meta": encode(record),
+                "score": 95.0,
+                "threshold": 80.0,
+                "depth": 2,
+                "max_depth": 2,
+                "fallback_model": fallback_model,
+                "expected_meta": encode(result.meta),
             }
         )
 
     success_cases = []
-    base = {"decomposed": False, "score": 50.0, "threshold": 80.0, "depth": 0, "max_depth": 2}
-    base["plan"] = {"say": "hi", "chunks": [1, 2]}
-    base["chunk_count"] = 2
-    base["result_path"] = "prime.merge.value"
-    base["yaml"] = "effects: []\n"
-    record = {**base, "decomposed": True, "outcome": "decomposed", "reason": None}
+    plan = _Plan(say="hi", chunks=[1, 2], yaml=_YAML_OK, done=True, result_path="prime.merge.value")
+    result = run(score=90.0, dset=dset, routing=None, depth=0, planned=plan, executed_value="computed")
+    assert result is not None and result.succeeded and result.value == "computed", result
     success_cases.append(
         {
             "name": "decomposed_in_place_first_key",
-            "score": 50.0,
+            "score": 90.0,
             "threshold": 80.0,
             "depth": 0,
             "max_depth": 2,
@@ -411,9 +694,9 @@ def build_max_depth_and_success_cases() -> list[dict[str, Any]]:
             "plan_chunks": [1, 2],
             "chunk_count": 2,
             "result_path": "prime.merge.value",
-            "yaml": "effects: []\n",
-            "expected_meta": encode(record),
-            "expected_key_order": list(record.keys()),
+            "yaml": _YAML_OK,
+            "expected_meta": encode(result.meta),
+            "expected_key_order": list(result.meta.keys()),
         }
     )
 
@@ -604,6 +887,7 @@ def main() -> int:
         "route_up_model_cases": build_route_up_model_cases(),
         "describe_inputs_cases": build_describe_inputs_cases(),
         "source_output_cases": build_source_output_cases(),
+        "run_planner_cases": build_run_planner_cases(),
         "validate_plan_cases": build_validate_plan_cases(),
         "failure_cases": build_failure_cases(),
         "max_depth_cases": max_depth_cases,
