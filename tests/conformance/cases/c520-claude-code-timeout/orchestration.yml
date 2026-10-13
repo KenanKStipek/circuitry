@@ -1,0 +1,17 @@
+name: c520-claude-code-timeout
+adapter: claude_code
+effects:
+  - type: prompt
+    name: hangs_then_times_out
+    model: hang
+    on_error: continue
+    timeout_ms: 1000
+    retries: {max_attempts: 2, backoff_ms: 1}
+    template: "ask"
+  - type: prompt
+    name: fallback_after_hang
+    model: hang
+    on_error: continue
+    timeout_ms: 1000
+    provider_fallbacks: ["claude_code:answers"]
+    template: "ask"

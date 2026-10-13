@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c520-claude-code-text (issue #520): echoes its own
+argv, the prompt it read on stdin, whether its own `cwd` is a fresh
+`circuitry-claude-*` directory, and whether every PARENT_SESSION_ENV/
+DEFAULT_UNSET_ENV name (plus one neutral variable) is set or unset --
+never a value, per the conformance suite's own credential-safety rule.
+Answers as Claude Code's own `--output-format json` result shape."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+_ENV_NAMES = (
+    "PI_SESSION_ID",
+    "PI_SESSION_FILE",
+    "PI_PANE_ARGS",
+    "PI_CODING_AGENT",
+    "PI_MODEL",
+    "PI_PROVIDER",
+    "PI_REASONING_LEVEL",
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "AGENT_CLI_NEUTRAL_VAR",
+)
+
+
+def main() -> int:
+    prompt = sys.stdin.read()
+    cwd_ok = os.path.basename(os.getcwd()).startswith("circuitry-claude-")
+    lines = [
+        "ARGV:" + " ".join(sys.argv),
+        "PROMPT:" + prompt,
+        "CWD_IS_FRESH:" + str(cwd_ok),
+    ]
+    for name in _ENV_NAMES:
+        lines.append(f"{name}=" + ("present" if name in os.environ else "absent"))
+    report = "\n".join(lines)
+    print(
+        json.dumps(
+            {
+                "result": report,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_read_input_tokens": 2,
+                    "cache_creation_input_tokens": 1,
+                    "output_tokens": 5,
+                },
+                "total_cost_usd": 0.5,
+                "stop_reason": "end_turn",
+            }
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

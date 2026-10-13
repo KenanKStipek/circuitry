@@ -810,6 +810,107 @@ fn strip_trailing_zeros(s: &mut String) {
     }
 }
 
+/// The two adapters' own temporary working directory (issue #520 part
+/// B, `adapters/claude_code.py:53`/`adapters/pi.py:46` --
+/// `tempfile.TemporaryDirectory(prefix=...)`), added here rather than
+/// in `electricity-adapters` itself (additive to this, part A's own
+/// file -- issue #520's own part-A/part-B seam) because `libc`, needed
+/// for [`libc::mkdtemp`], is already a dependency of this crate; part
+/// B's own crate has no dependency on it, and the issue's own ruling 2
+/// asks for "no new crates and no new dependencies."
+///
+/// Built from [`std::env::temp_dir`] (`TMPDIR`, or the platform
+/// default) made absolute first (issue #520's own settled question 12:
+/// `tempfile.mkdtemp`'s own result is always absolute, even under a
+/// *relative* `TMPDIR` -- confirmed directly: CPython's own
+/// `_candidate_tempdir_list` runs every candidate through
+/// `os.path.abspath`, where Rust's `std::env::temp_dir` does not), then
+/// `mkdtemp(3)`'s own `<dir>/<prefix>XXXXXX` template -- the random
+/// suffix and the directory's `0700` mode both come from `mkdtemp`
+/// itself, needing no separate `chmod`. [`Drop`] removes the directory
+/// recursively, best-effort (a failure here is silently ignored, same
+/// as Python's own `TemporaryDirectory.cleanup`'s `ignore_errors`
+/// companion in this port): on every way out of the caller's own
+/// `generate` -- success, a CLI failure, a timeout, or the call's own
+/// future simply dropped by a racing cancellation -- the guard's own
+/// stack slot still unwinds, running this.
+pub struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    /// *prefix* is the whole leading literal before `mkdtemp`'s own
+    /// random suffix (`"circuitry-claude-"`/`"circuitry-pi-"" -- B2),
+    /// not a directory component of its own.
+    pub fn new(prefix: &str) -> std::io::Result<Self> {
+        let mut base = absolutize(std::env::temp_dir())?;
+        base.push(format!("{prefix}XXXXXX"));
+        #[cfg(unix)]
+        {
+            use std::ffi::CString;
+            use std::os::unix::ffi::OsStrExt;
+            let mut template = CString::new(base.as_os_str().as_bytes())
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "temp dir prefix contains a NUL byte",
+                    )
+                })?
+                .into_bytes_with_nul();
+            // SAFETY: `template` is a NUL-terminated, mutable buffer
+            // long enough for `mkdtemp` to rewrite its own trailing
+            // `XXXXXX` in place; its return value is either that same
+            // pointer (success) or NULL with `errno` set (failure).
+            let result = unsafe { libc::mkdtemp(template.as_mut_ptr() as *mut libc::c_char) };
+            if result.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let len = template
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(template.len());
+            let path = PathBuf::from(std::ffi::OsStr::from_bytes(&template[..len]));
+            Ok(TempDirGuard { path })
+        }
+        #[cfg(not(unix))]
+        {
+            // Issue #520's settled question 14: no Windows work --
+            // electricity builds and tests on Linux/macOS only, so this
+            // branch exists only so the crate still compiles on a
+            // third platform's own `cargo check`, never runs in CI.
+            let _ = base;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "TempDirGuard::new is only implemented on Unix",
+            ))
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// *base*, made absolute against the current directory when it isn't
+/// already -- [`TempDirGuard::new`]'s own `TMPDIR`-may-be-relative
+/// case (issue #520's settled question 12), pulled out so a test can
+/// drive it directly with a synthetic relative path instead of
+/// mutating the process's real `TMPDIR`/cwd (both global, process-wide
+/// state a parallel test run can't safely share).
+fn absolutize(base: PathBuf) -> std::io::Result<PathBuf> {
+    if base.is_absolute() {
+        Ok(base)
+    } else {
+        Ok(std::env::current_dir()?.join(base))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1802,5 +1903,51 @@ mod tests {
         assert_eq!(py_format_g(1500005.0), "1.5e+06");
         assert_eq!(py_format_g(2500005.0), "2.5e+06");
         assert_eq!(py_format_g(1234565.0), "1.23456e+06");
+    }
+
+    // --- TempDirGuard -------------------------------------------------
+
+    #[test]
+    fn temp_dir_guard_creates_an_absolute_0700_directory_under_the_prefix() {
+        let guard = TempDirGuard::new("circuitry-agent-cli-test-").unwrap();
+        assert!(guard.path().is_absolute());
+        assert!(guard.path().is_dir());
+        let name = guard.path().file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("circuitry-agent-cli-test-"));
+        let mode = std::fs::metadata(guard.path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn absolutize_joins_a_relative_base_against_the_current_directory() {
+        let relative = PathBuf::from("circuitry-agent-cli-reltest");
+        let resolved = absolutize(relative.clone()).unwrap();
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, std::env::current_dir().unwrap().join(relative));
+    }
+
+    #[test]
+    fn absolutize_keeps_an_already_absolute_base_unchanged() {
+        let absolute = std::env::temp_dir();
+        assert_eq!(absolutize(absolute.clone()).unwrap(), absolute);
+    }
+
+    #[test]
+    fn temp_dir_guard_removes_the_directory_on_drop() {
+        let guard = TempDirGuard::new("circuitry-agent-cli-test-").unwrap();
+        let path = guard.path().to_path_buf();
+        assert!(path.is_dir());
+        drop(guard);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temp_dir_guard_two_calls_never_collide() {
+        let a = TempDirGuard::new("circuitry-agent-cli-test-").unwrap();
+        let b = TempDirGuard::new("circuitry-agent-cli-test-").unwrap();
+        assert_ne!(a.path(), b.path());
     }
 }

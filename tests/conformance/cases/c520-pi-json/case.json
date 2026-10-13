@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 11",
+  "description": "`prompt_type: json` with a schema through `pi`: no `--json-schema` flag (pi has none) and no warning for it either. A fenced markdown JSON reply is decoded and validated by cof the same way any other text answer would be.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

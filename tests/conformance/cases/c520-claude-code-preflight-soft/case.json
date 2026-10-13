@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 8b",
+  "description": "The same missing-`binary` config as the hard-failure case, but with its one usage `on_error: continue`: preflight downgrades it to a soft, skippable warning instead of refusing the run, checked through `compare_run_warnings`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "compare_run_warnings": true
+}

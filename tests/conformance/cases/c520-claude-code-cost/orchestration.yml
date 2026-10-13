@@ -1,0 +1,22 @@
+name: c520-claude-code-cost
+adapter: claude_code
+effects:
+  - type: prompt
+    name: half
+    model: cost-half
+    template: "ask"
+  - type: prompt
+    name: quarter
+    model: cost-quarter
+    template: "ask"
+  - type: prompt
+    name: no_cost
+    model: cost-none
+    template: "ask"
+  - type: prompt
+    name: retried_then_fails
+    model: cost-hang
+    on_error: continue
+    timeout_ms: 1000
+    retries: {max_attempts: 2, backoff_ms: 1}
+    template: "ask"

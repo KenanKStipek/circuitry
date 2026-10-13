@@ -3,6 +3,15 @@
 //! own builders do: `cfg.get(key) or default` -- a `dict.get` lookup,
 //! then Python's own truthiness (`None`, `""`, `0`, `0.0`, an empty
 //! collection) falling back to *default*, never just a missing key.
+//!
+//! [`cfg_value_or`]/[`require_str`]/[`resolve_truthy_str`]/[`string_list`]
+//! (issue #520 part B) widen this module for the `claude_code`/`pi`
+//! adapters' own config rule (B5): a *truthy non-string* config value
+//! (`binary: 5`, `thinking: true`) is never replaced by the default
+//! the way [`cfg_str_or`] would -- Python keeps it verbatim and fails
+//! only once something actually tries to use it as a string (`shutil.
+//! which`, a real `Popen`'s own `cmd[0]`), so falling back silently
+//! here would start the real CLI instead of reporting that failure.
 
 use electricity_value::Value;
 use electricity_vm::adapter::{AdapterError, PyExc};
@@ -53,27 +62,101 @@ pub fn cfg_str_or(cfg: &Value, key: &str, default: &str) -> String {
     }
 }
 
-/// `cfg.get(key) or default`, kept **raw** -- for `base_url`/
-/// `endpoint`, the two keys every adapter in this crate eventually
-/// calls `.rstrip("/")` on (`adapters/ollama.py`/`openai.py`/
-/// `anthropic.py`/`replicate.py`/`watsonx.py`'s own direct call, or
-/// `_openai_compat.py::chat_completion`'s shared one for the whole
-/// OpenAI-compatible family). Python's own `cfg.get(key) or default`
-/// keeps a truthy non-string value as-is -- it is `self.base_url.
-/// rstrip("/")`, called *later* (inside `generate()`/`check()`, after
-/// whatever earlier checks that specific adapter runs first -- an API
-/// key check, an IAM token exchange, ...), that actually raises
-/// `AttributeError: '<type>' object has no attribute 'rstrip'` (issue
-/// #515's own new finding, review finding F5: raising this at *build*
-/// time instead, unconditionally, refuses preflight for an adapter
-/// whose own `check()` never looks at `base_url` at all, and runs a
-/// watsonx IAM exchange in the wrong order relative to it). Builders
-/// store this raw value and each adapter calls [`rstrip_base_url`] on
-/// it at its own Python call site instead.
+/// `cfg.get(key) or default`, kept as the raw post-`or` [`Value`] --
+/// an absent/falsy config value becomes `Value::Str(default)`, but a
+/// truthy non-string value is kept exactly as configured, never
+/// coerced to a string the way [`cfg_str_or`] would. Two independent
+/// uses share this: `binary`/`default_model`/`thinking` (issue #520
+/// part B, B5) resolve -- or raise Python's own `TypeError` -- only
+/// where actually used ([`require_str`]/[`resolve_truthy_str`]);
+/// `base_url`/`endpoint` (issue #515, review finding F5) resolve via
+/// [`rstrip_base_url`] at each adapter's own later Python call site,
+/// since `self.base_url.rstrip("/")` there raises `AttributeError`
+/// lazily, not at build time (a watsonx IAM exchange, say, must still
+/// run before that attribute error would).
 pub fn cfg_value_or(cfg: &Value, key: &str, default: &str) -> Value {
     match cfg_get(cfg, key) {
-        Some(v) if value_is_truthy(v) => v.clone(),
+        Some(value) if value_is_truthy(value) => value.clone(),
         _ => Value::Str(default.to_string()),
+    }
+}
+
+/// Python's own `expected str, bytes or os.PathLike object, not
+/// <type>` -- `os.fspath()`'s exact text, confirmed directly against
+/// both `shutil.which(5)` and `subprocess.Popen([5])`/
+/// `subprocess.Popen(["claude", 5])` under CPython 3.11: the same
+/// message either way, so one `AdapterError` shape covers `binary`'s
+/// own `check()` use and every call-site use (`cmd[0]`, `--model`,
+/// `--thinking`) alike.
+pub fn type_error(value: &Value) -> AdapterError {
+    AdapterError {
+        message: format!(
+            "expected str, bytes or os.PathLike object, not {}",
+            value.type_name()
+        ),
+        retry: RetryInfo::not_retryable(),
+        py_class: PyExc::TypeError,
+    }
+}
+
+/// A config string that is always used, regardless of truthiness
+/// (`binary`, B5) -- *value* is already the result of [`cfg_value_or`],
+/// so it is guaranteed non-falsy; a non-`Value::Str` here is therefore
+/// always a truthy non-string, and [`type_error`] applies.
+pub fn require_str(value: &Value) -> Result<&str, AdapterError> {
+    match value {
+        Value::Str(s) => Ok(s),
+        other => Err(type_error(other)),
+    }
+}
+
+/// A config string that is used only when truthy (`default_model`,
+/// `thinking`, B5): Python's own `if model:`/`if thinking:` inside
+/// `claude_command`/`pi_command` -- a falsy value (including a falsy
+/// *non*-string: `0`, `False`, `[]`) resolves to `""` (no flag added),
+/// and only a truthy non-string raises [`type_error`] (the same
+/// `TypeError` a real `Popen` would once the raw value actually
+/// reached its argv).
+pub fn resolve_truthy_str(value: &Value) -> Result<String, AdapterError> {
+    if !value_is_truthy(value) {
+        return Ok(String::new());
+    }
+    match value {
+        Value::Str(s) => Ok(s.clone()),
+        other => Err(type_error(other)),
+    }
+}
+
+/// `adapters/factory.py::_string_list` -- `cfg[key]` as a list of
+/// strings, *default* when the key is absent or explicitly `null`
+/// (never type-checked the way a present value is); a present value
+/// that isn't a list, or contains anything but strings, fails with
+/// Python's own `ValueError` text, `raw`'s own [`Value::py_repr`].
+pub fn string_list(
+    cfg: &Value,
+    key: &str,
+    adapter_name: &str,
+    default: &[&str],
+) -> Result<Vec<String>, AdapterError> {
+    match cfg_get(cfg, key) {
+        None | Some(Value::None) => Ok(default.iter().map(|s| (*s).to_string()).collect()),
+        Some(Value::List(items)) if items.iter().all(|item| matches!(item, Value::Str(_))) => {
+            Ok(items
+                .iter()
+                .map(|item| match item {
+                    Value::Str(s) => s.clone(),
+                    _ => unreachable!("already checked above: every item is Value::Str"),
+                })
+                .collect())
+        }
+        Some(other) => Err(AdapterError {
+            message: format!(
+                "runtime.adapters.{adapter_name}.{key} must be a list of strings, got {}",
+                other.py_repr()
+            ),
+            retry: RetryInfo::not_retryable(),
+            py_class: PyExc::ValueError,
+        }),
     }
 }
 
@@ -226,5 +309,91 @@ mod tests {
         assert!(!value_is_truthy(&Value::from(0i64)));
         assert!(value_is_truthy(&Value::from(1i64)));
         assert!(value_is_truthy(&Value::Str("x".to_string())));
+    }
+
+    #[test]
+    fn require_str_keeps_a_string_and_type_errors_on_anything_else() {
+        assert_eq!(require_str(&Value::Str("claude".to_string())), Ok("claude"));
+        let err = require_str(&Value::from(5i64)).unwrap_err();
+        assert_eq!(
+            err.message,
+            "expected str, bytes or os.PathLike object, not int"
+        );
+        assert!(!err.retry.retryable);
+        assert_eq!(err.py_class, PyExc::TypeError);
+    }
+
+    #[test]
+    fn require_str_names_bool_the_same_way_python_does() {
+        let err = require_str(&Value::Bool(true)).unwrap_err();
+        assert_eq!(
+            err.message,
+            "expected str, bytes or os.PathLike object, not bool"
+        );
+    }
+
+    #[test]
+    fn resolve_truthy_str_treats_a_falsy_non_string_as_empty() {
+        assert_eq!(resolve_truthy_str(&Value::from(0i64)).unwrap(), "");
+        assert_eq!(resolve_truthy_str(&Value::Bool(false)).unwrap(), "");
+        assert_eq!(resolve_truthy_str(&Value::Str("".to_string())).unwrap(), "");
+    }
+
+    #[test]
+    fn resolve_truthy_str_keeps_a_truthy_string_and_errors_on_truthy_non_string() {
+        assert_eq!(
+            resolve_truthy_str(&Value::Str("opus".to_string())).unwrap(),
+            "opus"
+        );
+        let err = resolve_truthy_str(&Value::Bool(true)).unwrap_err();
+        assert_eq!(
+            err.message,
+            "expected str, bytes or os.PathLike object, not bool"
+        );
+        assert_eq!(err.py_class, PyExc::TypeError);
+    }
+
+    #[test]
+    fn string_list_defaults_on_absence_or_explicit_null() {
+        let cfg = dict(&[("unset_env", Value::None)]);
+        assert_eq!(
+            string_list(&cfg, "unset_env", "pi", &["A", "B"]).unwrap(),
+            vec!["A".to_string(), "B".to_string()]
+        );
+        assert_eq!(
+            string_list(&Value::None, "unset_env", "pi", &["A", "B"]).unwrap(),
+            vec!["A".to_string(), "B".to_string()]
+        );
+    }
+
+    #[test]
+    fn string_list_keeps_an_explicit_empty_list_empty() {
+        let cfg = dict(&[("unset_env", Value::List(vec![]))]);
+        assert_eq!(
+            string_list(&cfg, "unset_env", "pi", &["A", "B"]).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn string_list_rejects_a_non_list_with_pythons_value_error_text() {
+        let cfg = dict(&[("unset_env", Value::Str("ANTHROPIC_API_KEY".to_string()))]);
+        let err = string_list(&cfg, "unset_env", "pi", &[]).unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.pi.unset_env must be a list of strings, got 'ANTHROPIC_API_KEY'"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert!(!err.retry.retryable);
+    }
+
+    #[test]
+    fn string_list_rejects_a_list_containing_a_non_string() {
+        let cfg = dict(&[("extra_args", Value::List(vec![Value::from(1i64)]))]);
+        let err = string_list(&cfg, "extra_args", "claude_code", &[]).unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.claude_code.extra_args must be a list of strings, got [1]"
+        );
     }
 }

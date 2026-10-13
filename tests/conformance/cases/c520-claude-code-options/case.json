@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 6",
+  "description": "`params` carrying `temperature` and another key plus a `messages:` prompt, a separate prompt with only `deterministic: true` (no `params`), and a model-mode `if:` through `claude_code` with no options at all: pins `meta.warnings`, the `WARNING` stderr lines, the flattened prompt on stdin, and that `deterministic` alone warns `temperature` on its own.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

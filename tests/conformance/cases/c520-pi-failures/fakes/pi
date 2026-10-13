@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c520-pi-failures (issue #520): picks one of seven
+failure/edge behaviours from `--model`, covering every branch in
+`parse_pi_output`'s own A5/A6/A8 handling (error stop reasons, no
+answer, a non-zero exit after a good message, a truncation stop
+reason, and a raw U+2028 splitting an event's own JSON line)."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def _model() -> str:
+    args = sys.argv[1:]
+    return args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def _message_end(message: dict) -> str:
+    return json.dumps({"type": "message_end", "message": message})
+
+
+def main() -> int:
+    sys.stdin.read()
+    model = _model()
+
+    if model == "error-with-message":
+        print(_message_end({"role": "assistant", "content": "", "stopReason": "error", "errorMessage": "boom"}))
+        return 1
+
+    if model == "aborted-text-only":
+        print(_message_end({"role": "assistant", "content": "partial output", "stopReason": "aborted"}))
+        return 1
+
+    if model == "error-with-neither":
+        print(_message_end({"role": "assistant", "content": "", "stopReason": "error"}))
+        return 1
+
+    if model == "no-assistant-message-exit0":
+        print(json.dumps({"type": "session", "id": "sess-1"}))
+        return 0
+
+    if model == "exit1-after-good-message":
+        print(_message_end({"role": "assistant", "content": "all good", "stopReason": "end_turn"}))
+        sys.stderr.write("log noise\n")
+        return 1
+
+    if model == "truncation-length":
+        print(_message_end({"role": "assistant", "content": "cut off tex", "stopReason": "length"}))
+        return 0
+
+    if model == "raw-u2028-split":
+        print(_message_end({"role": "assistant", "content": "first answer", "stopReason": "end_turn"}))
+        # A raw U+2028 inside the JSON text (never escaped by `json.
+        # dumps`) splits this whole line in two under `str.splitlines`/
+        # `py_splitlines` -- neither half parses as JSON, so this event
+        # is dropped entirely and the prior assistant message answers.
+        corrupted = json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": "second\u2028answer",
+                    "stopReason": "end_turn",
+                },
+            },
+            ensure_ascii=False,
+        )
+        print(corrupted)
+        return 0
+
+    print(_message_end({"role": "assistant", "content": f"unknown model {model!r}", "stopReason": "error", "errorMessage": "bad test model"}))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

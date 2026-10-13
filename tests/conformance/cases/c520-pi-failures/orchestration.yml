@@ -1,0 +1,38 @@
+name: c520-pi-failures
+adapter: pi
+effects:
+  - type: prompt
+    name: error_with_message
+    model: error-with-message
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: aborted_text_only
+    model: aborted-text-only
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: error_with_neither
+    model: error-with-neither
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: no_assistant_message_exit0
+    model: no-assistant-message-exit0
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: exit1_after_good_message
+    model: exit1-after-good-message
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: truncation_length
+    model: truncation-length
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: raw_u2028_split
+    model: raw-u2028-split
+    on_error: continue
+    template: "ask"

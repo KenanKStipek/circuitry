@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-13T21:00:36.498Z","ev":"run_start","run_id":"1f7acb6c-bb4f-4445-84c6-1d6076aaad47","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":14287}
+{"v":1,"seq":1,"ts":"2026-10-13T21:00:36.501Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T21:00:36.501Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-10-13T21:00:36.506Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":5,"error":"All adapter attempts failed: [{'adapter': 'claude_code', 'model': 'm', 'status': 'failed', 'error': \"circuitry-test-missing-claude could not be started (circuitry-test-missing-claude): [Errno 2] No such file or directory: 'circuitry-test-missing-claude'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-13T21:00:36.506Z","ev":"end","id":0,"path":"prime","ok":true,"ms":5}
+{"v":1,"seq":5,"ts":"2026-10-13T21:00:36.506Z","ev":"run_end","ok":true}

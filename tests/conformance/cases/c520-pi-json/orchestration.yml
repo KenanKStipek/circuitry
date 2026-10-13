@@ -1,0 +1,23 @@
+name: c520-pi-json
+adapter: pi
+effects:
+  - type: prompt
+    name: no_flag_no_warning
+    model: no-flag
+    prompt_type: json
+    template: "give json"
+    schema:
+      type: object
+      properties:
+        a: {type: string}
+      required: ["a"]
+  - type: prompt
+    name: fenced_json_reply
+    model: fenced
+    prompt_type: json
+    template: "give json"
+    schema:
+      type: object
+      properties:
+        a: {type: string}
+      required: ["a"]

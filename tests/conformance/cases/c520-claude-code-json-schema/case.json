@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 2",
+  "description": "`--json-schema` across claude_code's own schema-wrapping rule: an object schema with `$defs`/`$ref`/a non-ASCII description sent unchanged; an array schema wrapped and unwrapped again; `prompt_type: json` with an empty `schema: {}` sends no flag at all; `structured_output: null` falls back to a fenced JSON `result`. The fake echoes the `--json-schema` argument's own bytes back inside its answer, pinning `claude_json_schema`'s exact output.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

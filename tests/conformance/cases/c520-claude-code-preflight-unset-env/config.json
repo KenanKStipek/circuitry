@@ -1,0 +1,9 @@
+{
+  "runtime": {
+    "adapters": {
+      "claude_code": {
+        "unset_env": "ANTHROPIC_API_KEY"
+      }
+    }
+  }
+}

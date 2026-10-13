@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c520-claude-code-schema-invalid (issue #520):
+always answers a structured reply that fails the orchestration's own
+schema (missing the required `a` property), on every attempt -- both
+retries exhaust the same way, deterministically."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def main() -> int:
+    sys.stdin.read()
+    print(json.dumps({"result": None, "is_error": False, "structured_output": {"b": 1}}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

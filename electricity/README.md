@@ -18,11 +18,13 @@ composition run too, in every field that reaches them (a tool's
 `template`, a `prompt`'s own `template`/`messages`). A `prompt` effect runs
 for real against a document's own top-level `adapter:`/a prompt's own
 `provider:` (native Ollama, the OpenAI-compatible family, `openai`,
-`anthropic`, `replicate`, `watsonx`, `cyberdiner`, and the `scripted`
-adapter) with its preflight check run for real too -- `claude_code`,
-`litellm` and `pi` are the only Circuitry-known adapter names with no
-electricity builder yet, and still refuse with the preview message, as does a
-`reflector`'s own generated plan naming one of them. `runtime.complexity`
+`anthropic`, `replicate`, `watsonx`, `cyberdiner`, `claude_code`, `pi`, and
+the `scripted` adapter) with its preflight check run for real too --
+`litellm` is the only Circuitry-known adapter name with no electricity
+builder, and stays refused permanently (it embeds the Python `litellm`
+package, which electricity neither embeds nor reimplements), still
+refusing with the preview message, as does a `reflector`'s own generated
+plan naming it. `runtime.complexity`
 scoring and model routing run too, writing `meta.complexity`/routing a
 prompt's model the same way `cof run` does; only decomposition (splitting
 an over-threshold prompt into chunks) still refuses with a preview message.

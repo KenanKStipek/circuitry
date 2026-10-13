@@ -1,0 +1,5 @@
+name: c520-claude-code-not-started
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

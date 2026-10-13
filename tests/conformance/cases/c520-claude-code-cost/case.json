@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), B5",
+  "description": "`meta.cost_usd`/`runtime.last_run.totals.cost_usd` summed across a chain of several claude_code calls: two successful costs exact in binary (0.5, 0.25), one successful call that reports no cost at all, and one call that always times out (`retries: {max_attempts: 2, backoff_ms: 1}`, `on_error: continue`) and so never reports a cost either -- the retried, never-succeeding call must not perturb the running total.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

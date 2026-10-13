@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c520-claude-code-json-schema (issue #520): picks a
+canned answer from `--model`, echoing the `--json-schema` argument's own
+bytes (verbatim, never a value a credential could hide) back inside its
+own structured answer -- so the committed `expected.json` pins the exact
+argument `claude_command`/`claude_json_schema` build, on both engines."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def _model() -> str:
+    args = sys.argv[1:]
+    return args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def _json_schema_arg() -> str | None:
+    args = sys.argv[1:]
+    return args[args.index("--json-schema") + 1] if "--json-schema" in args else None
+
+
+def main() -> int:
+    sys.stdin.read()
+    model = _model()
+    schema_arg = _json_schema_arg()
+
+    if model == "schema-object":
+        structured = {"echo": schema_arg}
+        payload = {"result": None, "is_error": False, "structured_output": structured}
+    elif model == "schema-array":
+        structured = {"value": [schema_arg]}
+        payload = {"result": None, "is_error": False, "structured_output": structured}
+    elif model == "schema-none":
+        payload = {
+            "result": json.dumps({"ok": True, "saw_flag": schema_arg is not None}),
+            "is_error": False,
+            "structured_output": None,
+        }
+    elif model == "schema-null-structured":
+        fenced = "```json\n" + json.dumps({"fenced": True, "echo": schema_arg}) + "\n```"
+        payload = {"result": fenced, "is_error": False, "structured_output": None}
+    else:
+        payload = {"result": f"unknown model {model!r}", "is_error": True}
+
+    print(json.dumps(payload))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

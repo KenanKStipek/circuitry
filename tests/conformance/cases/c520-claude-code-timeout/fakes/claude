@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c520-claude-code-timeout (issue #520): `--model
+hang` ignores SIGTERM and sleeps until killed (so the timeout's own
+process-group kill is exercised, not a cooperative exit); any other
+model answers immediately."""
+
+from __future__ import annotations
+
+import json
+import signal
+import sys
+import time
+
+
+def _model() -> str:
+    args = sys.argv[1:]
+    return args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def main() -> int:
+    sys.stdin.read()
+    model = _model()
+    if model == "hang":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(3600)
+    print(json.dumps({"result": "fallback answered", "is_error": False}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
