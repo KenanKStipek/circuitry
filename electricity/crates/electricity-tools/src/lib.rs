@@ -128,6 +128,20 @@ pub enum ErrorCause {
         status: u16,
         retry_after: Option<String>,
     },
+    /// A prompt's bare `SchemaValidationError` re-raise (electricity
+    /// M1-L2b, issue #522): the planner's whole rejected `plan` reply,
+    /// kept in full so the decomposition call site
+    /// (`electricity_vm::decompose::maybe_decompose`) can recover it
+    /// as `meta.decomposition.raw_payload` even after a chain/tree wrap
+    /// (`retry.rs`'s own exhaustive match on this enum treats this
+    /// variant like [`ErrorCause::None`] -- never retried by status,
+    /// only by the decode/schema-failure rule `exec/prompt.rs` already
+    /// applies independently of *cause*). `core/decompose.py::
+    /// _rejected_payload_text`'s own chain walk has no equivalent here:
+    /// `electricity_vm::exec::wrap_effect_error` keeps *cause*
+    /// unchanged through every wrap, so the cause set at the leaf
+    /// survives to whatever ancestor reads it.
+    SchemaRejected { raw_response_text: String },
 }
 
 /// A tool call's own raised error (as opposed to [`ToolResult::ok`]

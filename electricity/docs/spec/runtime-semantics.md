@@ -1237,12 +1237,14 @@ top-level effects is an `invalid_plan` failure, **never silently truncated**;
 `UseDefinition(inline=plan_yaml, validate=True, on_error="fail")` at
 `prime.<reflector>.<generated_key>.iter_<i>`.
 
-**Decomposition/routing/scoring are off by default** for the reflector's own
-planning prompt — `core/decompose.py`'s own planner run explicitly disables
-decomposition for itself (its planning prompt is deliberately huge and would
-otherwise trigger the very feature it's generating). This is the one
-documented exception; everywhere else decomposition/scoring/routing follow
-the ordinary `runtime.complexity.*` config (§5.8).
+**Decomposition/routing/scoring are not forced off** for the reflector's own
+planning prompt — it runs with nothing special at all, the ordinary
+`runtime.complexity.*` config (§5.8) applying to it exactly as it would to any
+other prompt. The one documented exception belongs to a different planner
+entirely: `core/decompose.py`'s own decomposition planner explicitly disables
+decomposition for *itself* (its planning prompt is deliberately huge and
+would otherwise trigger the very feature it's generating) — never the
+reflector's planning prompt, which this paragraph used to say incorrectly.
 
 ### 5.8 Decomposition, routing, scoring
 

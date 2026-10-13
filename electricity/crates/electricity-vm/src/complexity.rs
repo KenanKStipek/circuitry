@@ -65,8 +65,11 @@ pub(crate) mod depth {
     /// A `use`/decomposition child's own root `dynamic`
     /// (`core/use.py::UseRuntime.execute`'s own `depth=self.depth + 1`)
     /// -- one level deeper than the `use` effect itself, whatever
-    /// ambient depth *that* ran at. [`crate::Frame::nested`] applies
-    /// this automatically; no caller needs to call it directly.
+    /// ambient depth *that* ran at. [`crate::Frame::nested`] does
+    /// *not* apply this on its own (it only composes the child's own
+    /// path prefix); every caller chains
+    /// `.nested(..).with_display_depth(use_child_root(frame.display_depth()))`
+    /// itself (`exec::use_::execute_use`, `decompose::maybe_decompose`).
     pub(crate) fn use_child_root(ambient: u32) -> u32 {
         ambient + 1
     }

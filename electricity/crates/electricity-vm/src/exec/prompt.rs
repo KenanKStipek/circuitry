@@ -298,6 +298,12 @@ struct LastFailure {
     /// own exhaustion path re-raises as-is, rather than wrapping in
     /// `"All adapter attempts failed: ..."`.
     bare: Option<(electricity_tools::PyExc, String)>,
+    /// `ErrorCause::SchemaRejected` (issue #522, §3) for a bare
+    /// `SchemaValidationError` re-raise whose reply text is non-empty;
+    /// `ErrorCause::None` for every other failure (an
+    /// `AnswerParseError`, a malformed schema, an adapter failure, a
+    /// timeout, or an empty reply never carry one).
+    cause: electricity_tools::ErrorCause,
 }
 
 enum PassOutcome {
@@ -502,6 +508,7 @@ async fn generate_with_fallbacks(
                     last_failure = Some(LastFailure {
                         retry: err.retry,
                         bare: None,
+                        cause: electricity_tools::ErrorCause::None,
                     });
                     continue;
                 }
@@ -555,6 +562,7 @@ async fn generate_with_fallbacks(
                 last_failure = Some(LastFailure {
                     retry: err.retry,
                     bare: None,
+                    cause: electricity_tools::ErrorCause::None,
                 });
             }
             Ok(result) => {
@@ -602,11 +610,28 @@ async fn generate_with_fallbacks(
                             }
                             _ => crate::retry::RetryInfo::not_retryable(),
                         };
+                        // Issue #522 §3: a bare `SchemaValidationError`
+                        // re-raise keeps the attempt's own full reply
+                        // text (never the capped copy `attempts_meta`
+                        // carries) as `ErrorCause::SchemaRejected`, so
+                        // decomposition can recover the planner's
+                        // rejected `plan` reply even through a
+                        // chain/tree wrap -- never for an
+                        // `AnswerParseError`, never for an empty reply.
+                        let cause = if py_class == electricity_tools::PyExc::SchemaValidationError
+                            && !result.text.is_empty()
+                        {
+                            electricity_tools::ErrorCause::SchemaRejected {
+                                raw_response_text: result.text.clone(),
+                            }
+                        } else {
+                            electricity_tools::ErrorCause::None
+                        };
                         let bare = match status {
                             "decode_failed" | "schema_invalid" => Some((py_class, message)),
                             _ => None,
                         };
-                        last_failure = Some(LastFailure { retry, bare });
+                        last_failure = Some(LastFailure { retry, bare, cause });
                     }
                 }
             }
@@ -618,6 +643,7 @@ async fn generate_with_fallbacks(
         failure: last_failure.unwrap_or(LastFailure {
             retry: crate::retry::RetryInfo::not_retryable(),
             bare: None,
+            cause: electricity_tools::ErrorCause::None,
         }),
     })
 }
@@ -656,6 +682,7 @@ fn finish_failure(
     attempt_index: u32,
     message: String,
     py_class: electricity_tools::PyExc,
+    cause: electricity_tools::ErrorCause,
 ) -> Result<(), VmError> {
     set_leaf(
         store,
@@ -690,7 +717,7 @@ fn finish_failure(
         return Err(VmError::Raised {
             py_class,
             message,
-            cause: electricity_tools::ErrorCause::None,
+            cause,
             cause_class: None,
         });
     }
@@ -849,8 +876,8 @@ pub(crate) async fn execute_prompt(
         frame.display_depth(),
         run_ctx,
     )?;
-    if let Some(complexity_meta) = complexity_meta {
-        set_leaf(store, &meta_node, "complexity", complexity_meta);
+    if let Some(complexity_value) = &complexity_meta {
+        set_leaf(store, &meta_node, "complexity", complexity_value.clone());
     }
     if let Some(routed) = routed_model {
         resolved_model = routed;
@@ -893,6 +920,65 @@ pub(crate) async fn execute_prompt(
         }
     };
 
+    // Issue #522 (M1-L2b): `_maybe_decompose` runs right here in Python
+    // too (`prompt.py:617-659`) -- before the generation options, the
+    // assets and the attempt chain, all of which a decomposed prompt
+    // never touches at all.
+    let decomposition = crate::decompose::maybe_decompose(
+        op,
+        prompt,
+        complexity_meta.as_ref(),
+        &prompt_sent,
+        &render_chain,
+        store,
+        frame,
+        run_ctx,
+        observer,
+        token,
+    )
+    .await?;
+
+    let mut dispatch_model = resolved_model.clone();
+    if let Some(result) = decomposition {
+        set_leaf(store, &meta_node, "decomposition", result.meta);
+        match result.posture {
+            crate::decompose::Posture::Decomposed(value) => {
+                set_leaf(store, &effect_node, "value", value);
+                set_leaf(store, &meta_node, "completed_at", now_iso());
+                observer.record_totals(&store.snapshot(&meta_node));
+                observer.effect_complete(
+                    &effect_path,
+                    instance,
+                    None,
+                    super::completed_at_is_truthy(store, &meta_node),
+                );
+                observer.write();
+                return Ok(());
+            }
+            crate::decompose::Posture::Fail { reason, error } => {
+                return finish_failure(
+                    store,
+                    &meta_node,
+                    &effect_node,
+                    op,
+                    &effect_path,
+                    instance,
+                    observer,
+                    Vec::new(),
+                    0,
+                    crate::decompose::failure_text(name, reason, &error),
+                    electricity_tools::PyExc::DecompositionError,
+                    electricity_tools::ErrorCause::None,
+                );
+            }
+            crate::decompose::Posture::Dispatch { fallback_model } => {
+                if let Some(model) = fallback_model {
+                    dispatch_model = model;
+                }
+            }
+        }
+    }
+
     let built_options = match options::build_options(
         name,
         raw_dict(&prompt.model_params)
@@ -914,6 +1000,7 @@ pub(crate) async fn execute_prompt(
                 0,
                 message,
                 electricity_tools::PyExc::ValueError,
+                electricity_tools::ErrorCause::None,
             );
         }
     };
@@ -942,6 +1029,7 @@ pub(crate) async fn execute_prompt(
                     0,
                     err.to_string(),
                     electricity_tools::PyExc::TemplateError,
+                    electricity_tools::ErrorCause::None,
                 );
             }
         };
@@ -966,6 +1054,7 @@ pub(crate) async fn execute_prompt(
                     0,
                     message,
                     electricity_tools::PyExc::ValueError,
+                    electricity_tools::ErrorCause::None,
                 );
             }
         }
@@ -988,20 +1077,13 @@ pub(crate) async fn execute_prompt(
         .filter_map(|v| v.as_str().map(str::to_string))
         .collect();
 
-    let attempts = build_attempts(prompt, run_ctx.default_adapter.name(), &resolved_model);
+    let attempts = build_attempts(prompt, run_ctx.default_adapter.name(), &dispatch_model);
     let call_path = effect_path.clone();
 
     let mut attempts_meta_outer: Vec<Value> = Vec::new();
     let mut totals: (Option<i64>, Option<i64>) = (None, None);
     let mut next_delay_ms = backoff_ms;
 
-    // L2's own call-site placeholder: `_maybe_decompose` runs here in
-    // Python (`prompt.py:624-658`), once before the retry loop starts
-    // -- it either replaces the dispatch entirely (the merged child
-    // result lands at this effect's own path), falls through to an
-    // ordinary dispatch (possibly on a routed-up model), or raises
-    // under `on_failure: fail`. Out of scope for this lane (issue #498
-    // ruling 2) -- `meta.decomposition` is simply never written.
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -1050,6 +1132,7 @@ pub(crate) async fn execute_prompt(
                     attempt_index,
                     limiter_err.to_string(),
                     electricity_tools::PyExc::RuntimeError,
+                    electricity_tools::ErrorCause::None,
                 );
             }
             Some(Ok(guard)) => guard,
@@ -1090,6 +1173,7 @@ pub(crate) async fn execute_prompt(
                     attempt_index,
                     message,
                     electricity_tools::PyExc::AllowlistError,
+                    electricity_tools::ErrorCause::None,
                 );
             }
             Ok(PassOutcome::Success {
@@ -1185,6 +1269,7 @@ pub(crate) async fn execute_prompt(
 
                 let is_last_attempt = attempt_index + 1 >= max_attempts;
                 if !failure.retry.retryable || is_last_attempt {
+                    let cause = failure.cause.clone();
                     let (message, py_class) = match failure.bare {
                         Some((py_class, message)) => (message, py_class),
                         None => {
@@ -1207,6 +1292,7 @@ pub(crate) async fn execute_prompt(
                         attempt_index,
                         message,
                         py_class,
+                        cause,
                     );
                 }
                 next_delay_ms =

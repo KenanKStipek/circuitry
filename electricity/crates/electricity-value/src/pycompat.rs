@@ -116,6 +116,11 @@ pub enum PyExc {
     /// `block.get(...)` on a non-dict content block, ...): CPython's
     /// own `'<type>' object has no attribute '<name>'`.
     AttributeError,
+    /// `core/decompose.py::DecompositionError` (electricity M1-L2b,
+    /// issue #522) -- a `RuntimeError` subclass, raised under
+    /// `on_failure: fail` when a decomposition attempt ends in
+    /// `planner_failed`/`invalid_plan`/`execution_failed`.
+    DecompositionError,
 }
 
 impl PyExc {
@@ -150,6 +155,7 @@ impl PyExc {
             PyExc::IncompleteRead => "IncompleteRead",
             PyExc::InvalidURL => "InvalidURL",
             PyExc::AttributeError => "AttributeError",
+            PyExc::DecompositionError => "DecompositionError",
         }
     }
 }

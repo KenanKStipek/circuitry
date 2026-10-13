@@ -259,14 +259,17 @@ async fn an_unsupported_effect_is_refused_with_no_state_written() {
     assert!(error.contains("prime.ask"));
 }
 
-/// Issue #516 §4(b): decomposition stays refused through the
-/// narrowed `RefusalReason::DecompositionEnabled`, gated on
-/// `runtime.complexity.decomposition.enabled` alone -- a config that
-/// only turns on scoring/routing (the two K2 wires into `prompt`) must
-/// not hit this at all; that's the next test.
+/// Issue #522 (M1-L2b): `RefusalReason::DecompositionEnabled` no
+/// longer fires at all -- `Supported::current().decomposition` is
+/// `true` now, so a config enabling decomposition runs rather than
+/// refusing. This is the same config issue #516's own
+/// `decomposition_enabled_is_refused_with_no_state_written` test used
+/// to refuse; the refusal itself is still exercised directly against
+/// `Supported::m0`/a hand-built `Supported` in
+/// `electricity-bytecode::refusal`'s own unit tests.
 #[tokio::test]
-async fn decomposition_enabled_is_refused_with_no_state_written() {
-    let dir = temp_dir("decomposition-refusal");
+async fn decomposition_enabled_runs() {
+    let dir = temp_dir("decomposition-enabled");
     let config = write(
         &dir,
         "config.json",
@@ -277,14 +280,7 @@ async fn decomposition_enabled_is_refused_with_no_state_written() {
 
     let result = run(&req).await;
 
-    assert!(!result.ok);
-    assert!(
-        result.state.is_none(),
-        "a refusal must write no state at all"
-    );
-    let error = result.error.unwrap();
-    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains("a run whose effective config enables complexity decomposition"));
+    assert!(result.ok, "expected success, got: {:?}", result.error);
 }
 
 /// The narrowing's other half: a config that only turns on

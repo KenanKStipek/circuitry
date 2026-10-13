@@ -23,11 +23,11 @@ preflight check run for real too -- `claude_code`, `cyberdiner`, `litellm`
 and `pi` are the only Circuitry-known adapter names with no electricity
 builder yet, and still refuse with the preview message, as does a
 `reflector`'s own generated plan naming one of them. `runtime.complexity`
-scoring and model routing run too, writing `meta.complexity`/routing a
-prompt's model the same way `cof run` does; only decomposition (splitting
-an over-threshold prompt into chunks) still refuses with a preview message.
-Everything else (the other tool providers, persistence, runtime plugins) is
-also still refused with a preview message pointing at `cof run`. A document
+scoring, model routing and decomposition (splitting an over-threshold prompt
+into chunks, planned and executed as its own isolated child run) all run
+too, writing `meta.complexity`/`meta.decomposition` the same way `cof run`
+does. Everything else (the other tool providers, persistence, runtime
+plugins) is still refused with a preview message pointing at `cof run`. A document
 and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
