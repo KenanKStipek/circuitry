@@ -24,8 +24,11 @@ effects:
     template: "give an array"
     schema:
       type: array
+      "$defs":
+        item:
+          type: string
       items:
-        type: string
+        "$ref": "#/$defs/item"
   - type: prompt
     name: no_schema_flag
     model: schema-none

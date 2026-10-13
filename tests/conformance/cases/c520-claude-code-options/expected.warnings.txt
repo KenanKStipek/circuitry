@@ -1,1 +1,2 @@
 WARNING: prompt 'opts': adapter 'claude_code' ignored: temperature; params (custom_key); messages (roles flattened into one prompt)
+WARNING: prompt 'deterministic_only': adapter 'claude_code' ignored: temperature

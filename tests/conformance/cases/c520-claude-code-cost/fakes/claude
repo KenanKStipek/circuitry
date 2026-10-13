@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c520-claude-code-cost (issue #520, B5): picks a
+canned cost from `--model` -- `cost-half`/`cost-quarter` answer at once
+with an exact-in-binary `total_cost_usd`, `cost-none` answers with no
+cost field at all, and `cost-hang` ignores SIGTERM and sleeps until
+killed (so every attempt times out, deterministically, and never
+reports a cost) -- so the committed `expected.json` pins
+`runtime.last_run.totals.cost_usd` summing only the two real costs."""
+
+from __future__ import annotations
+
+import json
+import signal
+import sys
+import time
+
+
+def _model() -> str:
+    args = sys.argv[1:]
+    return args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def main() -> int:
+    sys.stdin.read()
+    model = _model()
+
+    if model == "cost-half":
+        print(json.dumps({"result": "half", "is_error": False, "total_cost_usd": 0.5}))
+        return 0
+
+    if model == "cost-quarter":
+        print(json.dumps({"result": "quarter", "is_error": False, "total_cost_usd": 0.25}))
+        return 0
+
+    if model == "cost-none":
+        print(json.dumps({"result": "no cost reported", "is_error": False}))
+        return 0
+
+    if model == "cost-hang":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(3600)
+
+    print(json.dumps({"result": f"unknown model {model!r}", "is_error": True}))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

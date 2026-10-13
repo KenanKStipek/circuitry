@@ -146,6 +146,39 @@ mod tests {
 
     const SUCCESS_SCRIPT: &str = "#!/bin/sh\necho '{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"hi\", \"stopReason\": \"end_turn\", \"usage\": {\"input\": 3, \"output\": 5, \"cost\": 0.25}}}'\n";
 
+    /// A fake `pi` that writes its own `cwd` to the path named by a
+    /// `--capture-cwd=<path>` argument (an `extra_args` entry, never
+    /// interpreted by the Rust side) before doing anything else -- the
+    /// `claude_code.rs` tests' own helper, mirrored here (`pi` never
+    /// reads stdin, unlike `claude`, so there is no leading `cat
+    /// >/dev/null`).
+    fn capture_cwd_script(behaviour: &str) -> String {
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    --capture-cwd=*) pwd > \"${{a#--capture-cwd=}}\" ;;\n  esac\ndone\n{behaviour}\n"
+        )
+    }
+
+    const CAPTURE_SUCCESS: &str = "echo '{\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": \"hi\"}}'";
+    const CAPTURE_FAILURE: &str = "exit 1";
+    const CAPTURE_HANG: &str = "sleep 30";
+
+    fn capture_extra_args(path: &std::path::Path) -> Vec<String> {
+        vec![format!("--capture-cwd={}", path.display())]
+    }
+
+    /// The directory [`capture_cwd_script`] reported, asserted non-empty
+    /// and gone -- `TempDirGuard`'s own `Drop` removes it on every way
+    /// out of `generate`.
+    fn assert_captured_dir_removed(capture: &std::path::Path) {
+        let captured = std::fs::read_to_string(capture).unwrap();
+        let captured_dir = captured.trim();
+        assert!(!captured_dir.is_empty(), "the fake never captured a cwd");
+        assert!(
+            !std::path::Path::new(captured_dir).exists(),
+            "temp dir {captured_dir} must be removed, but still exists"
+        );
+    }
+
     #[tokio::test]
     async fn generate_runs_the_fake_binary_end_to_end() {
         let tmp = std::env::temp_dir().join(format!("pi-test-{}", std::process::id()));
@@ -316,17 +349,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_removes_the_temp_dir_after_a_cli_failure() {
-        let script = "#!/bin/sh\nexit 1\n";
-        let tmp = std::env::temp_dir().join(format!("pi-test-fail-{}", std::process::id()));
+    async fn generate_removes_the_temp_dir_after_success() {
+        let tmp = std::env::temp_dir().join(format!("pi-test-tempdir-ok-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let binary = write_fake_pi(&tmp, script);
+        let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_SUCCESS));
+        let capture = tmp.join("cwd.txt");
         let adapter = PiAdapter {
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
             unset_env: Vec::new(),
-            extra_args: Vec::new(),
+            extra_args: capture_extra_args(&capture),
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        adapter
+            .generate(
+                "",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap();
+        assert_captured_dir_removed(&capture);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn generate_removes_the_temp_dir_after_a_cli_failure() {
+        let tmp = std::env::temp_dir().join(format!("pi-test-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_FAILURE));
+        let capture = tmp.join("cwd.txt");
+        let adapter = PiAdapter {
+            binary: Value::Str(binary),
+            default_model: Value::Str(String::new()),
+            thinking: Value::Str(String::new()),
+            unset_env: Vec::new(),
+            extra_args: capture_extra_args(&capture),
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -343,6 +404,63 @@ mod tests {
             err.message
                 .starts_with("pi exited with code 1 without an answer")
         );
+        assert_captured_dir_removed(&capture);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn generate_removes_the_temp_dir_after_a_timeout() {
+        let tmp = std::env::temp_dir().join(format!("pi-test-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_HANG));
+        let capture = tmp.join("cwd.txt");
+        let adapter = PiAdapter {
+            binary: Value::Str(binary),
+            default_model: Value::Str(String::new()),
+            thinking: Value::Str(String::new()),
+            unset_env: Vec::new(),
+            extra_args: capture_extra_args(&capture),
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 1,
+            token: &token,
+        };
+        let err = adapter
+            .generate("", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        assert!(err.retry.retryable);
+        assert_captured_dir_removed(&capture);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn generate_removes_the_temp_dir_when_the_future_is_dropped() {
+        let tmp = std::env::temp_dir().join(format!("pi-test-dropped-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_HANG));
+        let capture = tmp.join("cwd.txt");
+        let adapter = PiAdapter {
+            binary: Value::Str(binary),
+            default_model: Value::Str(String::new()),
+            thinking: Value::Str(String::new()),
+            unset_env: Vec::new(),
+            extra_args: capture_extra_args(&capture),
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let call = call_ctx(&path, &token);
+        let options = GenerateOptions::default();
+        let mut fut = Box::pin(adapter.generate("", "hi", &options, &call));
+        tokio::select! {
+            _ = &mut fut => panic!("must not finish before the capture file is written"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        }
+        drop(fut);
+        assert_captured_dir_removed(&capture);
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

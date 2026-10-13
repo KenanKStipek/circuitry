@@ -32,8 +32,8 @@ effects:
     on_error: continue
     template: "ask"
   - type: prompt
-    name: array_line_before_result
-    model: array-line-before-result
+    name: array_line_after_result
+    model: array-line-after-result
     on_error: continue
     template: "ask"
   - type: prompt

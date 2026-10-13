@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 
 _ENV_NAMES = (
@@ -52,6 +53,16 @@ def _attached_dir_holds_only_prompt_md() -> bool:
     return os.listdir(directory) == [os.path.basename(path)] == ["prompt.md"]
 
 
+def _cwd_matches_attached_dir() -> bool:
+    # An inherited `cwd` that merely *looks* fresh isn't enough -- compare
+    # it against the attached file's own directory with `realpath`, since
+    # either side could in principle be reached through a symlink.
+    path = _attached_file()
+    if path is None:
+        return False
+    return os.path.realpath(os.getcwd()) == os.path.realpath(os.path.dirname(path))
+
+
 def _argv_with_placeholder() -> str:
     # The attached `@<file>` argument is a fresh temporary path every run
     # -- printed as a stable placeholder instead (issue #520's own
@@ -63,7 +74,10 @@ def _argv_with_placeholder() -> str:
 
 def main() -> int:
     stdin_data = sys.stdin.read()
-    stdin_closed = stdin_data == ""
+    # `stdin_data == ""` alone would also be true for an inherited
+    # `/dev/null` -- confirm fd 0 is actually the closed pipe
+    # `run_agent_cli` wires up, not merely empty.
+    stdin_closed = stdin_data == "" and stat.S_ISFIFO(os.fstat(0).st_mode)
     prompt = _attached_prompt()
     cwd_ok = os.path.basename(os.getcwd()).startswith("circuitry-pi-")
 
@@ -74,6 +88,7 @@ def main() -> int:
             "PROMPT:" + prompt,
             "CWD_IS_FRESH:" + str(cwd_ok),
             "CWD_HOLDS_ONLY_PROMPT_MD:" + str(_attached_dir_holds_only_prompt_md()),
+            "CWD_MATCHES_ATTACHED_DIR:" + str(_cwd_matches_attached_dir()),
             "STDIN_CLOSED:" + str(stdin_closed),
             *env_lines,
         ]
@@ -89,11 +104,17 @@ def main() -> int:
             "usage": {"input": 2, "cacheRead": 1, "cacheWrite": 0, "output": 3, "cost": {"total": 0.25}},
         },
     }
+    # Two text parts, joined then stripped (`agent_cli.py:422-433`) --
+    # pins the *joining*, not only the common one-part case every other
+    # event in this fake exercises.
     final_assistant_event = {
         "type": "message_end",
         "message": {
             "role": "assistant",
-            "content": [{"type": "text", "text": " " + report + " "}],
+            "content": [
+                {"type": "text", "text": " " + report},
+                {"type": "text", "text": " "},
+            ],
             "stopReason": "end_turn",
             "usage": {"input": 4, "cacheRead": 0, "cacheWrite": 2, "output": 5, "cost": 0.5},
         },

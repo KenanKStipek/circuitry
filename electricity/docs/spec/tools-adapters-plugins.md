@@ -698,8 +698,9 @@ functions, `api_key_env=` in each adapter file):
 
 electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
 (native, not through this family)/`replicate`/`watsonx`, and (issue #515's follow-up) `cyberdiner`
-— the unbuildable set is now exactly `claude_code`, `litellm` and `pi` (`electricity/README.md`'s
-own preview paragraph).
+— the unbuildable set was then exactly `claude_code`, `litellm` and `pi` (`electricity/README.md`'s
+own preview paragraph); issue #520 (§3.13 below) builds `claude_code`/`pi` too, leaving `litellm`
+alone.
 
 `check_dependencies` (`_openai_compat.py:212-220`): `binary:curl` if `curl` isn't on PATH;
 `env:<api_key_env>` if that var is required and unset. electricity, using a native HTTP client
@@ -966,9 +967,11 @@ or default` keeps it verbatim, and only raises `TypeError: expected str, bytes o
 object, not <type>` once something actually tries to use it as a string (`shutil.which`, a real
 `Popen`'s own `cmd[0]`); falling back to the default name there would start the real CLI instead
 of reporting that failure. `check()` is `which(binary)` (no `~` expansion, unlike the tool
-plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>"]` with the
-same `<binary> is not on PATH: install it and log in, or set
-runtime.adapters.<name>.binary.` message every other binary-backed check uses.
+plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>"]` with its own
+`<binary> is not on PATH: install it and log in, or set runtime.adapters.<name>.binary.` message
+-- distinct wording from the tool plugins' own binary-missing check (`none of <candidates> found
+on PATH. Install one of them...`, `subprocess_tool.rs::check_binary`), since there is exactly
+one binary name here, never a candidate list.
 
 **Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
 failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
@@ -980,7 +983,7 @@ every other adapter's own `cost_usd` field would (`core/prompt.py`; `electricity
 prompt`), these two adapters are only its first end-to-end exercise.
 
 **Ported** (issue #520, `electricity-adapters::{claude_code, pi}`, over part A's own
-`electricity_tools::agent_cli`): every rule above, with an eleven-case conformance suite
+`electricity_tools::agent_cli`): every rule above, with a fourteen-case conformance suite
 (`c520-*`) against fake `claude`/`pi` binaries — never a real CLI, enforced by its own guard
 test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
 lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports

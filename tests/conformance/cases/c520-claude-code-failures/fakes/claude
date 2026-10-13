@@ -45,7 +45,10 @@ def main() -> int:
         print(json.dumps({"result": "it broke", "is_error": True, "subtype": "boom"}))
         return 1
 
-    if model == "array-line-before-result":
+    if model == "array-line-after-result":
+        # The array line comes AFTER the result line: `_last_json_object`
+        # must skip past it (it isn't a JSON *object*) to find the real
+        # result on the line before.
         print(json.dumps({"result": "nope", "is_error": True, "subtype": "weird"}))
         print(json.dumps([1, 2, 3]))
         return 1
