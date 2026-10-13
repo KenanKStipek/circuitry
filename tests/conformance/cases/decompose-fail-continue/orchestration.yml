@@ -1,0 +1,16 @@
+name: decompose-fail-continue
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: big
+    on_error: continue
+    template: >-
+      Analyze and critique the following in great depth, cross-reference
+      every claim, and deduce the underlying causes, evaluate alternatives
+      and justify your conclusion with explicit reasoning. Analyze and
+      critique the following in great depth, cross-reference every claim,
+      and deduce the underlying causes, evaluate alternatives and justify
+      your conclusion with explicit reasoning. Analyze and critique the
+      following in great depth, cross-reference every claim, and deduce
+      the underlying causes.

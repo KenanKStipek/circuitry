@@ -1,0 +1,2 @@
+prime.big.plan:
+- text: '{"say": "Split into two chunks.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B.\"\n"}'
