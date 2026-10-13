@@ -6,7 +6,7 @@
     reason: OK
     headers:
       Content-Type: application/json
-    body: '{"choices": [{"message": {"content": "{\"say\": \"two chunks plus a merge\", \"chunks\": [{\"name\": \"a\", \"job\": \"do a\"}, {\"name\": \"b\", \"job\": \"do b\"}], \"yaml\": \"effects:\\n  - type: prompt\\n    name: a\\n    template: \\\"chunk a\\\"\\n  - type: prompt\\n    name: b\\n    template: \\\"chunk b\\\"\\n  - type: tool\\n    name: merge\\n    provider: json\\n    params: {mode: parse, input: ''\\\"merged widgets\\\"''}\\n\"}"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'
+    body: '{"choices": [{"message": {"content": "{\"say\": \"two chunks plus a merge\", \"chunks\": [{\"name\": \"a\", \"job\": \"do a\"}, {\"name\": \"b\", \"job\": \"do b\"}], \"yaml\": \"effects: [{type: prompt, name: a, template: \\\"chunk a\\\"}, {type: prompt, name: b, template: \\\"chunk b\\\"}, {type: tool, name: merge, provider: json, params: {mode: parse, input: ''\\\"merged widgets\\\"''}}]\"}"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'
 - request:
     method: POST
     path: /v1/chat/completions
