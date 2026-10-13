@@ -41,6 +41,23 @@ fn open_pty() -> (File, PathBuf) {
     assert!(master_fd >= 0, "posix_openpt failed");
     assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
     assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
+    // Without `FD_CLOEXEC`, `spawn_osp_on_pty`'s own `Command::spawn`
+    // (fork, then exec) would hand osp itself a surviving duplicate
+    // of this exact fd -- a real bug this file's own tests never hit
+    // before, since none of them ever needed the master to actually,
+    // fully close while osp was still alive: osp would then still
+    // hold the pty's master open all on its own even after this
+    // test's own copy is dropped, so the slave side this test cares
+    // about (osp's own stdin/stdout/stderr) would never see the EOF/
+    // write-error a closed master is supposed to cause at all -- the
+    // bug `a_closed_pty_master_with_no_signal_still_exits_promptly_
+    // with_no_leftovers` below exists to catch, found by that exact
+    // test hanging on this exact gap.
+    assert_eq!(
+        unsafe { libc::fcntl(master_fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+        0,
+        "fcntl F_SETFD FD_CLOEXEC failed"
+    );
 
     let slave_name = unsafe { libc::ptsname(master_fd) };
     assert!(!slave_name.is_null(), "ptsname failed");
@@ -142,6 +159,49 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// [`wait_for_pattern`], read straight off `master` itself rather
+/// than a [`drain_continuously`] buffer -- the one test below that
+/// needs to close `master` itself afterward can't hand it to
+/// `drain_continuously` first (that moves it into a thread that owns
+/// it for good; dropping a mere *clone* of the fd would leave the
+/// real pty master still open under the thread's own copy, which is
+/// exactly the one thing that test exists to not do). Non-blocking,
+/// so a quiet stretch between frames can never block this past its
+/// own deadline.
+fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Duration) {
+    use std::io::Read;
+    let fd = master.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    assert!(flags >= 0, "fcntl F_GETFL failed");
+    assert_eq!(
+        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0,
+        "fcntl F_SETFL O_NONBLOCK failed"
+    );
+    let deadline = Instant::now() + timeout;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while Instant::now() < deadline {
+        match master.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(pattern.len()).any(|w| w == pattern) {
+                    return;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
+    }
+    panic!(
+        "pattern {pattern:?} never appeared within {timeout:?}; got:\n{:?}",
+        String::from_utf8_lossy(&buf)
+    );
 }
 
 /// Writes `bytes` to the pty's master side, i.e. exactly what a key
@@ -314,6 +374,71 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     // created an `osp-*` directory under the real system temp dir in
     // the first place (`--out-dir` above kept it inside `out_dir`,
     // this test's own, already-cleaned-up tempdir).
+    assert_no_leftover_process(work.path());
+}
+
+/// The orchestrator's own acceptance criterion: a SIGTERM must always
+/// be honoured, including on the finished screen (DESIGN.md §6.3: the
+/// run already ended on its own, and the TUI is just showing its
+/// final state until the user leaves it) -- not only while the engine
+/// is still going, the only shape `a_forwarded_sigterm_in_the_tui_
+/// exits_143` exercises. The engine already exited with its own
+/// `code`, so there is nothing left to cancel; osp's own exit code is
+/// that same one, not 143 -- SIGTERM here means "stop showing me the
+/// finished screen", not "the run failed after all".
+#[test]
+fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master);
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+    let pid = child.id() as i32;
+
+    // The `echo` finishes almost at once, well inside `SIGNAL_DELAY`
+    // -- by the time this sends SIGTERM, the TUI is on the finished
+    // screen already, never having been asked to leave it yet.
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "the run itself already succeeded; a SIGTERM on the finished screen must not turn that \
+         into a failure, got {status:?}"
+    );
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence after the forwarded signal; got:\n{rendered:?}"
+    );
+
     assert_no_leftover_process(work.path());
 }
 
@@ -516,7 +641,80 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
     assert_no_leftover_process(work.path());
 }
 
-/// Review finding K3: raw mode disables the kernel's own `ISIG`, so a
+/// The orchestrator's own finding: a driver that merely closes its
+/// end of the pty and exits, with no signal sent at all, leaves osp
+/// without even a SIGHUP -- the slave was never its own *controlling*
+/// terminal (`spawn_osp_on_pty`'s own `setpgid`, with no `TIOCSCTTY`),
+/// so nothing tells the kernel to send one. Before the fix, every
+/// further `event::poll`/`read` and `terminal.draw` call against the
+/// now-gone master kept failing at once, forever, with no blocking
+/// read left to cap the loop's own pace -- a whole CPU core spun for
+/// as long as the engine (here, a `tail -f` that never finishes on
+/// its own) kept running, and every signal sent at it, SIGTERM
+/// included, went unanswered. osp must now notice the dead terminal
+/// on its own: cancel the engine, and exit promptly -- in practice
+/// within a couple of redraw ticks, never minutes.
+#[test]
+fn a_closed_pty_master_with_no_signal_still_exits_promptly_with_no_leftovers() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (mut master, slave_path) = open_pty();
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern_on_master(&mut master, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+
+    // The orchestrator's own repro, exactly: close the master without
+    // ever sending osp a signal of any kind -- no clone of this fd
+    // survives anywhere else (`wait_for_pattern_on_master` read
+    // straight off this same `File`, never a `drain_continuously`
+    // clone), so this is the whole pty master actually going away.
+    let closed_at = Instant::now();
+    drop(master);
+
+    // A generous hard cap (the real incident spun for 13 minutes); the
+    // point of this assertion is that it panics long before reaching
+    // it if the bug ever came back, not that it needs to be this
+    // loose.
+    let status = wait_with_timeout(child, Duration::from_secs(15));
+    let elapsed = closed_at.elapsed();
+    assert!(
+        status.code().is_some(),
+        "osp should have exited on its own, got {status:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "osp took {elapsed:?} to notice its terminal was gone -- it should be a couple of \
+         redraw ticks, not spinning"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// real Ctrl-C keypress never generates a `SIGINT` at all once the
 /// TUI has entered raw mode — the byte `0x03` reaches osp as a plain
 /// key, and `keys::Action::CtrlC` is the only thing that can still
