@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-13T20:54:03.184Z","ev":"run_start","run_id":"59f6df6f-cf35-445a-900d-9f07fcc143df","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":7865}
+{"v":1,"seq":1,"ts":"2026-10-13T20:54:03.187Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T20:54:03.188Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-10-13T20:54:03.616Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":428,"error":"Schema validation failed: 'a' is a required property"}
+{"v":1,"seq":4,"ts":"2026-10-13T20:54:03.616Z","ev":"end","id":0,"path":"prime","ok":true,"ms":429}
+{"v":1,"seq":5,"ts":"2026-10-13T20:54:03.616Z","ev":"run_end","ok":true}

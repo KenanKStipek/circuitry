@@ -1,0 +1,50 @@
+name: c520-claude-code-json-schema
+adapter: claude_code
+effects:
+  - type: prompt
+    name: object_schema
+    model: schema-object
+    prompt_type: object
+    template: "give an object"
+    schema:
+      type: object
+      "$defs":
+        thing:
+          type: string
+      properties:
+        echo:
+          "$ref": "#/$defs/thing"
+      required: ["echo"]
+      additionalProperties: false
+      description: "café"
+  - type: prompt
+    name: array_schema
+    model: schema-array
+    prompt_type: array
+    template: "give an array"
+    schema:
+      type: array
+      "$defs":
+        item:
+          type: string
+      items:
+        "$ref": "#/$defs/item"
+  - type: prompt
+    name: no_schema_flag
+    model: schema-none
+    prompt_type: json
+    template: "give json"
+    schema: {}
+  - type: prompt
+    name: null_structured
+    model: schema-null-structured
+    prompt_type: json
+    template: "give json"
+    schema:
+      type: object
+      properties:
+        fenced:
+          type: boolean
+        echo:
+          type: ["string", "null"]
+      required: ["fenced"]

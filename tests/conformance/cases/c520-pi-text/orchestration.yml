@@ -1,0 +1,7 @@
+name: c520-pi-text
+adapter: pi
+model: "anthropic/claude-sonnet"
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

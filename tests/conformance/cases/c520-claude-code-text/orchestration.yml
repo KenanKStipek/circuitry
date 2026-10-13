@@ -1,0 +1,7 @@
+name: c520-claude-code-text
+adapter: claude_code
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

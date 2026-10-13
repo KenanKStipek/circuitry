@@ -1,0 +1,22 @@
+name: c520-claude-code-options
+adapter: claude_code
+model: opts
+effects:
+  - type: prompt
+    name: opts
+    params: {temperature: 0.7, custom_key: "v"}
+    messages:
+      - role: system
+        content: "sys"
+      - role: user
+        content: "hi"
+  - type: prompt
+    name: deterministic_only
+    deterministic: true
+    template: "plain"
+  - type: if
+    name: gate
+    if:
+      mode: model
+      template: "should we proceed?"
+    then: []

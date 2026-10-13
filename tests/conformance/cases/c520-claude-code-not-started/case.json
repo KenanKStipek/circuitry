@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 7",
+  "description": "`config.json`'s `default_adapter: claude_code` with `binary: circuitry-test-missing-claude` (deliberately missing, never a real CLI): preflight never walks the config's own default adapter, so the run only discovers the missing binary once it actually dispatches, with the A3 start-failure text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

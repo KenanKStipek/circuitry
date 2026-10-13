@@ -27,16 +27,29 @@ serde_json = "1"
 # default feature) brings in crossterm 0.29, pinned to match directly
 # below so osp's own signal/raw-mode calls and ratatui's backend never
 # disagree about which crossterm they're linking.
+# "unstable-rendered-line-info" (finding F8): `Paragraph::line_count`,
+# the only way to clamp the details pane's own scroll to its *wrapped*
+# line count rather than its logical one — on a narrow layout a long
+# `prompt_sent`/value wraps to more lines than it has of its own, and
+# `End` must still be able to reach the last of them.
 ratatui = { version = "=0.30.0", default-features = false, features = [
     "crossterm",
     "underline-color",
+    "unstable-rendered-line-info",
 ] }
 crossterm = "0.29"
+# The orchestrator's own finding: a raw, non-blocking `libc::poll` on
+# the tty fd itself (`terminal_fd_hung_up`, main.rs) is the only thing
+# that catches a hung-up pty with no controlling terminal to raise a
+# real SIGHUP over it -- crossterm's own event source (`event::source::
+# unix::tty::try_read`) checks only `revents & POLLIN`, never
+# `POLLHUP`/`POLLERR`/`POLLNVAL`, so it never surfaces one as an error
+# at all.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
 insta = "1"
-libc = "0.2"
 # Only for the TUI's own golden tests, which build a small plan by
 # hand the same way oscilloscope-core's own plan.rs tests do (K4):
 # no new code path exercises these two outside `#[cfg(test)]`.

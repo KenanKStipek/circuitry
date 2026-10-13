@@ -1,0 +1,15 @@
+name: c520-claude-code-schema-invalid
+adapter: claude_code
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    on_error: continue
+    retries: {max_attempts: 2, backoff_ms: 1}
+    schema:
+      type: object
+      properties:
+        a: {type: string}
+      required: [a]
+    template: "give json"

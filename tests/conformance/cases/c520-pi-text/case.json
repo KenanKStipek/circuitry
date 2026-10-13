@@ -1,0 +1,14 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 9",
+  "description": "`pi` with a `provider/id` model, `thinking`, `extra_args`, and `unset_env: [\"AGENT_CLI_FAKE_DROP\"]` replacing the default list -- `ANTHROPIC_API_KEY` is kept, `PARENT_SESSION_ENV` is still removed. A `session` event, an ignored user `message_end`, two assistant `message_end` events whose usage is summed (`cost` once as `{total}`, once as a bare number), a blank line and a non-JSON line both skipped. The fake reports its own argv, the attached prompt, its cwd, and whether stdin is a closed pipe inside the final message's own joined, stripped text parts.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "env": {
+    "CLAUDECODE": "1",
+    "AGENT_CLI_FAKE_DROP": "1"
+  },
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-key"
+  }
+}

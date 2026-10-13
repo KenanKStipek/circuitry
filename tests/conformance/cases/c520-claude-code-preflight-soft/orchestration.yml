@@ -1,0 +1,8 @@
+name: c520-claude-code-preflight-soft
+adapter: claude_code
+model: m
+effects:
+  - type: prompt
+    name: ask
+    on_error: continue
+    template: "hi"

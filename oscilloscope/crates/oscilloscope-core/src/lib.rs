@@ -16,3 +16,4 @@ pub mod observe;
 pub mod plan;
 pub mod render;
 pub mod supervise;
+pub mod treemap;

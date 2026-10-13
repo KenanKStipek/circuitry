@@ -1,0 +1,1 @@
+Warning: adapter 'claude_code' unavailable; effects ['ask'] will skip (circuitry-test-missing-claude is not on PATH: install it and log in, or set runtime.adapters.claude_code.binary.) (missing ['binary:circuitry-test-missing-claude'])

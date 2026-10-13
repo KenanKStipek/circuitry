@@ -1,0 +1,7 @@
+name: c520-claude-code-preflight-hard
+adapter: claude_code
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

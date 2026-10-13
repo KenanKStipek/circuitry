@@ -754,6 +754,127 @@ fn cancel_once(
     }
 }
 
+/// The orchestrator's own finding: a pty whose master end is gone,
+/// but which was never osp's own *controlling* terminal (so no
+/// SIGHUP ever arrives for it), keeps answering `poll`/`read` with an
+/// immediate error and `draw` with a failed write, forever -- with no
+/// blocking read left to cap the loop's own pace, that span a whole
+/// CPU core for as long as the engine itself kept running, ignoring
+/// every further signal in the process (it never actually stopped
+/// reaching the top of the loop; it just had nothing left to *show*
+/// for any of it). Treated exactly like a real SIGHUP
+/// (`cancel_once`'s own `Hup` arm): the engine is cancelled if osp
+/// started it and hasn't already exited, and the caller leaves the
+/// TUI loop at once -- never waiting around for the engine to exit on
+/// its own the way a *real* signal's "finished screen" rule does,
+/// since there is no terminal left to show one on, and continuing to
+/// poll/read/draw against the same dead one is exactly what spun
+/// before.
+fn cancel_for_lost_terminal(
+    child: &SupervisedChild,
+    exit_status: Option<std::process::ExitStatus>,
+    signal_count: &mut u32,
+    kill_deadline: &mut Option<Instant>,
+    log_lines: &mut Vec<String>,
+    clock: &mut Clock,
+) {
+    if exit_status.is_none() {
+        cancel_once(
+            child,
+            ForwardSignal::Hup,
+            signal_count,
+            kill_deadline,
+            log_lines,
+            clock,
+        );
+    }
+}
+
+/// The orchestrator's own follow-up finding: a pty slave whose master
+/// has closed, but which was never osp's own *controlling* terminal
+/// (no `setsid`-then-`TIOCSCTTY` acquisition, as a driver using
+/// `start_new_session=True` alone never gives it one) raises no
+/// SIGHUP at all -- yet `event::poll`/`event::read` (checked above)
+/// never error for it either. The reason lives in crossterm's own
+/// event source (`event::source::unix::tty::try_read`, crossterm
+/// 0.29): it `poll(2)`s the tty fd checking only `revents & POLLIN`,
+/// never `POLLHUP`/`POLLERR`/`POLLNVAL` -- and a hung-up pty slave
+/// sets `POLLIN` right alongside `POLLHUP` (EOF counts as
+/// "readable"), so crossterm keeps calling a `read()` that returns 0
+/// bytes in a tight inner loop until its own timeout budget runs out,
+/// then returns cleanly with nothing to show for it. Every
+/// `KEY_POLL_INTERVAL` tick spends its *entire* budget spinning on
+/// that 0-byte read instead of actually blocking for up to it, which
+/// is the real source of the CPU this bug burns -- `event::poll`
+/// itself never seeing an error is just a symptom of that inner loop
+/// having already given up by the time it returns.
+///
+/// A direct, non-blocking `poll(2)` of our own on the same fd, before
+/// ever calling into crossterm at all, sees the `POLLHUP` crossterm's
+/// own check throws away -- `fd: libc::STDIN_FILENO` matches
+/// crossterm's own `tty_fd()` exactly: it uses stdin directly
+/// whenever stdin is itself a tty (`isatty(STDIN_FILENO)`, never a
+/// separate `/dev/tty` open), which is always true for an `osp`
+/// spawned the way every caller here does, with its own stdin
+/// already pointed at the pty slave.
+fn stdin_hung_up() -> bool {
+    let mut fds = [libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    // `poll` itself erroring on fd 0 (EBADF, most plausibly) means
+    // there is no usable terminal fd left either, same conclusion as
+    // a hang-up bit actually being set.
+    if unsafe { libc::poll(fds.as_mut_ptr(), 1, 0) } < 0 {
+        return true;
+    }
+    fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+}
+
+/// The orchestrator's own third finding, from a real `sample` of a
+/// still-spinning `osp`: `stdin_hung_up`'s own pre-check, run between
+/// crossterm calls, never gets another turn once the main thread is
+/// actually *inside* `event::poll`/`event::read` when the hang-up
+/// happens -- the overwhelmingly common case, since that call blocks
+/// for up to `KEY_POLL_INTERVAL` out of every tick. Crossterm 0.29's
+/// own mio-based event source (`event::source::unix::mio::try_read`)
+/// has an inner `read()` loop with no `Ok(0)` (EOF) arm at all: once
+/// a hung-up pty slave starts returning zero bytes, every attempt
+/// takes the same `Ok(read_count)` branch forever (`read_count == 0`
+/// skips the parser, finds nothing new, and the `loop` just tries
+/// `read()` again) -- it never reaches the outer poll-timeout check
+/// again, so `try_read`, and therefore `event::poll`, never returns
+/// at all once this state is hit. No pre-check on the *same* thread
+/// can ever get a chance to run again either.
+///
+/// The only fix is not letting the main thread sit inside crossterm
+/// in the first place: this spawns crossterm's own blocking
+/// `event::read()` loop onto its own thread, forwarding whatever it
+/// eventually produces (or never does, if it gets stuck exactly as
+/// above) over a channel the main loop only ever waits on with its
+/// own bounded `recv_timeout`, checking `stdin_hung_up()` itself on
+/// every one of *its own* ticks regardless of whether the reader
+/// thread ever answers again. A reader thread stuck forever inside
+/// crossterm after a hang-up is harmless: nothing ever joins it, and
+/// every caller of this function ends the whole process outright
+/// (`std::process::exit`, after its own normal cleanup) the moment
+/// its own main loop decides to leave, taking the stuck thread down
+/// with it without needing any cooperation from it at all.
+fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        loop {
+            let event = event::read();
+            let stop = event.is_err();
+            if tx.send(event).is_err() || stop {
+                break;
+            }
+        }
+    });
+    rx
+}
+
 /// `print_line`'s own formatting, into the TUI's own log buffer
 /// instead of straight to stdout (DESIGN.md §6.3's log pane: "the
 /// same lines as `--log`").
@@ -865,6 +986,11 @@ fn run_tui(
         }
     };
 
+    // The orchestrator's own design: crossterm's own blocking
+    // `event::read()` runs on its own thread from here on, never
+    // this one -- see `spawn_event_reader`'s own doc comment.
+    let event_rx = spawn_event_reader();
+
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     let mut dirty = true;
@@ -889,6 +1015,9 @@ fn run_tui(
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
     }
 
+    // Set when the terminal itself went away (see `stdin_hung_up`):
+    // ratatui's own `Terminal::drop` must not run then (below).
+    let mut lost_terminal = false;
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             for sig in watcher.pending() {
@@ -993,11 +1122,12 @@ fn run_tui(
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.selected_path = Some(target.to_string());
+                    app.select_tree_path(Some(target.to_string()));
                 }
             }
             if app.selected_path.is_none() {
-                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+                let first = render_state.rows.first().map(|r| r.path.clone());
+                app.select_tree_path(first);
             }
         }
         // K4: computed every tick regardless (collapse/filter/errors-
@@ -1005,10 +1135,22 @@ fn run_tui(
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
         let visible = keys::visible_rows(&render_state.rows, &app);
+        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
+            render_state.state_rows.iter().collect();
 
-        if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
-            if let Ok(ev) = event::read() {
-                match ev {
+        // The orchestrator's own third finding: never call into
+        // crossterm directly here at all any more -- see
+        // `spawn_event_reader`'s own doc comment for why a pre-check
+        // between crossterm calls, on this same thread, can't work.
+        // `stdin_hung_up()` is still checked every tick regardless of
+        // whether the reader thread answered this time.
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
                         let running = exit_status.is_none();
                         let has_prompt_sent = app.selected_path.as_deref().is_some_and(|p| {
@@ -1019,7 +1161,13 @@ fn run_tui(
                             )
                             .is_some()
                         });
-                        match app.handle_key(key, &visible, running, has_prompt_sent) {
+                        match app.handle_key(
+                            key,
+                            &visible,
+                            &state_visible,
+                            running,
+                            has_prompt_sent,
+                        ) {
                             keys::Action::Cancel => {
                                 cancel_once(
                                     &child,
@@ -1060,8 +1208,20 @@ fn run_tui(
                     }
                     CEvent::Resize(_, _) => dirty = true,
                     _ => {}
-                }
+                },
             }
+        }
+        if terminal_gone {
+            cancel_for_lost_terminal(
+                &child,
+                exit_status,
+                &mut signal_count,
+                &mut kill_deadline,
+                &mut log_lines,
+                &mut clock,
+            );
+            lost_terminal = true;
+            break 'tui;
         }
 
         if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
@@ -1069,18 +1229,30 @@ fn run_tui(
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
-            let _ = terminal.draw(|f| {
+            let drew = terminal.draw(|f| {
                 tui::draw(
                     f,
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    &app,
+                    &mut app,
                     current_state.as_ref(),
                 );
             });
             last_draw = Instant::now();
             dirty = false;
+            if drew.is_err() {
+                cancel_for_lost_terminal(
+                    &child,
+                    exit_status,
+                    &mut signal_count,
+                    &mut kill_deadline,
+                    &mut log_lines,
+                    &mut clock,
+                );
+                lost_terminal = true;
+                break 'tui;
+            }
         }
 
         if exit_status.is_none() {
@@ -1124,15 +1296,25 @@ fn run_tui(
         // `Action::Quit`/`Action::CtrlC`'s own "nothing running" arms
         // are only ever reachable once `exit_status` is already
         // `Some` (that's exactly what `running`/`App::handle_key`'s
-        // own dialog logic means by "nothing running") — but the
-        // engine is still osp's own child, and must never be left
-        // behind regardless; one more wait costs nothing when it has
-        // already exited, and is the only safety net if that
-        // invariant were ever wrong.
-        None => child.wait().expect("the engine has already exited"),
+        // own dialog logic means by "nothing running"), so neither
+        // reaches here with the engine still going — but a lost
+        // terminal (`cancel_for_lost_terminal`'s own `break 'tui`)
+        // can, with the engine's own cancellation only just sent: a
+        // real, blocking wait for however long that takes, not a
+        // busy one, and the only safety net if the first invariant
+        // were ever wrong too.
+        None => child.wait().expect("waiting for the engine's own exit"),
     };
 
-    drop(terminal);
+    // ratatui's own `Terminal::drop` shows the cursor again and reports
+    // a failure with `eprintln!`, which panics (exit 101) when stderr is
+    // the same dead terminal. With the terminal gone there is nothing
+    // left to restore on it, so skip that drop.
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
     drop(_guard);
 
     let stdout = std::io::stdout();
@@ -1152,7 +1334,16 @@ fn run_tui(
         exit_status,
         print_run_dir,
     );
-    ExitCode::from(code)
+    // The orchestrator's own design: `spawn_event_reader`'s own
+    // background thread may still be stuck forever inside crossterm
+    // if the terminal hung up (its own doc comment) -- a plain
+    // `return`/falling off the end here would already exit the
+    // process just as fast regardless (detached threads never block
+    // it), but ending it explicitly, after this function's own
+    // cleanup and final output, removes any doubt that anything else
+    // could ever end up waiting on that thread first.
+    let _ = out.flush();
+    std::process::exit(i32::from(code));
 }
 
 /// `cof`'s own pre-execution failure shape (DESIGN.md §4.1): with no
@@ -1627,6 +1818,11 @@ fn run_tui_watch(
         }
     };
 
+    // The orchestrator's own design: crossterm's own blocking
+    // `event::read()` runs on its own thread from here on, never
+    // this one -- see `spawn_event_reader`'s own doc comment.
+    let event_rx = spawn_event_reader();
+
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     let mut dirty = true;
@@ -1651,6 +1847,9 @@ fn run_tui_watch(
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
     }
 
+    // Set when the terminal itself went away (see `stdin_hung_up`):
+    // ratatui's own `Terminal::drop` must not run then (below).
+    let mut lost_terminal = false;
     'tui: loop {
         if let Some(watcher) = signals.as_mut() {
             if let Some(sig) = watcher.pending().into_iter().next() {
@@ -1776,18 +1975,31 @@ fn run_tui_watch(
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
-                    app.selected_path = Some(target.to_string());
+                    app.select_tree_path(Some(target.to_string()));
                 }
             }
             if app.selected_path.is_none() {
-                app.selected_path = render_state.rows.first().map(|r| r.path.clone());
+                let first = render_state.rows.first().map(|r| r.path.clone());
+                app.select_tree_path(first);
             }
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
+        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
+            render_state.state_rows.iter().collect();
 
-        if event::poll(KEY_POLL_INTERVAL).unwrap_or(false) {
-            if let Ok(ev) = event::read() {
-                match ev {
+        // The orchestrator's own third finding: never call into
+        // crossterm directly here at all any more -- see
+        // `spawn_event_reader`'s own doc comment for why a pre-check
+        // between crossterm calls, on this same thread, can't work.
+        // `stdin_hung_up()` is still checked every tick regardless of
+        // whether the reader thread answered this time.
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
                     CEvent::Key(key) if key.kind == KeyEventKind::Press => {
                         // Watch owns no engine to cancel (DESIGN.md
                         // §6.3), so `running` is always false here:
@@ -1802,7 +2014,8 @@ fn run_tui_watch(
                             )
                             .is_some()
                         });
-                        match app.handle_key(key, &visible, false, has_prompt_sent) {
+                        match app.handle_key(key, &visible, &state_visible, false, has_prompt_sent)
+                        {
                             keys::Action::Quit => {
                                 // Finding 15: `q` while the watched
                                 // run is still going is a voluntary
@@ -1827,8 +2040,17 @@ fn run_tui_watch(
                     }
                     CEvent::Resize(_, _) => dirty = true,
                     _ => {}
-                }
+                },
             }
+        }
+        if terminal_gone {
+            // The orchestrator's own finding, `osp watch`'s own shape
+            // of it: watch owns no engine to cancel, so this is
+            // exactly the real-SIGHUP arm above, just detected from a
+            // dead terminal instead of a real signal.
+            local_signal = Some(ForwardSignal::Hup);
+            lost_terminal = true;
+            break 'tui;
         }
 
         if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
@@ -1836,22 +2058,35 @@ fn run_tui_watch(
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
-            let _ = terminal.draw(|f| {
+            let drew = terminal.draw(|f| {
                 tui::draw(
                     f,
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    &app,
+                    &mut app,
                     last_state.as_ref(),
                 );
             });
             last_draw = Instant::now();
             dirty = false;
+            if drew.is_err() {
+                local_signal = Some(ForwardSignal::Hup);
+                lost_terminal = true;
+                break 'tui;
+            }
         }
     }
 
-    drop(terminal);
+    // ratatui's own `Terminal::drop` shows the cursor again and reports
+    // a failure with `eprintln!`, which panics (exit 101) when stderr is
+    // the same dead terminal. With the terminal gone there is nothing
+    // left to restore on it, so skip that drop.
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
     drop(_guard);
 
     let stdout = std::io::stdout();
@@ -1870,7 +2105,11 @@ fn run_tui_watch(
         detached_while_live,
     );
     let _ = writeln!(out, "exit {code}");
-    ExitCode::from(code as u8)
+    // The orchestrator's own design -- see `run_tui`'s own matching
+    // tail for why this ends the process explicitly rather than just
+    // returning.
+    let _ = out.flush();
+    std::process::exit(i32::from(code));
 }
 
 /// The common ending every `osp watch` session reaches, however its

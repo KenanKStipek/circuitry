@@ -1,0 +1,7 @@
+name: c520-claude-code-preflight-unset-env
+adapter: claude_code
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

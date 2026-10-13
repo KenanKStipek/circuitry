@@ -62,6 +62,11 @@ MOCK_HTTP_PORT_PLACEHOLDER = "__MOCK_HTTP_PORT__"
 CREDENTIAL_ENV_VARS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    # `claude_code`/`pi` (issue #520): `agent_cli.py::DEFAULT_UNSET_ENV`'s
+    # own second name -- a case that needs the CLI to actually see a
+    # value sets it through `fake_credentials` like any other provider
+    # credential, never inherited from the caller's shell.
+    "ANTHROPIC_AUTH_TOKEN",
     "GOOGLE_API_KEY",
     "GROQ_API_KEY",
     "OPENROUTER_API_KEY",

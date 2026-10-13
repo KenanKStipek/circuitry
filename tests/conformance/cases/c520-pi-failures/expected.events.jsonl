@@ -1,0 +1,18 @@
+{"v":1,"seq":0,"ts":"2026-10-13T21:04:08.790Z","ev":"run_start","run_id":"02aa093c-8a4b-4c58-a031-82c297018c20","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":17939}
+{"v":1,"seq":1,"ts":"2026-10-13T21:04:08.794Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T21:04:08.794Z","ev":"start","id":1,"path":"prime.error_with_message"}
+{"v":1,"seq":3,"ts":"2026-10-13T21:04:09.061Z","ev":"end","id":1,"path":"prime.error_with_message","ok":false,"ms":267,"error":"All adapter attempts failed: [{'adapter': 'pi', 'model': 'error-with-message', 'status': 'failed', 'error': 'pi failed (error): boom', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-13T21:04:09.061Z","ev":"start","id":2,"path":"prime.aborted_text_only"}
+{"v":1,"seq":5,"ts":"2026-10-13T21:04:09.092Z","ev":"end","id":2,"path":"prime.aborted_text_only","ok":false,"ms":31,"error":"All adapter attempts failed: [{'adapter': 'pi', 'model': 'aborted-text-only', 'status': 'failed', 'error': 'pi failed (aborted): partial output', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":6,"ts":"2026-10-13T21:04:09.092Z","ev":"start","id":3,"path":"prime.error_with_neither"}
+{"v":1,"seq":7,"ts":"2026-10-13T21:04:09.130Z","ev":"end","id":3,"path":"prime.error_with_neither","ok":false,"ms":38,"error":"All adapter attempts failed: [{'adapter': 'pi', 'model': 'error-with-neither', 'status': 'failed', 'error': 'pi failed (error): no message', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":8,"ts":"2026-10-13T21:04:09.131Z","ev":"start","id":4,"path":"prime.no_assistant_message_exit0"}
+{"v":1,"seq":9,"ts":"2026-10-13T21:04:09.167Z","ev":"end","id":4,"path":"prime.no_assistant_message_exit0","ok":false,"ms":36,"error":"All adapter attempts failed: [{'adapter': 'pi', 'model': 'no-assistant-message-exit0', 'status': 'failed', 'error': 'pi exited with code 0 without an answer', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":10,"ts":"2026-10-13T21:04:09.167Z","ev":"start","id":5,"path":"prime.exit1_after_good_message"}
+{"v":1,"seq":11,"ts":"2026-10-13T21:04:09.197Z","ev":"end","id":5,"path":"prime.exit1_after_good_message","ok":false,"ms":29,"error":"All adapter attempts failed: [{'adapter': 'pi', 'model': 'exit1-after-good-message', 'status': 'failed', 'error': 'pi exited with code 1 without an answer: log noise', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":12,"ts":"2026-10-13T21:04:09.197Z","ev":"start","id":6,"path":"prime.truncation_length"}
+{"v":1,"seq":13,"ts":"2026-10-13T21:04:09.227Z","ev":"end","id":6,"path":"prime.truncation_length","ok":true,"ms":30}
+{"v":1,"seq":14,"ts":"2026-10-13T21:04:09.227Z","ev":"start","id":7,"path":"prime.raw_u2028_split"}
+{"v":1,"seq":15,"ts":"2026-10-13T21:04:09.256Z","ev":"end","id":7,"path":"prime.raw_u2028_split","ok":true,"ms":29}
+{"v":1,"seq":16,"ts":"2026-10-13T21:04:09.256Z","ev":"end","id":0,"path":"prime","ok":true,"ms":463}
+{"v":1,"seq":17,"ts":"2026-10-13T21:04:09.256Z","ev":"run_end","ok":true}
