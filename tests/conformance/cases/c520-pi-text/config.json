@@ -1,0 +1,11 @@
+{
+  "runtime": {
+    "adapters": {
+      "pi": {
+        "thinking": "high",
+        "extra_args": ["--extra-flag"],
+        "unset_env": ["AGENT_CLI_FAKE_DROP"]
+      }
+    }
+  }
+}

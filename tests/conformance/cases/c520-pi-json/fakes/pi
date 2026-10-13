@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c520-pi-json (issue #520): `--model no-flag` echoes
+whether a `--json-schema` argument reached it at all (pi has no such
+flag; B3 says it is ignored silently) inside a plain JSON reply;
+`--model fenced` answers a fenced markdown JSON block instead."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def _model() -> str:
+    args = sys.argv[1:]
+    return args[args.index("--model") + 1] if "--model" in args else ""
+
+
+def main() -> int:
+    sys.stdin.read()
+    model = _model()
+    saw_schema_flag = "--json-schema" in sys.argv[1:]
+
+    if model == "fenced":
+        content = "Sure, here you go:\n```json\n" + json.dumps({"a": "fenced"}) + "\n```\nHope that helps."
+    else:
+        content = json.dumps({"a": "plain", "saw_schema_flag": saw_schema_flag})
+
+    print(
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {"role": "assistant", "content": content, "stopReason": "end_turn"},
+            }
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

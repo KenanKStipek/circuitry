@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 10",
+  "description": "Seven `pi` edge cases, each `on_error: continue`: `stopReason: error` with `errorMessage`; `aborted` with text only; an error with neither; no assistant message at all (exit 0); exit 1 after an otherwise-good message; `stopReason: length` (a success, with the truncation warning); and a raw U+2028 inside one event's own JSON line, which splits it so the prior assistant message answers instead.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

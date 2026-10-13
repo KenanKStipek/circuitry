@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 4",
+  "description": "Eight single-attempt `claude_code` failures, each `on_error: continue`: `is_error` with subtype `success` (hidden label) and with another subtype plus an empty result; a good result with a non-zero exit; a non-zero exit with no JSON and over 2000 non-ASCII stderr characters; a zero exit with no JSON; plain log lines before the real result line; a trailing JSON-array line after the real (failing) result line, which `_last_json_object`'s reverse scan must skip rather than mistake for the answer; and invalid UTF-8 on stdout.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

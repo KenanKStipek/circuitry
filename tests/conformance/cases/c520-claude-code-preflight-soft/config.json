@@ -1,0 +1,9 @@
+{
+  "runtime": {
+    "adapters": {
+      "claude_code": {
+        "binary": "circuitry-test-missing-claude"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 3",
+  "description": "A structured Claude Code answer that fails its own schema on every attempt, `retries: {max_attempts: 2, backoff_ms: 1}`, `on_error: continue`: pins `schema_invalid`, `raw_reply` equal to the `json.dumps` text of the unwrapped answer, and the exhausted retry.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

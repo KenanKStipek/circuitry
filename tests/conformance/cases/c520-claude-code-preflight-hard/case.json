@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 8a",
+  "description": "A document `adapter: claude_code` with a configured `binary` that isn't on `PATH`, and no `on_error: continue` anywhere: preflight's own hard failure refuses the whole run before any effect dispatches.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

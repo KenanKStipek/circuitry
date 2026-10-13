@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-10-13T20:56:49.872Z","ev":"run_start","run_id":"c2ac7b10-472a-4441-bb7b-5dde03b9b60c","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":10936}
+{"v":1,"seq":1,"ts":"2026-10-13T20:56:49.875Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T20:56:49.876Z","ev":"start","id":1,"path":"prime.hangs_then_times_out"}
+{"v":1,"seq":3,"ts":"2026-10-13T20:56:51.898Z","ev":"end","id":1,"path":"prime.hangs_then_times_out","ok":false,"ms":2022,"error":"All adapter attempts failed: [{'adapter': 'claude_code', 'model': 'hang', 'status': 'failed', 'error': 'claude did not finish within 1s; it was stopped with everything it started.', 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":4,"ts":"2026-10-13T20:56:51.898Z","ev":"start","id":2,"path":"prime.fallback_after_hang"}
+{"v":1,"seq":5,"ts":"2026-10-13T20:56:52.992Z","ev":"end","id":2,"path":"prime.fallback_after_hang","ok":true,"ms":1093}
+{"v":1,"seq":6,"ts":"2026-10-13T20:56:52.992Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3116}
+{"v":1,"seq":7,"ts":"2026-10-13T20:56:52.992Z","ev":"run_end","ok":true}

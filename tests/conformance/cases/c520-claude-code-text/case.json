@@ -1,0 +1,15 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 1",
+  "description": "A plain text prompt through the claude_code adapter, with its fake `claude` reporting its own argv, the prompt it read on stdin, its working directory and every PARENT_SESSION_ENV/DEFAULT_UNSET_ENV name's presence. `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`/`PI_SESSION_ID` are set via `env`, `ANTHROPIC_API_KEY` via `fake_credentials` -- all must be absent in the child, with the neutral variable present.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "env": {
+    "CLAUDECODE": "1",
+    "CLAUDE_CODE_ENTRYPOINT": "cli",
+    "PI_SESSION_ID": "parent-session",
+    "AGENT_CLI_NEUTRAL_VAR": "1"
+  },
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-key"
+  }
+}

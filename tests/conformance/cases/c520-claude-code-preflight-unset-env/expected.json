@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:claude_code: not ready \u2014 adapter 'claude_code' unavailable; required by effects ['ask'] (runtime.adapters.claude_code.unset_env must be a list of strings, got 'ANTHROPIC_API_KEY'). Re-run with --skip-preflight to bypass."
+}

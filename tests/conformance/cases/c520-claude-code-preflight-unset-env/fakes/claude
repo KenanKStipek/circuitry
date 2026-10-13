@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Defense-in-depth for c520-claude-code-preflight-unset-env (issue
+#520): this case's own bad `unset_env` config always fails at adapter
+*build* time, before any call could ever reach this binary -- this fake
+exists only so the suite's own guard test (`test_agent_cli_fakes.py`)
+never has reason to treat the case as missing one, and so a future
+preflight change that let a build error slip through would still never
+spend a real request."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def main() -> int:
+    sys.stdin.read()
+    print(json.dumps({"result": "should never be reached", "is_error": True}))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

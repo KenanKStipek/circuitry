@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 8c",
+  "description": "`runtime.adapters.claude_code.unset_env` set to a bare string instead of a list: `_string_list`'s own `ValueError` text, caught by preflight and reported as the one named check's own message.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

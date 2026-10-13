@@ -36,12 +36,19 @@
 //! notion of "the process is exiting" of its own.
 
 pub mod anthropic;
+// `claude_code.rs`/`pi.rs`'s own shared half (issue #520 part B) --
+// retry classification, `check()`, and the result builder every
+// adapter that runs a coding-agent CLI through `electricity_tools::
+// agent_cli` (part A) shares.
+pub(crate) mod agent_cli;
+pub mod claude_code;
 pub(crate) mod config;
 pub mod curl_text;
 pub mod host_claude;
 pub mod ollama;
 pub mod openai;
 pub mod openai_compat;
+pub mod pi;
 pub mod replicate;
 pub mod scripted;
 pub mod transport;
@@ -60,6 +67,12 @@ pub fn build_registry() -> AdapterRegistry {
     let mut registry = AdapterRegistry::new();
     registry.register("scripted", Box::new(scripted::build_scripted));
     registry.register("host_claude", Box::new(host_claude::build_host_claude));
+    // Issue #520 part B: the two coding-agent-CLI adapters, registered
+    // right after `host_claude` (not at the end) -- the issue's own
+    // seam note with #515/`cyberdiner`, to keep that lane's own merge
+    // conflict here as small as possible.
+    registry.register("claude_code", Box::new(claude_code::build_claude_code));
+    registry.register("pi", Box::new(pi::build_pi));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
     // `replicate`/`watsonx` last. The unbuildable set after this lane
@@ -329,6 +342,7 @@ mod tests {
                 "ai21",
                 "anthropic",
                 "azure-openai",
+                "claude_code",
                 "cloudflare-workers-ai",
                 "cohere",
                 "databricks",
@@ -346,6 +360,7 @@ mod tests {
                 "openai",
                 "openrouter",
                 "perplexity",
+                "pi",
                 "qwen-dashscope",
                 "replicate",
                 "scripted",

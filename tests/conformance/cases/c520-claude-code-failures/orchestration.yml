@@ -1,0 +1,43 @@
+name: c520-claude-code-failures
+adapter: claude_code
+effects:
+  - type: prompt
+    name: is_error_success_subtype
+    model: is-error-success-subtype
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: is_error_other_subtype
+    model: is-error-other-subtype
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: good_result_exit2
+    model: good-result-exit2
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: exit1_long_stderr
+    model: exit1-long-stderr
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: exit0_no_json
+    model: exit0-no-json
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: log_lines_before_result
+    model: log-lines-before-result
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: array_line_before_result
+    model: array-line-before-result
+    on_error: continue
+    template: "ask"
+  - type: prompt
+    name: invalid_utf8
+    model: invalid-utf8
+    on_error: continue
+    template: "ask"
