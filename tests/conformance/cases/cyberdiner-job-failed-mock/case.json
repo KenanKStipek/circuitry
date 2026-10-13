@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #515 (cyberdiner adapter in electricity: a failed job)",
+  "description": "The polled job reaches a terminal failed status with an errorMessage -- the run fails with that message, never retried.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "mock_http_fixture": "mock-http.yaml"
+}

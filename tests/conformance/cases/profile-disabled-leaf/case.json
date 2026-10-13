@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 1: profile-disabled-leaf",
+  "description": "A chain: tool `a`; prompt `p` and tool `t`, both disabled by the profile; tool `after`, which renders `{{p.meta.disabled}}` and `{{t.value}}`; plus one enabled prompt `q`. Proves the skip-node shape and key order, a balanced start/end pair per disabled node, `effects_run`'s own count, that `after` sees the skip nodes, and -- via the absence of a `prime.p` entry in `scripted-replies.yaml` -- that no reply was consumed for the disabled prompt.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

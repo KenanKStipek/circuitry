@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #521's own acceptance section, validate-yaml-circuitry-texts",
+  "description": "One validate_yaml tool per input, pinning value, meta.raw, meta.stderr and meta.stdout: a valid document and the same fenced, a fence-free document with strip_fences off, a blank (Python-whitespace) document, non-mapping documents of several types, a missing effects key, a near-miss key, group: on a non-empty dynamic, an unknown interface type, a quoted interface default, a duplicate key, duplicate sibling names (with and without compile), a bare interface-input reference, and the max_errors cap over two Circuitry-own errors.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

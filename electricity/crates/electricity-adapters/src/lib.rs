@@ -44,6 +44,7 @@ pub(crate) mod agent_cli;
 pub mod claude_code;
 pub(crate) mod config;
 pub mod curl_text;
+pub mod cyberdiner;
 pub mod host_claude;
 pub mod ollama;
 pub mod openai;
@@ -75,8 +76,11 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("pi", Box::new(pi::build_pi));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
-    // `replicate`/`watsonx` last. The unbuildable set after this lane
-    // is exactly `claude_code`, `cyberdiner`, `litellm` and `pi`.
+    // `replicate`/`watsonx` last. Issue #515 (N1) ports `cyberdiner`
+    // too, so the unbuildable set is now exactly `claude_code`,
+    // `litellm` and `pi` (`host_claude`'s own builder always fails,
+    // deliberately -- see this file's own module doc comment -- so it
+    // is never part of that set).
     registry.register("ollama", Box::new(ollama::build_ollama));
     registry.register("openai", Box::new(openai::build_openai));
     registry.register("anthropic", Box::new(anthropic::build_anthropic));
@@ -112,6 +116,7 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("xai", Box::new(openai_compat::build_xai));
     registry.register("replicate", Box::new(replicate::build_replicate));
     registry.register("watsonx", Box::new(watsonx::build_watsonx));
+    registry.register("cyberdiner", Box::new(cyberdiner::build_cyberdiner));
     registry
 }
 
@@ -345,6 +350,7 @@ mod tests {
                 "claude_code",
                 "cloudflare-workers-ai",
                 "cohere",
+                "cyberdiner",
                 "databricks",
                 "deepseek",
                 "fireworks",

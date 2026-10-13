@@ -236,14 +236,14 @@ async fn a_bad_e_value_against_a_required_input_is_an_ordinary_failure_with_stat
 async fn an_unsupported_effect_is_refused_with_no_state_written() {
     let dir = temp_dir("refusal");
     let config = write(&dir, "config.json", "{}");
-    // A `validate_yaml` tool provider (lane L2, issue #448) is still
-    // refused -- this lane (G2, issue #513) only flips `model_
-    // condition`/`model_expect`; lane L1 (#506) has since flipped
-    // `reflector` too.
+    // An `mcp` tool provider (an M2 plugin, #448) is still refused --
+    // `validate_yaml` (lane L2a, issue #521) is runnable now, so this
+    // probe was swapped to a provider that stays refused until the M2
+    // plugin bridge.
     let doc = write(
         &dir,
         "doc.yml",
-        "effects:\n  - name: ask\n    type: tool\n    provider: validate_yaml\n    params: {text: 'a: 1'}\n",
+        "effects:\n  - name: ask\n    type: tool\n    provider: mcp\n    params: {text: 'a: 1'}\n",
     );
     let req = request(config, doc);
 
@@ -732,4 +732,165 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         electricity::run_orchestration(&req, &token).await
     });
     assert!(result.ok, "{:?}", result.error);
+}
+
+fn dict_get<'a>(
+    dict: &'a indexmap::IndexMap<electricity_value::Value, electricity_value::Value>,
+    key: &str,
+) -> &'a electricity_value::Value {
+    dict.get(&electricity_value::Value::Str(key.to_string()))
+        .unwrap_or_else(|| panic!("missing key {key}"))
+}
+
+fn as_dict(
+    value: &electricity_value::Value,
+) -> &indexmap::IndexMap<electricity_value::Value, electricity_value::Value> {
+    value.as_dict().expect("expected a dict")
+}
+
+/// Issue #518 (lane J2): a profile that disables every prompt in the
+/// document makes the run adapter-free through the existing
+/// `has_prompt_effects` -- no `adapter:`/`default_adapter` anywhere,
+/// and the overlay must have applied *before* that check for this to
+/// succeed at all (Settled question 11 / the Hazards section's own
+/// ordering warning).
+#[tokio::test]
+async fn a_profile_disabling_every_prompt_runs_with_the_noop_adapter() {
+    let dir = temp_dir("profile-disables-every-prompt");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: prompt\n    name: p\n    template: hi\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  p:\n    enabled: false\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+    let state = as_dict(result.state.as_ref().unwrap());
+    let prime = as_dict(dict_get(state, "prime"));
+    let meta = as_dict(dict_get(prime, "meta"));
+    assert_eq!(
+        dict_get(meta, "adapter"),
+        &electricity_value::Value::Str("_noop".to_string())
+    );
+}
+
+/// Scope §2 / settled ruling 6 (issue #518): a profile `provider:`
+/// naming a known-but-unbuildable adapter on an *enabled* prompt is
+/// refused before the run, with no state written -- `litellm` stays
+/// permanently unbuildable (#515), so this case can't regress when
+/// that lane's own adapter set grows.
+#[tokio::test]
+async fn a_profile_provider_naming_an_unbuildable_adapter_on_an_enabled_prompt_is_refused() {
+    let dir = temp_dir("profile-provider-unbuildable-enabled");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: prompt\n    name: p\n    template: hi\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  p:\n    provider: litellm\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("litellm"));
+}
+
+/// The same profile, but on a *disabled* prompt -- never dispatched,
+/// so the override's own provider is never even looked at (Scope §2:
+/// "and only on an enabled prompt").
+#[tokio::test]
+async fn the_same_unbuildable_provider_on_a_disabled_prompt_runs() {
+    let dir = temp_dir("profile-provider-unbuildable-disabled");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: prompt\n    name: p\n    template: hi\n",
+    );
+    let profile = write(
+        &dir,
+        "p.yml",
+        "effects:\n  p:\n    provider: litellm\n    enabled: false\n",
+    );
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+}
+
+/// Scope §2's second sentence / settled ruling 6: a profile that swaps
+/// a *tool*'s provider to one this build doesn't support is refused by
+/// the ordinary refusal walker (`UnsupportedToolProvider`), not by the
+/// new unbuildable-adapter check above -- that one only ever looks at
+/// a prompt's own provider.
+#[tokio::test]
+async fn a_profile_swapping_a_tools_provider_to_an_unsupported_one_is_refused_by_the_walker() {
+    let dir = temp_dir("profile-tool-provider-unsupported");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {}\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  t:\n    provider: mcp\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains("mcp"));
+}
+
+/// Review finding 1 on PR #526's own review: a *disabled* tool naming
+/// a plugin Circuitry knows but this build can't build is still
+/// refused with the preview marker, no state written -- the refusal
+/// walker skips a disabled subtree entirely (issue #518 Scope §4), so
+/// this has to come from a check that reads the raw document instead.
+/// Before that check existed, this case reached preflight's own
+/// "Unknown plugin" failure, a hard failure with `--out` written.
+#[tokio::test]
+async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker() {
+    let dir = temp_dir("disabled-tool-unbuildable-plugin");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: t\n    provider: comfyui\n    params: {}\n",
+    );
+    let profile = write(&dir, "p.yml", "effects:\n  t:\n    enabled: false\n");
+    let mut req = request(config, doc);
+    req.profile_path = Some(profile);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("comfyui"));
 }

@@ -1,0 +1,10 @@
+name: profile-routing-pin-and-opt-out
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: pinned
+    template: "hi"
+  - type: prompt
+    name: optout
+    template: "hi"

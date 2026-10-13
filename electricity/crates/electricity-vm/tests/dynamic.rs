@@ -1106,18 +1106,16 @@ async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after
 }
 
 #[tokio::test]
-async fn a_disabled_op_reaches_disabled_rs_own_stub_not_a_silent_run() {
-    // Review P2-4 on PR #454's second review: `execute_op` used to
-    // never read `Op::enabled` at all, so a disabled effect ran
-    // normally (M0-H's own documented gap). Wired now, so lane J2's
-    // own PR only ever fills `disabled.rs`'s own stub bodies, never
-    // this file -- unreachable for any document this build can
-    // compile today (every compiled `Op` has `enabled: true`; only a
-    // profile's own effect override, not yet wired, can ever produce
-    // `false`), reachable only by building the `Op` directly like
-    // this one. The probe: the tool leaf's own always-fails `json`
-    // dispatch never runs at all -- `disabled::write_disabled_node`'s
-    // own M1-J2 stub error is what the run fails with instead.
+async fn a_disabled_op_writes_a_skip_node_instead_of_dispatching() {
+    // Review P2-4 on PR #454's second review, finished by issue #518
+    // (lane J2): `execute_op` reads `Op::enabled` before dispatching
+    // any effect type -- unreachable for any document this build
+    // compiles on its own (every compiled `Op` has `enabled: true`;
+    // only a profile's own effect override can ever produce `false`),
+    // reached here only by building the `Op` directly. The probe: the
+    // tool leaf's own always-fails `json` dispatch never runs at all
+    // (the run succeeds, not `TOOL_FAIL_TEXT`) -- `disabled::
+    // write_disabled_node`'s own skip node is written in its place.
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = json_registry();
@@ -1131,7 +1129,7 @@ async fn a_disabled_op_reaches_disabled_rs_own_stub_not_a_silent_run() {
     };
     let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![disabled_leaf]);
 
-    let err = electricity_vm::execute_root(
+    electricity_vm::execute_root(
         &support::program(root),
         &store,
         &Value::None,
@@ -1140,14 +1138,34 @@ async fn a_disabled_op_reaches_disabled_rs_own_stub_not_a_silent_run() {
         &token,
     )
     .await
-    .unwrap_err();
-    let VmError::Message(message) = err else {
-        panic!(
-            "expected a chain wrap around disabled::write_disabled_node's own error, got {err:?}"
-        )
-    };
-    assert!(
-        message.contains("M1-J2"),
-        "expected disabled::write_disabled_node's own M1-J2 stub error, got: {message}"
-    );
+    .unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let root_dict = as_dict(&snapshot);
+    let prime = as_dict(get(root_dict, "prime").unwrap());
+    let b = as_dict(get(prime, "b").unwrap());
+    assert_eq!(get(b, "value"), Some(&Value::None));
+    let meta = as_dict(get(b, "meta").unwrap());
+    assert_eq!(get(meta, "disabled"), Some(&Value::Bool(true)));
+    assert!(get(meta, "created_at").is_some());
+    assert_eq!(get(meta, "created_at"), get(meta, "completed_at"));
+
+    // Python's own order: write the node, then start, then complete,
+    // then `on_write` (`write()` here) -- never start before write.
+    let events = observer.events();
+    let b_path = root_path().push_name("b").to_string();
+    let start_index = events
+        .iter()
+        .position(|e| matches!(e, Event::Start(p) if p == &b_path))
+        .expect("expected a Start event for b");
+    let complete_index = events
+        .iter()
+        .position(|e| matches!(e, Event::Complete(p, None) if p == &b_path))
+        .expect("expected a Complete event for b");
+    assert!(complete_index > start_index);
+    let write_after_complete = events[complete_index + 1..]
+        .iter()
+        .position(|e| matches!(e, Event::Write))
+        .expect("expected a Write event right after b's own Complete");
+    assert_eq!(write_after_complete, 0);
 }

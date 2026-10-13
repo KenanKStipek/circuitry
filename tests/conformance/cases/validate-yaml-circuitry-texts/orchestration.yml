@@ -1,0 +1,208 @@
+effects:
+  - type: tool
+    name: valid
+    provider: validate_yaml
+    params:
+      yaml: "effects: []"
+
+  - type: tool
+    name: valid_fenced
+    provider: validate_yaml
+    params:
+      yaml: |-
+        ```yaml
+        effects: []
+        ```
+
+  - type: tool
+    name: strip_fences_no
+    provider: validate_yaml
+    params:
+      yaml: "effects: []"
+      strip_fences: "no"
+
+  - type: tool
+    name: via_json_template
+    provider: json
+    params:
+      mode: parse
+      input: '"effects: []"'
+
+  - type: tool
+    name: validated_via_template
+    provider: validate_yaml
+    params:
+      yaml: "{{{prime.via_json_template.value}}}"
+
+  - type: tool
+    name: blank_document
+    provider: validate_yaml
+    params:
+      yaml: "  \u001C "
+
+  - type: tool
+    name: not_a_mapping_date
+    provider: validate_yaml
+    params:
+      yaml: "2024-01-01"
+
+  - type: tool
+    name: not_a_mapping_comment_only
+    provider: validate_yaml
+    params:
+      yaml: "# only a comment"
+
+  - type: tool
+    name: not_a_mapping_list
+    provider: validate_yaml
+    params:
+      yaml: "- a"
+
+  - type: tool
+    name: missing_effects_key
+    provider: validate_yaml
+    params:
+      yaml: "name: x"
+
+  - type: tool
+    name: near_miss_key_no_schema_error
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            discription: oops
+            params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: group_on_non_empty_dynamic
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: dynamic
+            name: d
+            group: mygroup
+            effects:
+              - type: tool
+                name: a
+                provider: json
+                params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: unknown_interface_type
+    provider: validate_yaml
+    params:
+      yaml: |-
+        interface:
+          inputs:
+            x:
+              type: wat
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: quoted_interface_default
+    provider: validate_yaml
+    params:
+      yaml: |-
+        interface:
+          inputs:
+            x:
+              type: number
+              default: "5"
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: duplicate_key
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+        effects:
+          - type: tool
+            name: b
+            provider: json
+            params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: duplicate_sibling_names
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+
+  - type: tool
+    name: duplicate_sibling_names_no_compile
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+          - type: tool
+            name: a
+            provider: json
+            params: {mode: parse, input: "1"}
+      compile: "off"
+
+  # A set-delimiter tag (`{{=<% %>=}}`) switches this params template's own
+  # Mustache delimiters away from `{{ }}` before the first real line, so the
+  # literal `{{x}}` inside the embedded document survives this effect's own
+  # params render unexpanded (otherwise, with `x` undeclared at this scope,
+  # Mustache would already have rendered it to "", and `validate_yaml` would
+  # see a *different* error -- an empty `template:` -- never the bare
+  # interface-input-reference compile error this case means to pin).
+  - type: tool
+    name: bare_interface_input_reference
+    provider: validate_yaml
+    params:
+      yaml: |-
+        {{=<% %>=}}interface:
+          inputs:
+            x: {type: string}
+        effects:
+          - type: yield
+            name: a
+            template: "{{x}}"
+
+  - type: tool
+    name: max_errors_cap
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - type: tool
+            name: a
+            provider: json
+            discription: x
+            params: {mode: parse, input: "1"}
+          - type: tool
+            name: b
+            provider: json
+            discription: x
+            params: {mode: parse, input: "1"}
+      max_errors: 1

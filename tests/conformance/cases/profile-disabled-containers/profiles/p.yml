@@ -1,0 +1,11 @@
+effects:
+  dyn:
+    enabled: false
+  lp:
+    enabled: false
+  gate:
+    enabled: false
+  inline_use:
+    enabled: false
+  planit:
+    enabled: false

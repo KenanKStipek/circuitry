@@ -1,0 +1,5 @@
+effects:
+  p:
+    enabled: false
+  t:
+    enabled: false

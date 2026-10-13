@@ -95,9 +95,10 @@ whenever:
 
 HTTP-family plugins (`http`, `web_fetch`, `webhook`, `linear` — `_HTTP_FAMILY_PROVIDERS`,
 `:38-40`) set `ok=False` on a 4xx/5xx by default (opt-out per effect, see each plugin). Every
-other "soft-failure" plugin (`wikipedia`, `dns`, `port_check`, `validate_yaml` — not among
-the tools production documents use, noted for parity completeness) reports its own outcome in `value`/`raw` while
-keeping `ok=True`.
+other "soft-failure" plugin (`wikipedia`, `dns`, `port_check` — not among the tools production
+documents use, noted for parity completeness; `validate_yaml` — the bundled decomposition
+planner's own `check`/repair-loop steps call it, issue #448's decision 3) reports its own
+outcome in `value`/`raw` while keeping `ok=True`.
 
 `meta.raw` is always set for a tool effect that returned a result (never for prompts);
 `meta.binary` is set only when `result.raw` carries a `"binary"` key (the resolved absolute
@@ -696,9 +697,9 @@ functions, `api_key_env=` in each adapter file):
 | `databricks` | `DATABRICKS_TOKEN` | `DATABRICKS_HOST` env (no static default — per-workspace) or `base_url` cfg |
 
 electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
-(native, not through this family)/`replicate`/`watsonx` — the unbuildable set after that lane is
-exactly `claude_code`, `cyberdiner`, `litellm` and `pi` (`electricity/README.md`'s own preview
-paragraph).
+(native, not through this family)/`replicate`/`watsonx`, and (issue #515's follow-up) `cyberdiner`
+— the unbuildable set is now exactly `claude_code`, `litellm` and `pi` (`electricity/README.md`'s
+own preview paragraph).
 
 `check_dependencies` (`_openai_compat.py:212-220`): `binary:curl` if `curl` isn't on PATH;
 `env:<api_key_env>` if that var is required and unset. electricity, using a native HTTP client
@@ -796,6 +797,21 @@ should implement it natively rather than defer to the external-plugin bridge, si
 model adapter (the bridge is scoped to *tool* plugins per the project's plugin list, which does not
 include a generic "adapter" bridge).
 
+**Ported** (issue #515, `electricity-adapters::cyberdiner`): submit/poll, tier resolution,
+terminal-status folding, `check()`/`list_models()`, retry classification (an HTTP error
+classifies by status the same way a curl-based adapter's own exit code does; a connect/timeout/
+remote-disconnect failure is unconditionally retryable, matching `urllib.error.URLError`/
+`TimeoutError`/`ConnectionError`), and the `max_in_flight` semaphore, all match; built over
+`electricity_tools::http_client` directly (urllib's own request shape -- Host/Accept-encoding/
+Connection headers, a `Location` redirect joined via the same `http` tool's own `urljoin`,
+urllib's own proxy-environment convention and per-operation timeout model), never
+`crate::transport::run_curl`'s curl convention, since the reference adapter is the one model
+adapter that never shells out to curl. The semaphore is a per-instance `tokio::sync::Semaphore`:
+the run's own default `cyberdiner` adapter is one shared instance reused for every call
+(`exec/prompt.rs`'s own doc comment), exactly like Python's long-lived `self`, so this
+coordinates the same way Python's own `threading.Semaphore` does; it is only ever inert for a
+`provider:` override, which rebuilds a fresh instance per call in both engines alike.
+
 ### 3.9 `host_claude`
 
 `src/circuitry/adapters/host_claude.py`. **Not needed by electricity v1.** It has no HTTP
@@ -882,6 +898,93 @@ HTTP client, so none of curl's own mechanics (config-file-via-pipe-fd, `--data-b
 5. **A response body excerpt in a failure message is bounded and redacted** the same way
    `parse_error_body`/`http_error_excerpt` do (§2.6.1) — a large or secret-bearing error body
    must not reach a log line or `meta.error` unbounded.
+
+### 3.13 `claude_code` and `pi`
+
+`src/circuitry/adapters/claude_code.py`, `src/circuitry/adapters/pi.py`, and the shared
+`src/circuitry/agent_cli.py`/`adapters/_agent_cli.py` (issue #520). Neither talks HTTP at all —
+each runs a coding-agent CLI (`claude`/`pi`) as a subprocess, through its own interactive login,
+and reads its `--output-format json`/`--mode json` reply. No curl, no `electricity_tools::
+http_client`; the whole call goes through `electricity-tools::process::run_tracked` (lane C)
+instead, in its own process group (`new_session: true`) so a timeout or cancellation kills the
+CLI and everything it started.
+
+**Child environment.** The child always loses `PARENT_SESSION_ENV` (`PI_SESSION_ID`,
+`PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`,
+`PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — a CLI that inherits these acts as
+part of the parent session) plus `unset_env` (default `["ANTHROPIC_API_KEY",
+"ANTHROPIC_AUTH_TOKEN"]`, so the CLI uses its own login instead of billing an exported key).
+Every other variable, including one loaded from the user's `.env`, is kept.
+
+**Command lines.** `claude -p --output-format json --tools "" --strict-mcp-config
+--no-session-persistence [--model <m>] [--json-schema <schema>]`; the prompt goes on stdin.
+`pi -p --mode json --no-approve --no-tools --no-session [--model <m>] [--thinking <level>]
+@<prompt-file> "The attached file is the prompt..."` — pi reads no prompt from stdin at all,
+so its own stdin is an empty, closed pipe, and the prompt instead goes to a fresh `prompt.md`
+inside a temporary `circuitry-pi-*` directory (`circuitry-claude-*` for Claude Code, so no
+project `CLAUDE.md`/context file is ever picked up). Both directories are created with
+`libc::mkdtemp` (absolute even under a relative `TMPDIR`, mode `0700` free from `mkdtemp`
+itself) and removed on every way out — success, a CLI failure, a timeout, or the call's own
+future simply dropped by a racing cancellation.
+
+**`--json-schema`.** Only a `json`/`object`/`array` prompt with a non-empty `schema` sends one,
+as `json.dumps` with default separators and `ensure_ascii` (so a non-ASCII schema description
+is sent `\uXXXX`-escaped, confirmed directly against CPython). A schema whose top-level `type`
+is exactly `"object"` is sent unchanged; anything else (another type, a list such as
+`["object", "null"]`, or no `type` at all) is wrapped as the one required property `"value"` of
+an object, with `$defs`/`definitions` hoisted to the wrapper's own root so a `#/$defs/...`
+reference still resolves — the answer is unwrapped again once Claude Code replies. pi has no
+schema flag of its own at all; a schema is ignored silently, never named in the ignored-options
+warning either way (`adapters/base.py::GenerateOptions`'s own doc comment: `json_schema` is
+never listed, since every adapter is expected to validate against it itself without being
+warned for ignoring it).
+
+**Reading the reply.** Claude Code: the whole of stdout, or else the last line (`str.
+splitlines()`) that parses as a JSON object, is the result; `is_error: true` (the exact bool,
+never `1`/`1.0`) or a non-zero exit both fail the call (`is_error` checked first), and a non-null
+`structured_output` (including `false`/`0`/`""`) becomes the answer, unwrapped only when the
+sent schema itself was wrapped. Tokens: `input_tokens + cache_read_input_tokens +
+cache_creation_input_tokens` sent, `output_tokens` received; cost is `total_cost_usd`. pi: every
+`message_end` event whose own `message.role` is `"assistant"` updates the running usage totals
+and becomes the last answer; `stopReason` `error`/`aborted` or a non-zero exit (checked in that
+order) both fail the call. `str.splitlines()`'s own separator set (`\r`, `\x0b`–`\x0c`,
+`\x1c`–`\x1e`, `\x85`, `U+2028`, `U+2029`) applies to pi's own event stream too: a raw one of
+these inside an event's JSON text splits that line in two, so neither half parses and the event
+is silently dropped — the prior assistant message answers instead. Every reply's own token/cost
+sums run over every assistant turn the call made, not only the last, through `int()`/`float()`
+coercion (`py_int`, floats truncating toward zero; `NaN`/infinity raise).
+
+**Config** (`runtime.adapters.<name>`): `binary` (default `claude`/`pi`), `default_model`
+(default `""`), `thinking` (pi only, default `""`), `unset_env` (default the two names above;
+`null`/absent means the default, `[]` stays empty), `extra_args` (default `[]`). `unset_env`/
+`extra_args` must be a list of strings or the build fails with `ValueError`
+(`runtime.adapters.<name>.<key> must be a list of strings, got <repr>`), never `RuntimeError` —
+preflight treats a `RuntimeError` at build time as "deferred (runtime-injected)" and passes it,
+which a bad list config must not get. **A truthy non-string `binary`/`default_model`/`thinking`
+(`binary: 5`, `thinking: true`) is never replaced by the default** — Python's own `cfg.get(key)
+or default` keeps it verbatim, and only raises `TypeError: expected str, bytes or os.PathLike
+object, not <type>` once something actually tries to use it as a string (`shutil.which`, a real
+`Popen`'s own `cmd[0]`); falling back to the default name there would start the real CLI instead
+of reporting that failure. `check()` is `which(binary)` (no `~` expansion, unlike the tool
+plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>"]` with the
+same `<binary> is not on PATH: install it and log in, or set
+runtime.adapters.<name>.binary.` message every other binary-backed check uses.
+
+**Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
+failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
+outright. stdout/stderr not valid UTF-8 escapes as CPython's own `UnicodeDecodeError`, never
+wrapped as an `AdapterCallError` at all — `classify_exception` finds nothing retryable in it
+either. **Cost.** These are the first electricity adapters that report one at all —
+`meta.cost_usd` and `runtime.last_run.totals.cost_usd` flow through the same, already-wired code
+every other adapter's own `cost_usd` field would (`core/prompt.py`; `electricity_vm::exec::
+prompt`), these two adapters are only its first end-to-end exercise.
+
+**Ported** (issue #520, `electricity-adapters::{claude_code, pi}`, over part A's own
+`electricity_tools::agent_cli`): every rule above, with an eleven-case conformance suite
+(`c520-*`) against fake `claude`/`pi` binaries — never a real CLI, enforced by its own guard
+test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
+lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports
+the Python `litellm` package directly, which electricity neither embeds nor reimplements).
 
 ---
 

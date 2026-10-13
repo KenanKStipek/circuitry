@@ -1,0 +1,8 @@
+prime.p1:
+  - text: "hello there"
+    tokens_sent: 3
+    tokens_received: 4
+prime.p2:
+  - text: "hi there"
+    tokens_sent: 1
+    tokens_received: 2

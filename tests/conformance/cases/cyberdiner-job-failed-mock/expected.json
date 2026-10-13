@@ -1,0 +1,3 @@
+{
+  "error": "prime.ask: All adapter attempts failed: [{'adapter': 'cyberdiner', 'model': 'cheap', 'status': 'failed', 'error': 'cyberdiner: job job-2 failed: cook crashed', 'tokens_sent': None, 'tokens_received': None}]"
+}

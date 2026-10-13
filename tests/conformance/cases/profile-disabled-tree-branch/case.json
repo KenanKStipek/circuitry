@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #518 (lane J2), case 5: profile-disabled-tree-branch",
+  "description": "A `flow: tree` `dynamic` with three branches; the middle one (`b`) is disabled by the profile. Proves the merged skip node for `b` and that `dispatch` still reports `branches: 3` -- a disabled branch still counts as a branch, it just never actually dispatches.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

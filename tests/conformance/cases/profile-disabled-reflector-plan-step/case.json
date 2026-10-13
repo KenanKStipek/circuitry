@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 6: profile-disabled-reflector-plan-step",
+  "description": "A reflector whose `plan_from_step` prompt (`propose_steps`) is disabled by the profile. Proves the skip node under `inner`, and that `get_plan_text` reading a `null` value gives an empty plan, which the reflector records as `done: true`/`stop: true`, stopping after one iteration.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 12: profile-routing-pin-without-scoring",
+  "description": "`scoring.enabled: false` and `routing: {enabled: false, bands: [...]}` -- only `routing.bands` has to exist for a pin to resolve, settled ruling 8. A profile `routing: low` pin still sets meta.model/model_reason: \"router\" with no scoring at all run; no meta.complexity is written, since the score that field would carry was never computed.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}
