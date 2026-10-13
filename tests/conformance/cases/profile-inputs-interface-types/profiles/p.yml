@@ -1,0 +1,5 @@
+inputs:
+  n: 5
+  flag: "yes"
+  k: null
+  extra: [1, 2]

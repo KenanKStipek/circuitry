@@ -1,0 +1,15 @@
+name: profile-model-override
+adapter: scripted
+model: doc-default-model
+effects:
+  - type: prompt
+    name: p1
+    model: doc-model
+    template: "say hello"
+  - type: prompt
+    name: p2
+    template: "say hi"
+  - type: tool
+    name: t1
+    provider: json
+    params: {mode: stringify, input: {x: 1}}

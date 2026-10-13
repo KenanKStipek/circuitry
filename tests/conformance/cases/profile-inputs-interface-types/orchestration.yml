@@ -1,0 +1,17 @@
+name: profile-inputs-interface-types
+interface:
+  inputs:
+    n: {type: string}
+    flag: {type: boolean}
+    k: {type: integer, default: 42}
+effects:
+  - type: tool
+    name: echo
+    provider: json
+    params:
+      mode: stringify
+      input:
+        n: {from: input.n}
+        flag: {from: input.flag}
+        k: {from: input.k}
+        extra: {from: input.extra}

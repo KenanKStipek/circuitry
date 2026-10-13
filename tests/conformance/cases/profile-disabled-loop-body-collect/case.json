@@ -1,0 +1,7 @@
+{
+  "spec_case": "C8",
+  "description": "issue #518 (lane J2), case 4: `c8-each-chain-prev-and-collect`'s document, plus a second body step that reads `{{step.meta.disabled}}` and `{{prime.refine.prev.step.meta.disabled}}`; `refine.step` is disabled by the profile for every pass. Proves each pass's own `executed_effects[]` record for `step` carries `disabled: true`, `count` includes it, `collected` is `{value: []}`, `iter_N.step` is the skip-node shape, and `prev`/`last` alias the disabled step's own node on later passes.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

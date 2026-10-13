@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #515 (cyberdiner adapter in electricity: a cancelled job)",
+  "description": "The polled job reaches a terminal cancelled status -- the run fails, never retried.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "mock_http_fixture": "mock-http.yaml"
+}

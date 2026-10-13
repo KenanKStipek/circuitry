@@ -373,27 +373,28 @@ pub(crate) fn execute_op<'a>(
         // dynamic.py::DynamicRuntime._execute_effect`'s own single
         // `is_enabled` check, before dispatching to any effect type,
         // leaf or container -- disabling a container disables its
-        // whole subtree because nothing inside it ever gets this far)
-        // so lane J2's own PR only ever fills `disabled.rs`'s own stub
-        // bodies, never this file. `op.enabled` is `true` for every
-        // `Op` this build can compile today -- orchestration YAML
-        // itself never sets the field (only a profile's own `effects.
-        // <path>.enabled: false`, `electricity-compiler::overrides`,
-        // not created until lane J2), so this branch is unreachable in
-        // any real or test run, same as the model-mode `expect`/
-        // condition wiring below.
+        // whole subtree because nothing inside it ever gets this far).
+        // `op.enabled` is `true` for every `Op` orchestration YAML
+        // alone ever compiles to -- only a profile's own `effects.
+        // <path>.enabled: false` (`electricity_compiler::overrides::
+        // apply_effect_overrides`, lane J2, issue #518) ever sets it
+        // `false`, so this branch stays unreachable for a run with no
+        // `--profile` (or a profile with no `effects:` entries).
+        //
+        // Python's own order (`core/disabled.py::write_disabled_node`):
+        // write the node first, *then* fire the balanced `effect_start`/
+        // `effect_complete` pair around it, then `on_write`
+        // (`store.write()`'s own hook here) -- never start-before-write,
+        // unlike every other leaf/container's own hook pairing in this
+        // crate, which always has real work to report *between* start
+        // and complete.
         if disabled::skip_disabled(op, &Value::None) {
             if op.name.is_some() {
                 let effect_path = frame.effect_path(&op.path);
-                let instance = observer.effect_start(&effect_path);
                 disabled::write_disabled_node(store, parent, op)?;
-                // `write_disabled_node` is a stub that always errors
-                // (never reached by any build that compiles a real
-                // document, this function's own doc comment) -- `?`
-                // above already propagates before this ever runs, so
-                // there is no real node to peek `completed_at` off of;
-                // `true` is this call's own dead-but-type-correct value.
+                let instance = observer.effect_start(&effect_path);
                 observer.effect_complete(&effect_path, instance, None, true);
+                observer.write();
             }
             return Ok(());
         }

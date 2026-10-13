@@ -1,0 +1,5 @@
+effects:
+  pinned:
+    routing: high
+  optout:
+    routing: false

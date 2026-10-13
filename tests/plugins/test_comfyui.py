@@ -166,6 +166,18 @@ def test_check_uses_q_first(monkeypatch: pytest.MonkeyPatch) -> None:
     assert_q_first(captured["cmd"])
 
 
+def test_check_masks_userinfo_in_the_missing_host_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        return _FakePopen(subprocess.CompletedProcess(cmd, 7, stdout="", stderr=""))
+
+    monkeypatch.setattr(subprocess, "Popen", fake_run)
+    plugin = ComfyUIPlugin(base_url="http://user:secret@localhost:8188")
+    result = plugin.check()
+    assert result.ok is False
+    assert "host:http://localhost:8188" in result.missing
+    assert not any("secret" in m for m in result.missing)
+
+
 def test_upload_image_failure_does_not_echo_cmd(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

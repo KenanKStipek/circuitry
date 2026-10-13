@@ -1265,7 +1265,7 @@ byte of state identical.
 **Routing**: a band table (`runtime.complexity.routing.bands`, each
 `{max, model, name}` with a mandatory catch-all) maps a score to a
 model. **Precedence** (`core/router.py` module docstring, confirmed):
-`--model` (CLI) > per-effect `model:` > profile effect `model` override >
+profile effect `model` override > per-effect `model:` > `--model` (CLI) >
 profile effect `routing` pin > **router** > orchestration default > config
 default. The router returns `None` ("no opinion, keep what's already
 resolved") whenever anything above it in that list already made a
@@ -1898,7 +1898,7 @@ the run is fully deterministic.
 | C5 | Tool `params_json` splicing a native list from a prior prompt's `array` output, vs. the same list spliced via `{{{...}}}` in an ordinary `template:` | scripted JSON array reply | `params_rendered`/`prompt_sent` show the JSON-vs-repr asymmetry (Q2) |
 | C6 | `if: {mode: cel, expr: "has(state.input.x) && state.input.x > 1"}` run with `x` absent, `x: 0`, `x: 5`; same with `strict: true` | n/a | `condition_result` / raised-error exactly matches the absent-path table (§4.4) |
 | C7 | `if`/`while` CEL: `1 == true`, `1.0 == 1`, `"a" == 1` | n/a | Heterogeneous-equality results (§4.3) |
-| C8 | Named `each` loop, `flow: chain`, body reads `prime.<loop>.prev.<step>.value` on pass 2; `collect:` on a step that is `disabled: true` via profile override on one pass | scripted tool replies, 3 items | `prev` absent on pass 0, correct on later passes; `collected` elides the disabled pass (§2.3, §2.4, Q7) |
+| C8 | Named `each` loop, `flow: chain`, body reads `prime.<loop>.prev.<step>.value` on pass 2; a profile overlay disables the `collect:` step for every pass (a profile override applies to the whole effect, never just one pass) | scripted tool replies, 3 items | `prev` absent on pass 0, correct on later passes; each pass's own `executed_effects[]` record for the disabled step carries `disabled: true`; `collected` is `{value: []}` (§2.3, §2.4, Q7) |
 | C9 | Named `each` loop, `flow: tree`, 4 items, `max_concurrency: 2` | scripted tool replies | `iter_0..3` all present, `last == iter_3`, order-independent of actual completion order |
 | C10 | `while: {mode: cel}` loop with `min_iterations: 2`, condition reading a path only the body writes | scripted tool replies | Condition never evaluated on the forced passes (no absent-path warning in logs); `iter.index` off-by-one between condition and body (Q4) |
 | C11 | `each` loop, collection longer than `max_iterations`, once with `each.truncate: true` and once without, both `on_error: fail` and `on_error: continue` | n/a (fails before dispatch) | `LoopBoundsError` message exactly; `termination.reason`/`unvisited`/`detail` per combination (§5.4) |

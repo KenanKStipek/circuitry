@@ -1,0 +1,6 @@
+prime.p:
+  - error:
+      kind: unauthorized
+  - text: "hi there"
+    tokens_sent: 1
+    tokens_received: 2

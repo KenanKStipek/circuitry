@@ -141,6 +141,17 @@ pub struct RawResponse {
     /// unfollowed/disallowed 3xx -- `src/http.rs`'s own job, issue
     /// #485 review finding 8).
     pub body_error: Option<SendError>,
+    /// Every body byte actually received before [`RawResponse::body_error`]
+    /// (if any) cut the read short -- unlike [`RawResponse::body`], never
+    /// cleared. urllib's own discarded-partial-read (the doc comment
+    /// above) is specific to the `http` *tool*'s own parity with
+    /// `plugins/http.py`; a curl-shelling adapter (`electricity-adapters::
+    /// transport::body_error_outcome`) needs the opposite -- real curl
+    /// still writes whatever bytes it received to stdout before exiting
+    /// nonzero on a dropped connection -- so this field carries that half
+    /// forward for that caller alone, and every other caller of
+    /// [`send`] that has no use for it just ignores it.
+    pub partial_body: Vec<u8>,
 }
 
 /// How a timeout applies -- urllib's own per-operation deadline
@@ -772,9 +783,15 @@ async fn send_inner(
             }
         }
     }
-    if body_error.is_some() {
-        body_bytes.clear();
-    }
+    // Only a body-phase failure's own caller (`electricity-adapters::
+    // transport::body_error_outcome`) ever reads `partial_body` at all
+    // (review finding F11) -- the success path leaves it empty rather
+    // than cloning the whole body for nothing.
+    let partial_body = if body_error.is_some() {
+        std::mem::take(&mut body_bytes)
+    } else {
+        Vec::new()
+    };
 
     Ok(RawResponse {
         status,
@@ -782,6 +799,7 @@ async fn send_inner(
         headers,
         body: body_bytes,
         body_error,
+        partial_body,
     })
 }
 

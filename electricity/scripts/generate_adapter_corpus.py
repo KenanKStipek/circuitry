@@ -521,6 +521,56 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------
 
 
+def _openai_request_cases() -> list[dict[str, Any]]:
+    """Issue #515 finding 5's first item: `openai` had an outcome-
+    interpretation case but no request-building one -- its own
+    `max_completion_tokens`/deterministic-`seed` placement, distinct
+    from the rest of the OpenAI-compatible family, was untested here."""
+    specs: list[dict[str, Any]] = [
+        {"model": "m", "prompt": "hello", "options": {}},
+        {
+            "model": "m",
+            "prompt": "hello",
+            "options": {
+                "messages": [{"role": "tool", "content": "tool out"}],
+                "temperature": 0.5,
+                "max_tokens": 10,
+                "stop": ["END"],
+            },
+        },
+        {
+            "model": "m",
+            "prompt": "hello",
+            "options": {"deterministic": True},
+        },
+        {
+            "model": "m",
+            "prompt": "hello",
+            "options": {"params": {"seed": 7}, "deterministic": True},
+        },
+    ]
+    cases = []
+    for spec in specs:
+        adapter = OpenAIAdapter(base_url="https://api.openai.com/v1")
+        options = _options_from_json(spec["options"])
+        with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "circuitry-test-fake-key"}):
+            captured, _result = _call_generate(
+                "circuitry.adapters.openai",
+                lambda a=adapter, m=spec["model"], p=spec["prompt"], o=options: a.generate(
+                    model=m, prompt=p, options=o
+                ),
+            )
+        cases.append(
+            {
+                "spec": spec,
+                "url": captured.get("url"),
+                "headers": captured.get("headers"),
+                "data": captured.get("data"),
+            }
+        )
+    return cases
+
+
 def _openai_outcome_cases() -> list[dict[str, Any]]:
     scripted = [
         (
@@ -671,6 +721,13 @@ def _replicate_outcome_cases() -> list[dict[str, Any]]:
         (0, '{"status": "processing", "id": "abc123"}', ""),
         (0, '{"status": "failed", "error": "boom"}', ""),
         (22, '{"detail": "unauthorized"}', "curl: (22) The requested URL returned error: 401"),
+        # Issue #515 finding 4: a non-string `id` reprs as Python shows it
+        # (`None`, not the Rust port's old `'?'`).
+        (0, '{"status": "processing", "id": null}', ""),
+        # A non-string `status` with no `error` key -- `err = raw.get("error")
+        # or status` falls through to `status` itself (`None`), formatted
+        # with plain `str()`.
+        (0, '{"status": null}', ""),
     ]
     cases = []
     for returncode, stdout, stderr in scripted:
@@ -708,6 +765,7 @@ def build_corpus() -> dict[str, Any]:
         "ollama_outcome_cases": _ollama_outcome_cases(),
         "openai_compat_request_cases": _openai_compat_request_cases(),
         "openai_compat_outcome_cases": _openai_compat_outcome_cases(),
+        "openai_request_cases": _openai_request_cases(),
         "openai_outcome_cases": _openai_outcome_cases(),
         "anthropic_request_cases": _anthropic_request_cases(),
         "anthropic_outcome_cases": _anthropic_outcome_cases(),

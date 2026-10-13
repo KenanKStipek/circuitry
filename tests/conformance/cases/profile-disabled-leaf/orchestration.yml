@@ -1,0 +1,26 @@
+name: profile-disabled-leaf
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params: {mode: stringify, input: {ok: true}}
+  - type: prompt
+    name: p
+    template: "say hello"
+  - type: tool
+    name: t
+    provider: json
+    params: {mode: stringify, input: {never: true}}
+  - type: tool
+    name: after
+    provider: json
+    params:
+      mode: stringify
+      input:
+        p_disabled: "{{prime.p.meta.disabled}}"
+        t_value: "{{prime.t.value}}"
+  - type: prompt
+    name: q
+    template: "say goodbye"

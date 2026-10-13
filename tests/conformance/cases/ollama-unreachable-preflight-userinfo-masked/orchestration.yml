@@ -1,0 +1,7 @@
+name: ollama-unreachable-preflight-userinfo-masked
+adapter: ollama
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

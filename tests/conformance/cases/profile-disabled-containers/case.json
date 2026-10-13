@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 2: profile-disabled-containers",
+  "description": "A named `dynamic` (with children and a `finally:`), a named `each` loop, a named model-mode `if`, an inline `use`, and a `reflector` are all disabled by the profile. Proves one skip node each with nothing underneath (no child nodes, no `iter_N`/`collected`, no `condition_result`, no child events, no `finally:` run, no reflector planning call, no `use` child run) and no replies consumed.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

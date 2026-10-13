@@ -1339,19 +1339,26 @@ for how the file itself is located:
   and exits `1`, not nothing, exactly as the reference does. electricity matches
   that outcome (writes `--out`, exits `1`) for a profile path that doesn't resolve, rather than
   grouping it into the pre-run bucket the way an unreadable *config* path is (§6.9) — the two
-  look similar but the reference's own failure point for each is different. Every other profile
-  failure below — schema validation, an unknown effect path, an unresolvable routing pin — is an
-  in-run failure for the same reason, writing `--out` the same way. **A profile failure's own
-  `--out` is only ever the plain `--out` path given on this run, never the profile's own `out:`
-  or the resume default** — the reference's `resolved_out` (what the failure handler actually
-  writes to) starts as the caller's own `--out` and is only refined to include a profile's `out:`
-  once `resolve_effective_settings` runs, which is *after* the profile has already loaded
-  successfully; a profile that fails before that point never reaches its own refinement, so its
-  failure writes wherever `--out` alone pointed (or nowhere, if `--out` was never given) rather
-  than the profile's own `out:` or §6.8's resume default. electricity matches that: a profile
-  failure's `--out` resolution uses only the plain `--out` value, not the profile's own `out:` or
-  the resume default, the same narrower resolution the reference has at that point in its own
-  run.
+  look similar but the reference's own failure point for each is different. Schema validation and
+  an unknown effect path are both in-run failures for the same reason, and both happen while the
+  profile is still loading — *before* `resolve_effective_settings` has run at all. **A failure at
+  or before that point writes its `--out` record to only the plain `--out` path given on this
+  run, never the profile's own `out:` or the resume default** — the reference's `resolved_out`
+  (what the failure handler actually writes to) starts as the caller's own `--out` and is only
+  refined to include a profile's `out:` once `resolve_effective_settings` runs, which is *after*
+  the profile has already loaded successfully; a profile that fails before that point never
+  reaches its own refinement, so its failure writes wherever `--out` alone pointed (or nowhere, if
+  `--out` was never given) rather than the profile's own `out:` or §6.8's resume default.
+  electricity matches that: a load/schema/effect-path failure's `--out` resolution uses only the
+  plain `--out` value, the same narrower resolution the reference has at that point in its own
+  run. **An unresolvable routing pin or a denied profile `provider:` override is different**: both
+  are checked only once the run's full effective settings are known (§9.7, below), which is
+  *after* `resolved_out` has already been refined to the profile's own `out:` (lane R, issue
+  #495) — so a routing-pin or provider-denial failure's `--out` record goes to the profile's own
+  `out:` (or §6.8's resume default, if the profile set no `out:` of its own), exactly like any
+  other in-run failure once effective settings exist. electricity matches that ordering: its own
+  routing-pin/provider-denial checks run after `resolved_out` is set from `effective.out`, so
+  their failures write to the same place the reference's would.
 - **Schema and parsing.** electricity carries a synced copy of `schema/profile.schema.json`,
   checked the same way as the orchestration schema (§4 step 3);
   Draft7-validated the same way, word-for-word on Circuitry's own validation-failure message
@@ -1438,7 +1445,12 @@ for how the file itself is located:
   `routing: false` is the per-effect opt-out instead — it suppresses the router for that one
   effect without naming a band, leaving its model resolution to whatever the chain above it
   already decided. Targeting a container disables its entire subtree, matching the reference
-  exactly.
+  exactly. A disabled subtree is skipped by the capability-driven refusal walker that runs over
+  the overlaid IR, since it can never need a capability it will never run — but a disabled `use`
+  effect whose child orchestration electricity itself can't run is still refused: the separate
+  static `use`-child check (`first_refused_child`) walks the raw document, not the overlaid IR,
+  exactly as it already does for an *enabled* `use` child, so a profile disabling that effect
+  doesn't change whether electricity refuses it up front.
 - **The `effective_settings.profile` record** — written only when `--profile` resolved
   successfully, omitted otherwise, exactly reproducing `runtime_shim.py`'s own two-field shape
   (around its `state["runtime"]["effective_settings"]["profile"] = {...}` assignment):
@@ -1984,7 +1996,12 @@ cross-referenced to §3.8 for the literal field names.
   optional `max_in_flight` cap (0 = unbounded) enforced by a semaphore shared across the adapter
   instance — load-bearing specifically for a `flow: tree` loop that could otherwise submit more
   jobs than the broker's claim window can absorb, driving excess jobs into a server-side
-  timeout.
+  timeout. Ported (issue #515): the run's own default `cyberdiner` adapter is one shared
+  instance reused for every call (`exec/prompt.rs`'s own doc comment), exactly like Python's
+  own long-lived `self` — the same observation that made `watsonx`'s own IAM token cache
+  process-wide applies here too, except a per-*instance* semaphore already coordinates
+  correctly for the shared default adapter; it is only ever inert for a `provider:` override,
+  which rebuilds a fresh instance per call in both engines alike.
 - **Model-to-tier mapping**: the orchestration's `model:` field is reinterpreted entirely as a
   tier name, not a model string.
 - **Terminal statuses**, normalized case/punctuation-insensitively (folding e.g. `TimedOut`/
@@ -2118,11 +2135,11 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   case C26).
 - **Routing**: a band table (`runtime.complexity.routing.bands`, each `{max, model, name}`,
   with a mandatory catch-all) maps a score to a model. The reference's full precedence chain is
-  `--model` (CLI) > per-effect `model:` > profile effect override > profile routing pin > router >
+  profile effect override > per-effect `model:` > `--model` (CLI) > profile routing pin > router >
   orchestration default > config default (runtime-semantics §5.8, confirmed against
   `core/router.py`'s own module docstring); electricity has no `--model` CLI flag (Decisions, §1)
   but does support profiles (§6.11), so its chain is the remainder of the reference's own:
-  **per-effect `model:` > profile effect override > profile run-level `model:` (locked) >
+  **profile effect override > per-effect `model:` > profile run-level `model:` (locked) >
   profile routing pin > router > orchestration default > config default — by default.**
   A profile's own run-level `model:` (§6.11) doesn't occupy its own link in the reference's own
   chain at all — it is folded into the same boolean the first two layers already collapse into.
@@ -2547,7 +2564,7 @@ divergence.
 | — | **Plugin-bridge method naming**: an earlier draft's elaborated method set (`plugin/execute`/`check`/`cancel`/`log`) did not match the project's own sketch (`describe`/`invoke`/`progress`/`cancel`) term-for-term. | **Settled 2026-10-06 in favor of the sketch** (§8.5): `describe`/`invoke`/`progress`/`cancel`, with the elaborated design's health-check and logging behavior folded into `describe` (re-callable) and the plugin's own stderr stream, respectively, rather than kept as separate RPCs. | No — settled; listed here as the record of the decision. |
 | — | **Cancellation granularity**: the reference's own current behavior is coarser than an earlier draft of this design described, and inconsistent between its two flows — chain flow loses an in-flight leaf's result (the child process is killed), tree flow runs every already-submitted branch to completion but then discards all of their results, having skipped the merge step (§6.5). | **Settled 2026-10-06: fix upstream, don't reproduce as-is.** Both runners stop promptly on the first signal — every running leaf/branch is stopped (child process groups terminated, in-flight network/MCP calls cancelled where possible), a not-yet-started branch is never started, `finally:` still runs, nothing in flight is merged, a second SIGINT/SIGTERM during cleanup ends the run at once with its own exit code, SIGHUP is handled like SIGTERM (exit `129`) and never acts as a second signal (§6.5 has the full rule). Circuitry has this fix since #357 (closing #356); electricity implements the same behavior, with conformance cases from that PR's tests. | No — settled; listed here as the record of the decision. |
 | — | **A document naming a top-level `adapter:` runs `cof run`'s preflight check** (readiness/credential probing, `cli/runtime_shim.py::preflight` via `cli/allowlist.py::walk_orchestration_refs`'s own top-level-adapter inclusion). | **Ported** (lane R of #448, issue #495): `electricity-config::preflight` (classification, the two formatters) plus `electricity` (lib)'s own `src/preflight.rs` (the driver — builds each referenced adapter/tool from the config's own runtime block and awaits `check()`). `Supported::current().preflight` is `true`; `RefusalReason::DocumentAdapter` only ever fires under `Supported::m0` now (its golden tests still exercise it). | No — ported; listed here as the record of the change. |
-| — | **Python-known adapter names with no electricity builder** (`claude_code`, `cyberdiner`, `litellm`, `pi` — the exact set `build_registry()` leaves unbuilt once lane F2 registers every other provider). | **Settled ruling 3 (issue #495):** refuse the whole run up front, stateless, with the preview marker, for any such name preflight would check (the document's own top-level `adapter:`/prompt `provider:` — never the config's own `default_adapter`, which preflight never walks either). For the run *default* adapter, reached only through a `use` effect, install `preflight::PlaceholderAdapter` instead — it reports the same preview-marker text if `generate` is ever called, which it isn't in this milestone. Widened for lane G (issue #498, #448): once a `prompt`/model-mode `if`/`while`/`expect:` in the root document (never a `use` child) could call that adapter for real, the up-front refusal applies there too (`default_adapter_called_directly`); the placeholder stays reserved for a default reached solely through `use`. | No — ported; lane F2 (issue #503) shrinks the set to its final four. |
+| — | **Python-known adapter names with no electricity builder** (`claude_code`, `litellm`, `pi` — the exact set `build_registry()` leaves unbuilt once lane F2/the issue #515 follow-up register every other provider). | **Settled ruling 3 (issue #495):** refuse the whole run up front, stateless, with the preview marker, for any such name preflight would check (the document's own top-level `adapter:`/prompt `provider:` — never the config's own `default_adapter`, which preflight never walks either). For the run *default* adapter, reached only through a `use` effect, install `preflight::PlaceholderAdapter` instead — it reports the same preview-marker text if `generate` is ever called, which it isn't in this milestone. Widened for lane G (issue #498, #448): once a `prompt`/model-mode `if`/`while`/`expect:` in the root document (never a `use` child) could call that adapter for real, the up-front refusal applies there too (`default_adapter_called_directly`); the placeholder stays reserved for a default reached solely through `use`. | No — ported; lane F2 (issue #503) shrinks the set to four, issue #515 shrinks it further to its final three (`cyberdiner` built). |
 | — | **`cof run`'s preflight failure text ends `. Re-run with --skip-preflight to bypass.`**, but electricity has no `--skip-preflight` flag in its own CLI shape at all (§1) — preflight always runs. | **Settled (issue #495):** keep that exact suffix verbatim anyway, under the word-for-word rule for Circuitry's own text, even though the flag it names doesn't exist on this binary. A message that already ends in `.` produces `..` before `Re-run` (e.g. the factory's own `Unknown adapter: ...resolution.` text). | No — settled; listed here as the record of the decision. |
 | — | **A panicking `check()`** (an adapter/tool's own preflight probe) can't raise a Python exception from Rust the way Circuitry's own `call_check` catches one. | **Settled ruling 5 (issue #495):** caught at the call site (`catch_unwind`, `FutureExt::catch_unwind` for an adapter's own `async fn check`), becoming `ok: false` with electricity's own `check() panicked: <panic message>` text — never Python's `check() raised {Type}: {exc}`, which names a Python exception class electricity can't reproduce. | No — settled; listed here as the record of the decision. |
 | — | **A panicking `check()` still writes a line to stderr** (PR #497 review finding 6): `catch_unwind` stops the panic from aborting the process and from reaching `cof`'s own "check() raised ..." text (the row above), but the `electricity` binary's own secret-safe panic hook (`install_secret_safe_panic_hook`, `electricity-cli/src/main.rs`) still runs first and still writes `electricity panicked at <location>` to stderr — `cof run`'s own hitting the same panic writes nothing there at all (the exception is caught in Python, not unwound through a process-wide hook). | **Accept the gap, documented, not silenced**: swallowing it would mean temporarily swapping the process-wide panic hook around every `catch_unwind` call in `electricity` (lib)'s own `src/preflight.rs`, a library crate with no CLI of its own to scope that swap to — any other embedder of `run_preflight`/`run_orchestration` (a test, a future caller) would have its own panic hook silently overridden for the duration, including on panics unrelated to this one. Not worth it for one extra stderr line on an already-caught, already-reported failure. | No — narrow; revisit only if a caller actually needs this line gone. |
@@ -2766,7 +2783,6 @@ model-not-found) now passes: lane F2 (issue #503) ports `ollama.py` as its own n
 |---|---|---|
 | M2-A | `electricity-tools`: `mcp` (`rmcp` client). | M1 |
 | M2-B | `electricity-tools`: `surrealdb` (own HTTP client) + `email_smtp` (`lettre`). | M1 |
-| M2-C | `electricity-adapters`: the `cyberdiner` adapter (§9.4). | M1 |
 | M2-D | `electricity-plugin-bridge`: the Rust NDJSON JSON-RPC client half, per-plugin-name process lifecycle (§8.5), stdout-redirect enforcement, the host-side hard-kill timer. | M1 |
 | M2-E | **Python-side** change: the bridge server module in Circuitry's Python package (§8.5), a hard dependency of M2-D's conformance cases. | — |
 | M2-F | `python_eval` end-to-end through the bridge (M2-D + M2-E only — no longer bundled with the reflector/decomposition/scoring work, which moved to M1 lanes K1/K2 (complexity/routing) and L1/L2 (reflector/decomposition) since none of it has a real dependency on the bridge). | M2-D, M2-E |
