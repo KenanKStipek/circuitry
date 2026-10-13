@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 9: profile-model-override",
+  "description": "`p1` has its own `model:` and a profile `model:` override (the profile's value wins); `p2` has no `model:` of its own, so it still resolves the document default; `t1` (a tool) has only a profile `model:` override. Proves `meta.model`, `model_reason: \"explicit\"` on `p1`, `fallback_attempts[].model`, and the tool's own `meta.params_rendered.model`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success"
+}

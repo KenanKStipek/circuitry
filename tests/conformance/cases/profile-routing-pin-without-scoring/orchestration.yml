@@ -1,0 +1,7 @@
+name: profile-routing-pin-without-scoring
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

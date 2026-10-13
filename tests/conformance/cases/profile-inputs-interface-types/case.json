@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #518 (lane J2), case 15: profile-inputs-interface-types",
+  "description": "`interface.inputs` declares `n` as `string`, `flag` as `boolean`, and `k` as `integer` with a `default: 42`. The profile's `inputs: {n: 5, flag: \"yes\", k: null, extra: [1, 2]}` layers under `-e flag=no`: `n: 5` (an int) against the declared `string` type is turned into text via `json.dumps` (\"5\"); `flag`'s profile value never reaches the type check at all, since `-e flag=no` already filled that key before the profile's own inputs are applied, and that raw CLI text then coerces to the declared boolean (false); `k: null` is treated as absent, filling in the declared `default` (42); `extra` has no `interface.inputs` entry, so the profile's own `[1, 2]` passes through unchecked.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "cli_args": ["-e", "flag=no"],
+  "expect": "success"
+}

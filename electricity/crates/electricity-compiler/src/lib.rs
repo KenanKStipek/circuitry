@@ -28,6 +28,7 @@
 //! | [`cycles`] | C | `core/cycle_check.py` |
 //! | [`compose`] | D | `core/prompt_compose.py` (composition checks) |
 //! | [`prompt_files`] | D | `core/prompt_files.py` |
+//! | [`overrides`] | M1-J2 (#518) | `core/compiler.py::apply_effect_overrides`/`_overlay_effect`/`_disable_subtree` |
 //! | [`digest`] | D | `core/prompt_compose.py::document_content_digest` |
 //!
 //! # Known divergences
@@ -163,6 +164,7 @@ pub mod difflib;
 pub mod digest;
 pub mod groups;
 pub mod load;
+pub mod overrides;
 pub mod pipeline;
 pub mod profile;
 pub mod project_root;

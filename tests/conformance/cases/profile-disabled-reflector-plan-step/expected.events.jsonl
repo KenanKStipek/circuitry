@@ -1,0 +1,12 @@
+{"v":1,"seq":0,"ts":"2026-10-12T23:13:31.496Z","ev":"run_start","run_id":"6a30df89-17a8-4141-9543-6aef867dec1e","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":54746}
+{"v":1,"seq":1,"ts":"2026-10-12T23:13:31.500Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-12T23:13:31.500Z","ev":"start","id":1,"path":"prime.goal"}
+{"v":1,"seq":3,"ts":"2026-10-12T23:13:31.500Z","ev":"end","id":1,"path":"prime.goal","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-12T23:13:31.500Z","ev":"start","id":2,"path":"prime.plan_it"}
+{"v":1,"seq":5,"ts":"2026-10-12T23:13:31.500Z","ev":"start","id":3,"path":"prime.plan_it.inner"}
+{"v":1,"seq":6,"ts":"2026-10-12T23:13:31.500Z","ev":"start","id":4,"path":"prime.plan_it.inner.propose_steps"}
+{"v":1,"seq":7,"ts":"2026-10-12T23:13:31.500Z","ev":"end","id":4,"path":"prime.plan_it.inner.propose_steps","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-10-12T23:13:31.500Z","ev":"end","id":3,"path":"prime.plan_it.inner","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-12T23:13:31.500Z","ev":"end","id":2,"path":"prime.plan_it","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-10-12T23:13:31.500Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-10-12T23:13:31.500Z","ev":"run_end","ok":true}

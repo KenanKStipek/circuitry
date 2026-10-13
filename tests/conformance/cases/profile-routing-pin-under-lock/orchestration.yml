@@ -1,0 +1,7 @@
+name: profile-routing-pin-under-lock
+adapter: scripted
+model: model-big
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

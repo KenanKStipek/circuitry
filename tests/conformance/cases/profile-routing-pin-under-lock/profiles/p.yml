@@ -1,0 +1,4 @@
+model: locked-model
+effects:
+  ask:
+    routing: high

@@ -151,6 +151,17 @@ fn builders() -> HashMap<&'static str, Builder> {
     map
 }
 
+/// Every name *this crate* actually has a builder for in
+/// [`builders`], sorted -- [`electricity_vm::adapter::AdapterRegistry::
+/// supported_names`]'s own tool-side counterpart, used the same way:
+/// a caller that needs to know what's buildable right now, as opposed
+/// to [`crate::plugin_names::PLUGIN_NAMES`], Circuitry's full registry.
+pub fn supported_names() -> Vec<String> {
+    let mut names: Vec<String> = builders().keys().map(|s| s.to_string()).collect();
+    names.sort();
+    names
+}
+
 /// `(runtime or {}).get("plugins") or {}`, then `.get(plugin_name) or {}`
 /// -- `runtime.plugins.<plugin_name>`, defaulting to an empty dict at
 /// either level exactly as Python's own `dict.get(...) or {}` does

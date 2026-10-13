@@ -364,7 +364,15 @@ pub fn first_unsupported(
     walk_op(&program.root, supported)
 }
 
+/// A disabled subtree (`op.enabled == false`, only ever set by a
+/// profile's own per-effect `enabled: false` -- `electricity_compiler::
+/// overrides::apply_effect_overrides`, lane J2, issue #518) never
+/// executes, so it can't need a capability this build doesn't have:
+/// never refused, regardless of what it contains.
 fn walk_op(op: &Op, supported: &Supported<'_>) -> Option<Refusal> {
+    if !op.enabled {
+        return None;
+    }
     match &op.kind {
         NodeKind::Leaf(leaf) => walk_leaf(&op.path, leaf, supported),
         NodeKind::Control(region) => walk_region(&op.path, region, supported),
@@ -1621,5 +1629,46 @@ mod tests {
         let refusal = first_unsupported(&program, false, &supported).unwrap();
         assert_eq!(refusal.reason, RefusalReason::Use);
         assert_eq!(refusal.path, use_path);
+    }
+
+    /// Issue #518 (lane J2): a disabled subtree never executes, so it
+    /// can't need a capability this build doesn't have -- a profile's
+    /// own `enabled: false` (`electricity_compiler::overrides::
+    /// apply_effect_overrides`) is the only thing that ever sets
+    /// `Op::enabled` to `false` on a compiled `Op`; no orchestration
+    /// YAML alone can.
+    #[test]
+    fn a_disabled_subtree_holding_an_unsupported_use_is_never_refused() {
+        let use_path = EffectPath::root().push_name("d").push_name("sub");
+        let disabled_use = Op {
+            enabled: false,
+            ..use_leaf(use_path)
+        };
+        let disabled_dynamic = Op {
+            enabled: false,
+            ..nested_dynamic("d", EffectPath::root().push_name("d"), vec![disabled_use])
+        };
+        let program = program_with_root(root_block(vec![disabled_dynamic]));
+        assert!(first_unsupported(&program, false, &m0()).is_none());
+    }
+
+    /// A disabled op's own M0 golden case is unaffected: the compiler
+    /// never emits a disabled op on its own, so `Supported::m0`'s own
+    /// acceptance set doesn't change -- this is a defensive regression
+    /// test, not a new acceptance flag.
+    #[test]
+    fn an_enabled_sibling_next_to_a_disabled_unsupported_one_is_still_fully_supported() {
+        let tool_path = EffectPath::root().push_name("fetch");
+        let tool = leaf_op(
+            tool_path,
+            LeafKind::Tool(tool_op(ParamNode::Map(IndexMap::new()))),
+        );
+        let use_path = EffectPath::root().push_name("sub");
+        let disabled_use = Op {
+            enabled: false,
+            ..use_leaf(use_path)
+        };
+        let program = program_with_root(root_block(vec![tool, disabled_use]));
+        assert!(first_unsupported(&program, false, &m0()).is_none());
     }
 }
