@@ -1,0 +1,11 @@
+name: decompose-route-up-max-depth
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: a
+    template: "hi"
+  - type: prompt
+    name: b
+    template: "hi"
+    model: explicit-model
