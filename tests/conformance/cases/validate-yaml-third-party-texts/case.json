@@ -1,0 +1,14 @@
+{
+  "spec_case": "issue #521's own acceptance section, validate-yaml-third-party-texts",
+  "description": "A PyYAML scan error and a JSON-Schema violation, both third-party text (DESIGN.md \u00a71, \u00a712): compared by location only, via third_party_text on each tool's own value.errors.0, meta.raw.errors.0 and meta.stderr.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "third_party_text": [
+    {"location": "prime.scan_error.value.errors.0", "pattern": "(?s)YAML parse error: .+"},
+    {"location": "prime.scan_error.meta.raw.errors.0", "pattern": "(?s)YAML parse error: .+"},
+    {"location": "prime.scan_error.meta.stderr", "pattern": "(?s)YAML parse error: .+"},
+    {"location": "prime.schema_error.value.errors.0", "pattern": "(?s)effects\\[0\\]: .+"},
+    {"location": "prime.schema_error.meta.raw.errors.0", "pattern": "(?s)effects\\[0\\]: .+"},
+    {"location": "prime.schema_error.meta.stderr", "pattern": "(?s)effects\\[0\\]: .+"}
+  ]
+}

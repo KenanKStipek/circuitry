@@ -95,9 +95,10 @@ whenever:
 
 HTTP-family plugins (`http`, `web_fetch`, `webhook`, `linear` — `_HTTP_FAMILY_PROVIDERS`,
 `:38-40`) set `ok=False` on a 4xx/5xx by default (opt-out per effect, see each plugin). Every
-other "soft-failure" plugin (`wikipedia`, `dns`, `port_check`, `validate_yaml` — not among
-the tools production documents use, noted for parity completeness) reports its own outcome in `value`/`raw` while
-keeping `ok=True`.
+other "soft-failure" plugin (`wikipedia`, `dns`, `port_check` — not among the tools production
+documents use, noted for parity completeness; `validate_yaml` — the bundled decomposition
+planner's own `check`/repair-loop steps call it, issue #448's decision 3) reports its own
+outcome in `value`/`raw` while keeping `ok=True`.
 
 `meta.raw` is always set for a tool effect that returned a result (never for prompts);
 `meta.binary` is set only when `result.raw` carries a `"binary"` key (the resolved absolute

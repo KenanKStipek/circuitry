@@ -34,6 +34,14 @@ electricity-pyre = { path = "../electricity-pyre" }
 # crate `electricity-vm`'s `exec/tool.rs` already redacts `meta.raw`/
 # `meta.params_rendered` with.
 electricity-redaction = { path = "../electricity-redaction" }
+# `validate_yaml` (issue #448 decision 3, issue #521): the structural
+# checks and compiler `cof check`/`cof run`/`use: inline` already run
+# (`structural_errors`, `compile_document`), plus `electricity-yaml`'s
+# own loader (`load_yaml`/`clean_yaml_fences`) -- the same crates `use`
+# compiles/loads a path/inline child with. Neither depends on this
+# crate or on `electricity-vm`, so this adds no dependency cycle.
+electricity-compiler = { path = "../electricity-compiler" }
+electricity-yaml = { path = "../electricity-yaml" }
 # `http.rs`'s own header map (insertion order matters for `Request.
 # add_header`'s own capitalize-collapse, "a later one wins, never
 # moved" -- the same ordered-map guarantee `electricity-value`'s own

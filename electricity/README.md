@@ -10,8 +10,8 @@ is the production runner.
 **This is a preview.** `electricity <config.json> <orchestration.yml>` runs
 documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
-`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid` and
-`clock` tool providers, aiming at the same final state, `--live-state` and
+`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
+`clock` and `validate_yaml` tool providers, aiming at the same final state, `--live-state` and
 `--events` output as `cof run`. A top-level `prompts:` map and `{{> name}}`
 composition run too, in every field that reaches them (a tool's
 `prompt`/`params`/`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s
