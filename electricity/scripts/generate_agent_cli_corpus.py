@@ -210,6 +210,9 @@ def _parse_claude_output_cases() -> list[dict[str, Any]]:
             json.dumps({"result": "boom", "is_error": True, "subtype": "error_max_turns"}),
         ),
         _claude_case(0, json.dumps({"result": "", "is_error": True, "subtype": ""})),
+        # `is_error` must be exactly `true` (`is True` in Python): 1 and 1.0 are answers.
+        _claude_case(0, json.dumps({"result": "one", "is_error": 1, "subtype": "error_max_turns"})),
+        _claude_case(0, json.dumps({"result": "one point oh", "is_error": 1.0})),
         _claude_case(0, json.dumps({"result": "", "is_error": True, "subtype": "success"})),
         _claude_case(
             2,

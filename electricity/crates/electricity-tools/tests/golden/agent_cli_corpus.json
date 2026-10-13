@@ -682,6 +682,40 @@
     },
     {
       "returncode": 0,
+      "stdout": "{\"result\": \"one\", \"is_error\": 1, \"subtype\": \"error_max_turns\"}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "one",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"result\": \"one point oh\", \"is_error\": 1.0}",
+      "stderr": "",
+      "json_schema": null,
+      "expected": {
+        "ok": {
+          "text": "one point oh",
+          "session_id": null,
+          "tokens_sent": null,
+          "tokens_received": null,
+          "cost_usd": null,
+          "finish_reason": null,
+          "structured_output": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
       "stdout": "{\"result\": \"\", \"is_error\": true, \"subtype\": \"success\"}",
       "stderr": "",
       "json_schema": null,

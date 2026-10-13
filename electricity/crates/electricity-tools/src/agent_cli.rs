@@ -661,7 +661,7 @@ pub fn parse_claude_output(
 /// through a non-failing `float()` (Python can raise `OverflowError`
 /// converting an astronomically large int to `float`, an edge case no
 /// real CLI usage figure reaches and this module does not reproduce).
-/// The running `i64` sums use `checked_add`, saturating at the bound
+/// The running `i64` sums saturate at the bound (`saturating_add`)
 /// rather than panicking in debug or silently wrapping to a negative
 /// number in release (review finding 8 on PR #525) -- Python's own `int`
 /// never overflows, so this is a safety net against an implausible
