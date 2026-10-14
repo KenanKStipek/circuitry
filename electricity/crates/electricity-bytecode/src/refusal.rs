@@ -318,7 +318,7 @@ impl<'a> Supported<'a> {
     /// Whether a `tool` effect's own normalized `provider:` is one
     /// this build can actually dispatch: `json` (always), one of
     /// *providers* (the `test-tools` feature's own extras), or a name
-    /// in one of the four native-tool sets whose own capability flag
+    /// in one of the five native-tool sets whose own capability flag
     /// is set.
     fn allows_provider(&self, name: &str) -> bool {
         name == "json"

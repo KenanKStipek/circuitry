@@ -609,6 +609,8 @@ fn a_document_level_adapter_is_refused_with_no_files_written() {
         "{error}"
     );
     assert!(error.contains("litellm"), "{error}");
+    assert!(error.contains("refused permanently"), "{error}");
+    assert!(!error.contains("later milestone"), "{error}");
     assert!(!out.exists());
     assert!(!events.exists());
     assert!(!live_state.exists());

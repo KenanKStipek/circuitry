@@ -42,7 +42,7 @@ Python package's version and release tags; from this repository's next
 release on, its binaries and a container image are attached to the GitHub
 release alongside the Python distributions, marked as a preview.
 
-### What electricity can't run yet
+## What electricity can't run yet
 
 - **Tool providers.** electricity builds 13 of Circuitry's 74 tool
   plugins (the list above). A document, or a `use: {path:}` child, naming

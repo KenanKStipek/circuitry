@@ -78,12 +78,14 @@ Decisions" instead of citing an external project file repeatedly:
 - The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `http`,
   `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `mcp`, `surrealdb`, `email_smtp`
   (§8.1).
-- Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2,
-  which also covers `replicate` and `watsonx`), a native `anthropic` adapter (§9.3), and a
-  native `openai` adapter (hand-rolled with the same shape, not built on the OpenAI-compatible
-  transport); a third adapter — named `cyberdiner`, as in Circuitry's own public source (settled
-  2026-10-06) — is required for v1 by a production document set (§9.4); and the two coding-agent
-  CLI adapters, `claude_code` and `pi` (§9.8), and the deterministic `scripted` adapter (§12).
+- Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2), a
+  native `anthropic` adapter (§9.3), a native `openai` adapter (its own file, reusing the
+  family's message/response helpers and shared transport but registered separately, for its
+  own reasoning-model field names — §9.2), and `replicate` and `watsonx`, each its own adapter
+  with its own wire shape over the shared transport, not the OpenAI-compatible one; an adapter —
+  named `cyberdiner`, as in Circuitry's own public source (settled 2026-10-06) — is required for
+  v1 by a production document set (§9.4); and the two coding-agent CLI adapters, `claude_code`
+  and `pi` (§9.8), and the deterministic `scripted` adapter (§12).
 - The external plugin bridge (§8.5) exists for *tool* plugins only — `python_eval` is its
   primary consumer — not a generic adapter or runtime-plugin bridge.
 - **Repository and releases (settled 2026-10-07).** electricity lives in the Circuitry
@@ -2711,8 +2713,9 @@ document sets: one of them turns on complexity scoring/routing and reads `meta.c
 for documents using `provider: ollama` with no explicit model (§9.7's correction — only one of
 the two sets does this, not both, but M1 still has to gate on it); M2 is needed for the third,
 larger document set (it is the one that uses the
-extended protocol surface — `python_eval`, the vendor adapter, SurrealDB); M3 and M4 are v1
-features layered on top of a document set that already runs, not gates on any one document set.
+extended protocol surface — `python_eval` and SurrealDB; the vendor adapter (`cyberdiner`)
+landed in M1, #515); M3 and M4 are v1 features layered on top of a document set that already
+runs, not gates on any one document set.
 
 ### M0 — Foundation
 

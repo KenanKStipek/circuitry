@@ -304,9 +304,10 @@ async fn scoring_and_routing_enabled_without_decomposition_runs() {
 
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, before the VM would otherwise run it fine (`json`/`dynamic`
-/// only) -- `cof run` would fail this one in preflight instead (no
-/// `OPENAI_API_KEY` in this test's own `env_clear`'d process), which
-/// M0-H doesn't port yet.
+/// only) -- preflight (lane R) would fail this one with the config's
+/// own missing-adapter text instead; this build has no builder for
+/// `litellm` at all, so it refuses up front and permanently, before
+/// preflight is ever reached.
 #[tokio::test]
 async fn a_document_level_adapter_is_refused_with_no_state_written() {
     let dir = temp_dir("document-adapter-refusal");
@@ -331,6 +332,8 @@ async fn a_document_level_adapter_is_refused_with_no_state_written() {
     let error = result.error.unwrap();
     assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("litellm"));
+    assert!(error.contains("refused permanently"), "{error}");
+    assert!(!error.contains("later milestone"), "{error}");
 }
 
 /// Issue #513's own Interfaces §8: a document whose only call reaching

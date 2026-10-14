@@ -1571,7 +1571,7 @@ deliberately, so `--json`/`--tail`/a piped stdout stay machine-readable and
 electricity runs preflight for real (lane R, #495, merged in #497):
 `electricity::preflight::run_preflight` builds each adapter/tool a raw
 document references from the config's own `runtime:` block and awaits/calls
-its `check()`, the same way `cof run` does. The one case still refused
+its `check()`, the same way `cof run` does. The one adapter still refused
 outright, with the preview marker, before preflight is ever reached: a
 document/prompt naming a Circuitry-known adapter this build has no builder
 for at all (`litellm` alone, as of issue #539) -- `electricity-bytecode::

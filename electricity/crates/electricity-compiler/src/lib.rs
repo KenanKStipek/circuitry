@@ -79,7 +79,9 @@
 //!   persistence backends) has an IR representation *in this crate*,
 //!   so only their *validation* is ported here, not their behaviour.
 //!   Complexity scoring/routing/decomposition's own behaviour runs in
-//!   `electricity-vm`'s `exec::prompt` (lanes K2/#516 and L2b/#522);
+//!   `electricity_vm::complexity::score_and_route` and `electricity_vm::
+//!   decompose::maybe_decompose`, called from `exec/prompt.rs` (lanes
+//!   K2/#516 and L2b/#522);
 //!   persistence (`--resume`, state-snapshot backends) has no run
 //!   behaviour anywhere yet -- `runtime.persistence` is still refused
 //!   outright (M2-G).

@@ -2,12 +2,10 @@
 //! `sub` over Python `re` semantics, through [`translate`] (pattern
 //! syntax) and [`replace`] (`sub`'s own substitution semantics).
 //!
-//! **Known divergences** (DESIGN.md §7.3; each one accepted outright
-//! in that section's own table rather than pinned by a conformance
-//! case -- no `case.json` sets `known_divergence` at all, issue #539's
-//! own settled question 1; `regex-ignorecase-turkish-i-divergence`'s
+//! **Known divergences** (DESIGN.md §7.3; no conformance case marks
+//! them `known_divergence`): `regex-ignorecase-turkish-i-divergence`'s
 //! own name is misleading, since its own description calls it "an
-//! ordinary parity case, not a divergence"):
+//! ordinary parity case, not a divergence":
 //! - `\N{NAME}` (a full Unicode character-name database) is rejected
 //!   with the invalid-pattern prefix, not resolved;
 //! - a backreference *inside a lookbehind* is always rejected, even
