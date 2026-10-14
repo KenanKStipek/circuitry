@@ -5,6 +5,8 @@
 //! `e2e_cof.rs`'s own shape: success, failure, an
 //! invalid document, a preview-marker refusal, all three signals,
 //! `osp watch` on a finished run directory, and `--log` output.
+//! Issue #538's B1 adds four more documents: a scripted prompt, a
+//! tree loop, a `use` path child, and a decomposition run.
 //!
 //! Gated on `OSP_E2E_ELECTRICITY=1`, with `electricity` on `PATH`
 //! (`cargo build -p electricity-cli --features test-tools` from
@@ -12,10 +14,10 @@
 //! oscilloscope.yml`'s own step does exactly this). Every test gets
 //! its own temporary `HOME`, a hard per-test timeout, and asserts
 //! exit codes and final statuses — never exact timings. The
-//! `scripted`/`claude_code` adapters the prompt tests below use read
-//! no real credentials, but the four variables this repository's
-//! `CLAUDE.md` names are still removed from every spawned process,
-//! the same as every other e2e test here.
+//! `scripted` adapter the prompt tests below use reads no real
+//! credentials, but the four variables this repository's `CLAUDE.md`
+//! names are still removed from every spawned process, the same as
+//! every other e2e test here.
 
 mod support;
 
@@ -37,10 +39,9 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
-    // `shell` is out of osp's own scope here (`RunSpec` never passes a
-    // profile, and this suite never spawns a real process for a
-    // `tool` step): this success case uses the `json` provider where
-    // `e2e_cof.rs`'s own equivalent uses `echo`.
+    // This success case uses the `json` provider, where `e2e_cof.rs`'s
+    // own equivalent uses `echo`, so this suite never starts a real
+    // process.
     let doc = write_doc(
         work.path(),
         "do.yml",
@@ -504,10 +505,11 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 /// state-polling loop ever catches up even once, and an `end` event
 /// processed with no matching state-sourced entry yet falls back to
 /// the plain `"ok"` summary (`diff.rs`'s own documented ordering,
-/// `Differ::event_failed`'s doc comment) -- a real timing race in
-/// `osp run`'s own live view, not something this test should assert
-/// around. `osp watch` has no such race: it renders once, from the
-/// finished run's own complete final state.
+/// `Differ::event_failed`'s doc comment) -- a real gap between
+/// `osp run`'s own live view and its documented `--log` output
+/// (`DESIGN.md:466`'s `↑3 ↓1`), tracked as issue #545 rather than
+/// fixed here. `osp watch` has no such race: it renders once, from
+/// the finished run's own complete final state.
 #[test]
 fn a_scripted_prompt_prints_tokens_sent_and_received() {
     if !e2e_electricity_enabled() {
@@ -572,14 +574,14 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 }
 
 /// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
-/// loop, `max_concurrency: 2`, three items, a `json` body -- short
-/// enough to finish quickly, but each pass sleeps first so this test
-/// has a real window, after the first pass starts and before the loop
-/// merges, to read `--live-state` directly and confirm issue #465's
-/// known gap: electricity's own `--live-state` file shows none of a
-/// tree's in-flight branches before the merge (unlike `cof`'s).
+/// loop, `max_concurrency: 2`, three items, a `json` body. Asserts
+/// only the finished run's own lines -- nothing mid-run, since
+/// issue #465 (electricity's own `--live-state` shows none of a
+/// tree's in-flight branches before the merge, unlike `cof`'s) is out
+/// of scope for this issue and a test that asserted that gap directly
+/// would start failing the moment #465 is fixed.
 #[test]
-fn a_tree_loop_merges_every_pass_and_shows_none_of_them_in_live_state_mid_run() {
+fn a_tree_loop_merges_every_pass() {
     if !e2e_electricity_enabled() {
         eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
         return;
@@ -589,7 +591,7 @@ fn a_tree_loop_merges_every_pass_and_shows_none_of_them_in_live_state_mid_run() 
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: seed\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"[1, 2, 3]\"}\n  - name: shots\n    type: loop\n    flow: tree\n    max_concurrency: 2\n    each: {in: \"prime.seed.value\", as: item}\n    body:\n      - name: step\n        type: tool\n        provider: sleep\n        params: {seconds: 2}\n",
+        "effects:\n  - name: seed\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"[1, 2, 3]\"}\n  - name: shots\n    type: loop\n    flow: tree\n    max_concurrency: 2\n    each: {in: \"prime.seed.value\", as: item}\n    body:\n      - name: step\n        type: tool\n        provider: json\n        params: {mode: parse, input: \"\\\"ok\\\"\"}\n",
     );
     let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
 
@@ -603,20 +605,6 @@ fn a_tree_loop_merges_every_pass_and_shows_none_of_them_in_live_state_mid_run() 
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-
-    wait_for_step_start(
-        &run_dir.join("events.jsonl"),
-        "prime.shots.iter_0.step",
-        Duration::from_secs(20),
-    );
-    let live_state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(run_dir.join("state.live.json")).unwrap())
-            .unwrap();
-    assert!(
-        live_state["prime"]["shots"]["iter_0"].is_null(),
-        "issue #465's known gap: --live-state must show none of a tree's in-flight \
-         branches before the merge: {live_state:?}"
-    );
 
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
@@ -632,7 +620,16 @@ fn a_tree_loop_merges_every_pass_and_shows_none_of_them_in_live_state_mid_run() 
 
 /// Issue #538's B1, item 3 ("a `use`"): a `use: {path: child.yml}`
 /// child, which osp grafts into its own compiled plan
-/// (`oscilloscope_core::plan::try_graft_use`).
+/// (`oscilloscope_core::plan::try_graft_use`). `prime.step.inner`
+/// printing at all doesn't by itself prove the graft happened: an
+/// observed-only child (one `try_graft_use` failed to resolve) prints
+/// the exact same line from events/state alone. What only a successful
+/// graft produces is the *label* on its `▶` line: `summary_for`'s own
+/// `▶` fallback (`diff.rs`) reads the plan's `LeafEffectKind::label`
+/// (`"tool"`) for a path the plan recognises, and the generic
+/// `"effect"` fallback otherwise (`plan_kind_label`) -- confirmed
+/// directly against both outcomes (a resolvable and an unresolvable
+/// child) before writing this assertion.
 #[test]
 fn a_use_path_child_grafts_into_the_plan() {
     if !e2e_electricity_enabled() {
@@ -667,15 +664,26 @@ fn a_use_path_child_grafts_into_the_plan() {
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.step.inner"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("▶ prime.step.inner  tool"),
+        "the plan's own `tool` label must appear on the child's start line, \
+         or it was never actually grafted into osp's compiled plan: stdout:\n{stdout}"
+    );
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
 }
 
 /// Issue #538's B1, item 4 ("decomposition"): the `decompose-success`
 /// conformance case's document, config and scripted replies
 /// (`tests/conformance/cases/decompose-success/`), inlined. The
-/// planner/chunk steps (`prime.big.plan`, `.check`, `.result_path`,
-/// `.done`) aren't in osp's compiled plan at all, so they render as
-/// observed-only rows; this only asserts the rows that are.
+/// decomposition machinery's own planner-check steps (`prime.big.plan`,
+/// `.check`, `.result_path`, `.done`) and its chunk effects
+/// (`.a`, `.b`, `.merge`) are injected at runtime -- neither is
+/// declared anywhere in the document -- so none of them is in osp's
+/// own compiled plan; every one renders as an observed-only row.
+/// This asserts a subset of those observed-only rows
+/// (`prime.big.plan`, `.a`, `.b`, `.merge`), plus the two effects the
+/// document does declare and osp's plan does compile
+/// (`prime.big`, `prime.downstream`).
 #[test]
 fn decomposition_renders_the_planner_and_chunk_rows() {
     if !e2e_electricity_enabled() {

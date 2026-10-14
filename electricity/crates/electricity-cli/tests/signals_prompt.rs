@@ -15,18 +15,30 @@
 //!
 //! Every fake `claude`'s own `--model` argument carries a marker
 //! unique to its own test (this test binary's pid plus a counter,
-//! [`unique_marker`]): the "no leftover process" and "no new pass
-//! starts" assertions below `pgrep -f` that exact marker, never a
-//! bare `pgrep -f claude` or `pgrep sleep` -- issue #491 was a flake
-//! from exactly that kind of unscoped match racing a concurrent run
-//! of this same file.
+//! [`unique_marker_and_sleep_secs`]), and its `sleep` itself blocks
+//! for a duration drawn from that very same counter: the marker alone
+//! never survives into the fake's own blocking state (`sh`'s own argv
+//! is replaced the moment it execs the script's final `sleep N`, same
+//! as `process_tool_signals.rs`'s own fakes), so every "no leftover
+//! process"/"no new pass starts" assertion below `pgrep -f`s *both*
+//! the marker and the exact `sleep N` pattern -- never a bare
+//! `pgrep -f claude` or `pgrep sleep` -- issue #491 was a flake from
+//! exactly that kind of unscoped match racing a concurrent run of
+//! this same file. [`FakeGuard`] `pkill -f`s both patterns when a
+//! test ends, including by a panicking assertion, since the fake's
+//! own process group is its own session (`setsid`, same as the shell
+//! tool's own child) and so is never reached by [`TestChild::drop`]'s
+//! group-scoped `SIGKILL` on the tracked `electricity` process alone.
 //!
 //! Run explicitly:
 //! ```sh
 //! cargo test -p electricity-cli --test signals_prompt
 //! ```
-//! (wired into `.github/workflows/electricity.yml` alongside
-//! `signals.rs`/`signals_loop.rs`).
+//! This file needs no feature flag, so it runs under the ordinary
+//! `cargo test --workspace` step CI already runs for every other
+//! unflagged test (`.github/workflows/electricity.yml`'s "cargo
+//! test" step) -- it is not named individually there, unlike
+//! `signals.rs`/`signals_loop.rs`, which need `--features test-tools`.
 
 #![cfg(unix)]
 
@@ -110,26 +122,55 @@ impl Drop for TestChild {
 /// A process-wide counter, combined with this test *process*'s own
 /// pid (`process_tool_signals.rs`'s own [same-named helper], mirrored
 /// here): every call, even from concurrently running tests in this
-/// same file, gets a marker no other call -- in this process or any
-/// other -- will ever produce.
+/// same file, gets a marker -- and a `sleep` duration derived from the
+/// very same draw -- no other call, in this process or any other,
+/// will ever produce.
 static MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn unique_marker() -> String {
+/// A `--model` marker string and a `sleep` duration, both unique to
+/// this call: the marker alone can't identify the fake once it's
+/// actually blocking (see [`write_fake_claude`]), so every assertion
+/// that needs to find or wait on the fake uses the duration-derived
+/// pattern from [`sleep_pattern`] instead, the same shape
+/// `process_tool_signals.rs`'s own `unique_sleep_secs` uses.
+fn unique_marker_and_sleep_secs() -> (String, u64) {
     let n = MARKER_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("electricity-signals-prompt-{}-{n}", std::process::id())
+    let pid = std::process::id() as u64;
+    (
+        format!("electricity-signals-prompt-{pid}-{n}"),
+        pid * 1_000 + n,
+    )
+}
+
+/// A `pgrep -f`/`pkill -f` pattern that matches this exact `sleep`
+/// duration and nothing else (`process_tool_signals.rs`'s own
+/// `sleep_pattern`): the trailing alternation anchors the match to a
+/// following space or end of line, so marker `500` can never match
+/// inside marker `5001`.
+fn sleep_pattern(sleep_secs: u64) -> String {
+    format!("sleep {sleep_secs}( |$)")
 }
 
 /// A fake `claude` (the shape of `tests/conformance/cases/
 /// c520-claude-code-timeout/fakes/claude`): reads the prompt from
-/// stdin so the adapter's own write never blocks, then sleeps for an
-/// hour regardless of its own arguments. Every test here kills it with
-/// a real signal long before that, through electricity's own
-/// cancellation (`run_agent_cli`'s dropped future kills the whole
-/// process group) -- never through the fake choosing to exit on its
-/// own.
-fn write_fake_claude(dir: &Path) -> PathBuf {
+/// stdin so the adapter's own write never blocks, then sleeps for
+/// *sleep_secs* -- always far longer than any test here waits, so a
+/// signal, never the fake's own choice, is always what ends it. A
+/// POSIX shell execs its own last statement in place rather than
+/// forking for it (confirmed against both `/bin/bash` and
+/// `/bin/dash`, the same as `process_tool_signals.rs`'s own fakes),
+/// so once this script reaches `sleep`, *that* process's entire
+/// command line is `sleep {sleep_secs}` -- the `--model` marker from
+/// its own invocation is gone from argv by then, which is exactly why
+/// *sleep_secs* -- not the marker -- has to be the thing every
+/// "still running"/"now gone" check below actually looks for.
+fn write_fake_claude(dir: &Path, sleep_secs: u64) -> PathBuf {
     let path = dir.join("claude");
-    fs::write(&path, "#!/bin/sh\ncat >/dev/null\nsleep 3600\n").unwrap();
+    fs::write(
+        &path,
+        format!("#!/bin/sh\ncat >/dev/null\nsleep {sleep_secs}\n"),
+    )
+    .unwrap();
     let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o700);
     fs::set_permissions(&path, perms).unwrap();
@@ -144,21 +185,53 @@ fn pgrep_matches(pattern: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Polls `pgrep -f marker` until it matches at least once, up to
-/// *timeout* -- firm evidence the fake `claude` itself has actually
-/// started (not merely that `electricity` has), since a signal sent
-/// any earlier could land before `claude_code`'s own child even
-/// exists.
-fn wait_for_fake_claude(marker: &str, timeout: Duration) {
+/// Polls `pgrep -f` for *pattern* until it matches at least once, up
+/// to *timeout* -- firm evidence the fake `claude` itself has reached
+/// its own blocking `sleep` (not merely that `electricity` has
+/// started), since a signal sent any earlier could land before
+/// `claude_code`'s own child even exists, or while it's still reading
+/// stdin.
+fn wait_for_fake_claude(pattern: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        if pgrep_matches(marker) {
+        if pgrep_matches(pattern) {
             return;
         }
         if Instant::now() >= deadline {
-            panic!("the fake claude carrying marker {marker:?} never started within {timeout:?}");
+            panic!("the fake claude matching {pattern:?} never started within {timeout:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Kills every process still matching this run's own marker or its
+/// own `sleep` pattern, unconditionally, when the test that owns it
+/// ends -- including by a panicking assertion
+/// (`process_tool_signals.rs`'s own `SleepGuard`, mirrored here). The
+/// fake's own child gets its own session (`setsid`, same as the shell
+/// tool's own child -- see `electricity-tools::process`), so it is
+/// **not** a member of this test's own `electricity` child's process
+/// group: [`TestChild::drop`], which `SIGKILL`s only that group, can
+/// never reach it. Without this, a failed assertion before the
+/// "must be gone" check runs at all would leave the fake sleeping for
+/// up to an hour.
+struct FakeGuard {
+    patterns: Vec<String>,
+}
+
+impl FakeGuard {
+    fn new(marker: &str, sleep_secs: u64) -> Self {
+        FakeGuard {
+            patterns: vec![marker.to_string(), sleep_pattern(sleep_secs)],
+        }
+    }
+}
+
+impl Drop for FakeGuard {
+    fn drop(&mut self) {
+        for pattern in &self.patterns {
+            let _ = Command::new("pkill").args(["-f", pattern]).status();
+        }
     }
 }
 
@@ -221,16 +294,17 @@ fn single_prompt_doc(marker: &str) -> String {
 }
 
 fn signal_test(tag: &str, signum: i32, want_exit: i32) {
-    let marker = unique_marker();
+    let (marker, sleep_secs) = unique_marker_and_sleep_secs();
+    let _cleanup = FakeGuard::new(&marker, sleep_secs);
     let home = TempHome::new(tag);
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", &single_prompt_doc(&marker));
-    write_fake_claude(&home.path);
+    write_fake_claude(&home.path, sleep_secs);
     let out = home.path.join("out.json");
 
     let mut child = spawn(&home, &config, &doc, &home.path, &out);
     wait_until_running(&home);
-    wait_for_fake_claude(&marker, Duration::from_secs(10));
+    wait_for_fake_claude(&sleep_pattern(sleep_secs), Duration::from_secs(10));
     child.send(signum);
     let status = child
         .wait_timeout(Duration::from_secs(10))
@@ -251,7 +325,7 @@ fn signal_test(tag: &str, signum: i32, want_exit: i32) {
 
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        !pgrep_matches(&marker),
+        !pgrep_matches(&marker) && !pgrep_matches(&sleep_pattern(sleep_secs)),
         "the fake claude carrying marker {marker:?} must be gone after cancellation"
     );
 }
@@ -297,16 +371,17 @@ fn chain_loop_prompt_doc(marker: &str) -> String {
 
 #[test]
 fn sigint_mid_chain_loop_prompt_exits_130_runs_finally_and_starts_no_new_pass() {
-    let marker = unique_marker();
+    let (marker, sleep_secs) = unique_marker_and_sleep_secs();
+    let _cleanup = FakeGuard::new(&marker, sleep_secs);
     let home = TempHome::new("chain");
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", &chain_loop_prompt_doc(&marker));
-    write_fake_claude(&home.path);
+    write_fake_claude(&home.path, sleep_secs);
     let out = home.path.join("out.json");
 
     let mut child = spawn(&home, &config, &doc, &home.path, &out);
     wait_until_running(&home);
-    wait_for_fake_claude(&marker, Duration::from_secs(10));
+    wait_for_fake_claude(&sleep_pattern(sleep_secs), Duration::from_secs(10));
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
@@ -325,13 +400,23 @@ fn sigint_mid_chain_loop_prompt_exits_130_runs_finally_and_starts_no_new_pass() 
         "runtime.last_run.completed_at must be set: {state}"
     );
     assert!(
+        !state["prime"]["shots"]["iter_0"].is_null(),
+        "pass 0 must actually have started under iter_0, or the next \
+         assertion (no iter_1) would trivially pass with no pass ever \
+         having run at all: {state}"
+    );
+    assert!(
+        state["prime"]["shots"]["iter_0"]["ask"]["meta"]["completed_at"].is_null(),
+        "pass 0's own in-flight prompt must never have completed: {state}"
+    );
+    assert!(
         state["prime"]["shots"]["iter_1"].is_null(),
         "a cancelled chain loop must start no new pass after the signal: {state}"
     );
 
     std::thread::sleep(Duration::from_millis(300));
     assert!(
-        !pgrep_matches(&marker),
+        !pgrep_matches(&marker) && !pgrep_matches(&sleep_pattern(sleep_secs)),
         "the fake claude carrying marker {marker:?} must be gone after cancellation"
     );
 }
