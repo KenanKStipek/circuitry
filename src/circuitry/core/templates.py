@@ -48,6 +48,62 @@ def _escape_aware(string: str) -> str:
 chevron.renderer._html_escape = _escape_aware
 
 
+def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
+    """chevron's own ``_get_key`` (``renderer.py``), with one change: a
+    ``getattr`` hit that resolves to a callable (a bound method, a
+    built-in method, any attribute whose value is itself callable) is
+    treated as a miss, exactly like an ``AttributeError`` would be, instead
+    of being returned.
+
+    Mustache has no concept of a method call; a tag whose name happens to
+    match one of its scope's methods (``title`` inside ``{{#title}}``,
+    ``count``/``format``/... on any string) means the value in scope, not
+    a description of that method. Vendored rather than patched upstream
+    (#389) so a miss still falls through to the next scope the same way
+    any other missing key does, and a non-callable attribute —
+    ``{{d.year}}`` on a ``datetime.date`` — keeps resolving exactly as
+    before.
+    """
+    if key == ".":
+        return scopes[0]
+
+    for outer_scope in scopes:
+        current = outer_scope
+        try:
+            for child in key.split("."):
+                try:
+                    current = current[child]
+                except (TypeError, AttributeError):
+                    try:
+                        attr = getattr(current, child)
+                    except (TypeError, AttributeError):
+                        current = current[int(child)]
+                    else:
+                        current = current[int(child)] if callable(attr) else attr
+
+            if current in (0, False):
+                return current
+
+            try:
+                if current._CHEVRON_return_scope_when_falsy:
+                    return current
+            except AttributeError:
+                return current or ""
+        except (AttributeError, KeyError, IndexError, ValueError):
+            pass
+
+    if warn:
+        import sys
+        from os import linesep
+
+        sys.stderr.write(f"Could not find key '{key}'{linesep}")
+
+    return ""
+
+
+chevron.renderer._get_key = _get_key
+
+
 class TemplateError(ValueError):
     """A Mustache template could not be parsed or rendered."""
 

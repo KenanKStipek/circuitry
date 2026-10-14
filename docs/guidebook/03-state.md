@@ -46,6 +46,8 @@ The rule beneath the table: **the path is the full path from `prime`, one segmen
 
 A tag must be well-formed: an unclosed `{{input.issue}`, or a section closed under a different name than it opened with, is an error from `cof check`, never text sent on as written.
 
+A tag never resolves to a method. Looking up a name tries the current scope, then each enclosing one in turn — a dict key, a list index, or (for a date/datetime value) a data attribute (`year`, `month`, `day`, `hour`, `minute`, `second`, `microsecond`). If that would otherwise reach a method or other callable — `{{#title}}{{title}}{{/title}}` over the string `"Intro"` landing on `str.title`, or `{{prime.today.value.isoformat}}` on a date landing on `date.isoformat` — it counts as a miss there and the lookup falls through to the next scope, exactly like a plain missing key.
+
 **CEL**, inside any `expr:` — a `cel`-mode `if`, a `cel`-mode `while`. Here `state` is bound to the root, so every path gains that prefix:
 
 ```

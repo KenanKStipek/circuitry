@@ -12,6 +12,7 @@ import io
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,30 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
     assert render_template("hi {{a}}", {"a": 1}) == "hi 1"
     with pytest.raises(TemplateError, match=r"^params\.input: malformed Mustache template"):
         render_template(BROKEN, {}, label="params.input")
+
+
+def test_section_tag_matching_the_section_name_renders_the_value_not_a_method() -> None:
+    """``{{#title}}{{title}}{{/title}}`` means the string, never ``str.title`` (#389)."""
+    assert render_template("{{#title}}# {{title}}{{/title}}", {"title": "Intro"}) == "# Intro"
+
+
+def test_list_section_of_strings_falls_through_to_an_outer_scope_for_a_str_method_name() -> None:
+    out = render_template(
+        "{{#tags}}{{.}} ({{title}}) {{/tags}}", {"tags": ["a", "b"], "title": "Outer"}
+    )
+    assert out == "a (Outer) b (Outer) "
+
+
+def test_date_data_attribute_still_renders() -> None:
+    assert render_template("{{d.year}}", {"d": date(2026, 10, 14)}) == "2026"
+
+
+def test_date_method_name_falls_through_instead_of_rendering_a_bound_method() -> None:
+    d = date(2026, 10, 14)
+    assert render_template("{{d.isoformat}}", {"d": d}) == ""
+    # "d.isoformat" and "isoformat" are different dotted keys, so an outer
+    # "isoformat" key doesn't satisfy this one either.
+    assert render_template("{{d.isoformat}}", {"d": d, "isoformat": "OUTER"}) == ""
 
 
 def test_render_template_refuses_a_partial_and_never_reads_the_file(

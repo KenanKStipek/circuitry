@@ -12,6 +12,7 @@
 //! `lib.rs`'s "Known divergences from chevron" section for the
 //! confirmed exceptions) by output, not by internal mechanism.
 
+use chrono::{Datelike, Timelike};
 use electricity_value::Value;
 
 use crate::tokenizer::Tag;
@@ -243,16 +244,50 @@ pub fn step(current: &Value, part: &str) -> Result<Option<Value>, String> {
             };
             Ok(wrapped_index(b.len(), n).map(|idx| Value::Int((b[idx] as i64).into())))
         }
-        _ => {
-            if part.parse::<i64>().is_ok() {
-                Err(format!(
-                    "'{}' object is not subscriptable",
-                    current.type_name()
-                ))
-            } else {
-                Ok(None)
-            }
-        }
+        // `getattr(scope, child)` on a `datetime.date`/`datetime.datetime`
+        // (chevron's `_get_key`, second lookup step) reaches these plain
+        // data attributes -- never a method, which `core/templates.py`'s
+        // `_get_key` treats as a miss (circuitry#389) -- so this is the
+        // one named, non-callable set a `Value::Date`/`Value::DateTime`
+        // exposes; anything else (a method name, an unrelated word) falls
+        // through to the same scalar rule every other segment on these
+        // types already gets.
+        Value::Date(d) => match part {
+            "year" => Ok(Some(Value::Int((d.year() as i64).into()))),
+            "month" => Ok(Some(Value::Int((d.month() as i64).into()))),
+            "day" => Ok(Some(Value::Int((d.day() as i64).into()))),
+            _ => scalar_step(current, part),
+        },
+        Value::DateTime(naive, _) => match part {
+            "year" => Ok(Some(Value::Int((naive.year() as i64).into()))),
+            "month" => Ok(Some(Value::Int((naive.month() as i64).into()))),
+            "day" => Ok(Some(Value::Int((naive.day() as i64).into()))),
+            "hour" => Ok(Some(Value::Int((naive.hour() as i64).into()))),
+            "minute" => Ok(Some(Value::Int((naive.minute() as i64).into()))),
+            "second" => Ok(Some(Value::Int((naive.second() as i64).into()))),
+            "microsecond" => Ok(Some(Value::Int(
+                (i64::from(naive.nanosecond() / 1000)).into(),
+            ))),
+            _ => scalar_step(current, part),
+        },
+        _ => scalar_step(current, part),
+    }
+}
+
+/// The scalar fallback shared by every `step` arm with no index/key
+/// concept of its own (`None`/`bool`/`int`/`float`, and a `Date`/
+/// `DateTime` segment that isn't one of their own named attributes
+/// above): an int-parseable segment is a hard error (mirrors chevron's
+/// own bare, un-caught `scope[int(child)]` `TypeError` on these types),
+/// anything else is just "not found".
+fn scalar_step(current: &Value, part: &str) -> Result<Option<Value>, String> {
+    if part.parse::<i64>().is_ok() {
+        Err(format!(
+            "'{}' object is not subscriptable",
+            current.type_name()
+        ))
+    } else {
+        Ok(None)
     }
 }
 

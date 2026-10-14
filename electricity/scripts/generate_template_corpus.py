@@ -328,6 +328,37 @@ def build_render_cases() -> list[dict]:
     cases.append(render_case("{{x.name}}", {"x": None}))
     cases.append(render_case("{{#n}}{{label}}{{/n}}", {"n": 5, "label": "OUTER"}))
 
+    # --- attribute-fallback-vs-method-name conformance (circuitry#389):
+    # a tag whose name matches an attribute or method of the value in
+    # scope falls through to the next scope for a callable, and still
+    # resolves a non-callable data attribute (a date's year/month/day/
+    # hour/minute/second) ---
+    cases.append(render_case("{{#title}}{{title}}{{/title}}", {"title": "Intro"}))
+    cases.append(
+        render_case(
+            "{{#items}}{{count}}/{{index}}{{/items}}",
+            {"items": ["a", "b"], "count": 2, "index": 1},
+        )
+    )
+    cases.append(render_case("{{d.year}}", {"d": datetime.date(2026, 10, 14)}))
+    cases.append(render_case("{{d.isoformat}}", {"d": datetime.date(2026, 10, 14)}))
+    cases.append(
+        render_case(
+            "{{d.isoformat}}",
+            {"d": datetime.date(2026, 10, 14), "isoformat": "OUTER"},
+        )
+    )
+    cases.append(
+        render_case(
+            "{{dt.year}}-{{dt.month}}-{{dt.day}} {{dt.hour}}:{{dt.minute}}:{{dt.second}}",
+            {"dt": utc_dt},
+        )
+    )
+    cases.append(render_case("{{dt.isoformat}}", {"dt": utc_dt}))
+    cases.append(
+        render_case("{{#tags}}{{.}} ({{title}}) {{/tags}}", {"tags": ["a", "b"], "title": "Outer"})
+    )
+
     # --- more section/inverted nesting and nested falsy-list suppression ---
     cases.append(
         render_case(

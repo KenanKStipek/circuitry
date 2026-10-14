@@ -37,24 +37,6 @@
 //!   This port's `Value::List` is the only section-iterable type, so
 //!   `Value::Bytes` renders its section body once, with the whole byte
 //!   string as scope, like any other truthy scalar.
-//! - **The attribute-fallback mismatch (tracked upstream as #389, not
-//!   here).** `_get_key`'s second lookup step is `getattr(scope, child)`:
-//!   inside a section whose scope is a `str` (or any Python object), a
-//!   tag whose name happens to match one of that object's attributes or
-//!   methods (`count`, `index`, `format`, a date's `.isoformat`/`.year`,
-//!   ...) resolves to Python's description of that attribute/bound
-//!   method — e.g. `{{#title}}{{title}}{{/title}}` with `title: "Intro"`
-//!   renders (HTML-escaped, since `{{title}}` is an escaped tag)
-//!   `&lt;built-in method title of str object at 0x...&gt;`, not
-//!   `"Intro"` — instead of falling through to the next scope up the way
-//!   a plain missing key would. The text contains a memory address, so
-//!   it cannot be ported byte for byte even in principle. This port has
-//!   no `getattr` step at all, so a name shadowing an attribute/method
-//!   simply falls through to the outer scope — the value a template
-//!   author actually meant. This is a genuine Circuitry rendering bug
-//!   (reachable by an ordinary `{{#title}}{{title}}{{/title}}`-shaped
-//!   template), tracked as a separate upstream issue (#389) rather than
-//!   fixed or reproduced in this port.
 //! - **`int()` leniency.** Python's `int()` accepts leading/trailing
 //!   whitespace (`" 1"`), underscore digit grouping (`"1_0"` == 10), and
 //!   arbitrary precision. A dotted segment or set-delimiter split in this
@@ -851,5 +833,64 @@ mod tests {
         let ctx = dict(vec![("items", Value::List(vec![Value::Int(1.into())]))]);
         let err = render_template("{{items}}", &ctx, &json_ctx, "params_json").unwrap_err();
         assert_eq!(err.to_string(), "params_json: could not render: boom");
+    }
+
+    #[test]
+    fn section_tag_matching_the_section_name_renders_the_value_not_a_method() {
+        let ctx = dict(vec![("title", Value::Str("Intro".to_string()))]);
+        assert_eq!(
+            render_template("{{#title}}{{title}}{{/title}}", &ctx, &PlainCtx, "t").unwrap(),
+            "Intro"
+        );
+    }
+
+    #[test]
+    fn date_named_data_attributes_render() {
+        use chrono::NaiveDate;
+        let d = Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap());
+        let ctx = dict(vec![("d", d)]);
+        assert_eq!(
+            render_template("{{d.year}}", &ctx, &PlainCtx, "t").unwrap(),
+            "2026"
+        );
+        assert_eq!(
+            render_template("{{d.month}}", &ctx, &PlainCtx, "t").unwrap(),
+            "10"
+        );
+        assert_eq!(
+            render_template("{{d.day}}", &ctx, &PlainCtx, "t").unwrap(),
+            "14"
+        );
+    }
+
+    #[test]
+    fn date_method_name_falls_through_instead_of_resolving() {
+        use chrono::NaiveDate;
+        let d = Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap());
+        let ctx = dict(vec![("d", d)]);
+        assert_eq!(
+            render_template("{{d.isoformat}}", &ctx, &PlainCtx, "t").unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn datetime_named_data_attributes_render() {
+        use chrono::{NaiveDate, NaiveDateTime};
+        let naive: NaiveDateTime = NaiveDate::from_ymd_opt(2026, 10, 14)
+            .unwrap()
+            .and_hms_micro_opt(9, 30, 15, 678901)
+            .unwrap();
+        let ctx = dict(vec![("dt", Value::DateTime(naive, None))]);
+        assert_eq!(
+            render_template(
+                "{{dt.year}}-{{dt.month}}-{{dt.day}} {{dt.hour}}:{{dt.minute}}:{{dt.second}}.{{dt.microsecond}}",
+                &ctx,
+                &PlainCtx,
+                "t"
+            )
+            .unwrap(),
+            "2026-10-14 9:30:15.678901"
+        );
     }
 }

@@ -9,8 +9,11 @@ description = "A chevron port (Mustache) over electricity-value's Value, matchin
 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
+# `step`'s own named-attribute lookup on a `Value::Date`/`Value::DateTime`
+# (`year`/`month`/`day`/`hour`/`minute`/`second`/`microsecond`, circuitry#389)
+# needs `Datelike`/`Timelike` outside of tests too.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
