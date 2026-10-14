@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..core.cancellation import deferred_signal_region
 from ..core.saved_state import dumps_saved_state
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,15 @@ class LiveStateMirror:
         self._thread.start()
 
     def __call__(self, state: dict[str, Any]) -> None:
-        with self._wake:
+        # `deferred_signal_region`: this runs on whichever thread the
+        # runtime calls `Store.on_write` from, including the main thread
+        # (a plain sequential chain's own leaf effects) -- `_wake` is a
+        # `threading.Condition`, the same #555-style exposure as a
+        # `Future`'s own lock. A first signal's handler raising
+        # mid-release here would leak it, wedging the writer thread's
+        # own `_write_loop` (blocked on the identical lock) and, in turn,
+        # `close()`'s `self._thread.join()`.
+        with deferred_signal_region(), self._wake:
             first = not self._first_written
             self._first_written = True
             if not first:
@@ -167,7 +176,10 @@ class LiveStateMirror:
         serialise or reach disk over the mirror's whole lifetime, so the
         caller can fold it into one warning on the run's result.
         """
-        with self._wake:
+        # Same `deferred_signal_region` reasoning as `__call__` above:
+        # `close()` ordinarily runs on the main thread, at the end of a
+        # run.
+        with deferred_signal_region(), self._wake:
             if self._closed:
                 return self._had_failure
             self._closed = True

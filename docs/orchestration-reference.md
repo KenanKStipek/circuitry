@@ -1861,14 +1861,16 @@ else, but faster: a branch that hasn't started yet never starts at all (no
 node, no hooks — the same shape `stop_on_error` already gives a not-yet-
 started sibling), and a branch already running is stopped outright — its
 child process (the whole process group a tool like `shell` spawns, not
-just its own pid) is killed, and killed again on every short poll for as
-long as cancellation stays requested: a shell step whose own command
-forks a further child right as the first kill lands (a shell running
-more than one command, e.g. `cmd1; cmd2`, can do this even for a plain
-sequential pipeline) can rarely survive that single kill, since the new
-child joining its process group and the kill being delivered to it are
-racing each other at the kernel level — the repeated kill catches it
-within a fraction of a second regardless of which kill it survived.
+just its own pid) is killed, and killed again on every short poll until
+the group is confirmed empty: a shell step whose own command forks a
+further child right as the first kill lands (a shell running more than
+one command, e.g. `cmd1; cmd2`, can do this even for a plain sequential
+pipeline) can rarely survive that single kill, since the new child
+joining its process group and the kill being delivered to it are racing
+each other at the kernel level — the repeated kill catches it within a
+fraction of a second regardless of which kill it survived, and stops
+once the kernel itself confirms there is nothing left in the group to
+kill.
 This covers every `shell`/binary-wrapping
 tool plugin and every HTTP call that goes through curl (every model
 adapter's own prompt, `web_search`, `weather`, ComfyUI's REST calls). A
@@ -1880,22 +1882,18 @@ running until the server responds or its own timeout, regardless of the
 signal), the `service` tool's own `start`/`stop` calls (a service is
 meant to outlive the run, so cancelling the run must not orphan a
 half-started or half-stopped one), and any plain Python-level step that
-never polls back in. Rarely, and only under very heavy CPU load on the
-machine running `cof` itself, a step can start after the run has already
-been reported cancelled, and not only on a branch with a step the kill
-cannot reach — Ctrl-C/SIGTERM/SIGHUP is only ever actually handled by
-this process's own main thread, and only once that thread's Python
-interpreter next checks for one, so *any* branch still running at that
-moment can reach its own next step first if that check is delayed long
-enough. Under adversarial contention (a synthetic load of three
-CPU-bound processes competing for the machine's own cores) this has been
-measured happening on roughly 3% of runs, with the main thread's own
-handler recorded running more than three seconds after the signal was
-sent; the run keeps going during that whole delay. What causes a delay
-that long is not yet pinned down — closing it is tracked as a redesign
-in #404, not something this orchestrator's own polling (which otherwise
-returns to that check several times a second) can paper over on its
-own. A killed
+never polls back in. Cancellation itself — the flag every other step's
+own check/poll sees, and the kill of every tracked process — is set
+directly off the raw signal, on whichever thread the OS happens to
+deliver it to, not only once this process's own main thread next gets
+around to running the signal's Python-level handler: a dedicated
+watcher thread reacts to the signal itself (via `signal.set_wakeup_fd`),
+so a branch still running at the moment of the signal can no longer
+reach its own next step first just because the main thread was slow to
+notice — only a step the kill genuinely cannot reach (the three kinds
+listed above) can still run past the signal, exactly as described
+above. The main-thread handler keeps deciding exit codes and the
+second-signal behaviour below. A killed
 child is sent SIGKILL directly, not the SIGINT/SIGTERM the signal itself
 carried, so a tool with its own graceful-shutdown handling (`ffmpeg`
 finalizing a partial output) never gets the chance; running detached from
