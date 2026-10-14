@@ -798,9 +798,9 @@ impl RunObserver for Observer<'_> {
         }
     }
 
-    fn clear_tree_branches(&self, node_path: &EffectPath) {
+    fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
         if let Some(mirror) = self.live_state {
-            mirror.clear_tree_branches(node_path);
+            mirror.clear_tree_branches(node_path, branches);
         }
     }
 

@@ -727,13 +727,17 @@ the full bottom width, two content lines:
     finishes.
 
     The *count* comes from `render::Row`, not from the live state
-    alone (issue #527's own PR): a
-    tree-loop pass's prompt, and (on `cof`) a `use` child's, are
-    confirmed `Running` by `--events` while never once appearing in
-    live state at all for as long as they run (DESIGN.md §1.4) — a
-    row with no state node of its own still counts when its own
-    `kind` is known to be [`Prompt`], which a tree-loop pass's is (its
-    plan entry is matched through the loop's own `iter_*` placeholder)
+    alone (issue #527's own PR): a tree-loop pass's prompt, and (on
+    `cof`) a `use` child's, are confirmed `Running` by `--events`
+    while a `--live-state` reader can still be a step behind -- on
+    electricity, a tree-loop pass's prompt (issue #465) and a `use`
+    child's (issue #448 item U6) both now reach `--live-state` while
+    they still run, the same overlay either way, but only once the
+    mirror's own next coalesced write actually catches up (DESIGN.md
+    §1.4) — a row with no state node of its own yet still counts when
+    its own `kind` is known to be [`Prompt`], which a tree-loop pass's
+    is (its plan entry is matched through the loop's own `iter_*`
+    placeholder)
     and a `use: path:` child's is too (its plan is grafted under the
     `use` node, §5) — but a `use: inline:`/`ref:` child's is not: it
     has no static plan at all, and `--events` carries no effect kind

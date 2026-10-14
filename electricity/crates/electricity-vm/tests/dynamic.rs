@@ -328,6 +328,67 @@ async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
 }
 
 #[tokio::test]
+async fn a_tree_cancelled_before_any_branch_starts_still_clears_its_overlay() {
+    // PR #549's review, finding 3: a cancelled tree never merges
+    // (cof's own no-state-write cancellation contract), but
+    // `clear_tree_branches` must still fire -- left registered, a
+    // still-coalescing `--live-state` mirror would keep overlaying
+    // branch content that is never going to reach `--out` at all,
+    // until the run's own final `close()` write overwrites it.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    token.request(2); // SIGINT, already set before the tree even dispatches
+    let registry = ToolRegistry::new();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let root = tree_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        None,
+        false,
+        vec![
+            chain_dynamic(root_path().push_name("x0"), "x0", OnError::Fail, vec![]),
+            chain_dynamic(root_path().push_name("x1"), "x1", OnError::Fail, vec![]),
+        ],
+    );
+
+    let err = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, VmError::Cancelled));
+
+    let events = observer.events();
+    let register_index = events
+        .iter()
+        .position(
+            |e| matches!(e, Event::RegisterTreeBranches(path, n) if path == "prime" && *n == 2),
+        )
+        .unwrap_or_else(|| {
+            panic!("register_tree_branches must still fire even though every branch is cancelled before it starts, got {events:?}")
+        });
+    let clear_index = events
+        .iter()
+        .position(|e| matches!(e, Event::ClearTreeBranches(path) if path == "prime"))
+        .unwrap_or_else(|| {
+            panic!("clear_tree_branches must fire on the cancelled path too, got {events:?}")
+        });
+    assert!(
+        clear_index > register_index,
+        "clear must come after register, got {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn tree_stop_on_error_never_starts_a_queued_branch() {
     let store = Store::new();
     let token = CancellationToken::new();

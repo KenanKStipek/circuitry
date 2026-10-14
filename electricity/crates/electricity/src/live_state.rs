@@ -36,6 +36,7 @@ use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -207,6 +208,26 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
 /// A branch index earlier in *branches* whose keys a later branch
 /// also wrote loses that key, exactly as cof's own ascending-index
 /// `node.update` loop does.
+///
+/// A branch that *has* started but not yet finished its own first
+/// effect is a known, deliberate difference from cof, not a match for
+/// it (PR #549's review, finding 2; `electricity/DESIGN.md` §13, Q11):
+/// every electricity effect type writes an in-progress `meta` node
+/// (`created_at` set, `completed_at` still `None`) the moment it
+/// starts, the same as a plain chain effect already does, so that
+/// branch's own [`Store::saved`] is non-empty and shows through this
+/// overlay well before it finishes. cof's own publisher only
+/// republishes a branch once that branch's own `Store.on_write` has
+/// fired at least once -- which, for a `tool` effect specifically,
+/// only happens once it completes (`core/tool.py` writes no
+/// in-progress state of its own at attempt start the way a `prompt`
+/// effect's `waiting_for` does) -- so a `tool`/`shell` branch that has
+/// started but not finished stays invisible in cof's own mid-run
+/// `--live-state`, visible in electricity's. Matching cof's staler
+/// view here would mean taking a branch snapshot on every write
+/// instead of lazily at publish time, which issue #465's own
+/// performance ruling forbids -- so this divergence is kept, not
+/// hidden.
 fn tree_overlay_snapshot(
     root: &Value,
     node_path: &str,
@@ -257,12 +278,33 @@ pub struct LiveStateMirror {
     /// walks shallower paths before any deeper one nested under them (a
     /// dotted path that is a strict prefix of another always sorts
     /// first), composing a nested `use`/tree correctly on top of its
-    /// own parent's, in whichever order the two kinds actually nest. A
-    /// plain map, not a stack: a call for a path already present simply
-    /// replaces that path's own entry, and a tree's own simultaneous
-    /// sibling `use` branches (or a `use` child's own nested tree) each
-    /// keep their own independent entry.
-    grafts: RefCell<BTreeMap<String, GraftEntry>>,
+    /// own parent's, in whichever order the two kinds actually nest.
+    ///
+    /// Each path maps to a `Vec`, not a single entry -- more than one
+    /// overlay can legitimately share the exact same path (PR #549's
+    /// review, finding 1): a `use` child whose own document has a
+    /// top-level `flow: tree` registers that tree's branches at the
+    /// same path the child's own graft already uses (the child frame
+    /// maps the child root to the `use` node's own path, and an
+    /// unnamed/transparent root tree appends no name segment of its
+    /// own); an unnamed tree loop that is a direct branch of another
+    /// tree registers at the same path as that outer tree's own
+    /// container (an unnamed loop appends no name segment either,
+    /// `exec::loop_::run_each_tree`'s own `dispatch_path` comment); and
+    /// two concurrent sibling unnamed tree loops can collide the same
+    /// way with each other. [`Self::graft_child_write`] updates its own
+    /// `GraftEntry::Child` entry *in place*, wherever it already sits
+    /// in the `Vec`, rather than moving it to the end, so a path's own
+    /// relative order between a child graft and a tree overlay is
+    /// fixed the moment both are first registered, never reshuffled by
+    /// a later child write; [`Self::register_tree_branches`] always
+    /// pushes a new `GraftEntry::Tree` entry, never replacing one, and
+    /// [`Self::clear_tree_branches`] removes only the one entry whose
+    /// branches are *this* tree's own (matched by `Rc::ptr_eq` on the
+    /// first branch, since two different trees' `NodeRef`s are never
+    /// the same allocation) -- so a sibling or a nested tree at the
+    /// same path is untouched by this tree's own clear.
+    grafts: RefCell<BTreeMap<String, Vec<GraftEntry>>>,
 }
 
 impl LiveStateMirror {
@@ -283,55 +325,105 @@ impl LiveStateMirror {
 
     /// [`electricity_vm::RunObserver::graft_child_write`]'s own
     /// implementation: records *snapshot* as *node_path*'s own latest
-    /// grafted overlay (replacing whatever was there from an earlier
-    /// write at the same path) and marks a mid-run write pending, the
-    /// same as an ordinary [`Self::mark_pending`] call -- a graft is
-    /// itself a store change a live-state reader should eventually
-    /// see.
+    /// grafted overlay and marks a mid-run write pending, the same as
+    /// an ordinary [`Self::mark_pending`] call -- a graft is itself a
+    /// store change a live-state reader should eventually see. A
+    /// second call at a path already carrying a `GraftEntry::Child`
+    /// updates that entry's own value *in place*, at whatever position
+    /// it already holds in the `Vec` (this struct's own `grafts` field
+    /// doc comment) -- never appended anew, so a tree overlay already
+    /// registered at the same path keeps whichever relative order the
+    /// two were first registered in.
     pub fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
-        self.grafts
-            .borrow_mut()
-            .insert(node_path.to_string(), GraftEntry::Child(snapshot.clone()));
+        let mut grafts = self.grafts.borrow_mut();
+        let entries = grafts.entry(node_path.to_string()).or_default();
+        match entries
+            .iter_mut()
+            .find(|entry| matches!(entry, GraftEntry::Child(_)))
+        {
+            Some(GraftEntry::Child(existing)) => *existing = snapshot.clone(),
+            _ => entries.push(GraftEntry::Child(snapshot.clone())),
+        }
+        drop(grafts);
         self.mark_pending();
     }
 
     /// [`electricity_vm::RunObserver::clear_graft`]'s own
-    /// implementation: *node_path* no longer needs an overlay (the
-    /// child it named finished) -- a no-op if nothing was grafted
-    /// there (or it was already cleared).
+    /// implementation: *node_path* no longer needs its own
+    /// `GraftEntry::Child` overlay (the child it named finished) -- a
+    /// no-op if nothing was grafted there (or it was already cleared).
+    /// Leaves any `GraftEntry::Tree` entry at the same path untouched
+    /// (PR #549's review, finding 1): a tree nested directly at a
+    /// `use` child's own root path must keep overlaying after the
+    /// child's own graft is gone.
     pub fn clear_graft(&self, node_path: &EffectPath) {
-        self.grafts.borrow_mut().remove(&node_path.to_string());
+        let path = node_path.to_string();
+        let mut grafts = self.grafts.borrow_mut();
+        if let Some(entries) = grafts.get_mut(&path) {
+            entries.retain(|entry| !matches!(entry, GraftEntry::Child(_)));
+            if entries.is_empty() {
+                grafts.remove(&path);
+            }
+        }
     }
 
     /// [`electricity_vm::RunObserver::register_tree_branches`]'s own
-    /// implementation: records *branches* (cloned `Rc`s, cheap) as
-    /// *node_path*'s own tree overlay, replacing whatever was there
-    /// from an earlier registration at the same path. Unlike
-    /// [`Self::graft_child_write`] this never marks a write pending on
-    /// its own -- it runs once, before any branch has written anything
-    /// at all, so there would be nothing new to publish yet; every
-    /// branch's own first effect write already calls [`Self::
-    /// mark_pending`] through the ordinary [`electricity_vm::
-    /// RunObserver::write`] hook.
+    /// implementation: records *branches* (cloned `Rc`s, cheap) as a
+    /// *new* tree overlay at *node_path*, always pushed, never
+    /// replacing an existing entry there (PR #549's review, finding 1:
+    /// two sibling trees, or a child graft and a tree, can share a
+    /// path). Unlike [`Self::graft_child_write`] this never marks a
+    /// write pending on its own -- it runs once, before any branch has
+    /// written anything at all, so there would be nothing new to
+    /// publish yet; every branch's own first effect write already
+    /// calls [`Self::mark_pending`] through the ordinary
+    /// [`electricity_vm::RunObserver::write`] hook.
     pub fn register_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
         self.grafts
             .borrow_mut()
-            .insert(node_path.to_string(), GraftEntry::Tree(branches.to_vec()));
+            .entry(node_path.to_string())
+            .or_default()
+            .push(GraftEntry::Tree(branches.to_vec()));
     }
 
     /// [`electricity_vm::RunObserver::clear_tree_branches`]'s own
-    /// implementation: *node_path*'s own tree has merged -- a no-op if
-    /// nothing was registered there (or it was already cleared).
-    pub fn clear_tree_branches(&self, node_path: &EffectPath) {
-        self.grafts.borrow_mut().remove(&node_path.to_string());
+    /// implementation: *node_path*'s own tree (identified by
+    /// *branches*, this exact tree's own `NodeRef`s, not merely its
+    /// path) has merged -- a no-op if nothing matching was registered
+    /// there (or it was already cleared). Matches by `Rc::ptr_eq` on
+    /// the first branch (PR #549's review, finding 1): *branches* is
+    /// never empty in practice (both callers guard the zero-branch
+    /// case before ever registering), and two distinct trees never
+    /// share the same `NodeRef` allocation, so this removes exactly
+    /// the one entry this call's own tree pushed, leaving a sibling or
+    /// nested tree -- or a `use` child's own graft -- at the same path
+    /// untouched.
+    pub fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
+        let Some(first) = branches.first() else {
+            return;
+        };
+        let path = node_path.to_string();
+        let mut grafts = self.grafts.borrow_mut();
+        if let Some(entries) = grafts.get_mut(&path) {
+            if let Some(pos) = entries.iter().position(|entry| {
+                matches!(entry, GraftEntry::Tree(b) if b.first().is_some_and(|b0| Rc::ptr_eq(b0, first)))
+            }) {
+                entries.remove(pos);
+            }
+            if entries.is_empty() {
+                grafts.remove(&path);
+            }
+        }
     }
 
     /// *snapshot* with every currently active overlay applied,
     /// shallowest path first ([`BTreeMap`]'s own sorted iteration order
     /// over a dotted path -- this struct's own `grafts` field doc
-    /// comment). *store* resolves a [`GraftEntry::Tree`] entry's own
-    /// branch [`NodeRef`]s lazily, right here -- the only place any of
-    /// them is ever read. Only [`Self::flush_if_due`] ever calls this:
+    /// comment), and within a path, in the order each entry was first
+    /// registered (the `Vec`'s own order -- same field doc comment).
+    /// *store* resolves a [`GraftEntry::Tree`] entry's own branch
+    /// [`NodeRef`]s lazily, right here -- the only place any of them is
+    /// ever read. Only [`Self::flush_if_due`] ever calls this:
     /// [`Self::write_initial`] runs before anything could have
     /// grafted, and [`Self::close`] writes the final, already-really-
     /// merged state, where no overlay should ever still apply.
@@ -339,9 +431,13 @@ impl LiveStateMirror {
         self.grafts
             .borrow()
             .iter()
-            .fold(snapshot, |acc, (path, entry)| match entry {
-                GraftEntry::Child(child) => grafted_snapshot(&acc, path, child),
-                GraftEntry::Tree(branches) => tree_overlay_snapshot(&acc, path, store, branches),
+            .fold(snapshot, |acc, (path, entries)| {
+                entries.iter().fold(acc, |acc, entry| match entry {
+                    GraftEntry::Child(child) => grafted_snapshot(&acc, path, child),
+                    GraftEntry::Tree(branches) => {
+                        tree_overlay_snapshot(&acc, path, store, branches)
+                    }
+                })
             })
     }
 
@@ -731,16 +827,18 @@ mod tests {
     }
 
     /// Issue #465's own acceptance list, first bullet: a two-branch
-    /// `flow: tree` dynamic, mid-run -- `fast` has already finished,
-    /// `slow` hasn't written anything yet. The published shape matches
-    /// cof's own (established against a real `cof run --live-state`
-    /// mid-run snapshot, issue #465's own PR body): the container's
-    /// own skeleton `value`/`meta` stay first, `fast`'s own finished
-    /// node is appended after them, and `slow` doesn't appear at all
-    /// yet -- the same as cof's `latest[index] is None` branches being
-    /// skipped by its own publisher.
+    /// `flow: tree` dynamic, mid-run -- *both* branches have written
+    /// their own finished effect by the time this flush happens, one
+    /// of them (`note`) under a key both branches use, proving the
+    /// issue's own "later index wins a key" rule (`core/store/
+    /// store.py::Store.parallel_branches`'s own ascending-index
+    /// `node.update` loop): branch 1's own `note` value survives,
+    /// branch 0's own `note` value is gone, but `note`'s own key
+    /// *position* in the published dict is wherever branch 0 (the
+    /// first writer) put it -- `IndexMap::insert`'s own
+    /// already-present-key behaviour, the same as a Python `dict`'s.
     #[test]
-    fn a_two_branch_tree_overlays_only_the_branch_that_has_written_so_far() {
+    fn a_two_branch_tree_overlays_both_branches_later_index_wins_a_shared_key() {
         let path = temp_path("two-branch-tree");
         let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
         let store = Store::new();
@@ -757,9 +855,14 @@ mod tests {
         let node_path = EffectPath::root().push_name("lp");
         mirror.register_tree_branches(&node_path, &branches);
 
-        // Branch 0 ("fast") finishes; branch 1 ("slow") never writes
-        // anything during this flush.
+        // Branch 0 ("fast") finishes first, writing its own effect
+        // plus a `note` key both branches happen to use; branch 1
+        // ("slow") then finishes too, writing its own effect and its
+        // own, different `note` value.
         store.set_leaf(&branches[0], str_key("fast"), Value::from("fast done"));
+        store.set_leaf(&branches[0], str_key("note"), Value::from("from fast"));
+        store.set_leaf(&branches[1], str_key("slow"), Value::from("slow done"));
+        store.set_leaf(&branches[1], str_key("note"), Value::from("from slow"));
         mirror.mark_pending();
         mirror.flush_if_due(&store, || store.saved(&store.root));
 
@@ -767,6 +870,8 @@ mod tests {
         expected_lp.insert(str_key("value"), Value::None);
         expected_lp.insert(str_key("meta"), Value::Dict(Dict::new()));
         expected_lp.insert(str_key("fast"), Value::from("fast done"));
+        expected_lp.insert(str_key("note"), Value::from("from slow"));
+        expected_lp.insert(str_key("slow"), Value::from("slow done"));
         let mut expected_prime = Dict::new();
         expected_prime.insert(str_key("lp"), Value::Dict(expected_lp));
         let mut expected_root = Dict::new();
@@ -842,7 +947,7 @@ mod tests {
         let node_path = EffectPath::root().push_name("lp");
         mirror.register_tree_branches(&node_path, &branches);
         store.set_leaf(&branches[0], str_key("fast"), Value::from("leftover"));
-        mirror.clear_tree_branches(&node_path);
+        mirror.clear_tree_branches(&node_path, &branches);
 
         mirror.mark_pending();
         mirror.flush_if_due(&store, || store.saved(&store.root));
@@ -867,7 +972,15 @@ mod tests {
     /// tree's own overlay at `prime.outer` and an inner tree nested in
     /// one of its own branches, registered at `prime.outer.inner`, both
     /// apply, shallowest path first, the same way a nested `use`'s own
-    /// graft already composes with its parent's.
+    /// graft already composes with its parent's. Unlike an earlier
+    /// version of this test (PR #549's review, finding 4), the outer
+    /// branch writes something of its own (`note`) *and* an `inner`
+    /// skeleton (`value`/`meta`) its own nested tree then overlays onto
+    /// -- so shallowest-path-first order is actually load-bearing here:
+    /// applying `prime.outer.inner`'s own overlay *before*
+    /// `prime.outer`'s own would have the outer overlay's own stale
+    /// (pre-`leaf`) copy of the `inner` skeleton clobber the deeper
+    /// overlay's `leaf` right back out.
     #[test]
     fn a_nested_tree_composes_with_its_own_parents_overlay() {
         let path = temp_path("nested-tree");
@@ -879,17 +992,94 @@ mod tests {
         mirror.write_initial(&store.saved(&store.root)).unwrap();
         std::thread::sleep(Duration::from_millis(5));
 
+        let outer_path = EffectPath::root().push_name("outer");
         let outer_branches = store.parallel_branches(&outer, 1).unwrap();
-        mirror.register_tree_branches(&EffectPath::root().push_name("outer"), &outer_branches);
+        mirror.register_tree_branches(&outer_path, &outer_branches);
 
-        // The outer tree's one branch starts its own, nested tree,
-        // writing its own skeleton directly into the branch's own root.
-        let inner_branches = store.parallel_branches(&outer_branches[0], 1).unwrap();
-        mirror.register_tree_branches(
-            &EffectPath::root().push_name("outer").push_name("inner"),
-            &inner_branches,
+        // The outer tree's one branch writes its own effect directly,
+        // and also starts its own nested tree -- creating the `inner`
+        // skeleton that nested tree's own branches write into, the
+        // same skeleton `value`/`meta` any named container writes
+        // before it dispatches.
+        store.set_leaf(
+            &outer_branches[0],
+            str_key("note"),
+            Value::from("outer wrote"),
         );
+        let inner_skeleton = store
+            .ensure_dict(&outer_branches[0], str_key("inner"))
+            .unwrap();
+        store.set_leaf(&inner_skeleton, str_key("value"), Value::None);
+        store.set_leaf(&inner_skeleton, str_key("meta"), Value::Dict(Dict::new()));
+
+        let inner_path = outer_path.clone().push_name("inner");
+        let inner_branches = store.parallel_branches(&inner_skeleton, 1).unwrap();
+        mirror.register_tree_branches(&inner_path, &inner_branches);
         store.set_leaf(&inner_branches[0], str_key("leaf"), Value::from("deep"));
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let mut expected_inner = Dict::new();
+        expected_inner.insert(str_key("value"), Value::None);
+        expected_inner.insert(str_key("meta"), Value::Dict(Dict::new()));
+        expected_inner.insert(str_key("leaf"), Value::from("deep"));
+        let mut expected_outer = Dict::new();
+        expected_outer.insert(str_key("note"), Value::from("outer wrote"));
+        expected_outer.insert(str_key("inner"), Value::Dict(expected_inner));
+        let mut expected_prime = Dict::new();
+        expected_prime.insert(str_key("outer"), Value::Dict(expected_outer));
+        let mut expected_root = Dict::new();
+        expected_root.insert(str_key("prime"), Value::Dict(expected_prime));
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            render_state(&Value::Dict(expected_root), false)
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// PR #549's review, finding 1: a `use` child's own graft and a
+    /// tree's own overlay can legitimately share one path (a `use`
+    /// child whose document has a top-level `flow: tree`, where the
+    /// child frame maps the child root to the `use` node's own path
+    /// the same way an unnamed/transparent tree appends no name
+    /// segment of its own). Both entries must compose rather than one
+    /// replacing the other -- and a *second* child write at the same
+    /// path must update that entry in place, never disturbing the
+    /// tree overlay already registered there.
+    #[test]
+    fn a_child_graft_and_a_tree_overlay_compose_at_the_same_path() {
+        let path = temp_path("child-graft-plus-tree");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let step = store.ensure_dict(&prime, str_key("step")).unwrap();
+        store.set_leaf(&step, str_key("value"), Value::None);
+        store.set_leaf(&step, str_key("meta"), Value::Dict(Dict::new()));
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let node_path = EffectPath::root().push_name("step");
+
+        // The tree registers first (as it always does inside a child
+        // whose own root is the tree -- `execute_tree` runs before any
+        // branch could ever call `write()`).
+        let branches = store.parallel_branches(&step, 1).unwrap();
+        mirror.register_tree_branches(&node_path, &branches);
+        store.set_leaf(&branches[0], str_key("fast"), Value::from("fast done"));
+
+        // A child write lands at the same path -- a snapshot of
+        // *something else* the child wrote, under a key the branch
+        // overlay above never touches.
+        let mut child_prime = Dict::new();
+        child_prime.insert(str_key("value"), Value::None);
+        child_prime.insert(str_key("meta"), Value::Dict(Dict::new()));
+        child_prime.insert(str_key("sibling"), Value::from("from child write"));
+        let mut child_snapshot = Dict::new();
+        child_snapshot.insert(str_key("prime"), Value::Dict(child_prime));
+        mirror.graft_child_write(&node_path, &Value::Dict(child_snapshot.clone()));
 
         mirror.mark_pending();
         mirror.flush_if_due(&store, || store.saved(&store.root));
@@ -902,8 +1092,208 @@ mod tests {
         };
         let text = fs::read_to_string(&path).unwrap();
         let parsed = electricity_json::loads(&text).unwrap();
-        let leaf = get(&get(&get(&get(&parsed, "prime"), "outer"), "inner"), "leaf");
-        assert_eq!(leaf, Value::from("deep"), "got {text}");
+        let step_node = get(&get(&parsed, "prime"), "step");
+        assert_eq!(
+            get(&step_node, "fast"),
+            Value::from("fast done"),
+            "the tree overlay must still show, got {text}"
+        );
+        assert_eq!(
+            get(&step_node, "sibling"),
+            Value::from("from child write"),
+            "the child graft at the same path must also show, got {text}"
+        );
+
+        // A second child write updates its own entry in place -- the
+        // tree overlay (registered first) must still win over it.
+        let mut child_prime2 = Dict::new();
+        child_prime2.insert(str_key("value"), Value::None);
+        child_prime2.insert(str_key("meta"), Value::Dict(Dict::new()));
+        child_prime2.insert(str_key("sibling"), Value::from("second write"));
+        let mut child_snapshot2 = Dict::new();
+        child_snapshot2.insert(str_key("prime"), Value::Dict(child_prime2));
+        mirror.graft_child_write(&node_path, &Value::Dict(child_snapshot2));
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let step_node = get(&get(&parsed, "prime"), "step");
+        assert_eq!(
+            get(&step_node, "fast"),
+            Value::from("fast done"),
+            "the tree overlay must survive a second child write at the same path, got {text}"
+        );
+        assert_eq!(
+            get(&step_node, "sibling"),
+            Value::from("second write"),
+            "the child graft's own second write must land, got {text}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// PR #549's review, finding 1: an outer tree and an inner,
+    /// unnamed tree nested one of its branches can register at the
+    /// *exact same path* (an unnamed tree loop/dynamic branch appends
+    /// no name segment of its own, `exec::loop_::run_each_tree`'s own
+    /// `dispatch_path` comment) -- both overlays must apply, and
+    /// clearing the inner one by identity must leave the outer one
+    /// alone.
+    #[test]
+    fn an_outer_tree_and_an_inner_unnamed_tree_compose_at_the_same_path() {
+        let path = temp_path("outer-plus-inner-unnamed-tree");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let lp = store.ensure_dict(&prime, str_key("lp")).unwrap();
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let node_path = EffectPath::root().push_name("lp");
+        let outer_branches = store.parallel_branches(&lp, 1).unwrap();
+        mirror.register_tree_branches(&node_path, &outer_branches);
+        store.set_leaf(
+            &outer_branches[0],
+            str_key("outer_key"),
+            Value::from("outer"),
+        );
+
+        // The unnamed inner tree lives directly off the outer branch's
+        // own root (no name segment), so its own branches write
+        // straight into *that same node* -- `dispatch_path` for an
+        // unnamed loop/dynamic is the enclosing container's, which
+        // here is the exact same path the outer tree already
+        // registered.
+        let inner_branches = store.parallel_branches(&outer_branches[0], 1).unwrap();
+        mirror.register_tree_branches(&node_path, &inner_branches);
+        store.set_leaf(
+            &inner_branches[0],
+            str_key("inner_key"),
+            Value::from("inner"),
+        );
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let lp_node = get(&get(&parsed, "prime"), "lp");
+        assert_eq!(
+            get(&lp_node, "outer_key"),
+            Value::from("outer"),
+            "the outer tree's own overlay must survive the inner tree registering at the same \
+             path, got {text}"
+        );
+        assert_eq!(
+            get(&lp_node, "inner_key"),
+            Value::from("inner"),
+            "the inner tree's own overlay must show too, got {text}"
+        );
+
+        // Clearing the inner tree by identity leaves the outer one.
+        mirror.clear_tree_branches(&node_path, &inner_branches);
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let lp_node = get(&get(&parsed, "prime"), "lp");
+        assert_eq!(
+            get(&lp_node, "outer_key"),
+            Value::from("outer"),
+            "clearing the inner tree must never remove the outer tree's own entry, got {text}"
+        );
+        assert_eq!(
+            get(&lp_node, "inner_key"),
+            Value::None,
+            "the inner tree's own content must be gone once it's cleared, got {text}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// PR #549's review, finding 1: two concurrent *sibling* unnamed
+    /// tree loops (neither nested in the other) can also register at
+    /// the same path, if both are direct, unnamed branches of the same
+    /// enclosing tree -- a shared key between them resolves the same
+    /// "later registration wins" way a shared key between two
+    /// branches of one tree does, and clearing either one by identity
+    /// leaves the other's overlay (and content) alone.
+    #[test]
+    fn two_sibling_unnamed_tree_loops_at_the_same_path_clear_independently() {
+        let path = temp_path("sibling-unnamed-trees");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let shared = store.ensure_dict(&prime, str_key("shared")).unwrap();
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let node_path = EffectPath::root().push_name("shared");
+        let sibling_a = store.parallel_branches(&shared, 1).unwrap();
+        mirror.register_tree_branches(&node_path, &sibling_a);
+        store.set_leaf(&sibling_a[0], str_key("note"), Value::from("from a"));
+
+        let sibling_b = store.parallel_branches(&shared, 1).unwrap();
+        mirror.register_tree_branches(&node_path, &sibling_b);
+        store.set_leaf(&sibling_b[0], str_key("note"), Value::from("from b"));
+        store.set_leaf(&sibling_b[0], str_key("b_key"), Value::from("b"));
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let shared_node = get(&get(&parsed, "prime"), "shared");
+        assert_eq!(
+            get(&shared_node, "note"),
+            Value::from("from b"),
+            "sibling b registered second, so it wins the shared key, got {text}"
+        );
+        assert_eq!(get(&shared_node, "b_key"), Value::from("b"));
+
+        // Clearing sibling a by identity leaves sibling b's overlay
+        // (and content) untouched.
+        mirror.clear_tree_branches(&node_path, &sibling_a);
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let shared_node = get(&get(&parsed, "prime"), "shared");
+        assert_eq!(get(&shared_node, "note"), Value::from("from b"));
+        assert_eq!(get(&shared_node, "b_key"), Value::from("b"));
+
+        // Clearing sibling b too leaves no overlay at that path at all.
+        mirror.clear_tree_branches(&node_path, &sibling_b);
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let shared_node = get(&get(&parsed, "prime"), "shared");
+        assert_eq!(
+            shared_node,
+            Value::Dict(Dict::new()),
+            "both siblings cleared must leave no overlay at all, got {text}"
+        );
         fs::remove_file(&path).unwrap();
     }
 }

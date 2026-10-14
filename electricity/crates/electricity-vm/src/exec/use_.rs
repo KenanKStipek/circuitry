@@ -1479,8 +1479,8 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.register_tree_branches(node_path, branches);
     }
 
-    fn clear_tree_branches(&self, node_path: &EffectPath) {
-        self.parent.clear_tree_branches(node_path);
+    fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
+        self.parent.clear_tree_branches(node_path, branches);
     }
 }
 

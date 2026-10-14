@@ -1199,7 +1199,9 @@ async fn named_tree_each_registers_every_pass_before_dispatch_and_clears_at_merg
         .position(
             |e| matches!(e, support::Event::RegisterTreeBranches(path, n) if path == "prime.shots" && *n == 2),
         )
-        .expect("register_tree_branches must fire with both passes, got {events:?}");
+        .unwrap_or_else(|| {
+            panic!("register_tree_branches must fire with both passes, got {events:?}")
+        });
     let first_pass_start = events
         .iter()
         .position(|e| matches!(e, support::Event::Start(path) if path == "prime.shots.iter_0.step"))
@@ -1212,7 +1214,7 @@ async fn named_tree_each_registers_every_pass_before_dispatch_and_clears_at_merg
     let clear_index = events
         .iter()
         .position(|e| matches!(e, support::Event::ClearTreeBranches(path) if path == "prime.shots"))
-        .expect("clear_tree_branches must fire, got {events:?}");
+        .unwrap_or_else(|| panic!("clear_tree_branches must fire, got {events:?}"));
     let last_pass_complete = events
         .iter()
         .rposition(|e| matches!(e, support::Event::Complete(path, None) if path.starts_with("prime.shots.iter_")))
@@ -1220,6 +1222,85 @@ async fn named_tree_each_registers_every_pass_before_dispatch_and_clears_at_merg
     assert!(
         clear_index > last_pass_complete,
         "clear must happen only once every pass (and so the merge) is done, got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_tree_loop_still_clears_its_overlay() {
+    // PR #549's review, finding 3: see `dynamic.rs`'s own identical
+    // test -- a cancelled tree loop never merges, but its overlay
+    // must still come down.
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![stringify_from(
+        body_prefix.push_name("step"),
+        "step",
+        "item",
+        "0",
+    )];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Tree,
+        Some(2),
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+
+    // `CancelOnStart` sets the token the moment `prime.shots` itself
+    // starts -- *after* the loop container's own `effect_start`, but
+    // (unlike a pre-set token) still in time to let
+    // `register_tree_branches` fire before any pass's own per-launch
+    // cancellation check sees it, exactly as a real signal landing
+    // while the loop is dispatching would.
+    let token = CancellationToken::new();
+    let inner = support::RecordingObserver::new();
+    let observer = support::CancelOnStart {
+        inner,
+        token: &token,
+        target: "prime.shots",
+    };
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let err = electricity_vm::execute_root(
+        &support::program(single(loop_op_)),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, VmError::Cancelled));
+
+    let events = observer.inner.events();
+    let register_index = events
+        .iter()
+        .position(
+            |e| matches!(e, support::Event::RegisterTreeBranches(path, n) if path == "prime.shots" && *n == 2),
+        )
+        .unwrap_or_else(|| {
+            panic!("register_tree_branches must still fire even though every pass is cancelled before it starts, got {events:?}")
+        });
+    let clear_index = events
+        .iter()
+        .position(|e| matches!(e, support::Event::ClearTreeBranches(path) if path == "prime.shots"))
+        .unwrap_or_else(|| {
+            panic!("clear_tree_branches must fire on the cancelled path too, got {events:?}")
+        });
+    assert!(
+        clear_index > register_index,
+        "clear must come after register, got {events:?}"
     );
 }
 

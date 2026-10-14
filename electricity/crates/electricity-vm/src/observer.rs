@@ -142,11 +142,19 @@ pub trait RunObserver {
     /// only `electricity` (lib)'s own `Observer` implements it for real.
     fn register_tree_branches(&self, _node_path: &EffectPath, _branches: &[NodeRef]) {}
 
-    /// *node_path* no longer needs [`RunObserver::register_tree_branches`]'s
-    /// own overlay -- its tree has merged. A no-op for a path that was
-    /// never registered (or already cleared), same as every other
-    /// hook's own tolerant default here.
-    fn clear_tree_branches(&self, _node_path: &EffectPath) {}
+    /// *node_path* no longer needs this tree's own overlay -- it has
+    /// merged. *branches* must be the exact same [`NodeRef`]s this
+    /// tree's own [`RunObserver::register_tree_branches`] call passed
+    /// (not merely the same *node_path*): PR #549's review, finding 1,
+    /// an unnamed tree loop that is a direct branch of another tree
+    /// registers at the *same* path as the outer tree's own container
+    /// (an unnamed loop/dynamic branch appends no name segment of its
+    /// own), so identifying which registration to undo by path alone
+    /// would also remove a sibling's or an outer tree's own still-live
+    /// overlay at that path. A no-op for a path with no entry matching
+    /// *branches* (never registered, or already cleared), same as
+    /// every other hook's own tolerant default here.
+    fn clear_tree_branches(&self, _node_path: &EffectPath, _branches: &[NodeRef]) {}
 
     /// Hands a completing effect's own `meta` snapshot to the run's
     /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
@@ -190,6 +198,6 @@ mod tests {
         observer.clear_graft(&path);
         observer.record_totals(&Value::None);
         observer.register_tree_branches(&path, &[]);
-        observer.clear_tree_branches(&path);
+        observer.clear_tree_branches(&path, &[]);
     }
 }

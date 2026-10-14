@@ -645,11 +645,10 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
 
 /// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
 /// loop, `max_concurrency: 2`, three items, a `json` body. Asserts
-/// only the finished run's own lines -- nothing mid-run, since
-/// issue #465 (electricity's own `--live-state` shows none of a
-/// tree's in-flight branches before the merge, unlike `cof`'s) is out
-/// of scope for this issue and a test that asserted that gap directly
-/// would start failing the moment #465 is fixed.
+/// only the finished run's own lines -- a mid-run assertion belongs to
+/// `a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges`
+/// below, which exercises issue #465's own overlay directly; this
+/// test only needs the run to merge correctly in the end.
 #[test]
 fn a_tree_loop_merges_every_pass() {
     if !e2e_electricity_enabled() {

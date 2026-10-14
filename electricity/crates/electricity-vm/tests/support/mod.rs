@@ -448,7 +448,7 @@ impl RunObserver for RecordingObserver {
         ));
     }
 
-    fn clear_tree_branches(&self, node_path: &EffectPath) {
+    fn clear_tree_branches(&self, node_path: &EffectPath, _branches: &[electricity_vm::NodeRef]) {
         self.events
             .borrow_mut()
             .push(Event::ClearTreeBranches(node_path.to_string()));
@@ -499,6 +499,14 @@ impl RunObserver for CancelOnStart<'_> {
 
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
         self.inner.dispatch(path, branches, concurrency);
+    }
+
+    fn register_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        self.inner.register_tree_branches(node_path, branches);
+    }
+
+    fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        self.inner.clear_tree_branches(node_path, branches);
     }
 }
 
