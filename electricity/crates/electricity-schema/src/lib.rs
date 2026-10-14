@@ -474,6 +474,24 @@ fn orchestration_schema() -> &'static Value {
     SCHEMA.get_or_init(|| load_schema(include_str!("../schema/orchestration.schema.json")))
 }
 
+/// The engine's own copy of the bundled orchestration schema, as
+/// `electricity_value::Value` -- unlike [`orchestration_schema`], never
+/// run through [`normalize_pattern_schema`]: the engine's own
+/// `pattern`/`patternProperties` matching ([`engine::pattern_is_match`])
+/// already translates Python `re` through `electricity-pyre` itself, so
+/// pre-mangling the schema's own pattern text here would both be
+/// redundant and leak the mangled text into a message (exactly the bug
+/// issue #528 reports against the `jsonschema` crate's own ECMA
+/// translation).
+fn orchestration_schema_engine() -> &'static electricity_value::Value {
+    static SCHEMA: OnceLock<electricity_value::Value> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let raw: Value = serde_json::from_str(include_str!("../schema/orchestration.schema.json"))
+            .expect("bundled schema file is valid JSON");
+        python_message::json_to_value(&raw)
+    })
+}
+
 fn profile_schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
     SCHEMA.get_or_init(|| load_schema(include_str!("../schema/profile.schema.json")))
@@ -523,19 +541,190 @@ fn profile_validator() -> &'static jsonschema::Validator {
     })
 }
 
-/// Every schema violation in `document` against Circuitry's
-/// `schema/orchestration.schema.json`; empty when it conforms. Mirrors
-/// `core.document_check.schema_errors`'s accept/reject verdict and, for
-/// each violation, its `_describe_schema_error`-computed location exactly.
-pub fn orchestration_errors(document: &Value) -> Vec<SchemaError> {
+/// [`orchestration_errors`]'s own `jsonschema`-crate fallback path --
+/// used whenever [`orchestration_errors_engine`] can't stand as sole
+/// authority (an unsupported keyword) or disagrees with this path on
+/// accept/reject (`orchestration_errors`'s own safety net). Message
+/// text here is the crate's own, not Python's -- `orchestration_errors`
+/// only reaches this path when [`orchestration_errors_engine`] itself
+/// couldn't produce Circuitry's own wording either, so there is no
+/// worse-than-today regression, only the pre-existing, documented
+/// crate-text gap this module's own docs already name.
+fn orchestration_errors_crate(schema_instance: &Value) -> Vec<SchemaError> {
     orchestration_validator()
-        .iter_errors(document)
+        .iter_errors(schema_instance)
         .filter(|err| !is_spurious_marker_error(err))
         .map(|err| SchemaError {
-            location: orchestration_location(document, err.instance_path.as_str()),
+            location: orchestration_location(schema_instance, err.instance_path.as_str()),
             message: substitute_value_prefix(&err.instance, err.to_string()),
         })
         .collect()
+}
+
+/// Every schema violation in `document` against Circuitry's
+/// `schema/orchestration.schema.json`, in Circuitry's own (Python
+/// `jsonschema`) wording and order -- empty when it conforms. Mirrors
+/// `core.document_check.schema_errors`'s accept/reject verdict and, for
+/// each violation, its `_describe_schema_error`-computed text exactly,
+/// through [`orchestration_errors_engine`] whenever that path can stand
+/// as sole authority and agrees with [`orchestration_errors_crate`] on
+/// accept/reject; *schema_instance* (the document, marker-converted the
+/// same way [`profile_errors`] needs) is still required on every call,
+/// as the fallback this never stops needing.
+pub fn orchestration_errors(
+    document: &electricity_value::Value,
+    schema_instance: &Value,
+) -> Vec<SchemaError> {
+    let crate_errors = orchestration_errors_crate(schema_instance);
+    match orchestration_errors_engine(document) {
+        Some(engine_errors) if engine_errors.is_empty() == crate_errors.is_empty() => engine_errors,
+        _ => crate_errors,
+    }
+}
+
+/// [`orchestration_errors`]'s own primary path: every violation of
+/// *document* (the original, marker-free value -- no `schema_instance`
+/// conversion needed, since [`engine::evaluate`] already understands a
+/// `Date`/`DateTime`/`Bytes`/non-string key natively) against the
+/// bundled orchestration schema, *in Circuitry's own (Python
+/// `jsonschema`) wording and order* -- `None` when the engine can't
+/// stand as sole authority at all (an unsupported keyword somewhere in
+/// the schema; never true for the bundled schema today, but this still
+/// checks it every call rather than assuming it, the same authority
+/// gate [`validate_prompt_schema`] applies). [`orchestration_errors`]
+/// itself is what still checks this path's own *verdict* (empty or not)
+/// against [`orchestration_errors_crate`]'s before trusting its text.
+fn orchestration_errors_engine(document: &electricity_value::Value) -> Option<Vec<SchemaError>> {
+    let schema = orchestration_schema_engine();
+    engine::clear_pattern_cache();
+    engine::clear_fully_supported_cache();
+    engine::take_recursion_exceeded();
+    engine::take_python_exception();
+    let fully_supported =
+        engine::with_draft7_mode(|| engine::schema_is_fully_supported(schema, schema));
+    if !fully_supported {
+        return None;
+    }
+    let mut violations = Vec::new();
+    engine::with_draft7_mode(|| {
+        engine::evaluate(schema, document, schema, &[], &[], &mut violations);
+    });
+    if engine::take_recursion_exceeded() || engine::take_python_exception().is_some() {
+        return None;
+    }
+    // `core/document_check.py::schema_errors` sorts the *raw* errors
+    // (`sorted(validator.iter_errors(orch), key=str)`) before ever
+    // calling `_describe_schema_error` -- so the sort key is each
+    // violation's own raw, un-substituted, un-suffixed message, not the
+    // text `describe_schema_error_engine` ultimately displays. The two
+    // can disagree (a `{}`/`[]`-repr message sorts differently from its
+    // own "value"-substituted spelling), so this keeps them separate
+    // rather than sorting by the displayed `SchemaError.message`.
+    let mut errors: Vec<(SchemaError, String, String, String, &str)> = violations
+        .iter()
+        .map(|violation| {
+            let raw_message = engine::render(violation);
+            let (error, schema_path_text, path_text, keyword) =
+                describe_schema_error_engine(violation, &raw_message);
+            (error, raw_message, schema_path_text, path_text, keyword)
+        })
+        .collect();
+    errors.sort_by(|a, b| (&a.1, a.4, &a.2, &a.3).cmp(&(&b.1, b.4, &b.2, &b.3)));
+    Some(errors.into_iter().map(|(error, ..)| error).collect())
+}
+
+/// One [`engine::Violation`] rendered as Circuitry's own
+/// `core.document_check._describe_schema_error` would: the message
+/// (with its own `repr(err.instance)` -> `"value"` substitution and
+/// `best_match`-chosen context suffix) and location, plus the keyword
+/// name and `schema_path`/`path` text [`orchestration_errors_engine`]'s
+/// own sort needs ([`engine::format_as_index`]'s own doc comment proves
+/// why that's enough of `str(err)` to sort by). *raw_message* is
+/// [`engine::render`]'s own output for *violation*, already computed by
+/// the caller.
+fn describe_schema_error_engine<'a>(
+    violation: &engine::Violation<'a>,
+    raw_message: &str,
+) -> (SchemaError, String, String, &'static str) {
+    let mut message = raw_message.to_string();
+    let instance_repr = violation.local_instance.py_repr();
+    if matches!(
+        violation.local_instance,
+        electricity_value::Value::Dict(_) | electricity_value::Value::List(_)
+    ) {
+        if let Some(rest) = message.strip_prefix(instance_repr.as_str()) {
+            message = format!("value{rest}");
+        }
+    }
+    if let Some(context) = violation_context(violation) {
+        if let Some(sub) = engine::best_match(context) {
+            let sub_message = engine::render(sub);
+            if sub_message != raw_message {
+                message = format!("{message} ({sub_message})");
+            }
+        }
+    }
+    let location = location_from_path(&violation.path);
+    let keyword = engine::keyword_name(&violation.kind).unwrap_or("");
+    let mut schema_path = violation.schema_path.clone();
+    if let Some(name) = engine::keyword_name(&violation.kind) {
+        schema_path.push(engine::PathSegment::Key(name.to_string()));
+    }
+    let schema_path_text = engine::format_as_index(&schema_path);
+    let path_text = engine::format_as_index(&violation.path);
+    (
+        SchemaError { location, message },
+        schema_path_text,
+        path_text,
+        keyword,
+    )
+}
+
+fn violation_context<'a, 'b>(
+    violation: &'b engine::Violation<'a>,
+) -> Option<&'b [engine::Violation<'a>]> {
+    match &violation.kind {
+        engine::Kind::AnyOfNotValid { context } | engine::Kind::OneOfNotValid { context } => {
+            Some(context)
+        }
+        _ => None,
+    }
+}
+
+/// Circuitry's own location format directly from an [`engine::Violation`]'s
+/// own `path` -- Python's `json_path` minus its leading `\$` and (if
+/// present) the next `.`, or `"top level"` for the document root.
+/// Unlike [`json_path_from_pointer`] (needed only by the `jsonschema`-
+/// crate path, whose own `instance_path` is a flattened JSON-Pointer
+/// *string* with no `Key`-vs-`Index` distinction of its own), this never
+/// needs to consult *document* at all: [`engine::PathSegment`] already
+/// carries that distinction.
+fn location_from_path(path: &[engine::PathSegment]) -> String {
+    let mut out = String::new();
+    for segment in path {
+        match segment {
+            engine::PathSegment::Index(i) => {
+                out.push('[');
+                out.push_str(&i.to_string());
+                out.push(']');
+            }
+            engine::PathSegment::Key(name) if is_json_path_compatible_property(name) => {
+                out.push('.');
+                out.push_str(name);
+            }
+            engine::PathSegment::Key(name) => {
+                out.push_str("['");
+                out.push_str(&name.replace('\\', "\\\\").replace('\'', "\\'"));
+                out.push_str("']");
+            }
+        }
+    }
+    let after_dot = out.strip_prefix('.').unwrap_or(&out);
+    if after_dot.is_empty() {
+        "top level".to_string()
+    } else {
+        after_dot.to_string()
+    }
 }
 
 /// `true` iff *err* is one of the object-shape keywords (`required`,
@@ -818,7 +1007,7 @@ fn validate_prompt_schema_impl(
             }
             _ => {
                 let mut violations = Vec::new();
-                engine::evaluate(schema, instance, schema, &[], &mut violations);
+                engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
                 match engine::best_match(&violations) {
                     None => PromptSchemaCheck::Valid,
                     Some(best) => PromptSchemaCheck::Invalid(engine::render(best)),
@@ -1574,7 +1763,7 @@ mod tests {
     #[test]
     fn valid_minimal_orchestration_has_no_errors() {
         let doc = json!({"effects": []});
-        assert_eq!(orchestration_errors(&doc), vec![]);
+        assert_eq!(orchestration_errors(&value_from_json(&doc), &doc), vec![]);
     }
 
     #[test]
@@ -1600,7 +1789,7 @@ mod tests {
     #[test]
     fn missing_required_effects_reports_top_level() {
         let doc = json!({});
-        let errors = orchestration_errors(&doc);
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].location, "top level");
         assert!(!errors[0].message.is_empty());
@@ -1609,7 +1798,7 @@ mod tests {
     #[test]
     fn nested_array_index_and_property_use_dotted_bracket_form() {
         let doc = json!({"effects": [{"type": "prompt", "name": "x", "prompt_type": 5}]});
-        let errors = orchestration_errors(&doc);
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
         assert!(
             errors
                 .iter()
@@ -1632,7 +1821,7 @@ mod tests {
     #[test]
     fn digit_string_property_key_is_bracket_quoted_not_an_array_index() {
         let doc = json!({"interface": {"inputs": {"1": {"type": 5}}}, "effects": []});
-        let errors = orchestration_errors(&doc);
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
         assert!(
             errors
                 .iter()
@@ -1764,7 +1953,7 @@ mod tests {
     #[test]
     fn value_prefix_is_substituted_for_a_failing_object_instance() {
         let doc = json!({"effects": [{}]});
-        let errors = orchestration_errors(&doc);
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
         let oneof_error = errors
             .iter()
             .find(|e| e.location == "effects[0]" && e.message.starts_with("value "))
@@ -1778,7 +1967,7 @@ mod tests {
             "interface": {"inputs": {"abc\n": {"type": 5}}},
             "effects": []
         });
-        let errors = orchestration_errors(&doc);
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
         let locations: Vec<&str> = errors.iter().map(|e| e.location.as_str()).collect();
         assert!(
             locations.contains(&"interface.inputs.abc\n.type"),

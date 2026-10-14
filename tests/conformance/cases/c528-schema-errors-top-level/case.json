@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/document_check.py::schema_errors, issue #528",
+  "description": "A run-level document check with two schema violations (issue #528's own worked example): a bad `NamePattern` and an unrecognized `type` enum value. Pins Circuitry's own wording and order exactly, not just the location.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

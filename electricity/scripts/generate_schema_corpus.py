@@ -4,18 +4,17 @@
 For every synthetic document below, records whether Circuitry's own
 ``jsonschema.Draft7Validator`` against the real
 ``schema/orchestration.schema.json`` or ``schema/profile.schema.json``
-accepts it and, when it does not, the exact *location* of every violation --
-Circuitry's own wrapping (DESIGN.md §4 step 3, issue #380), not the
-third-party library's message text (which the Rust side is never required
-to match word for word, only to fail at the same place with a non-empty
-message, DESIGN.md §1, §12):
+accepts it and, when it does not, every violation:
 
-* orchestration documents use ``core.document_check``'s own location formula
-  (``err.json_path.removeprefix("$").removeprefix(".") or "top level"``,
-  from ``_describe_schema_error``);
-* profile documents use ``cli.profiles``'s own location formula
-  (``"/".join(str(p) for p in err.path) or "<root>"``, from
-  ``_validate_profile_schema``).
+* orchestration documents record ``core.document_check.schema_errors``'s
+  own output verbatim (``described_errors``) -- text *and* order, both of
+  which electricity's engine path now reproduces exactly (issue #528), not
+  just the location (DESIGN.md §4 step 3, issue #380);
+* profile documents still record only each violation's own *location*
+  (``cli.profiles``'s own formula, ``"/".join(str(p) for p in err.path) or
+  "<root>"`` from ``_validate_profile_schema``) -- that caller isn't one of
+  #528's own four, and the Rust side is still never required to match its
+  message text word for word (DESIGN.md §1, §12).
 
 Documents are synthetic, hand-written against the schema/design, not drawn
 from any real orchestration. Must be run with the Circuitry package
@@ -46,14 +45,6 @@ OUTPUT = (
 )
 
 
-def _orchestration_locations(document: Any) -> list[str]:
-    validator = jsonschema.Draft7Validator(document_check.orchestration_schema())
-    return [
-        err.json_path.removeprefix("$").removeprefix(".") or "top level"
-        for err in validator.iter_errors(document)
-    ]
-
-
 def _profile_locations(document: Any) -> list[str]:
     validator = jsonschema.Draft7Validator(profiles._load_profile_schema())
     return [
@@ -61,41 +52,25 @@ def _profile_locations(document: Any) -> list[str]:
     ]
 
 
-def _value_substituted_messages(document: Any) -> dict[str, str]:
-    """Orchestration-only: location -> message, for every error whose own
-    ``_describe_schema_error`` dropped a leading ``repr(err.instance)`` in
-    favour of ``"value"`` -- the one piece of Circuitry's own message text
-    electricity-schema's ``substitute_value_prefix`` also reproduces (issue
-    #380 review, finding 4). The Rust test checks only that its own
-    substituted message starts the same way Python's does; the third-party
-    text after that point is the carved-out part (DESIGN.md §1, §12) and is
-    never compared.
-    """
-    validator = jsonschema.Draft7Validator(document_check.orchestration_schema())
-    out: dict[str, str] = {}
-    for err in validator.iter_errors(document):
-        described = document_check._describe_schema_error(err)
-        location, _, message = described.partition(": ")
-        if message.startswith("value "):
-            out[location] = message
-    return out
-
-
-def _case(name: str, schema: str, document: Any) -> dict:
-    locations = (
-        _orchestration_locations(document)
-        if schema == "orchestration"
-        else _profile_locations(document)
-    )
+def _orchestration_case(name: str, document: Any) -> dict:
+    described = document_check.schema_errors(document)
     return {
         "name": name,
-        "schema": schema,
+        "schema": "orchestration",
+        "document": document,
+        "valid": not described,
+        "described_errors": described,
+    }
+
+
+def _profile_case(name: str, document: Any) -> dict:
+    locations = _profile_locations(document)
+    return {
+        "name": name,
+        "schema": "profile",
         "document": document,
         "valid": not locations,
         "locations": sorted(locations),
-        "value_substituted_messages": (
-            _value_substituted_messages(document) if schema == "orchestration" else {}
-        ),
     }
 
 
@@ -422,9 +397,25 @@ def orchestration_cases() -> list[dict]:
                 ]
             },
         ),
+        (
+            # Issue #528's own worked example: an empty "body" (a minItems
+            # violation) and a missing "each"/"while" (a oneOf failure with
+            # context) on the same effect -- two different-message errors
+            # at two different locations, ordered by message text.
+            "loop_empty_body_and_missing_each_or_while",
+            {"effects": [{"name": "a", "type": "loop", "body": []}]},
+        ),
+        (
+            # Two effects each missing the same required keys: several
+            # pairs of violations share the exact same message text at two
+            # different locations, pinning that the sort breaks the tie by
+            # location rather than leaving it to chance.
+            "two_effects_with_identical_missing_required_errors",
+            {"effects": [{}, {}]},
+        ),
     ]
 
-    return [_case(name, "orchestration", doc) for name, doc in valid + invalid]
+    return [_orchestration_case(name, doc) for name, doc in valid + invalid]
 
 
 # ---------------------------------------------------------------------
@@ -461,7 +452,7 @@ def profile_cases() -> list[dict]:
         ("routing_wrong_oneof", {"effects": {"a.b": {"routing": 5}}}),
     ]
 
-    return [_case(name, "profile", doc) for name, doc in valid + invalid]
+    return [_profile_case(name, doc) for name, doc in valid + invalid]
 
 
 def build_corpus() -> list[dict]:

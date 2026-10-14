@@ -1,0 +1,7 @@
+name: c528-schema-errors-top-level
+effects:
+  - name: iter_0
+    type: tool
+    provider: json
+    params: {}
+  - type: bogus

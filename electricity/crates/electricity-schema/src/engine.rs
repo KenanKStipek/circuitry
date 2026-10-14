@@ -78,9 +78,16 @@ fn get<'a>(dict: &'a Dict, name: &str) -> Option<&'a Value> {
 /// render/relevance time rather than copied eagerly into this struct.
 pub(crate) struct Violation<'a> {
     pub(crate) kind: Kind<'a>,
-    path: Vec<PathSegment>,
+    pub(crate) path: Vec<PathSegment>,
+    /// The path to the keyword that fired, in `err.schema_path` terms --
+    /// `["properties", "a", "required"]` for a nested property, not
+    /// just `["required"]`. Needed only by the orchestration (draft-07)
+    /// document-check sort, which breaks a message+keyword tie this way
+    /// instead of porting `pprint`; irrelevant for prompt-schema
+    /// validation's own `best_match`, which never reads it.
+    pub(crate) schema_path: Vec<PathSegment>,
     local_schema: &'a Value,
-    local_instance: &'a Value,
+    pub(crate) local_instance: &'a Value,
 }
 
 /// One `error.path`/`error.relative_path` segment -- a `properties`/
@@ -110,6 +117,38 @@ pub(crate) enum PathSegment {
 /// same depth) has no Python analogue at all -- comparing a `str` to an
 /// `int` raises `TypeError` there -- so this picks an arbitrary, documented
 /// order (`Index` before `Key`) rather than mirroring a crash.
+/// `jsonschema._utils.format_as_index`'s own index text (the part after
+/// the container name): `"".join(f"[{index!r}]" for index in indices)`.
+///
+/// `core/document_check.py::schema_errors` sorts by `str(err)`, which
+/// (once the message itself ties) next compares `repr(err.validator)`,
+/// then this same text for `err.schema_path`, then the *schema*'s own
+/// `pprint`, then this text again for `err.path`, then the *instance*'s
+/// own `pprint` -- in that order, since it's one literal f-string
+/// compared left to right. Given two errors with equal message and
+/// keyword, their schema_path text alone decides the order *before*
+/// either pprint is ever reached, unless schema_path (hence this text)
+/// also ties -- but a tied schema_path names the exact same schema
+/// subtree (this engine's own schema is static per call), so the
+/// schema's own pprint can't differ either; the same argument applies
+/// to a tied path/instance pair. So comparing `(message, keyword,
+/// schema_path text, path text)` as a 4-tuple is a faithful stand-in
+/// for the full `str(err)` order -- it can never put two errors in a
+/// different relative order than Python would, without ever rendering
+/// either `pprint`.
+pub(crate) fn format_as_index(segments: &[PathSegment]) -> String {
+    let mut out = String::new();
+    for segment in segments {
+        out.push('[');
+        match segment {
+            PathSegment::Key(s) => out.push_str(&Value::Str(s.clone()).py_repr()),
+            PathSegment::Index(i) => out.push_str(&i.to_string()),
+        }
+        out.push(']');
+    }
+    out
+}
+
 fn compare_paths(a: &[PathSegment], b: &[PathSegment]) -> std::cmp::Ordering {
     for (x, y) in a.iter().zip(b.iter()) {
         let ordering = match (x, y) {
@@ -193,6 +232,18 @@ pub(crate) enum Kind<'a> {
         extra: usize,
         item_word: &'static str,
         rest_repr: String,
+    },
+    /// Draft 7's `additionalItems: false`, tripped by an `items` tuple
+    /// that doesn't cover every element.
+    AdditionalItemsFalse {
+        joined: String,
+        verb: &'static str,
+    },
+    /// Draft 7's `dependencies`, property form: *dependency* is listed
+    /// but missing, because *depends_on* is present.
+    Dependencies {
+        depends_on: &'a str,
+        dependency: &'a str,
     },
 }
 
@@ -637,6 +688,51 @@ fn relevance_cmp(a: &Violation<'_>, b: &Violation<'_>) -> std::cmp::Ordering {
         })
 }
 
+/// `err.validator` -- the keyword name a violation's own message is
+/// about, `None` only for a bare `false` subschema (Python's own
+/// `ValidationError` has no keyword there either, since no keyword
+/// function ever ran to produce it). Appended to a violation's own
+/// [`Violation::schema_path`] prefix to get the full `err.schema_path`
+/// the orchestration document-check sort needs; never used by
+/// prompt-schema validation's own `best_match`, which only reads
+/// [`relevance_cmp`].
+pub(crate) fn keyword_name(kind: &Kind<'_>) -> Option<&'static str> {
+    Some(match kind {
+        Kind::Type => "type",
+        Kind::Required { .. } => "required",
+        Kind::Enum => "enum",
+        Kind::Const => "const",
+        Kind::AdditionalPropertiesPlain { .. } | Kind::AdditionalPropertiesPatterned { .. } => {
+            "additionalProperties"
+        }
+        Kind::MinItems { .. } => "minItems",
+        Kind::MaxItems { .. } => "maxItems",
+        Kind::MinLength { .. } => "minLength",
+        Kind::MaxLength { .. } => "maxLength",
+        Kind::MinProperties { .. } => "minProperties",
+        Kind::MaxProperties { .. } => "maxProperties",
+        Kind::Minimum => "minimum",
+        Kind::Maximum => "maximum",
+        Kind::ExclusiveMinimum => "exclusiveMinimum",
+        Kind::ExclusiveMaximum => "exclusiveMaximum",
+        Kind::MultipleOf => "multipleOf",
+        Kind::Pattern => "pattern",
+        Kind::UniqueItems => "uniqueItems",
+        Kind::AnyOfNotValid { .. } => "anyOf",
+        Kind::OneOfNotValid { .. } | Kind::OneOfMultipleValid { .. } => "oneOf",
+        Kind::FalseSchema => return None,
+        Kind::Not { .. } => "not",
+        Kind::DependentRequired { .. } => "dependentRequired",
+        // Draft 7 (the only draft that ever reaches these through
+        // `draft7_mode_active()`) has no `minContains`/`maxContains` at
+        // all -- every `contains` failure there is this one keyword.
+        Kind::ContainsNone | Kind::MinContains { .. } | Kind::MaxContains { .. } => "contains",
+        Kind::ItemsFalse { .. } => "items",
+        Kind::AdditionalItemsFalse { .. } => "additionalItems",
+        Kind::Dependencies { .. } => "dependencies",
+    })
+}
+
 /// `jsonschema.exceptions.best_match`: `max(violations, key=relevance)`
 /// (Python's plain `max` keeps the *first* maximal element whenever
 /// [`relevance_cmp`] reports every candidate as equal to the current
@@ -948,6 +1044,32 @@ pub(crate) fn take_python_exception() -> Option<String> {
     PENDING_PY_EXCEPTION.with(|e| e.borrow_mut().take())
 }
 
+thread_local! {
+    /// Draft 7 vs. 2020-12 semantics this module's own callers pick
+    /// between (set once per top-level call, read deep inside
+    /// [`evaluate`]/[`schema_is_fully_supported_inner`], the same
+    /// pattern as [`LAZY_MODE`]): `$ref` siblings ignored, `dependencies`
+    /// a real validating keyword rather than a 2020-12 annotation, and
+    /// `dependentSchemas`/`dependentRequired` the other way around --
+    /// draft 7 never defines either, so a schema that happens to use one
+    /// of those names must leave it inert, not validated.
+    static DRAFT7_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn draft7_mode_active() -> bool {
+    DRAFT7_MODE.with(std::cell::Cell::get)
+}
+
+/// Sets [`DRAFT7_MODE`] for the duration of *f*, restoring the prior
+/// value afterward (so a draft-07 top-level call can never leak its own
+/// mode into a later, unrelated 2020-12 one on the same thread).
+pub(crate) fn with_draft7_mode<T>(f: impl FnOnce() -> T) -> T {
+    let prior = DRAFT7_MODE.with(|m| m.replace(true));
+    let result = f();
+    DRAFT7_MODE.with(|m| m.set(prior));
+    result
+}
+
 /// Collects every violation *schema* has against *instance*, in Python's
 /// own `iter_errors` order, appending to *out*. *path* is the instance
 /// path already descended through from this call's own starting point (an
@@ -955,11 +1077,14 @@ pub(crate) fn take_python_exception() -> Option<String> {
 /// `jsonschema.validators.create.descend`'s own `path=None` for those two
 /// keywords, matching `_keywords.anyOf`/`oneOf`'s own `validator.descend(
 /// instance, subschema, schema_path=index)` call, no `path=` at all).
+/// *schema_path* is the matching `err.schema_path` prefix -- see
+/// [`Violation::schema_path`]'s own doc comment.
 pub(crate) fn evaluate<'a>(
     schema: &'a Value,
     instance: &'a Value,
     root: &'a Value,
     path: &[PathSegment],
+    schema_path: &[PathSegment],
     out: &mut Vec<Violation<'a>>,
 ) {
     let (_eval_guard, exceeded) = enter_eval_guard(schema, instance);
@@ -970,6 +1095,7 @@ pub(crate) fn evaluate<'a>(
         out.push(Violation {
             kind: Kind::FalseSchema,
             path: path.to_vec(),
+            schema_path: schema_path.to_vec(),
             local_schema: schema,
             local_instance: instance,
         });
@@ -978,13 +1104,25 @@ pub(crate) fn evaluate<'a>(
     let Some(dict) = schema.as_dict() else {
         return;
     };
+    // Draft 7's `$ref` is a replace-node keyword: a sibling (besides pure
+    // annotations, already no-ops either way) is simply never looked at.
+    // 2020-12's own `$ref` keeps evaluating its siblings alongside it, so
+    // this only applies under `draft7_mode_active()`.
+    if draft7_mode_active() {
+        if let Some(pointer) = dict.get(&key("$ref")).and_then(Value::as_str) {
+            if let Some(resolved) = resolve_ref_or_raise(root, pointer) {
+                evaluate(resolved, instance, root, path, schema_path, out);
+            }
+            return;
+        }
+    }
     for (raw_key, value) in dict.iter() {
         let Some(k) = raw_key.as_str() else { continue };
         match k {
             "$ref" => {
                 if let Some(pointer) = value.as_str() {
                     if let Some(resolved) = resolve_ref_or_raise(root, pointer) {
-                        evaluate(resolved, instance, root, path, out);
+                        evaluate(resolved, instance, root, path, schema_path, out);
                     }
                 }
             }
@@ -993,6 +1131,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Type,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1004,6 +1143,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Enum,
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1015,6 +1155,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Const,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1032,6 +1173,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Required { property: name },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1049,7 +1191,17 @@ pub(crate) fn evaluate<'a>(
                     if let Some(prop_instance) = obj.get(&key(name)) {
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Key(name.to_string()));
-                        evaluate(subschema, prop_instance, root, &child_path, out);
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path.push(PathSegment::Key("properties".to_string()));
+                        child_schema_path.push(PathSegment::Key(name.to_string()));
+                        evaluate(
+                            subschema,
+                            prop_instance,
+                            root,
+                            &child_path,
+                            &child_schema_path,
+                            out,
+                        );
                     }
                 }
             }
@@ -1068,7 +1220,18 @@ pub(crate) fn evaluate<'a>(
                         if pattern_is_match(pattern, name) {
                             let mut child_path = path.to_vec();
                             child_path.push(PathSegment::Key(name.to_string()));
-                            evaluate(subschema, prop_instance, root, &child_path, out);
+                            let mut child_schema_path = schema_path.to_vec();
+                            child_schema_path
+                                .push(PathSegment::Key("patternProperties".to_string()));
+                            child_schema_path.push(PathSegment::Key(pattern.to_string()));
+                            evaluate(
+                                subschema,
+                                prop_instance,
+                                root,
+                                &child_path,
+                                &child_schema_path,
+                                out,
+                            );
                         }
                     }
                 }
@@ -1163,11 +1326,21 @@ pub(crate) fn evaluate<'a>(
                     // documented, narrower residual gap than leaving the
                     // keyword unsupported entirely (`DESIGN.md` §13).
                     Value::Dict(_) => {
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path
+                            .push(PathSegment::Key("additionalProperties".to_string()));
                         for name in &extras {
                             let prop_instance = obj.get(&key(name)).expect("just found above");
                             let mut child_path = path.to_vec();
                             child_path.push(PathSegment::Key(name.to_string()));
-                            evaluate(value, prop_instance, root, &child_path, out);
+                            evaluate(
+                                value,
+                                prop_instance,
+                                root,
+                                &child_path,
+                                &child_schema_path,
+                                out,
+                            );
                         }
                     }
                     Value::Bool(false) => {
@@ -1180,6 +1353,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind,
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1189,13 +1363,78 @@ pub(crate) fn evaluate<'a>(
                     _ => {}
                 }
             }
-            "items" => {
-                // Draft 7's tuple form (`items` itself a list) is left to
-                // the legacy fallback -- 2020-12's `items` only ever
-                // applies past `prefixItems`' own length.
-                if matches!(value, Value::List(_)) {
+            "items" if matches!(value, Value::List(_)) && draft7_mode_active() => {
+                // Draft 7's tuple form: `items` itself a list validates
+                // each element it has a slot for; `additionalItems`
+                // (a separate, draft-7-only keyword Python's own
+                // `_legacy_keywords.additionalItems` only ever consults
+                // when `items` is a list exactly like this) covers
+                // whatever's left. 2020-12 never gives `items` a list
+                // value at all (that's `prefixItems`' job there), so
+                // this arm only exists under `draft7_mode_active()`.
+                let Value::List(item_schemas) = value else {
+                    unreachable!("guarded by the match arm's own condition")
+                };
+                let Value::List(elements) = instance else {
+                    continue;
+                };
+                let prefix = item_schemas.len();
+                for (index, (subschema, element)) in
+                    item_schemas.iter().zip(elements.iter()).enumerate()
+                {
+                    let mut child_path = path.to_vec();
+                    child_path.push(PathSegment::Index(index));
+                    let mut child_schema_path = schema_path.to_vec();
+                    child_schema_path.push(PathSegment::Key("items".to_string()));
+                    child_schema_path.push(PathSegment::Index(index));
+                    evaluate(
+                        subschema,
+                        element,
+                        root,
+                        &child_path,
+                        &child_schema_path,
+                        out,
+                    );
+                }
+                if elements.len() <= prefix {
                     continue;
                 }
+                let Some(additional) = schema.as_dict().and_then(|d| get(d, "additionalItems"))
+                else {
+                    continue;
+                };
+                let rest = &elements[prefix..];
+                match additional {
+                    Value::Bool(false) => {
+                        let (joined, verb) = extras_msg_values(&rest.iter().collect::<Vec<_>>());
+                        out.push(Violation {
+                            kind: Kind::AdditionalItemsFalse { joined, verb },
+                            path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
+                            local_schema: schema,
+                            local_instance: instance,
+                        });
+                    }
+                    Value::Bool(true) => {}
+                    _ => {
+                        for (offset, element) in rest.iter().enumerate() {
+                            let mut child_path = path.to_vec();
+                            child_path.push(PathSegment::Index(prefix + offset));
+                            let mut child_schema_path = schema_path.to_vec();
+                            child_schema_path.push(PathSegment::Key("additionalItems".to_string()));
+                            evaluate(
+                                additional,
+                                element,
+                                root,
+                                &child_path,
+                                &child_schema_path,
+                                out,
+                            );
+                        }
+                    }
+                }
+            }
+            "items" => {
                 let Value::List(elements) = instance else {
                     continue;
                 };
@@ -1226,6 +1465,7 @@ pub(crate) fn evaluate<'a>(
                             rest_repr,
                         },
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1233,9 +1473,18 @@ pub(crate) fn evaluate<'a>(
                     for (index, element) in elements.iter().enumerate().skip(prefix) {
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Index(index));
-                        evaluate(value, element, root, &child_path, out);
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path.push(PathSegment::Key("items".to_string()));
+                        evaluate(value, element, root, &child_path, &child_schema_path, out);
                     }
                 }
+            }
+            "additionalItems" => {
+                // Handled jointly with a list-valued `items` above, the
+                // same way Python's own `additionalItems` validator
+                // function only ever acts when `items` is a list
+                // (confirmed directly) -- every other case (no `items`,
+                // or a single-schema `items`) is always a no-op.
             }
             "prefixItems" => {
                 let (Value::List(prefix_schemas), Value::List(elements)) = (value, instance) else {
@@ -1246,7 +1495,17 @@ pub(crate) fn evaluate<'a>(
                 {
                     let mut child_path = path.to_vec();
                     child_path.push(PathSegment::Index(index));
-                    evaluate(subschema, element, root, &child_path, out);
+                    let mut child_schema_path = schema_path.to_vec();
+                    child_schema_path.push(PathSegment::Key("prefixItems".to_string()));
+                    child_schema_path.push(PathSegment::Index(index));
+                    evaluate(
+                        subschema,
+                        element,
+                        root,
+                        &child_path,
+                        &child_schema_path,
+                        out,
+                    );
                 }
             }
             "minItems" => {
@@ -1257,6 +1516,7 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1271,6 +1531,7 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1285,6 +1546,7 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1299,6 +1561,7 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1313,6 +1576,7 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1327,6 +1591,7 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1340,6 +1605,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Minimum,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1352,6 +1618,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Maximum,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1367,6 +1634,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMinimum,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1382,6 +1650,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMaximum,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1392,6 +1661,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::MultipleOf,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1403,6 +1673,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Pattern,
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1415,6 +1686,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::UniqueItems,
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1428,7 +1700,13 @@ pub(crate) fn evaluate<'a>(
                 let mut context = Vec::new();
                 let mut all_valid = false;
                 for branch in branches {
-                    if evaluate_branch(branch, instance, root, path, &mut context) {
+                    // `context`'s own schema_path is never read (the
+                    // `AnyOfNotValid` wrapper itself is the only thing
+                    // the top-level sort/render ever sees), so this
+                    // passes the enclosing schema_path through
+                    // unchanged rather than threading a per-branch index
+                    // only `best_match` would discard anyway.
+                    if evaluate_branch(branch, instance, root, path, schema_path, &mut context) {
                         all_valid = true;
                         break;
                     }
@@ -1437,6 +1715,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::AnyOfNotValid { context },
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1460,7 +1739,7 @@ pub(crate) fn evaluate<'a>(
                 let mut first_valid: Option<&Value> = None;
                 let mut rest_start = branches.len();
                 for (index, branch) in branches.iter().enumerate() {
-                    if evaluate_branch(branch, instance, root, path, &mut context) {
+                    if evaluate_branch(branch, instance, root, path, schema_path, &mut context) {
                         first_valid = Some(branch);
                         rest_start = index + 1;
                         break;
@@ -1471,6 +1750,7 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::OneOfNotValid { context },
                             path: path.to_vec(),
+                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1487,6 +1767,7 @@ pub(crate) fn evaluate<'a>(
                                     matching: more_valid,
                                 },
                                 path: path.to_vec(),
+                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -1500,8 +1781,11 @@ pub(crate) fn evaluate<'a>(
                 // index)` -- no `path=`, so every subschema's own
                 // violations flow straight into `out`, never wrapped.
                 if let Value::List(subschemas) = value {
-                    for subschema in subschemas {
-                        evaluate(subschema, instance, root, path, out);
+                    for (index, subschema) in subschemas.iter().enumerate() {
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path.push(PathSegment::Key("allOf".to_string()));
+                        child_schema_path.push(PathSegment::Index(index));
+                        evaluate(subschema, instance, root, path, &child_schema_path, out);
                     }
                 }
             }
@@ -1510,6 +1794,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Not { not_schema: value },
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1518,13 +1803,17 @@ pub(crate) fn evaluate<'a>(
             "if" => {
                 if is_valid(value, instance, root) {
                     if let Some(then) = schema.as_dict().and_then(|d| get(d, "then")) {
-                        evaluate(then, instance, root, path, out);
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path.push(PathSegment::Key("then".to_string()));
+                        evaluate(then, instance, root, path, &child_schema_path, out);
                     }
                 } else if let Some(else_) = schema.as_dict().and_then(|d| get(d, "else")) {
-                    evaluate(else_, instance, root, path, out);
+                    let mut child_schema_path = schema_path.to_vec();
+                    child_schema_path.push(PathSegment::Key("else".to_string()));
+                    evaluate(else_, instance, root, path, &child_schema_path, out);
                 }
             }
-            "dependentRequired" => {
+            "dependentRequired" if !draft7_mode_active() => {
                 let (Value::Dict(dependent), Value::Dict(obj)) = (value, instance) else {
                     continue;
                 };
@@ -1546,6 +1835,7 @@ pub(crate) fn evaluate<'a>(
                             out.push(Violation {
                                 kind: Kind::DependentRequired { each, property },
                                 path: path.to_vec(),
+                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -1553,7 +1843,7 @@ pub(crate) fn evaluate<'a>(
                     }
                 }
             }
-            "dependentSchemas" => {
+            "dependentSchemas" if !draft7_mode_active() => {
                 let (Value::Dict(dependent), Value::Dict(obj)) = (value, instance) else {
                     continue;
                 };
@@ -1562,7 +1852,57 @@ pub(crate) fn evaluate<'a>(
                         continue;
                     };
                     if obj.contains_key(&key(property)) {
-                        evaluate(dependency, instance, root, path, out);
+                        let mut child_schema_path = schema_path.to_vec();
+                        child_schema_path.push(PathSegment::Key("dependentSchemas".to_string()));
+                        child_schema_path.push(PathSegment::Key(property.to_string()));
+                        evaluate(dependency, instance, root, path, &child_schema_path, out);
+                    }
+                }
+            }
+            // Draft 7's combined `dependencies`: a property's own value
+            // is either a list (the `dependentRequired` shape, one
+            // violation per still-missing name) or a schema (the
+            // `dependentSchemas` shape). 2020-12 never defines this
+            // keyword at all -- Python leaves it a pure annotation there
+            // (confirmed directly), so this arm only runs under
+            // `draft7_mode_active()`.
+            "dependencies" if draft7_mode_active() => {
+                let (Value::Dict(dependent), Value::Dict(obj)) = (value, instance) else {
+                    continue;
+                };
+                for (prop_key, dependency) in dependent.iter() {
+                    let Some(depends_on) = prop_key.as_str() else {
+                        continue;
+                    };
+                    if !obj.contains_key(&key(depends_on)) {
+                        continue;
+                    }
+                    match dependency {
+                        Value::List(each_list) => {
+                            for each in each_list {
+                                let Some(dependency_name) = each.as_str() else {
+                                    continue;
+                                };
+                                if !obj.contains_key(&key(dependency_name)) {
+                                    out.push(Violation {
+                                        kind: Kind::Dependencies {
+                                            depends_on,
+                                            dependency: dependency_name,
+                                        },
+                                        path: path.to_vec(),
+                                        schema_path: schema_path.to_vec(),
+                                        local_schema: schema,
+                                        local_instance: instance,
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            let mut child_schema_path = schema_path.to_vec();
+                            child_schema_path.push(PathSegment::Key("dependencies".to_string()));
+                            child_schema_path.push(PathSegment::Key(depends_on.to_string()));
+                            evaluate(dependency, instance, root, path, &child_schema_path, out);
+                        }
                     }
                 }
             }
@@ -1570,8 +1910,18 @@ pub(crate) fn evaluate<'a>(
                 let Value::List(elements) = instance else {
                     continue;
                 };
-                let min_contains_value = schema.as_dict().and_then(|d| get(d, "minContains"));
-                let max_contains_value = schema.as_dict().and_then(|d| get(d, "maxContains"));
+                // Draft 7 never defines `minContains`/`maxContains` at
+                // all -- a `contains` there always just means "at least
+                // one" (confirmed directly: both are inert alongside it
+                // under `Draft7Validator`).
+                let (min_contains_value, max_contains_value) = if draft7_mode_active() {
+                    (None, None)
+                } else {
+                    (
+                        schema.as_dict().and_then(|d| get(d, "minContains")),
+                        schema.as_dict().and_then(|d| get(d, "maxContains")),
+                    )
+                };
                 let mut matches: i64 = 0;
                 let mut too_many = false;
                 for element in elements {
@@ -1600,6 +1950,7 @@ pub(crate) fn evaluate<'a>(
                                 .expect("set whenever too_many is true"),
                         },
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1617,6 +1968,7 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind,
                         path: path.to_vec(),
+                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1629,9 +1981,11 @@ pub(crate) fn evaluate<'a>(
                 let Value::Dict(obj) = instance else {
                     continue;
                 };
+                let mut child_schema_path = schema_path.to_vec();
+                child_schema_path.push(PathSegment::Key("propertyNames".to_string()));
                 for prop_key in obj.keys() {
                     if prop_key.as_str().is_some() {
-                        evaluate(value, prop_key, root, path, out);
+                        evaluate(value, prop_key, root, path, &child_schema_path, out);
                     }
                 }
             }
@@ -1721,7 +2075,7 @@ fn suspend_lazy_mode() -> LazyModeGuard {
 pub(crate) fn is_valid(schema: &Value, instance: &Value, root: &Value) -> bool {
     let _lazy_guard = enter_lazy_mode();
     let mut violations = Vec::new();
-    evaluate(schema, instance, root, &[], &mut violations);
+    evaluate(schema, instance, root, &[], &[], &mut violations);
     violations.is_empty()
 }
 
@@ -2334,6 +2688,27 @@ fn schema_is_fully_supported_inner(
     }
     match schema {
         Value::Bool(_) => true,
+        // Draft 7's `$ref` is a replace-node keyword (`evaluate`'s own
+        // doc comment on the same gate): a sibling's own support is
+        // never consulted, since it's never evaluated either.
+        Value::Dict(dict) if draft7_mode_active() && dict.contains_key(&key("$ref")) => dict
+            .get(&key("$ref"))
+            .and_then(Value::as_str)
+            .is_some_and(|pointer| {
+                if !is_same_document_pointer_syntax(pointer) {
+                    return false;
+                }
+                match resolve_ref(root, pointer) {
+                    None => true,
+                    Some(resolved) => {
+                        let ptr: *const Value = resolved;
+                        if !seen.insert(ptr) {
+                            return true;
+                        }
+                        schema_is_fully_supported_inner(resolved, root, seen, depth + 1, false)
+                    }
+                }
+            }),
         Value::Dict(dict) => dict.iter().all(|(k, v)| {
             let Some(key_str) = k.as_str() else {
                 return false;
@@ -2424,7 +2799,15 @@ fn schema_is_fully_supported_inner(
                 // already confirmed every pattern in compiles, issue
                 // #498's own follow-up, finding F13).
                 "pattern" => v.as_str().is_some_and(python_regex_is_valid),
-                "properties" | "dependentSchemas" => v.as_dict().is_some_and(|d| {
+                "properties" => v.as_dict().is_some_and(|d| {
+                    d.values()
+                        .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
+                }),
+                // 2020-12 only -- under draft 7, Python never registers
+                // `dependentSchemas` at all, so it stays a plain
+                // annotation (`_ => true` below) regardless of its own
+                // content.
+                "dependentSchemas" if !draft7_mode_active() => v.as_dict().is_some_and(|d| {
                     d.values()
                         .all(|sub| schema_is_fully_supported_inner(sub, root, seen, depth, false))
                 }),
@@ -2434,9 +2817,35 @@ fn schema_is_fully_supported_inner(
                             && schema_is_fully_supported_inner(sub, root, seen, depth, false)
                     })
                 }),
-                "additionalProperties" | "items" | "not" | "propertyNames" | "contains" => {
+                "additionalProperties" | "not" | "propertyNames" | "contains" => {
                     schema_is_fully_supported_inner(v, root, seen, depth, false)
                 }
+                // Draft 7's tuple form: every slot schema, plus
+                // `additionalItems` (its own match arm below, since
+                // `dict.iter()` reaches it as a separate key). 2020-12
+                // never gives `items` a list value at all, so that shape
+                // stays unsupported there -- the plain single-schema
+                // case below still applies regardless of draft.
+                "items" if draft7_mode_active() && matches!(v, Value::List(_)) => {
+                    v.as_list().is_some_and(|subs| {
+                        subs.iter().all(|sub| {
+                            schema_is_fully_supported_inner(sub, root, seen, depth, false)
+                        })
+                    })
+                }
+                "items" => schema_is_fully_supported_inner(v, root, seen, depth, false),
+                "additionalItems" if draft7_mode_active() => {
+                    schema_is_fully_supported_inner(v, root, seen, depth, false)
+                }
+                // Draft 7's combined `dependencies`: a schema-valued
+                // entry needs its own support check; a list-valued one
+                // (the `dependentRequired` shape) needs none.
+                "dependencies" if draft7_mode_active() => v.as_dict().is_some_and(|d| {
+                    d.values().all(|sub| match sub {
+                        Value::List(_) => true,
+                        _ => schema_is_fully_supported_inner(sub, root, seen, depth, false),
+                    })
+                }),
                 "if" => {
                     schema_is_fully_supported_inner(v, root, seen, depth, false)
                         && dict.get(&key("then")).is_none_or(|t| {
@@ -2512,11 +2921,12 @@ fn evaluate_branch<'a>(
     instance: &'a Value,
     root: &'a Value,
     path: &[PathSegment],
+    schema_path: &[PathSegment],
     context: &mut Vec<Violation<'a>>,
 ) -> bool {
     let _lazy_guard = suspend_lazy_mode();
     let before = context.len();
-    evaluate(branch, instance, root, path, context);
+    evaluate(branch, instance, root, path, schema_path, context);
     context.len() == before
 }
 
@@ -2733,6 +3143,17 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
             item_word,
             rest_repr,
         } => format!("Expected at most {prefix} {item_word} but found {extra} extra: {rest_repr}"),
+        Kind::AdditionalItemsFalse { joined, verb } => {
+            format!("Additional items are not allowed ({joined} {verb} unexpected)")
+        }
+        Kind::Dependencies {
+            depends_on,
+            dependency,
+        } => format!(
+            "{} is a dependency of {}",
+            Value::Str(dependency.to_string()).py_repr(),
+            Value::Str(depends_on.to_string()).py_repr()
+        ),
     }
 }
 
@@ -2742,6 +3163,20 @@ fn extras_msg(extras: &[&str]) -> (String, &'static str) {
     let joined = extras
         .iter()
         .map(|s| Value::Str(s.to_string()).py_repr())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verb = if extras.len() == 1 { "was" } else { "were" };
+    (joined, verb)
+}
+
+/// [`extras_msg`]'s own shape for `additionalItems: false`'s extra
+/// *values* rather than extra property *names* -- each rendered through
+/// [`Value::py_repr`] directly, never quoted as a bare string the way a
+/// property name is.
+fn extras_msg_values(extras: &[&Value]) -> (String, &'static str) {
+    let joined = extras
+        .iter()
+        .map(|v| v.py_repr())
         .collect::<Vec<_>>()
         .join(", ");
     let verb = if extras.len() == 1 { "was" } else { "were" };
@@ -2958,7 +3393,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         let mut violations = Vec::new();
-        evaluate(&schema, &instance, &schema, &[], &mut violations);
+        evaluate(&schema, &instance, &schema, &[], &[], &mut violations);
         assert!(violations.is_empty(), "the last branch should have matched");
         assert!(
             start.elapsed().as_secs() < 2,

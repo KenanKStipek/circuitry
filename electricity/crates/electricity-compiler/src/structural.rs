@@ -3,20 +3,11 @@
 //! ([`crate::difflib`]), JSON Schema through [`crate::schema_instance`],
 //! `group:` placement, and `interface.inputs` checks.
 //!
-//! ## Known divergence: multi-error schema ordering
-//!
-//! Circuitry's own `schema_errors` sorts multiple simultaneous schema
-//! violations by `str(err)` on the raw Python `jsonschema.
-//! ValidationError` -- third-party text from a different JSON Schema
-//! implementation than the Rust `jsonschema` crate this workspace uses,
-//! so that exact order cannot be reproduced here (`electricity-schema`'s
-//! own crate docs note the same gap for `cli.profiles`' error list, for
-//! the identical reason). [`schema_errors`] instead sorts by
-//! `(location, message)`, a stable, deterministic order of its own --
-//! every individual error's own text and location still match
-//! Circuitry's own `_describe_schema_error` output exactly (that part is
-//! Circuitry's own format, not third-party), only the *relative order*
-//! of two or more simultaneous violations can differ.
+//! [`schema_errors`]' own text and order are Circuitry's own (issue
+//! #528) through `electricity_schema::orchestration_errors`'s own
+//! engine path, whenever that path can stand as sole authority and
+//! agrees with the `jsonschema`-crate fallback on accept/reject -- see
+//! that function's own doc comment.
 
 use crate::difflib;
 use crate::schema_instance::to_schema_instance;
@@ -274,13 +265,15 @@ pub fn unknown_key_warnings(document: &Value) -> Vec<String> {
     unknown_keys(document).1
 }
 
-/// `core/document_check.py::schema_errors` -- see this module's own
-/// "Known divergence" doc comment on multi-error ordering.
+/// `core/document_check.py::schema_errors`, text and order included --
+/// see `electricity_schema::orchestration_errors`'s own doc comment for
+/// how.
 pub fn schema_errors(document: &Value) -> Vec<String> {
     let instance = to_schema_instance(document);
-    let mut errors = electricity_schema::orchestration_errors(&instance);
-    errors.sort_by(|a, b| (&a.location, &a.message).cmp(&(&b.location, &b.message)));
-    errors.into_iter().map(|e| e.describe()).collect()
+    electricity_schema::orchestration_errors(document, &instance)
+        .into_iter()
+        .map(|e| e.describe())
+        .collect()
 }
 
 /// `core/document_check.py::group_field_errors`.
