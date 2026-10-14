@@ -830,13 +830,25 @@ fn mark_highlights(
 /// line's key stays stable even once the trim has dropped it from
 /// `log_lines` itself. `prev_total` is the same count as of the
 /// previous rebuild -- everything from there up to now is new.
+///
+/// `baseline_exists` is the same "does `prev_render_state` already
+/// hold a real build" condition `mark_highlights` tests via its own
+/// `prev` (issue #535's log-pane half of finding 3): on the loop's
+/// first real rebuild there is no baseline yet, so every line pushed
+/// by the catch-up drain that ran before it -- replaying what an
+/// already-progressed or already-finished run did before `osp
+/// watch`/`osp <doc>` ever attached -- is caught up here silently,
+/// same as the render-state diff is. `prev_total` still advances
+/// either way, so nothing from before this call is ever marked
+/// retroactively once a real baseline does exist.
 fn mark_new_log_lines(
     highlights: &mut highlight::Tracker,
     prev_total: &mut u64,
     next_seq: u64,
     no_animation: bool,
+    baseline_exists: bool,
 ) {
-    if !no_animation {
+    if !no_animation && baseline_exists {
         let now = Instant::now();
         for seq in *prev_total..next_seq {
             highlights.mark(&format!("log:{seq}"), now);
@@ -1345,6 +1357,7 @@ fn run_tui(
                 &now_rfc3339(),
                 &[],
             );
+            let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
                 &mut prev_render_state,
@@ -1356,6 +1369,7 @@ fn run_tui(
                 &mut prev_log_total,
                 next_log_seq,
                 no_animation,
+                baseline_exists,
             );
             mark_details_highlights(
                 &mut highlights,
@@ -2351,6 +2365,7 @@ fn run_tui_watch(
                 &now_rfc3339(),
                 &[],
             );
+            let baseline_exists = prev_render_state.is_some();
             mark_highlights(
                 &mut highlights,
                 &mut prev_render_state,
@@ -2362,6 +2377,7 @@ fn run_tui_watch(
                 &mut prev_log_total,
                 next_log_seq,
                 no_animation,
+                baseline_exists,
             );
             mark_details_highlights(
                 &mut highlights,
@@ -2855,14 +2871,103 @@ mod tests {
         );
     }
 
+    /// Issue #535: the real call sequence `osp watch` takes attaching
+    /// to a run that's already finished -- a catch-up drain pushes
+    /// every log line the run ever produced before the loop's first
+    /// real rebuild runs at all, so `prev_log_total` is still 0 (its
+    /// own startup value) when `next_log_seq` already reflects the
+    /// whole backlog. `mark_new_log_lines` must take its
+    /// `baseline_exists` from the same `prev_render_state.is_some()`
+    /// check made *before* `mark_highlights` runs, same as the real
+    /// loops do, or the backlog highlights on open.
+    #[test]
+    fn watching_a_finished_run_opens_calm_even_with_lines_already_in_the_log() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let finished = serde_json::json!({"prime": {"value": "x", "meta": {"completed_at": "t0"}}});
+        let render_state = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "watch",
+            &plan,
+            &mut model,
+            Some(&finished),
+            ProcessState::Exited {
+                interrupted: false,
+                likely_failed: false,
+                has_failure_reason: false,
+            },
+            1.0,
+            "t1",
+            &[],
+        );
+
+        let mut highlights = highlight::Tracker::new();
+        let mut prev_render_state = None;
+        let mut prev_log_total = 0u64;
+        // The catch-up drain's own three lines, already pushed before
+        // this first rebuild ever runs.
+        let next_log_seq = 3u64;
+
+        let baseline_exists = prev_render_state.is_some();
+        mark_highlights(
+            &mut highlights,
+            &mut prev_render_state,
+            &render_state,
+            false,
+        );
+        mark_new_log_lines(
+            &mut highlights,
+            &mut prev_log_total,
+            next_log_seq,
+            false,
+            baseline_exists,
+        );
+        let now = Instant::now();
+        assert!(
+            !highlights.has_active(now),
+            "a finished run's own replayed log lines must not highlight on open"
+        );
+        assert_eq!(prev_log_total, 3);
+
+        // A line pushed after the first frame still highlights.
+        let baseline_exists = prev_render_state.is_some();
+        mark_highlights(
+            &mut highlights,
+            &mut prev_render_state,
+            &render_state,
+            false,
+        );
+        mark_new_log_lines(
+            &mut highlights,
+            &mut prev_log_total,
+            4,
+            false,
+            baseline_exists,
+        );
+        assert!(
+            highlights
+                .style_for(
+                    "log:3",
+                    now,
+                    &theme::Theme::for_name(theme::ThemeName::Terminal),
+                    theme::ColorMode::TrueColor
+                )
+                .is_some(),
+            "a line pushed after the first frame must still highlight"
+        );
+    }
+
     /// Finding 4: `mark_new_log_lines` marks every sequence number
     /// from the previous rebuild's total up to the new one, and
     /// nothing retroactively once a key has already been marked.
+    /// `baseline_exists` is `true` throughout here -- a later rebuild
+    /// against an already-established baseline; the catch-up case
+    /// (`baseline_exists: false`, issue #535) has its own test below.
     #[test]
     fn mark_new_log_lines_marks_only_the_newly_pushed_sequence_numbers() {
         let mut highlights = highlight::Tracker::new();
         let mut prev_total = 0u64;
-        mark_new_log_lines(&mut highlights, &mut prev_total, 3, false);
+        mark_new_log_lines(&mut highlights, &mut prev_total, 3, false, true);
         let now = Instant::now();
         assert!(
             highlights
@@ -2887,7 +2992,7 @@ mod tests {
         assert_eq!(prev_total, 3);
 
         // A second call only marks what's new since the last one.
-        mark_new_log_lines(&mut highlights, &mut prev_total, 5, false);
+        mark_new_log_lines(&mut highlights, &mut prev_total, 5, false, true);
         assert!(
             highlights
                 .style_for(
@@ -2903,9 +3008,43 @@ mod tests {
         // `--no-animation` still advances `prev_total`, marks nothing.
         let mut highlights_off = highlight::Tracker::new();
         let mut prev_total_off = 0u64;
-        mark_new_log_lines(&mut highlights_off, &mut prev_total_off, 2, true);
+        mark_new_log_lines(&mut highlights_off, &mut prev_total_off, 2, true, true);
         assert!(!highlights_off.has_active(now));
         assert_eq!(prev_total_off, 2);
+    }
+
+    /// Issue #535: with no baseline yet (the loop's own first real
+    /// rebuild, same condition `mark_highlights` tests via its own
+    /// `prev`), `mark_new_log_lines` still advances `prev_total` but
+    /// marks nothing -- the catch-up drain that ran before this first
+    /// rebuild (an already-progressed or already-finished run's own
+    /// backlog) must open calm, same as the render-state diff does.
+    #[test]
+    fn mark_new_log_lines_is_silent_on_the_first_rebuild_with_no_baseline_yet() {
+        let mut highlights = highlight::Tracker::new();
+        let mut prev_total = 0u64;
+        mark_new_log_lines(&mut highlights, &mut prev_total, 5, false, false);
+        let now = Instant::now();
+        assert!(
+            !highlights.has_active(now),
+            "no baseline yet: the catch-up backlog must not mark"
+        );
+        assert_eq!(prev_total, 5);
+
+        // Once a baseline exists, a line pushed after it still marks.
+        mark_new_log_lines(&mut highlights, &mut prev_total, 6, false, true);
+        assert!(
+            highlights
+                .style_for(
+                    "log:5",
+                    now,
+                    &theme::Theme::for_name(theme::ThemeName::Terminal),
+                    theme::ColorMode::TrueColor
+                )
+                .is_some(),
+            "a line pushed after the first frame must still highlight"
+        );
+        assert_eq!(prev_total, 6);
     }
 
     /// Finding 5: `details:sent`/`details:received` mark only when
