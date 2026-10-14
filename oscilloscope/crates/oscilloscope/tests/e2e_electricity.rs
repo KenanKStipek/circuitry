@@ -577,7 +577,8 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
         .current_dir(work.path())
         .spawn()
         .expect("spawn osp");
-    let (log_status, log_stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+    let (log_status, log_stdout) =
+        wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(log_status.success(), "stdout:\n{log_stdout}");
     assert!(log_stdout.contains("prime.ask"), "stdout:\n{log_stdout}");

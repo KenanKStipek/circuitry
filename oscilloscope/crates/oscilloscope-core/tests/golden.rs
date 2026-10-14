@@ -225,6 +225,22 @@ fn replay_events(name: &str) -> String {
         model.observe_event(&event);
         lines.extend(differ.diff_event(&event, &plan, &model));
     }
+    // This replay feeds no state at all, so a held `End` line (#545)
+    // can never catch up -- draining it here falls every one back to
+    // the old `ok` text, the same as before the hold existed, rather
+    // than leaving it unresolved and silently missing from `lines`.
+    // Every drained line still carries its own real `ts`, so
+    // `sort_log_lines` places it correctly against anything whose
+    // timestamp actually differs; against a tied one (two of this
+    // file's own fixtures record several effects inside the same
+    // millisecond) the stable sort keeps this loop's own insertion
+    // order, which is "every drained line after every line emitted
+    // immediately" -- a later `▶` can print before an earlier, held
+    // `✓` the same way in a real run whose own state poll never
+    // catches up either.
+    while differ.has_pending_ends() {
+        lines.extend(differ.settle_pending_ends());
+    }
     sort_log_lines(&mut lines);
 
     let _ = writeln!(out, "log:");

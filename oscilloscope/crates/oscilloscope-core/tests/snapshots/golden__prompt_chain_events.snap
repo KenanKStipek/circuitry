@@ -4,8 +4,8 @@ expression: rendered
 ---
 log:
   ▶ prime.greet  effect
-  ✓ prime.greet  0.0s  ok
   ▶ prime.thank  effect
+  ✓ prime.greet  0.0s  ok
   ✓ prime.thank  0.0s  ok
 status:
 prime: Done skip=None retrying=false

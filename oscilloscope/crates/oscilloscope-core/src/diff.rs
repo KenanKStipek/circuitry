@@ -2371,7 +2371,10 @@ mod tests {
             &model,
         );
         assert_eq!(end.len(), 1);
-        assert!(end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 ↓5"), "{end:?}");
+        assert!(
+            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 ↓5"),
+            "{end:?}"
+        );
         assert!(!differ.has_pending_ends());
     }
 
