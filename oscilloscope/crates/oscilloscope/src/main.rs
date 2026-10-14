@@ -1811,6 +1811,11 @@ fn observe_tick(
     if let Some(state) = &state {
         lines.extend(differ.diff(state, plan));
     }
+    // Ages every held `End` line one tick, whether or not this tick's
+    // own poll/events had anything new (#545) — a leaf whose state
+    // never catches up within `END_SUMMARY_MAX_WAIT_POLLS` still gets
+    // a line, rather than staying silent for the rest of the run.
+    lines.extend(differ.settle_pending_ends());
     oscilloscope_core::diff::sort_log_lines(&mut lines);
     (lines, state)
 }
@@ -1880,13 +1885,19 @@ fn drain_until_ended(
     loop {
         let (tick_lines, live_state) =
             observe_tick(live_poller, events_tailer, differ, model, plan);
-        if tick_lines.is_empty() {
-            break;
-        }
+        let done = tick_lines.is_empty();
         if live_state.is_some() {
             last_live = live_state;
         }
         lines.extend(tick_lines);
+        // A held `End` line (#545) must not be abandoned here: this
+        // loop's own "nothing new" check would otherwise stop before
+        // `settle_pending_ends` ever gets the extra ticks it still
+        // owes it, dropping the line for good once the final read
+        // below moves on.
+        if done && !differ.has_pending_ends() {
+            break;
+        }
     }
     let final_state = std::fs::read(out_path)
         .ok()
