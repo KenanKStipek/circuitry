@@ -1,0 +1,7 @@
+{
+  "spec_case": "C26",
+  "description": "`c26-scoring-absent`'s companion case shares this exact document with `c26-scoring-enabled`, differing only in `runtime.complexity.scoring.enabled` (absent here, `true` there) -- an absent `complexity` block is the same `enabled: false` default `complexity-scoring-off`'s own explicit `false` pins, so neither prompt gets a `meta.complexity` key.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "C4",
+  "description": "`meta.prompt_sent` of a scripted prompt whose `template` uses `{{missing}}` (an undeclared variable), `{{a.b.c}}` on a partial dict (`a.b` resolves to a non-dict leaf, so `.c` is missing too), a list section `{{#list}}...{{/list}}` over a tool's own array value, and an inverted section `{{^flag}}...{{/flag}}` for a falsy/absent key -- all four render empty/absent cleanly, no error. No other case renders a section inside a prompt template.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

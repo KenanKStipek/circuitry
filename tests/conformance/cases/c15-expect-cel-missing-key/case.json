@@ -1,0 +1,9 @@
+{
+  "spec_case": "C15",
+  "description": "A `json` tool's `expect: {mode: cel, expr: \"value.missing_key == 1\"}` against a dict that lacks `missing_key`: the CEL error counts as a failed expectation (`meta.error`: \"expect failed: ...\") and is retried like any other -- `retries: {max_attempts: 2}` and `on_error: continue` both apply. `meta.expect.error` embeds cel-python's own exception text, listed under `third_party_text`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "third_party_text": [
+    {"location": "prime.result.meta.expect.error", "pattern": "CEL evaluation failed for 'value\\.missing_key == 1': .*"}
+  ]
+}

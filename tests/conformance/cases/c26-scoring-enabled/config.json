@@ -1,0 +1,6 @@
+{
+  "runtime": {
+    "complexity": {"scoring": {"enabled": true}},
+    "adapters": {"scripted": {"replies_file": "scripted-replies.yaml"}}
+  }
+}

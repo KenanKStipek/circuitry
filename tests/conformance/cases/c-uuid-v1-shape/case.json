@@ -1,0 +1,11 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md \u00a77 case 9 (uuid v1 shape)",
+  "description": "Two `version: 1` calls (one bare, one with `count: 2`): a v1 UUID depends on the time and the host (the MAC-address/clock-sequence node in the standard, `uuid.uuid1`'s own randomness fallback when no real MAC is available), so neither its exact value nor its relationship across two calls can ever be pinned byte-for-byte, even between two runs of the same engine -- `third_party_text` checks the shape only (a standard dashed UUID with the version nibble `1`), at every location the values land. The monotonic-ordering guarantee stays a Rust unit test (`electricity-tools/src/uuid.rs`); v5 is covered by `uuid-v5-and-errors`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "third_party_text": [
+    {"location": "prime.v1_a.value", "pattern": "[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"},
+    {"location": "prime.v1_b.value.0", "pattern": "[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"},
+    {"location": "prime.v1_b.value.1", "pattern": "[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"}
+  ]
+}

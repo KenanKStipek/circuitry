@@ -1,0 +1,7 @@
+name: c26-scoring-enabled
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi there"

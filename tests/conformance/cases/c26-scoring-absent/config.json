@@ -1,0 +1,5 @@
+{
+  "runtime": {
+    "adapters": {"scripted": {"replies_file": "scripted-replies.yaml"}}
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "spec_case": "C12 (c)",
+  "description": "A `shell` tool's `params.allowed_commands: {from: input.cmds}` is rejected at compile time, before the orchestration ever runs, on both engines -- a by-reference value for a security-sensitive param is never honoured, since it can carry runtime content (`core/compiler.py::_check_security_sensitive_param_leaf`; `electricity-compiler/src/compile/params.rs`'s own compile-time mirror).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

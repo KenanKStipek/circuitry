@@ -1,0 +1,7 @@
+{
+  "spec_case": "C5",
+  "description": "A `prompt_type: array` prompt with a scripted JSON-array reply (`[\"a\", \"b\", 3]`), spliced two ways: a `json` tool's `params_json` via `{{{prime.items.value}}}` lands the real native JSON list in `meta.params_rendered.input`; an ordinary `template:` splicing the same value gets Python's own `str()` (repr-ish, single-quoted) in `meta.prompt_sent` -- the JSON-vs-repr asymmetry quirk Q2 (runtime-semantics.md §3.2/§9). `params-json` only ever splices a string from `json stringify`, never a native list.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

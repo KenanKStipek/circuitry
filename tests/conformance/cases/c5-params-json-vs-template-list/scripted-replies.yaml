@@ -1,0 +1,4 @@
+prime.items:
+  - text: '["a", "b", 3]'
+prime.as_template:
+  - text: "ok"
