@@ -1074,7 +1074,10 @@ runtime:
 ```
 
 The record is for reading after the run, not for wiring: downstream effects still read a
-`use`'s declared outputs.
+`use`'s declared outputs. It is also what lets `cof run --resume` continue inside an
+unfinished `use` child instead of running it again from the start (see
+[Resuming a Run](#resuming-a-run-cof-run---resume)); a child interrupted by Ctrl-C, SIGTERM or
+SIGHUP keeps its record too.
 
 Every `use` node also records, whether or not the setting is on:
 
@@ -1806,12 +1809,28 @@ itself having completed, and the loop's own record is what tells those
 apart. A **tree**-flow `each` loop finishes its passes out of order, and an
 **unnamed** loop has no `iter_<N>` record at all (each pass overwrites the
 last at the same path) — neither is sound to resume pass-by-pass, so both
-rerun their whole loop. A `use` effect, an `if`, and a `reflector` are
-all-or-nothing for resume: if the effect's own node already finished
-without error, `--resume` skips the whole thing; otherwise the whole thing
-reruns from the start (a `use` child always runs in a fresh, isolated
-state, so there is nothing of its own partway through to resume either
-way).
+rerun their whole loop. An `if` and a `reflector` are all-or-nothing for
+resume: if the effect's own node already finished without error,
+`--resume` skips the whole thing; otherwise the whole thing reruns from the
+start.
+
+A `use` effect whose node already finished without error is skipped whole
+too. One that didn't finish reruns its child from the start, in a fresh
+state, unless the saved state holds the child's record
+([`runtime.state.record_children: true`](#complete-record-opt-in)). With
+the record, `--resume` continues *inside* the child by the same rules as
+at the top level: the child's finished effects are reused, its first
+unfinished effect and everything after it in the same chain rerun, its
+loops resume at their first unfinished pass, and a nested `use` inside it
+continues inside its own child the same way, at any depth. It does so only
+when the child would run the same document with the same inputs as the run
+that left the record: the child's content hash (`meta.orchestration_sha256`,
+which covers the prompt files it references) and its resolved inputs
+(`meta.inputs`) must both match what it gets now. If either changed, the
+record is stale and the child runs from its start, as it does without the
+record. A `use` with `retries` continues inside its child on its first
+attempt only; a retry runs the whole child again, as always. A `use` inside
+a loop pass or an `if` branch reruns with that pass or branch.
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and
