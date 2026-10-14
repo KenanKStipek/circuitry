@@ -95,11 +95,18 @@ fn param_node_to_json(node: &ParamNode) -> Json {
     match node {
         ParamNode::Literal(value) => value_to_json(value),
         ParamNode::Template(text) => Json::String(text.source.clone()),
-        ParamNode::From { path, default } => {
+        ParamNode::From {
+            path,
+            default,
+            as_json,
+        } => {
             let mut map = Map::new();
             map.insert("from".to_string(), Json::String(path.clone()));
             if let Some(default) = default {
                 map.insert("default".to_string(), value_to_json(default));
+            }
+            if *as_json {
+                map.insert("as".to_string(), Json::String("json".to_string()));
             }
             Json::Object(map)
         }

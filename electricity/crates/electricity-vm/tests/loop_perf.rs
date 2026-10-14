@@ -330,6 +330,7 @@ fn use_loop_item(path: EffectPath, name: &str) -> Op {
         ParamNode::From {
             path: "iter.index".to_string(),
             default: None,
+            as_json: false,
         },
     );
     support::use_leaf(

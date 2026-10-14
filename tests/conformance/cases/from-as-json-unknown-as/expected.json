@@ -1,0 +1,3 @@
+{
+  "error": "Tool effect 'show' param 'params.args[1]' at 'prime.effects[0]': unknown 'as: yaml' on a '{from: ...}' reference (supported: json)."
+}

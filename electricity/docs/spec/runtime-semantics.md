@@ -550,10 +550,24 @@ with `default:` present, use the default (deep-copied); without it, raise
 `None`, letting the ordinary required/type check in `interface.inputs` catch
 it, or — if that input is itself `required` in the child's
 `interface.inputs` — a more specific `"required input 'X' resolved to
-nothing from 'PATH'"` message, `core/use.py:446`). `{from: ...}` is rejected
-at compile time for any value that is syntactically a mapping with keys
-other than exactly `{from}` or `{from, default}` — any other mapping shape
-(extra keys) is a literal value, passed through unrendered as a plain dict.
+nothing from 'PATH'"` message, `core/use.py:446`). A leaf's keys are `from`
+plus any of `default` and `as` (a `use` input has no `default`) — any other
+mapping shape (extra keys) is a literal value, passed through unrendered as a
+plain dict.
+
+`as: json` (#566, `core/use.py::serialize_reference`) hands over the
+resolved value — the `default:` included, which is applied first — as compact
+JSON text instead: `json.dumps(value, ensure_ascii=False, separators=(",",
+":"), allow_nan=False)`, keys in their stored order. It applies at every
+by-reference leaf (any depth in `params`, list items included, and a `use`
+effect's top-level `inputs`); a `use` input that resolves to nothing stays
+`None` and is not serialized. A value JSON can't carry (`NaN`/`inf`, bytes, a
+date) raises `"<label>: '{from: PATH, as: json}' did not serialize to JSON:
+<reason>"`, where `<label>` is `Tool effect 'NAME' param 'params.a.b[0]'` for a
+tool and `inputs.NAME` for a `use` input. `json` is the only supported `as`
+value; any other (a non-string included) is a compile-time error,
+`"<label> at '<effect path>': unknown 'as: X' on a '{from: ...}' reference
+(supported: json)."`, and `as: null` is the same as omitting `as`.
 
 ### 3.6 Prompt composition: `{{> name}}`, declared `prompts:`, and prompt files (#396)
 

@@ -1,0 +1,14 @@
+interface:
+  inputs:
+    text:
+      type: string
+      required: true
+    missing:
+      required: false
+    native:
+      required: true
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: {text: {from: input.text}, missing: {from: input.missing, default: "none"}, native: {from: input.native}}}
