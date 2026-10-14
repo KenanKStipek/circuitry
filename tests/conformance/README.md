@@ -54,6 +54,7 @@ cases/<name>/
 | `compare_run_warnings` | bool, default `false` — also compares `expected.run_warnings.txt` against `harness.run_warning_lines(stderr)` (`cli/app.py::_print_run_warnings`'s own `Warning: ...` lines, e.g. preflight's soft warnings — distinct from `WARNING:`/`ERROR:` `logging`-module lines, which `expected.warnings.txt` already covers unconditionally) |
 | `fake_credentials` | a mapping from a `harness.CREDENTIAL_ENV_VARS` name to a synthetic value starting with `circuitry-test-fake-` (`harness.FAKE_CREDENTIAL_MARKER`) — set, for both engines' own subprocess, *after* the credential-stripping filter, so a case can give a real adapter (`openai`, `groq`, ...) a key to send without ever risking a live one; `env` still rejects any of these names |
 | `third_party_text` | a list of `{"location": "<dotted state path>", "pattern": "<regex>"}` — each listed leaf must `re.fullmatch` its own pattern in *both* the actual and the expected state (`expected.out.json` included), and is then replaced by a fixed placeholder before the exact comparison; for a case whose `meta.error` carries curl's own version-dependent stderr text (a connection-refused, or a timeout with no retry) that can't be pinned byte-for-byte |
+| `timeout_seconds` | overrides `harness.DEFAULT_TIMEOUT_SECONDS` (30) for both engines' own subprocess — a case whose document deliberately runs long (e.g. `c520-claude-code-timeout`'s own agent-CLI timeout) needs more than the default budget before the harness itself gives up and fails the case with a `subprocess.TimeoutExpired` |
 
 `harness.load_case` rejects an unknown `case.json` key and an `expect`/
 `engines`/`error_compare`/`known_divergence`/`electricity_preview_ok` value
@@ -202,17 +203,23 @@ whatever the *reference* client actually sent, not just the request a
 tool/adapter's own config describes. Python's `urllib` (the Python engine's
 own HTTP client) sends `Accept-Encoding: identity` and `Connection: close`
 on every request, neither of which any case's own fixture or document sets
-explicitly; a client under a future lane (reqwest, or any other library)
-must send the same headers the committed fixture already has, not merely
-the ones the orchestration document itself names.
+explicitly; electricity's own client (`reqwest`, lane E, issue #485) sends
+the same headers the committed fixture already has, not merely the ones
+the orchestration document itself names.
 
 ## Fake binaries
 
-`fakes/fake` (one script, copied verbatim into any case that needs it —
-the suite's `fakes/` contract is per-case, not a shared library) fakes a
-process-backed tool (`shell`, `awk`, `imagemagick`, `ffmpeg`) with no real
-binary installed, parameterized entirely through the `shell` tool's own
-`params.args`:
+`fakes/fake` fakes a process-backed tool (`shell`, `awk`, `imagemagick`,
+`ffmpeg`) with no real binary installed, parameterized entirely through
+the `shell` tool's own `params.args`. Each case keeps its own copy of the
+file (the suite's `fakes/` contract is per-case, not a shared library —
+`harness._sandboxed_env` only ever puts one case's own directory on
+`PATH`), but it isn't one script "copied verbatim" everywhere: most cases
+carry the original seven-flag version (issue #450, item 4, plus `--cat`/
+`--print-env` for a `stdin`/`runtime.plugins.<name>.env` check);
+`c-shell-background-survives-normal-exit` carries a second, extended copy
+(issue #519) that adds the pidfile flags below for a backgrounded-process
+case.
 
 | flag | behaviour |
 |---|---|
@@ -222,12 +229,17 @@ binary installed, parameterized entirely through the `shell` tool's own
 | `--sleep` | ignore `SIGTERM` and sleep until killed (`SIGKILL`) — for a subprocess-timeout/cancellation case |
 | `--crlf` | ignore every other flag; write two CRLF-terminated stdout lines |
 | `--invalid-utf8` | ignore every other flag; write a fixed, deliberately invalid UTF-8 byte sequence to stdout |
+| `--cat` | ignore every other flag; copy stdin to stdout verbatim — for a case that checks `params.stdin` actually reaches the child |
+| `--print-env NAME` | ignore every other flag; write the named environment variable's own value (or `"<unset>"`) — for a case that checks a configured `runtime.plugins.<name>.env` override actually reaches the child |
+| `--spawn-background --pidfile PATH` | (the extended copy only) start a detached grandchild that just sleeps, in this process's own process group, and write its pid to PATH — the `nohup ... &` pattern a real shell step uses to start a background server |
+| `--check-pidfile PATH` | (the extended copy only) print `"alive"`/`"gone"` for the pid PATH names |
+| `--kill-pidfile PATH` | (the extended copy only) `SIGKILL` the pid PATH names, remove PATH, print `"done"` |
 
-`c-shell-path-fake` uses `--stdout`/`--exit`; `--sleep`/`--crlf`/
-`--invalid-utf8` aren't exercised by a committed case yet (no timeout/
-cancellation/encoding case has landed), only by
-`tests/conformance/test_fakes.py`'s own direct subprocess tests, until one
-does.
+`c-shell-path-fake` uses `--stdout`/`--exit`; `c-shell-crlf` and
+`c-shell-invalid-utf8` use `--crlf`/`--invalid-utf8`; `c-shell-timeout`
+uses `--sleep`; `c-shell-background-survives-normal-exit` uses the
+pidfile flags. `tests/conformance/test_fakes.py` covers every flag
+directly too, including `--cat`/`--print-env`.
 
 ## Known divergence
 
@@ -250,9 +262,10 @@ Python-engine-captured `expected.json` — the same path convention
 validates every other key. `test_electricity_runner.py` applies
 `normalize.apply_known_divergence` to the expected state before comparing
 — `electricity_value` at `location`, and only there, is allowed to differ;
-everywhere else must still match exactly. No case uses this yet (M0-H has
-full parity for `tool`/`dynamic`/`if`/`finally:`) — `test_normalize.py`
-covers the override function directly, and
+everywhere else must still match exactly. No case sets it today: every
+committed case's two engines either both succeed with an identical value,
+or (`electricity_preview_ok`) one hasn't implemented the content at all
+yet — `test_normalize.py` covers the override function directly, and
 `test_harness.py`'s `known_divergence` tests cover the schema.
 
 ## Normalization
@@ -298,10 +311,19 @@ text. The generator redacts the same way, with the same replacement list,
 before writing any committed file (`_redact_and_reserialize`).
 
 Not implemented yet, because no case needs it today: cross-field timestamp
-ordering (`started_at` <= `completed_at`), a plausibility bound on a
-duration beyond `>= 0`, and §12's `{path}` rule for a profile's
-schema-failure message. Add the rule in `normalize.py` when the first case
-that needs it lands, rather than widening these ahead of a real case.
+ordering (`started_at` <= `completed_at`) and a plausibility bound on a
+duration beyond `>= 0`. §12's `{path}` rule for a profile's schema-failure
+message (`profile-schema-invalid`) needs no special handling either, but
+for a different reason: `cof run --profile <name>`'s own discovered path
+and electricity's own `--profile <absolute path>` argument both resolve
+to the case directory, so `case_redaction_replacements`' ordinary
+`<CASE_DIR>` substitution already lines the two up with no path-specific
+rule at all -- `error_compare: "location"` only needs the two messages to
+fail at the same place, so the small wording difference either engine's
+own `jsonschema` library leaves around that path goes unchecked anyway.
+Add the two timestamp/duration rules above to `normalize.py` when the
+first case that needs either lands, rather than widening these ahead of a
+real case.
 
 Circuitry's own error messages (everything the reference implementation
 itself raises) are compared byte-for-byte, always — `error_compare: "exact"`
@@ -379,13 +401,13 @@ session) and skips every case it applies to — with a reason naming why —
 only when `cargo` isn't on `PATH` (a contributor machine that genuinely has
 no Rust toolchain; the ordinary `pytest -q -m 'not integration'` gate
 itself *does* have one — CI's `ubuntu-latest` image ships `cargo`, so each
-of `quality.yml`'s pytest jobs builds this crate once). All of M0-H
-(issues #408, #431) is on `main`: electricity runs documents end to end
-(`electricity/README.md`'s preview section is the single source of truth
-for what it runs), so a case that lists `electricity` in its own `engines`
-and expects success now actually runs and is diffed against the same
-`expected.json`/`expected.events.jsonl` the Python runner uses — not
-skipped. A *failure* case may still legitimately skip for electricity if
+of `quality.yml`'s pytest jobs builds this crate once). electricity runs
+a real document end to end (`electricity/README.md`'s preview section is
+the single source of truth for what it runs), so a case that lists
+`electricity` in its own `engines` and expects success now actually runs
+and is diffed against the same `expected.json`/`expected.events.jsonl`
+the Python runner uses — not skipped. A *failure* case may still
+legitimately skip for electricity if
 its document uses content this preview genuinely doesn't support yet: the
 binary refuses those up front with a message containing the preview marker
 (`is a preview and can't run this orchestration`,
@@ -418,6 +440,48 @@ ran on both engines once `shell` landed, `c-scripted-prompt` once lane G
 and `c-http-mock-server`/`c-openai-compatible-mock-server` once lane E's
 `http` tool and lane F2's (issue #503) real model adapters landed. The
 flag stays declared and validated for the next lane that needs it.
+
+## M1 acceptance map
+
+Every DESIGN.md §15 M1 acceptance item maps to one or more case directories
+under `cases/`, or to a named Rust test outside this suite. `spec_case` in
+a case's own `case.json` names the same item (set to the plain label
+below, e.g. `"C19"`, `"§7 case 1"`, even where an existing case's own
+name predates the item it turned out to cover).
+
+| DESIGN §15 item | Case(s) / test |
+|---|---|
+| C1 | `c1-interface-inputs`, `c1-interface-inputs-required-missing`; `e-coercion-null`, `e-coercion-string-null`, `e-coercion-string-numeric`; `profile-inputs-interface-types` |
+| C4 | `c4-prompt-template-semantics` |
+| C5 | `c5-params-json-vs-template-list` |
+| C7 (`while` half) | `c7-while-heterogeneous-equality` |
+| C8 | `c8-each-chain-prev-and-collect`, `profile-disabled-loop-body-collect` |
+| C9–C11, C13, C14, C16–C18, C24, C28–C33 | the `cNN-*` case of the same number |
+| C12 | (a) `c-shell-path-fake`; (b) `c-shell-templated-allowed-commands`; (c) `c12-allowed-commands-from`; (d) `c12-allowed-commands-params-json` |
+| C15 | `c15-expect-cel-missing-key` |
+| C19 | `tree-stop-on-error`. The running-branch variant (a tree `stop_on_error` that must let an already-dispatched, still-running branch finish rather than cancelling it) was not added: on this machine the two branches' relative timing never reliably favors the slower one actually starting before the fast one fails, so the case cannot be made deterministic without changing what it exercises (making the "fast" branch artificially slow defeats the point). Left out rather than committed flaky. |
+| C20 | `concurrency-group`, `prompt-tree-group`; `c20-group-in-tree-loop` |
+| C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs` and `process_tool_signals.rs` (lane M part B adds the prompt re-run and `signals_prompt.rs`) |
+| C26 | `complexity-scoring-off`, `complexity-scoring-on-routing-off`; `c26-scoring-absent`, `c26-scoring-enabled` |
+| §7 case 1 | `c-shell-pin-denial` |
+| §7 case 2 | `c-shell-templated-allowed-commands` |
+| §7 case 3 | `c23-out-plain-vs-pretty`; `c-json-stringify-indent` |
+| §7 case 4 | `fs-delete-branches` |
+| §7 case 5 | `c-ffmpeg-filter-complex-allows-pipe-and-semicolon`, `c-ffmpeg-flags-unsafe-pipe-and-semicolon` |
+| §7 case 6 | `c-http-error-excerpt-shapes` |
+| §7 case 7 (the `http` half; the `mcp` half is M2) | `c-http-fail-on-error` |
+| §7 case 9 | `uuid-v5-and-errors` (v5, bad version, bad namespace); `c-uuid-v1-shape` (v1 shape only -- monotonic ordering stays a Rust unit test, `electricity-tools/src/uuid.rs`) |
+| §7 case 12 | `env-vars-get-and-list` |
+| §7 case 14 | `anthropic-messages-mock`, `openai-compatible-roles-images-params-mock` |
+| §7 case 15 | `openai-compatible-429-retry-after-mock`, `openai-compatible-401-mock`, `adapter-connection-refused-retried`, `c-http-retry-classification` |
+| §7 case 17 | `use-host-claude-document-adapter` |
+| §7 case 22 (the redaction blanket) | `c-http-redaction-blanket`, plus the post-check both runners now make after *every* case (`harness.assert_no_leaked_credentials`, `tests/conformance/test_no_leaked_credentials.py`'s static twin, `test_harness.py`'s own planted-credential test) |
+
+Out of M1's own acceptance, tracked here only because an earlier pass
+over DESIGN §15 already placed them: §7 case 8 (`regex-shapes`) and §7
+case 16 (the `cyberdiner-*` cases) are filed under M2 there; C21/C22 stay
+in M2-G with persistence; §7 cases 7's `mcp` half, 10, 11, 18, 19 are M2;
+§7 cases 20, 21 are M3.
 
 ## Adding a case
 
