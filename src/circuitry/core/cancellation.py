@@ -241,8 +241,8 @@ def kill_tracked_process(proc: BaseProcess) -> None:
 
 
 #: Bound at import time, not read off `threading.Event` fresh inside
-#: :meth:`CancellationToken.reset` (round 4 follow-up): a test that
-#: monkeypatches `threading.Event` itself for its own duration (e.g.
+#: :meth:`CancellationToken.reset`: a test that monkeypatches
+#: `threading.Event` itself for its own duration (e.g.
 #: `test_as_completed_promptly_no_longer_uses_a_private_threading_event`)
 #: must not also break every *other* test's own autouse teardown calling
 #: `reset()` -- this name was already bound to the real class long before
@@ -288,13 +288,14 @@ class CancellationToken:
         an earlier run's cancellation leak into the next one.
 
         Builds a fresh :class:`threading.Event` rather than calling
-        ``clear()`` on the existing one (delta review of PR #553, round
-        4, P2-2): the earlier reasoning here -- that ``sigterm_as_
-        interrupt`` only ever calls this before its own handlers are
-        installed or after they've been restored, so a signal landing on
-        either call can't reach a handler that could leak this lock --
-        was wrong. The *default* SIGINT handler installed at either of
-        those points still raises ``KeyboardInterrupt`` asynchronously,
+        ``clear()`` on the existing one: an earlier version of this
+        method relied on the reasoning that ``sigterm_as_interrupt``
+        only ever calls this before its own handlers are installed or
+        after they've been restored, so a signal landing on either call
+        can't reach a handler that could leak this lock -- that
+        reasoning was wrong. The *default* SIGINT handler installed at
+        either of those points still raises ``KeyboardInterrupt``
+        asynchronously,
         same as always, and :meth:`request`'s own ``Event.set()`` (the
         one call on this object that *does* still touch its lock, since
         :meth:`sleep_or_raise` is lock-free on the main thread) could
@@ -338,13 +339,13 @@ class CancellationToken:
         if first:
             if signum is not None:
                 self._signum = signum
-            # Only ever set once (delta review of PR #553, P1-2): a
-            # repeat call -- the watcher thread's own, racing the main
-            # thread's handler, or a second signal's handler that reaches
-            # here regardless -- skips `Event.set()`'s own `Condition`-
-            # backed call outright rather than taking its lock again for
-            # no reason, the same #555 exposure against this token's own
-            # `Event` instead of a `Future`'s.
+            # Only ever set once: a repeat call -- the watcher thread's
+            # own, racing the main thread's handler, or a second
+            # signal's handler that reaches here regardless -- skips
+            # `Event.set()`'s own `Condition`-backed call outright
+            # rather than taking its lock again for no reason, the same
+            # #555 exposure against this token's own `Event` instead of
+            # a `Future`'s.
             self._event.set()
         with self._lock:
             procs = list(self._processes)
@@ -419,31 +420,30 @@ class CancellationToken:
 
         On the *main* thread, each slice is a plain ``time.sleep`` plus
         :attr:`_event`'s lock-free :meth:`~threading.Event.is_set` --
-        never :meth:`~threading.Event.wait` there (delta review of PR
-        #553, P1-2): ``Event.wait`` sits on a ``threading.Condition``,
-        whose pure-Python ``__exit__`` a first signal's own handler
-        raising mid-release would leak, the same #555 mechanism found
-        against a ``Future``'s lock, just against this token's ``Event``
-        instead -- and the main thread is exactly where that handler
-        runs. A worker thread never runs a signal handler directly
-        (CPython only ever raises one on the main thread), so it keeps
-        the lower-latency ``Event.wait`` -- there is nothing for it to
-        leak.
+        never :meth:`~threading.Event.wait` there: ``Event.wait`` sits on
+        a ``threading.Condition``, whose pure-Python ``__exit__`` a first
+        signal's own handler raising mid-release would leak, the same
+        #555 mechanism found against a ``Future``'s lock, just against
+        this token's ``Event`` instead -- and the main thread is exactly
+        where that handler runs. A worker thread never runs a signal
+        handler directly (CPython only ever raises one on the main
+        thread), so it keeps the lower-latency ``Event.wait`` -- there
+        is nothing for it to leak.
         """
         if self.in_cleanup():
             time.sleep(max(0.0, seconds))
             return
         remaining = max(0.0, seconds)
-        # Lock-free on the main thread (delta review of PR #553, P1-2):
-        # `Event.wait` sits on a `Condition`, whose own pure-Python
-        # `__exit__` a first signal's handler raising mid-release would
-        # leak (the same #555 mechanism, against this token's own
-        # `Event` instead of a `Future`'s) -- and the main thread is
-        # exactly where that handler runs. `time.sleep` plus
-        # `Event.is_set()` (a plain attribute read with no lock at all)
-        # has no such exposure: a signal interrupts the sleep itself, the
-        # same way it always interrupted a bare `time.sleep` before this
-        # module existed. Worker threads never run a signal handler
+        # Lock-free on the main thread: `Event.wait` sits on a
+        # `Condition`, whose own pure-Python `__exit__` a first signal's
+        # handler raising mid-release would leak (the same #555
+        # mechanism, against this token's own `Event` instead of a
+        # `Future`'s) -- and the main thread is exactly where that
+        # handler runs. `time.sleep` plus `Event.is_set()` (a plain
+        # attribute read with no lock at all) has no such exposure: a
+        # signal interrupts the sleep itself, the same way it always
+        # interrupted a bare `time.sleep` before this module existed.
+        # Worker threads never run a signal handler
         # directly (CPython only ever raises one on the main thread), so
         # they keep the lower-latency `Event.wait` -- it has nothing to
         # leak there.
@@ -897,10 +897,10 @@ def acquire_promptly(
     the slot releases it, however long that takes.
 
     Each ``sem.acquire(...)`` call is wrapped in its own
-    ``deferred_signal_region`` (delta review of PR #553, round 4, P2-3):
-    a plain ``threading.Semaphore`` is ``Condition``-backed, the same
-    #555-style exposure the dispatch sites and :class:`core.concurrency.
-    RunConcurrencyLimiter` are audited for, and this is called on the
+    ``deferred_signal_region``: a plain ``threading.Semaphore`` is
+    ``Condition``-backed, the same #555-style exposure the dispatch
+    sites and :class:`core.concurrency.RunConcurrencyLimiter` are
+    audited for, and this is called on the
     main thread whenever a chain runs sequentially (``adapters.
     cyberdiner``'s own ``max_in_flight`` gate). Unlike
     ``RunConcurrencyLimiter.acquire()``, this function's own caller has

@@ -144,19 +144,19 @@ class _SignalCount:
 def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
     def _handler(signum: int, frame: FrameType | None) -> None:
         del frame
-        # Counted before touching the token at all (delta review of PR
-        # #553, P1-2): a second signal's own `request()` call -- which
-        # calls `self._event.set()`, itself a `Condition`-backed call the
-        # same way any `concurrent.futures` lock #555 audited is -- has
-        # the identical exposure if the *first* signal's own handler
-        # raised while the main thread was mid-release of that lock
-        # elsewhere (`sleep_or_raise`'s `Event.wait`, this same `set()`
-        # call, ...): a second signal that then blocks on it would never
-        # reach its own `os._exit`/SIGHUP no-op below. Deciding first-vs-
-        # second, and exiting, before ever calling `request()` again
-        # removes that risk outright for the second signal -- the first
-        # one already requested cancellation, so there is nothing further
-        # to request.
+        # Counted before touching the token at all: a second signal's
+        # own `request()` call -- which calls `self._event.set()`,
+        # itself a `Condition`-backed call the same way any
+        # `concurrent.futures` lock #555 audited is -- has the identical
+        # exposure if the *first* signal's own handler raised while the
+        # main thread was mid-release of that lock elsewhere
+        # (`sleep_or_raise`'s `Event.wait`, this same `set()` call, ...):
+        # a second signal that then blocks on it would never reach its
+        # own `os._exit`/SIGHUP no-op below. Deciding first-vs-second,
+        # and exiting, before ever calling `request()` again removes
+        # that risk outright for the second signal -- the first one
+        # already requested cancellation, so there is nothing further to
+        # request.
         first = signal_count.note()
         if not first:
             if signum == getattr(signal, "SIGHUP", None):

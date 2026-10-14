@@ -612,7 +612,7 @@ class LoopRuntime:
                         # submitted before that happens is still waited for
                         # below, not silently dropped.
                         future_to_idx: dict = {}
-                        # Second line of defense (#555 follow-up, F2):
+                        # Second line of defense (#555 follow-up):
                         # every future the pool actually accepted,
                         # appended inside the same `deferred_signal_
                         # region` as the submit call that returned it
@@ -636,9 +636,9 @@ class LoopRuntime:
                                 for idx, iter_ctx in iter_ctxs:
                                     # One `deferred_signal_region` around
                                     # both the submit and recording its
-                                    # future (#555 follow-up, F1) --
-                                    # mirrors dynamic.py's own tree-flow
-                                    # fix; see `submit_with_context`'s own
+                                    # future (#555 follow-up) -- mirrors
+                                    # dynamic.py's own tree-flow fix; see
+                                    # `submit_with_context`'s own
                                     # docstring for why it asserts rather
                                     # than opening its own narrower region.
                                     with deferred_signal_region():
@@ -712,11 +712,10 @@ class LoopRuntime:
                             #
                             # One region around both calls, not two --
                             # see dynamic.py's own identical call for the
-                            # full reasoning (delta review of PR #553,
-                            # P1-1): `shutdown(cancel_futures=True)`
-                            # dequeues not-yet-started futures itself
-                            # (`get_nowait()`, no worker races it for
-                            # them), but its own `Future.cancel()` still
+                            # full reasoning: `shutdown(cancel_futures=
+                            # True)` dequeues not-yet-started futures
+                            # itself (`get_nowait()`, no worker races it
+                            # for them), but its own `Future.cancel()` still
                             # touches a lock a worker could be mid-
                             # release of; splitting this into two regions
                             # let a first signal landing during the wait
@@ -739,7 +738,7 @@ class LoopRuntime:
                             # cancelled run reports cancellation.
                             #
                             # `all_submitted`, not `future_to_idx.keys()`
-                            # (#555 follow-up, F2): a strict superset.
+                            # (#555 follow-up): a strict superset.
                             with deferred_signal_region():
                                 executor.shutdown(wait=False, cancel_futures=True)
                                 wait_for_cancelled_branches(all_submitted)

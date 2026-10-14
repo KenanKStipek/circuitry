@@ -476,7 +476,7 @@ class DynamicRuntime:
                     # branch already submitted before that happens is still
                     # waited for below, not silently dropped.
                     futures: dict = {}
-                    # Second line of defense (#555 follow-up, F2): every
+                    # Second line of defense (#555 follow-up): every
                     # future the pool actually accepted, appended inside
                     # the same `deferred_signal_region` as the submit
                     # call that returned it below -- independent of
@@ -499,7 +499,7 @@ class DynamicRuntime:
                             for idx, effect in enumerate(self.defn.effects):
                                 # One `deferred_signal_region` around both
                                 # the submit and recording its future
-                                # (#555 follow-up, F1): `submit_with_
+                                # (#555 follow-up): `submit_with_
                                 # context` itself asserts the caller
                                 # already holds one rather than opening
                                 # its own narrower one that would raise
@@ -534,9 +534,9 @@ class DynamicRuntime:
                         # which the matching ``except`` doesn't cover.
                         #
                         # `all_submitted`, not `futures.keys()` (#555
-                        # follow-up, F2): a strict superset, so this
-                        # still waits for a branch even if some other bug
-                        # kept it out of `futures` itself.
+                        # follow-up): a strict superset, so this still
+                        # waits for a branch even if some other bug kept
+                        # it out of `futures` itself.
                         wait_for_cancelled_branches(all_submitted)
                     except BaseException:
                         # Cancellation (SIGINT/SIGTERM): a future the
@@ -552,10 +552,10 @@ class DynamicRuntime:
                         # actually notice its just-killed subprocess and
                         # return before this re-raises.
                         #
-                        # One region around both calls, not two (delta
-                        # review of PR #553, P1-1): `shutdown(cancel_
-                        # futures=True)` itself calls `Future.cancel()` on
-                        # every not-yet-dequeued future -- it dequeues
+                        # One region around both calls, not two:
+                        # `shutdown(cancel_futures=True)` itself calls
+                        # `Future.cancel()` on every not-yet-dequeued
+                        # future -- it dequeues
                         # those with its own `get_nowait()`, so no worker
                         # races it for them, but that `cancel()` still
                         # touches each one's own lock a worker could be

@@ -181,9 +181,9 @@ class RunConcurrencyLimiter:
                 )
             yield
         finally:
-            # `deferred_signal_region` (delta review of PR #553, P2-1):
-            # `Semaphore.release()` is a `Condition`-backed call, the same
-            # #555-style exposure a `Future`'s own lock has -- this often
+            # `deferred_signal_region`: `Semaphore.release()` is a
+            # `Condition`-backed call, the same #555-style exposure a
+            # `Future`'s own lock has -- this often
             # runs on the main thread (a plain sequential chain's own
             # leaf effect), and a first signal's handler raising
             # mid-release here would leak the lock, wedging whichever
@@ -208,18 +208,18 @@ class RunConcurrencyLimiter:
         held: list[threading.Semaphore],
     ) -> None:
         # Each `sem.acquire(...)` wrapped individually in its own
-        # `deferred_signal_region` (delta review of PR #553, P2-1), same
-        # reasoning as `acquire()`'s own `release()` loop above: a plain
-        # `threading.Semaphore` is `Condition`-backed, and this often runs
-        # on the main thread. Only the single call needs covering, not the
-        # whole retry loop -- unlike `wait_for_cancelled_branches`, a
-        # signal deferred until just after one 0.2s-bounded attempt costs
-        # nothing a cancelled run would otherwise have to wait out.
+        # `deferred_signal_region`, same reasoning as `acquire()`'s own
+        # `release()` loop above: a plain `threading.Semaphore` is
+        # `Condition`-backed, and this often runs on the main thread.
+        # Only the single call needs covering, not the whole retry loop
+        # -- unlike `wait_for_cancelled_branches`, a signal deferred
+        # until just after one 0.2s-bounded attempt costs nothing a
+        # cancelled run would otherwise have to wait out.
         #
         # `held.append(sem)` runs *inside* the same region as the
-        # successful acquire, not after this method returns (round 4
-        # follow-up, P2-1): the caller's own `try`/`finally` is already
-        # active by the time this is called (see `acquire()` above), so
+        # successful acquire, not after this method returns: the
+        # caller's own `try`/`finally` is already active by the time
+        # this is called (see `acquire()` above), so
         # even if a deferred signal's exception is raised at this
         # region's own exit -- necessarily after `held.append` has
         # already run, since that line is above the `with` block's exit

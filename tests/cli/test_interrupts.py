@@ -319,13 +319,13 @@ def test_second_signal_inside_a_deferred_region_still_exits_at_once(
 def test_second_signal_reaches_os_exit_without_calling_request_again(
     monkeypatch,
 ) -> None:
-    """P1-2 tests (delta review of PR #553, round 4): a second SIGINT/
-    SIGTERM must reach `os._exit` without calling `CancellationToken.
-    request()` a second time -- that call touches the token's own
-    `Event`, a `Condition`-backed lock a first signal's own handler
-    raising mid-release of could leave stuck (the #555-style exposure
-    P1-2 closes). A repeated SIGHUP is the no-op case: it must return
-    quietly too, without calling `request()` or `os._exit` either.
+    """A second SIGINT/SIGTERM must reach `os._exit` without calling
+    `CancellationToken.request()` a second time -- that call touches
+    the token's own `Event`, a `Condition`-backed lock a first signal's
+    own handler raising mid-release of could leave stuck (the
+    #555-style exposure this closes). A repeated SIGHUP is the no-op
+    case: it must return quietly too, without calling `request()` or
+    `os._exit` either.
     """
     exit_codes: list[int] = []
 

@@ -29,8 +29,7 @@ def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
     process is entered -- parking the exception (as the real handler
     would) if a `deferred_signal_region` is active there, raising it
     immediately otherwise. Saves and restores `sys.gettrace()` rather
-    than clobbering it with `None` (round 3's own settrace fix) --
-    pytest-cov runs on CI.
+    than clobbering it with `None` -- pytest-cov runs on CI.
     """
     exit_code = threading.Condition.__exit__.__code__
     previous_trace = sys.gettrace()
@@ -327,8 +326,8 @@ def test_parse_concurrency_groups_rejects_malformed_entries() -> None:
 
 
 def test_a_signal_deferred_mid_acquire_still_releases_the_slot_via_finally() -> None:
-    """P2-1 (delta review of PR #553, round 4): a first signal landing
-    during `sem.acquire(...)` is deferred (parked, not raised) while
+    """A first signal landing during `sem.acquire(...)` is deferred
+    (parked, not raised) while
     `_acquire_one`'s own `deferred_signal_region` is active -- but the
     acquire still *succeeds* underneath it, taking the one slot this
     limiter has. If `held.append(sem)` ran only after that region had

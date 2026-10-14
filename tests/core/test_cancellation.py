@@ -44,10 +44,10 @@ from circuitry.core.cancellation import (
 
 @pytest.fixture(autouse=True)
 def _restore_process_signal_state():
-    """Same fixture as `tests.cli.test_interrupts` (delta review of PR
-    #553, P2-5): this file's own `sigterm_as_interrupt`/real-SIGINT test
-    mutates process-wide signal handlers and the module-level
-    `CancellationToken` singleton -- undo both after every test here,
+    """Same fixture as `tests.cli.test_interrupts`: this file's own
+    `sigterm_as_interrupt`/real-SIGINT test mutates process-wide signal
+    handlers and the module-level `CancellationToken` singleton --
+    undo both after every test here,
     regardless of what the test itself left behind, so this file can
     never leak state into a test that runs after it (e.g. a later `cof
     run` subprocess test finding SIGHUP still `SIG_IGN`).
@@ -1099,9 +1099,9 @@ def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
     and actually release the lock.
     """
     exit_code = threading.Condition.__exit__.__code__
-    # Saved and restored, never set to `None` (delta review of PR #553,
-    # P2-6): pytest-cov installs its own tracer via `sys.settrace`, and
-    # CI runs with `--cov` -- clobbering it with `None` (on the self-
+    # Saved and restored, never set to `None`: pytest-cov installs its
+    # own tracer via `sys.settrace`, and CI runs with `--cov` --
+    # clobbering it with `None` (on the self-
     # disarm below, or this context manager's own exit) silently drops
     # coverage instrumentation on the main thread for every test that
     # runs after this one. There's no `fail_under` configured, so nothing
@@ -1171,7 +1171,7 @@ def test_bare_add_done_callback_under_a_signal_at_condition_exit_leaks_the_lock(
 
 def test_as_completed_promptly_registration_defers_the_signal_and_leaves_no_lock_owned(
 ) -> None:
-    """D4 (#555): the fix for the hazard shown above.
+    """Confirms the fix for the hazard shown above (#555):
     `as_completed_promptly` wraps its own `add_done_callback` loop in
     `deferred_signal_region` -- confirm, with the identical technique,
     that a signal landing there is parked (not raised while any lock
@@ -1208,8 +1208,8 @@ def test_as_completed_promptly_registration_defers_the_signal_and_leaves_no_lock
 
 def test_future_cancel_dispatch_site_defers_the_signal_and_leaves_no_lock_owned(
 ) -> None:
-    """D4, 'one dispatch site': `Future.cancel()` on a not-yet-started
-    future is exactly what `core.dynamic`'s `_await_tree_branches` calls
+    """`Future.cancel()` on a not-yet-started future is exactly what
+    `core.dynamic`'s `_await_tree_branches` calls
     (`pending.cancel()`) and what `executor.shutdown(cancel_futures=
     True)` calls internally on every future still queued -- both wrapped
     in `deferred_signal_region` (#555). Same technique and the same two
@@ -1239,7 +1239,7 @@ def test_future_cancel_dispatch_site_defers_the_signal_and_leaves_no_lock_owned(
 def test_as_completed_promptly_no_longer_uses_a_private_threading_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D4: #555 replaced the private `threading.Event` `as_completed_
+    """#555 replaced the private `threading.Event` `as_completed_
     promptly` used to poll on with `queue.SimpleQueue` -- `Event.wait`/
     `.set()` are themselves built on a `threading.Condition`, so that
     private lock had exactly the same exposure as a `Future`'s own.
@@ -1282,8 +1282,7 @@ def test_a_worker_threads_deferred_region_never_defers_the_main_threads_signal()
             worker_outcome.append(type(exc).__name__)
 
     # Handler restore and token reset are the autouse `_restore_process_
-    # signal_state` fixture's job now (delta review of PR #553, P2-5) --
-    # this used to restore inline.
+    # signal_state` fixture's job now -- this used to restore inline.
     with sigterm_as_interrupt():
         thread = threading.Thread(target=worker)
         thread.start()
@@ -1325,21 +1324,22 @@ def test_check_deferred_signal_on_a_worker_thread_leaves_the_main_threads_except
 
 
 def test_request_interrupted_mid_set_does_not_leave_the_tokens_event_locked_after_reset() -> None:
-    """P1-2 tests (delta review of PR #553, round 4): a first signal's
-    handler calls `CancellationToken.request()`, which calls `Event.
-    set()` -- if a handler-like interruption (simulated with the
-    settrace technique) raises right at `Condition.__exit__`'s entry
-    there, the old `Event`'s own lock is left owned. `reset()` no longer
-    calls `Event.clear()` on that same object (P2-2): it builds a fresh
-    `threading.Event()` instead, so the token's *current* `Event` is
-    never the one a prior call could have left locked.
+    """A first signal's handler calls `CancellationToken.request()`,
+    which calls `Event.set()` -- if a handler-like interruption
+    (simulated with the settrace technique) raises right at
+    `Condition.__exit__`'s entry there, the old `Event`'s own lock is
+    left owned. `reset()` no longer calls `Event.clear()` on that same
+    object: it builds a fresh `threading.Event()` instead, so the
+    token's *current* `Event` is never the one a prior call could have
+    left locked.
 
-    Reverting P2-2 back to `self._event.clear()` makes this test hang
-    instead of failing cleanly -- `clear()` tries to take the exact lock
-    this test already confirmed is still owned by this same (non-
-    reentrant) thread, deadlocking on itself. Confirmed manually with a
-    background thread and a join timeout, not in this test itself (a
-    real hang can't be asserted on without risking the suite).
+    Reverting to the old `self._event.clear()` makes this test hang
+    instead of failing cleanly -- `clear()` tries to take the exact
+    lock this test already confirmed is still owned by this same
+    (non-reentrant) thread, deadlocking on itself. Confirmed manually
+    with a background thread and a join timeout, not in this test
+    itself (a real hang can't be asserted on without risking the
+    suite).
     """
     token = CancellationToken()
     with _raise_keyboard_interrupt_at_condition_exit():
@@ -1364,13 +1364,12 @@ def test_request_interrupted_mid_set_does_not_leave_the_tokens_event_locked_afte
 
 
 def test_request_only_calls_event_set_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """P1-2 (b): a repeat `request()` call -- the watcher thread racing
-    the main thread's own handler, or anything else calling it again
-    once cancellation is already requested -- must never call `Event.
-    set()` a second time: that call is the one place this token's own
-    `Event` still touches its `Condition`-backed lock on the main
-    thread, and a second, unnecessary touch is exactly the exposure
-    P1-2 closes.
+    """A repeat `request()` call -- the watcher thread racing the main
+    thread's own handler, or anything else calling it again once
+    cancellation is already requested -- must never call `Event.set()`
+    a second time: that call is the one place this token's own `Event`
+    still touches its `Condition`-backed lock on the main thread, and a
+    second, unnecessary touch is exactly the exposure this closes.
     """
     token = CancellationToken()
     set_calls: list[int] = []
@@ -1389,8 +1388,8 @@ def test_request_only_calls_event_set_once(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_sleep_or_raise_on_main_thread_notices_within_one_poll_slice() -> None:
-    """P1-2 (c): `sleep_or_raise` is lock-free on the main thread -- a
-    plain `time.sleep` slice plus `Event.is_set()` -- so it must notice
+    """`sleep_or_raise` is lock-free on the main thread -- a plain
+    `time.sleep` slice plus `Event.is_set()` -- so it must notice
     a cancellation requested from another thread within about one poll
     slice, the same promptness the old `Event.wait`-based version gave,
     not just eventually once the full *seconds* argument elapses.
@@ -1414,8 +1413,8 @@ def test_sleep_or_raise_on_main_thread_notices_within_one_poll_slice() -> None:
 
 
 def test_sleep_or_raise_never_touches_a_condition_lock_on_the_main_thread() -> None:
-    """P1-2 (c): on the main thread, `sleep_or_raise` must be lock-free
-    outright, not merely as prompt as the old `Event.wait`-based wait --
+    """On the main thread, `sleep_or_raise` must be lock-free outright,
+    not merely as prompt as the old `Event.wait`-based wait --
     a signal's handler raising at `Condition.__exit__`'s entry during
     that old wait would leak the lock, the same #555-style exposure
     `request()`'s own `Event.set()` has. The old version is just as
@@ -1455,10 +1454,10 @@ def test_sleep_or_raise_never_touches_a_condition_lock_on_the_main_thread() -> N
 
 
 def test_acquire_promptly_releases_the_semaphore_if_interrupted_right_after_acquiring() -> None:
-    """P2-3 (delta review of PR #553, round 4): `acquire_promptly`'s own
-    `sem.acquire(...)` call is wrapped in `deferred_signal_region` --
-    the same #555-style audit `RunConcurrencyLimiter`'s own `_acquire_
-    one` got -- but unlike that limiter, this function's caller has no
+    """`acquire_promptly`'s own `sem.acquire(...)` call is wrapped in
+    `deferred_signal_region` -- the same #555-style audit
+    `RunConcurrencyLimiter`'s own `_acquire_one` got -- but unlike
+    that limiter, this function's caller has no
     `held` list and no `try`/`finally` active yet when it's called:
     `adapters.cyberdiner`'s own ``acquire_promptly(sem); try: ...;
     finally: sem.release()`` only registers that `finally` *after* this

@@ -112,14 +112,14 @@ class LiveStateMirror:
         self._thread.start()
 
     def __call__(self, state: dict[str, Any]) -> None:
-        # `deferred_signal_region` (delta review of PR #553, P2-1): this
-        # runs on whichever thread the runtime calls `Store.on_write`
-        # from, including the main thread (a plain sequential chain's own
-        # leaf effects) -- `_wake` is a `threading.Condition`, the same
-        # #555-style exposure as a `Future`'s own lock. A first signal's
-        # handler raising mid-release here would leak it, wedging the
-        # writer thread's own `_write_loop` (blocked on the identical
-        # lock) and, in turn, `close()`'s `self._thread.join()`.
+        # `deferred_signal_region`: this runs on whichever thread the
+        # runtime calls `Store.on_write` from, including the main thread
+        # (a plain sequential chain's own leaf effects) -- `_wake` is a
+        # `threading.Condition`, the same #555-style exposure as a
+        # `Future`'s own lock. A first signal's handler raising
+        # mid-release here would leak it, wedging the writer thread's
+        # own `_write_loop` (blocked on the identical lock) and, in turn,
+        # `close()`'s `self._thread.join()`.
         with deferred_signal_region(), self._wake:
             first = not self._first_written
             self._first_written = True

@@ -40,10 +40,10 @@ from circuitry.core.store import Store
 
 @pytest.fixture(autouse=True)
 def _restore_process_signal_state():
-    """Same fixture as `tests.cli.test_interrupts` (delta review of PR
-    #553, P2-5): several tests here drive `sigterm_as_interrupt` with a
-    real SIGINT -- a cancelled run leaves SIGHUP `SIG_IGN` on its way out
-    by design and nothing put it back, so without this, a later `cof run`
+    """Same fixture as `tests.cli.test_interrupts`: several tests here
+    drive `sigterm_as_interrupt` with a real SIGINT -- a cancelled run
+    leaves SIGHUP `SIG_IGN` on its way out by design and nothing put it
+    back, so without this, a later `cof run`
     subprocess test (`tests/cli/test_run_sighup.py`) could find SIGHUP
     already ignored and skip installing its own handler. Undoes both the
     process-wide signal handlers and the module-level `CancellationToken`
@@ -257,14 +257,14 @@ def _submit_then_self_sigint_once(
     this very process, right before returning -- the installed
     `sigterm_as_interrupt` handler then runs synchronously on the main
     thread *inside* `submit`, exactly where the 60-run stress batch's
-    own failure put it (#555 follow-up, F3). Only the first call fires
-    it: a second signal inside the same dispatch loop would take the
+    own failure put it (#555 follow-up). Only the first call fires it:
+    a second signal inside the same dispatch loop would take the
     handler's own immediate `os._exit` path instead of the cancellation
     this test means to drive.
 
-    Waits for *started* before delivering the signal (delta review of PR
-    #553, P2-3), rather than firing it unconditionally right after
-    `submit()` returns: the branch's own worker thread must already have
+    Waits for *started* before delivering the signal, rather than
+    firing it unconditionally right after `submit()` returns: the
+    branch's own worker thread must already have
     passed its own pre-step1 `get_token().check()` (`loop.py`/
     `dynamic.py`) and be running step1 by the time the signal lands, or
     this test would pass even against the bug it means to catch --
@@ -283,9 +283,9 @@ def _submit_then_self_sigint_once(
             signalled.set()
             assert started.wait(timeout=5.0), "branch's step1 never started"
             # `pthread_kill` targeting the main thread's own tid, not
-            # `os.kill` on the whole process (delta review of PR #553,
-            # round 4, P2-4): POSIX is free to deliver a process-directed
-            # signal to *any* thread that doesn't have it blocked -- if
+            # `os.kill` on the whole process: POSIX is free to deliver
+            # a process-directed signal to *any* thread that doesn't
+            # have it blocked -- if
             # the kernel picked a different one, the handler could run
             # after this dispatch region has already exited, and this
             # test would then also pass against the pre-fix code it
@@ -306,10 +306,10 @@ def _submit_then_self_sigint_once(
 def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F3 (#555 follow-up): reproduces the 60-run stress batch's own
-    failure -- a signal landing on the main thread *while
+    """Reproduces the 60-run stress batch's own failure (#555
+    follow-up): a signal landing on the main thread *while
     `ThreadPoolExecutor.submit` itself is still running*, not merely
-    between submits (the test above). On the pre-F1 code, the future
+    between submits (the test above). Before this fix, the future
     `submit` was about to return was discarded the moment
     `submit_with_context`'s own region raised, before this loop's own
     `future_to_idx[future] = idx` line ever ran -- so nothing ever
@@ -379,8 +379,8 @@ def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
 def test_dynamic_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F3 (#555 follow-up): the same reproduction as the `loop` test
-    above, against `dynamic.py`'s own tree-flow dispatch instead.
+    """The same reproduction as the `loop` test above (#555
+    follow-up), against `dynamic.py`'s own tree-flow dispatch instead.
     """
     ran: list[str] = []
     step1_started = threading.Event()
@@ -445,10 +445,9 @@ def _raise_runtime_error_on_second_call(
     """Like `_raise_keyboard_interrupt_on_second_call` above, but raises a
     plain `RuntimeError` instead -- simulating the cancel path being
     entered by something that is *not* a signal (`executor.submit`
-    itself, or an observer callback) rather than a real Ctrl-C, exactly
-    the P1-1 scenario (delta review of PR #553): a *first* signal then
-    lands while the main thread is inside the cancel path's own wait,
-    not during dispatch.
+    itself, or an observer callback) rather than a real Ctrl-C: a
+    *first* signal then lands while the main thread is inside the
+    cancel path's own wait, not during dispatch.
     """
     calls: list[int] = []
     real_submit = module.submit_with_context
@@ -469,14 +468,14 @@ def _raise_runtime_error_on_second_call(
 def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P1-1 (delta review of PR #553): the cancel path's own wait --
-    `executor.shutdown(wait=False, cancel_futures=True)` followed by
-    `wait_for_cancelled_branches` -- must not be cut short by a *first*
-    signal landing during it, or a still-running branch the kill can't
-    reach passes its next `get_token().check()` and starts its next step
-    after `sigterm_as_interrupt`'s own `finally:` has already reset the
-    token on the way out. Reproduced exactly as the review's own recipe:
-    the cancel path is entered by a non-signal exception (the *second*
+    """The cancel path's own wait -- `executor.shutdown(wait=False,
+    cancel_futures=True)` followed by `wait_for_cancelled_branches` --
+    must not be cut short by a *first* signal landing during it, or a
+    still-running branch the kill can't reach passes its next
+    `get_token().check()` and starts its next step after
+    `sigterm_as_interrupt`'s own `finally:` has already reset the token
+    on the way out. Reproduced step by step: the cancel path is entered
+    by a non-signal exception (the *second*
     `submit_with_context` call raising `RuntimeError`, simulating
     `executor.submit`/an observer callback failing), branch 0's own
     step1 blocks on an `Event`, a *first* real SIGINT is delivered via
@@ -508,12 +507,11 @@ def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_i
             if prompt == "step1":
                 block_started.set()
                 assert block_release.wait(timeout=5.0), "never released"
-                # Recorded only *after* the release (delta review of PR
-                # #553, round 4, P1-1): proves step1 was still blocked,
-                # waited out, and only then completed -- not that it
-                # happened to run and finish before the signal ever did
-                # anything, which is all the pre-fix recipe below would
-                # have shown otherwise.
+                # Recorded only *after* the release: proves step1 was
+                # still blocked, waited out, and only then completed --
+                # not that it happened to run and finish before the
+                # signal ever did anything, which an assertion checking
+                # only for step2 below would not have told apart.
                 ran.append("step1")
                 return GenerateResult(text=prompt, raw={})
             if prompt == "step2":
@@ -574,11 +572,11 @@ def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_i
 
     # Proves the wait actually outlasted the release, instead of the
     # signal cutting it short and letting execute() return well before
-    # step1 ever got to run at all (delta review of PR #553, round 4,
-    # P1-1) -- on the pre-fix code, the `with` block above exits the
-    # instant the signal lands, long before `deliver_then_release`'s own
-    # `block_release.set()` runs 0.5s later, so step1 is still blocked
-    # right here and this assertion would fail.
+    # step1 ever got to run at all -- on the pre-fix code, the `with`
+    # block above exits the instant the signal lands, long before
+    # `deliver_then_release`'s own `block_release.set()` runs 0.5s
+    # later, so step1 is still blocked right here and this assertion
+    # would fail.
     assert "step1" in ran, (
         "the with sigterm_as_interrupt() block exited before step1 ever "
         "finished -- the cancel path's own wait was cut short instead of "
@@ -602,9 +600,8 @@ def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_i
 def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P1-1 (delta review of PR #553): the same reproduction as the
-    `dynamic` test above, against `loop.py`'s own tree-flow dispatch
-    instead.
+    """The same reproduction as the `dynamic` test above, against
+    `loop.py`'s own tree-flow dispatch instead.
     """
     ran: list[str] = []
     block_started = threading.Event()
@@ -621,7 +618,7 @@ def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_s
                 block_started.set()
                 assert block_release.wait(timeout=5.0), "never released"
                 # Recorded only *after* the release -- see the dynamic
-                # test above (delta review of PR #553, round 4, P1-1).
+                # test above.
                 ran.append("step1")
                 return GenerateResult(text=prompt, raw={})
             if prompt == "step2":
@@ -664,8 +661,7 @@ def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_s
                 store=store
             )
 
-    # See the dynamic test above: proves the wait outlasted the release
-    # (delta review of PR #553, round 4, P1-1).
+    # See the dynamic test above: proves the wait outlasted the release.
     assert "step1" in ran, (
         "the with sigterm_as_interrupt() block exited before step1 ever "
         "finished -- the cancel path's own wait was cut short instead of "
@@ -684,12 +680,11 @@ def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_s
 def test_dynamic_tree_submit_dispatch_runs_inside_a_deferred_signal_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins dynamic.py's own dispatch-loop region (delta review of PR
-    #553, P2-4): if the ``with deferred_signal_region():`` wrapping the
-    ``submit_with_context`` call (and recording its future) were ever
-    removed, this would fail directly, at the call site -- not only via
-    ``submit_with_context``'s own internal assert that the caller
-    already holds one.
+    """Pins dynamic.py's own dispatch-loop region: if the ``with
+    deferred_signal_region():`` wrapping the ``submit_with_context``
+    call (and recording its future) were ever removed, this would fail
+    directly, at the call site -- not only via ``submit_with_context``'s
+    own internal assert that the caller already holds one.
     """
     seen_deferring: list[bool] = []
     real_submit = dynamic_module.submit_with_context
@@ -728,7 +723,7 @@ def test_loop_tree_submit_dispatch_runs_inside_a_deferred_signal_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pins loop.py's own dispatch-loop region -- see the identical
-    `dynamic` test above (delta review of PR #553, P2-4).
+    `dynamic` test above.
     """
     seen_deferring: list[bool] = []
     real_submit = loop_module.submit_with_context
@@ -764,14 +759,14 @@ def test_loop_tree_submit_dispatch_runs_inside_a_deferred_signal_region(
 def test_dynamic_tree_cancel_paths_shutdown_and_wait_share_one_deferred_signal_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins P1-1's own fix (delta review of PR #553, P2-4): if
-    ``executor.shutdown(wait=False, cancel_futures=True)`` and
+    """Pins the fix keeping the cancel path's wait from being cut
+    short: if ``executor.shutdown(wait=False, cancel_futures=True)`` and
     ``wait_for_cancelled_branches`` were ever split back into two
     separate ``deferred_signal_region`` scopes (or ``wait_for_cancelled_
-    branches`` taken out of one entirely, as before the P1-1 fix), the
-    region would have already exited -- and ``is_deferring_first_signal``
-    would read ``False`` -- by the time ``wait_for_cancelled_branches``
-    is called, below.
+    branches`` taken out of one entirely), the region would have
+    already exited -- and ``is_deferring_first_signal`` would read
+    ``False`` -- by the time ``wait_for_cancelled_branches`` is called,
+    below.
     """
     seen: list[tuple[str, bool]] = []
     real_shutdown = ThreadPoolExecutor.shutdown
@@ -822,8 +817,7 @@ def test_dynamic_tree_cancel_paths_shutdown_and_wait_share_one_deferred_signal_r
 def test_loop_tree_cancel_paths_shutdown_and_wait_share_one_deferred_signal_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins loop.py's own identical fix -- see the `dynamic` test above
-    (delta review of PR #553, P2-4).
+    """Pins loop.py's own identical fix -- see the `dynamic` test above.
     """
     seen: list[tuple[str, bool]] = []
     real_shutdown = ThreadPoolExecutor.shutdown
@@ -872,11 +866,10 @@ def test_loop_tree_cancel_paths_shutdown_and_wait_share_one_deferred_signal_regi
 def test_dynamic_tree_stop_on_error_pending_cancel_runs_inside_a_deferred_signal_region(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins `_await_tree_branches`'s own ``pending.cancel()`` region
-    (delta review of PR #553, P2-4): a ``stop_on_error`` tree cancels
-    every sibling that hasn't started yet the moment the first one
-    fails -- ``max_concurrency: 1`` keeps the second branch queued, not
-    yet dequeued, when that happens.
+    """Pins `_await_tree_branches`'s own ``pending.cancel()`` region: a
+    ``stop_on_error`` tree cancels every sibling that hasn't started yet
+    the moment the first one fails -- ``max_concurrency: 1`` keeps the
+    second branch queued, not yet dequeued, when that happens.
     """
     seen_deferring: list[bool] = []
     real_cancel = Future.cancel
