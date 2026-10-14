@@ -916,20 +916,14 @@ async fn a_tool_naming_a_provider_that_is_not_a_cof_plugin_reaches_preflights_re
         !error.contains(electricity_bytecode::PREVIEW_MARKER),
         "a genuinely unknown provider must never get the preview marker: {error}"
     );
+    let supported_plugins = electricity_tools::plugin_names::PLUGIN_NAMES.join(", ");
     assert_eq!(
         error,
-        "Preflight failed: tool:nonexistent_tool: not ready — Unknown plugin: \
-         'nonexistent_tool'. Supported plugins: \
-         7z, agent, awk, base64, clock, comfyui, csv, diff_patch, discord, dns, docker, \
-         email_smtp, embed, env_vars, exiftool, ffmpeg, fs, gcalendar, gdrive, gh, git, \
-         github, gpg, gzip, hash, hex, html_extract, http, imagemagick, jira, json, \
-         kubectl, linear, linter, math, mcp, mediainfo, notion, ocr, pandoc, pdf_extract, \
-         pdf_render, ping, playwright, port_check, process_list, pytest, python_eval, \
-         regex, rerank, ripgrep, rss, s3, screenshot, sed, service, shell, slack, \
-         surrealdb, system_info, tar, traceroute, uuid, validate_yaml, vector_search, \
-         weather, web_fetch, web_search, webhook, whois, wikipedia, xml, yt_dlp, zip. \
-         Check the 'provider' field on your tool effect.. Re-run with --skip-preflight \
-         to bypass."
+        format!(
+            "Preflight failed: tool:nonexistent_tool: not ready — Unknown plugin: \
+             'nonexistent_tool'. Supported plugins: {supported_plugins}. Check the \
+             'provider' field on your tool effect.. Re-run with --skip-preflight to bypass."
+        )
     );
     let state = result
         .state

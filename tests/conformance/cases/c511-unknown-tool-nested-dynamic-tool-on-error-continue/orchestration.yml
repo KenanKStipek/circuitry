@@ -1,0 +1,14 @@
+name: c511-unknown-tool-nested-dynamic-tool-on-error-continue
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: dynamic
+          name: dyn
+          effects:
+            - type: tool
+              name: x
+              provider: nonexistent_tool
+              params: {}
+              on_error: continue

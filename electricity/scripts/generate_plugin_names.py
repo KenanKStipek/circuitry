@@ -6,16 +6,17 @@ plugins: ..." text lists Python's *full* registry (every provider name in
 ``PLUGIN_REGISTRY``, sorted), not just the handful electricity itself can
 build. electricity-tools's own builder (``registry.rs::build_plugin``) needs
 that exact list to word its own unknown-plugin message the same way, even for
-a provider name no electricity lane has implemented yet -- the message is
-only ever the reason a `tool` effect's `provider:` is refused, never a
-dispatch decision, so it must speak to "every provider Circuitry itself
-knows", not "every provider electricity knows".
+a provider name no electricity lane has implemented yet -- it must speak to
+"every provider Circuitry itself knows", not "every provider electricity
+knows".
 
 Lives in electricity-bytecode, not electricity-tools (which re-exports it):
 the refusal walker (``electricity-bytecode::refusal::first_unsupported``)
-needs this same list to tell a known-but-unbuilt plugin from one that is not
-a cof plugin at all (issue #511), and can't depend on electricity-tools,
-which already depends on electricity-bytecode.
+also consults this same list, to decide whether a `tool` effect's
+unbuildable `provider:` is a cof plugin electricity doesn't run yet (still
+refused with the preview marker) or not a cof plugin at all (issue #511,
+left for the real "Unknown plugin" dispatch failure instead) -- and can't
+depend on electricity-tools, which already depends on electricity-bytecode.
 
 Usage: python3 generate_plugin_names.py [--check]
 """

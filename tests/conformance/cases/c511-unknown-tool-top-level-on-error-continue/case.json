@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "The same top-level tool effect naming a provider that is not a cof plugin at all, but with on_error: continue on the tool itself -- preflight fails before any effect dispatches, so on_error never gets a chance to apply; the text and --out are identical to the plain top-level case.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}
