@@ -173,6 +173,25 @@ def test_save_then_load_round_trips_state(fake_db: FakeDatabase) -> None:
     assert loaded == {"input": {"name": "ada"}}
 
 
+def test_save_run_snapshot_stringifies_a_date_instead_of_raising(fake_db: FakeDatabase) -> None:
+    """Issue #512: a state a reflector/tool/use/interface-default route put
+    an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
+    persistence write the way a plain `json.dumps` would."""
+    import datetime
+
+    backend = _backend()
+
+    backend.save_run_snapshot(
+        orchestration_path="orch.yml",
+        run_id="run-1",
+        ok=True,
+        error=None,
+        state={"d": datetime.date(2024, 1, 2)},
+    )
+
+    assert backend.load_latest_state(orchestration_path="orch.yml") == {"d": "2024-01-02"}
+
+
 def test_load_latest_state_returns_none_when_nothing_persisted(fake_db: FakeDatabase) -> None:
     backend = _backend()
 

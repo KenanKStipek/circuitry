@@ -153,6 +153,27 @@ def test_jsonl_round_trip_returns_latest_record(tmp_path: Path) -> None:
     assert last["created_at"]
 
 
+def test_jsonl_save_run_snapshot_stringifies_a_date_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """Issue #512: a state a reflector/tool/use/interface-default route put
+    an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
+    persistence write the way a plain `json.dumps` would."""
+    import datetime
+
+    backend = JsonlFileStatePersistence.from_config({"path": str(tmp_path / "runs.jsonl")})
+
+    backend.save_run_snapshot(
+        orchestration_path="orch.yml",
+        run_id="r1",
+        ok=True,
+        error=None,
+        state={"d": datetime.date(2024, 1, 2)},
+    )
+
+    assert backend.load_latest_state(orchestration_path="orch.yml") == {"d": "2024-01-02"}
+
+
 def test_jsonl_skips_malformed_lines(tmp_path: Path) -> None:
     log = tmp_path / "runs.jsonl"
     backend = JsonlFileStatePersistence.from_config({"path": str(log)})

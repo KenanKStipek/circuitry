@@ -172,6 +172,8 @@ A tree branch or a `use` child only ever appears in `--live-state` once it has f
 
 A saved shadow state holds each loop's final pass only once. In `--out`, `--json`, and the live mirror, a named loop's `last` is written as a reference to the pass it aliases, `"last": {"$ref": "iter_2"}`. Every reader that loads a state file links it back: `--state`, a persistence resume, and the TUI's Runs view. A run-time read of `{{prime.diagnoses.last.diagnose.value}}` does not change. Only a tool that reads the file directly must follow the reference: `jq '.prime.diagnoses | .[.last["$ref"]]'`.
 
+An unquoted YAML date (`issued: 2024-01-02`) or `!!binary` value can reach state without you asking for it — a `reflector`'s own parsed plan, a tool's recorded `params_rendered`, a `use` effect's literal inputs, an `interface.inputs` default with no declared `type:`. Saved state writes it as its string form (`"2024-01-02"`, `"b'...'"`) rather than failing the write; a resumed run's already-completed node shows that string back, not the original typed value.
+
 And when a run diverges from what you expected, `inspect_divergence_paths(state)` from the SDK walks the whole tree and returns every node with a `meta.error`, in path order — [Troubleshooting State Paths](../troubleshooting-state-paths.md) is the workflow built around it.
 
 ## Anti-patterns

@@ -1598,6 +1598,37 @@ genuinely different serializations of the same state, not just
 whitespace-different. A trailing `"\n"` is always appended
 (`cli/app.py:213` `_write_state_json`).
 
+Both calls pass `default=` a function limited to the two YAML 1.1 shapes
+that can reach state without an author writing one on purpose — an unquoted
+date or timestamp (`datetime.date`, `datetime.datetime`) and `!!binary`
+(`bytes`) — and stringifies them exactly as `json.dumps(..., default=str)`
+would: `str(date)` (`"2024-01-02"`), `str(datetime)` (`"2024-01-02
+03:04:05"`, with microseconds or a UTC offset when the value has them), and
+`str(bytes)` (`"b'...'"`). These can reach state several ways a document
+author doesn't fully control, not just a param written as a literal date on
+purpose: a `reflector`'s own `meta.iterations[i].parsed` (a scripted/model
+plan parsed back from YAML), any effect's `meta.params_rendered`, a `use`
+effect's literal (non-`{from: ...}`) inputs, and an `interface.inputs`
+default with no declared `type:`. `default=` is never consulted for a dict
+*key* (`json.dumps` doesn't either) — a date/bytes dict key still raises
+`TypeError`, and so does anything else `json.dumps` can't serialize, exactly
+as a plain `json.dumps` with no `default=` at all (issue #512).
+
+electricity's own `--out`/`--live-state` writer (`electricity::out::
+render_state`) reproduces this fallback byte for byte
+(`electricity_json::dumps_default_str`, the same function several other
+sites already use for a Python `default=str` caller — §8.2's redacted-`raw`
+size-cap path, among others). Before issue #512, a value this fallback now
+handles made `electricity::out::render_state` write a
+`{"error": "could not serialize run state: ..."}` placeholder and exit `0`;
+now that only remains true for a value `default=str` itself doesn't cover
+(an unserializable dict key, nesting past the depth limit, ...), and even
+then only for the non-TTY stdout summary (`render_state_for_stdout`, used
+only when no `--out` was given) — `write_out` instead returns an error,
+which `electricity-cli`'s `run_action` reports on stderr and turns into exit
+code `1`, matching a real `cof run`'s own uncaught `TypeError` for the same
+case.
+
 ### 8.4 Exit codes
 
 | Condition | Exit code |

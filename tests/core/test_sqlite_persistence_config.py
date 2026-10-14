@@ -77,3 +77,26 @@ def test_sqlite_load_latest_state_skips_failed_runs_but_load_run_finds_them(
     assert backend.load_latest_state(orchestration_path="orch.yml") == {"n": 1}
     assert backend.load_run(orchestration_path="orch.yml", run_id="r2") == {"n": 2}
     assert backend.load_run(orchestration_path="orch.yml", run_id="r1") == {"n": 1}
+
+
+def test_sqlite_save_run_snapshot_stringifies_a_date_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """Issue #512: a state a reflector/tool/use/interface-default route put
+    an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
+    persistence write the way a plain `json.dumps` would."""
+    import datetime
+
+    backend = SQLiteStatePersistence.from_config(
+        {"backend": "sqlite", "db_path": str(tmp_path / "runs.db")}
+    )
+
+    backend.save_run_snapshot(
+        orchestration_path="orch.yml",
+        run_id="r1",
+        ok=True,
+        error=None,
+        state={"d": datetime.date(2024, 1, 2)},
+    )
+
+    assert backend.load_run(orchestration_path="orch.yml", run_id="r1") == {"d": "2024-01-02"}

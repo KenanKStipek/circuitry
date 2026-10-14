@@ -239,7 +239,7 @@ async fn run_case(name: &str, orchestration: &str, inputs: &[(&str, &str)]) -> R
     let token = CancellationToken::new();
     let result = electricity::run_orchestration(&req, &token).await;
     let state = result.state.expect("every smoke case still writes state");
-    let state_text = electricity::out::render_state(&state, false);
+    let state_text = electricity::out::render_state(&state, false).unwrap();
     fs::write(&out_path, &state_text).unwrap();
 
     let root = dir.to_str().unwrap();

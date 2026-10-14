@@ -310,3 +310,65 @@ def test_persistence_save_run_snapshot_writes_ref_form_last(
     # The live state the run returns is untouched -- still real aliases.
     live_outer = result.state["prime"]["outer"]
     assert live_outer["last"] is live_outer["iter_1"]
+
+
+# ----------------------------------------------------------------------
+# Issue #512: an unquoted YAML 1.1 date/timestamp or ``!!binary`` reaching
+# state must not crash serialization the way a plain ``json.dumps`` does.
+# ----------------------------------------------------------------------
+
+
+def test_dumps_saved_state_stringifies_a_date() -> None:
+    import datetime
+
+    assert dumps_saved_state({"d": datetime.date(2024, 1, 2)}) == '{"d": "2024-01-02"}'
+
+
+def test_dumps_saved_state_stringifies_a_naive_datetime_with_microseconds() -> None:
+    import datetime
+
+    value = datetime.datetime(2024, 1, 2, 3, 4, 5, 123456)  # noqa: DTZ001
+    assert dumps_saved_state({"t": value}) == '{"t": "2024-01-02 03:04:05.123456"}'
+
+
+def test_dumps_saved_state_stringifies_a_datetime_with_a_utc_offset() -> None:
+    import datetime
+
+    value = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    assert dumps_saved_state({"t": value}) == '{"t": "2024-01-02 03:04:05+00:00"}'
+
+
+def test_dumps_saved_state_stringifies_bytes_as_its_python_repr() -> None:
+    assert dumps_saved_state({"b": b"hi"}) == '{"b": "b\'hi\'"}'
+
+
+def test_dumps_saved_state_still_raises_for_anything_else_unencodable() -> None:
+    """Only ``date``/``datetime``/``bytes`` get the fallback -- anything else
+    ``json.dumps`` can't encode remains an error, same as a plain
+    ``json.dumps`` with no ``default=`` at all."""
+    import pytest
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        dumps_saved_state({"s": {1, 2, 3}})
+
+
+def test_write_state_json_no_longer_crashes_on_a_date_and_resume_sees_a_string(
+    tmp_path: Path,
+) -> None:
+    """``cli/app.py::_write_state_json`` used to crash with ``TypeError:
+    Object of type date is not JSON serializable`` and write no ``--out``
+    file at all (#512) -- it now writes the stringified value, and a later
+    ``--resume`` reads that already-completed node's recorded value back as
+    the string ``--out`` wrote, not the original ``date``."""
+    import datetime
+
+    out_path = tmp_path / "out.json"
+    params_rendered = {"d": datetime.date(2024, 1, 2)}
+    state = {"prime": {"a": {"value": None, "meta": {"params_rendered": params_rendered}}}}
+
+    _write_state_json(out=out_path, state=state, pretty=False)
+
+    loaded = load_state_file(out_path)
+    assert loaded.ok
+    assert loaded.state is not None
+    assert loaded.state["prime"]["a"]["meta"]["params_rendered"] == {"d": "2024-01-02"}

@@ -82,7 +82,7 @@ async fn run_case(case: &CorpusCase) -> Json {
         case.name, result.error
     );
     let state = result.state.unwrap();
-    let state_text = electricity::out::render_state(&state, false);
+    let state_text = electricity::out::render_state(&state, false).unwrap();
 
     let root = dir.to_str().unwrap();
     let state_json: Json = serde_json::from_str(&state_text).unwrap();

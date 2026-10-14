@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from ..saved_state import json_safe_default
 from ._identifiers import validate_table_name
 
 
@@ -152,7 +153,7 @@ class PostgresStatePersistence:
                             orchestration_path,
                             ok,
                             error,
-                            json.dumps(state),
+                            json.dumps(state, default=json_safe_default),
                         ),
                     )
         except Exception as e:

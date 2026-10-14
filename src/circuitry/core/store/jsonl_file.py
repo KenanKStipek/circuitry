@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..saved_state import json_safe_default
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,7 +152,7 @@ class JsonlFileStatePersistence:
             log_file = self._resolve_path()
             log_file.parent.mkdir(parents=True, exist_ok=True)
             with log_file.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record) + "\n")
+                fh.write(json.dumps(record, default=json_safe_default) + "\n")
         except Exception as e:
             raise RuntimeError(
                 f"JSONL state save failed for run_id={run_id}: {e}"
