@@ -174,13 +174,11 @@ class RunConcurrencyLimiter:
         try:
             if group is not None:
                 sem = self._group_sems[group]
-                self._acquire_one(sem, group, on_wait, on_acquired)
-                held.append(sem)
+                self._acquire_one(sem, group, on_wait, on_acquired, held)
             if self._global_sem is not None:
                 self._acquire_one(
-                    self._global_sem, GLOBAL_RESOURCE_LABEL, on_wait, on_acquired
+                    self._global_sem, GLOBAL_RESOURCE_LABEL, on_wait, on_acquired, held
                 )
-                held.append(self._global_sem)
             yield
         finally:
             # `deferred_signal_region` (delta review of PR #553, P2-1):
@@ -207,6 +205,7 @@ class RunConcurrencyLimiter:
         label: str,
         on_wait: Callable[[str], None] | None,
         on_acquired: Callable[[], None] | None,
+        held: list[threading.Semaphore],
     ) -> None:
         # Each `sem.acquire(...)` wrapped individually in its own
         # `deferred_signal_region` (delta review of PR #553, P2-1), same
@@ -216,16 +215,32 @@ class RunConcurrencyLimiter:
         # whole retry loop -- unlike `wait_for_cancelled_branches`, a
         # signal deferred until just after one 0.2s-bounded attempt costs
         # nothing a cancelled run would otherwise have to wait out.
+        #
+        # `held.append(sem)` runs *inside* the same region as the
+        # successful acquire, not after this method returns (round 4
+        # follow-up, P2-1): the caller's own `try`/`finally` is already
+        # active by the time this is called (see `acquire()` above), so
+        # even if a deferred signal's exception is raised at this
+        # region's own exit -- necessarily after `held.append` has
+        # already run, since that line is above the `with` block's exit
+        # -- that `finally` is guaranteed to run and release every
+        # semaphore already in `held`, including this one. Appending
+        # only after the `with` block closed, as before, left exactly
+        # that window: an acquired slot whose append never ran before the
+        # region's exit raised past it, leaking the slot until the next
+        # process restart.
         with deferred_signal_region():
-            acquired = sem.acquire(blocking=False)
-        if acquired:
-            return
+            if sem.acquire(blocking=False):
+                held.append(sem)
+                return
         if on_wait is not None:
             on_wait(label)
         token = get_token()
         while True:
             with deferred_signal_region():
                 acquired = sem.acquire(timeout=cls._POLL_SECONDS)
+                if acquired:
+                    held.append(sem)
             if acquired:
                 break
             # A blocked wait for a concurrency slot is itself a place a
