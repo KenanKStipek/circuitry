@@ -442,7 +442,10 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
     send_bytes(&mut master, b"q");
 
     let status = wait_with_timeout(child, Duration::from_secs(30));
-    assert!(status.success(), "osp --no-animation should exit 0, got {status:?}");
+    assert!(
+        status.success(),
+        "osp --no-animation should exit 0, got {status:?}"
+    );
 
     std::thread::sleep(Duration::from_millis(200));
     let captured = captured_buf.lock().unwrap().clone();
