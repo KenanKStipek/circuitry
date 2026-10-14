@@ -845,6 +845,35 @@ HTTP error onto exit 22, whose *actual* status is parsed back out of curl's stde
 (429/408/5xx + "never got a reply" conditions) exactly, since that set is shared by every
 retrying effect (prompt, tool, use), not adapter-specific.
 
+**electricity's own exit/stderr mapping** (`electricity-adapters/src/transport.rs:396-476`):
+the adapter transport reproduces curl's own exit codes and synthesizes a `curl: (N) <text>`
+stderr string for every curl-shelling adapter's own failure path, so the rest of the adapter
+layer (`classify_curl_exit`'s own Rust port) never has to know the request didn't actually go
+through curl.
+
+| Failure | Exit | stderr text |
+|---|---|---|
+| HTTP status ≥ 400 | 22 | `The requested URL returned error: <status>`; the body is stdout |
+| connect: DNS | 6 | the connect error's own text |
+| connect: refused, or other | 7 | the connect error's own text |
+| connect: timeout | 28 | the connect error's own text |
+| connect: TLS handshake | 35 | the connect error's own text |
+| connect: TLS certificate | 60 | the connect error's own text |
+| no reply in time | 28 | `Operation timed out` |
+| closed before any response | 52 | `Empty reply from server` |
+| reset after the response began | 56 | `Recv failure: Connection reset by peer` |
+| body shorter than declared | 18 | `transfer closed with N bytes remaining to read (got M)` |
+| anything else | 2 | the error's own text |
+
+The retryable set this table's own exits feed into `is_retryable_exit` is exactly
+`RETRYABLE_CURL_EXIT_CODES` above, `{6, 7, 28, 35, 52, 56}` (`transport.rs:474`) — 60
+(certificate), 18 (incomplete read) and 2 (anything else) are not retryable, and are not in
+#448's own decision 2 list either (that decision names only 22/6/7/28/35/52/56). The "connect
+ error's own text" rows are electricity's own wording, never curl's: a native HTTP client has no
+curl stderr to reproduce for a connect failure, so a conformance case matches that text by
+pattern (`third_party_text`, DESIGN.md §13), never byte-for-byte against a real curl's own
+message.
+
 For a plain `RuntimeError(...) from exc`-raising adapter (`cyberdiner`'s `urllib`-based
 requests, `watsonx`'s IAM exchange), `classify_exception` (`:194-210`) walks the exception's
 `__cause__`/`__context__` chain (`_classify_cause_chain`, `:155-192`) looking for a
@@ -875,8 +904,9 @@ probe, or a conformance case built around an intentionally-unreachable `base_url
 ### 3.12 Curl hygiene — security intent for electricity's native HTTP client
 
 `src/circuitry/curl_support.py`. electricity replaces every curl invocation with a native Rust
-HTTP client, so none of curl's own mechanics (config-file-via-pipe-fd, `--data-binary @-`,
-`-q`) apply directly. The **security properties** a native client must still guarantee:
+HTTP client (§3.10's own exit/stderr table), so none of curl's own mechanics
+(config-file-via-pipe-fd, `--data-binary @-`, `-q`) apply directly. The **security properties**
+a native client must still guarantee:
 1. **No secret on argv or in a logged command line.** The reference's whole reason for
    `--config`-via-pipe instead of `-H`/`-d` flags is that argv is visible in `ps` to any local
    user; a native Rust client achieves the same by simply never constructing a shell command —

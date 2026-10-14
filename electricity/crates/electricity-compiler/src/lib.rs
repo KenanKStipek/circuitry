@@ -76,8 +76,13 @@
 //!   [`electricity_config::validate_complexity`]/[`electricity_config::
 //!   validate_persistence`]'s own port (issue #431's lane D1) -- neither
 //!   backend subsystem itself (complexity routing/decomposition,
-//!   persistence backends) has an IR representation in this crate, so
-//!   only their *validation* is ported, not their behaviour.
+//!   persistence backends) has an IR representation *in this crate*,
+//!   so only their *validation* is ported here, not their behaviour.
+//!   Complexity scoring/routing/decomposition's own behaviour runs in
+//!   `electricity-vm`'s `exec::prompt` (lanes K2/#516 and L2b/#522);
+//!   persistence (`--resume`, state-snapshot backends) has no run
+//!   behaviour anywhere yet -- `runtime.persistence` is still refused
+//!   outright (M2-G).
 //! - [`structural::schema_errors`] sorts multiple simultaneous schema
 //!   violations by `(location, message)`, not Circuitry's own `str(err)`
 //!   order (third-party `jsonschema` text from a different
