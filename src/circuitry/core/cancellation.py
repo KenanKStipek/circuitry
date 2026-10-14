@@ -276,6 +276,16 @@ class CancellationToken:
         module-level singleton (:func:`get_token`), so a test harness or an
         embedder running several orchestrations in one process must not see
         an earlier run's cancellation leak into the next one.
+
+        ``_event.clear()`` is itself a ``Condition``-backed call, the same
+        #555-style exposure :meth:`sleep_or_raise`/:meth:`request` are
+        audited for (delta review of PR #553, P1-2) -- but
+        ``sigterm_as_interrupt`` only ever calls this on the main thread
+        either before its own SIGINT/SIGTERM handlers are installed, or
+        after they have already been restored to whatever was there
+        before, so a signal landing on either call never reaches a
+        handler that could defer (or raise asynchronously into) this
+        method itself; both are safe without a region of their own.
         """
         self._event.clear()
         with self._lock:
@@ -304,9 +314,17 @@ class CancellationToken:
         of this call's own return value.
         """
         first = not self._event.is_set()
-        if first and signum is not None:
-            self._signum = signum
-        self._event.set()
+        if first:
+            if signum is not None:
+                self._signum = signum
+            # Only ever set once (delta review of PR #553, P1-2): a
+            # repeat call -- the watcher thread's own, racing the main
+            # thread's handler, or a second signal's handler that reaches
+            # here regardless -- skips `Event.set()`'s own `Condition`-
+            # backed call outright rather than taking its lock again for
+            # no reason, the same #555 exposure against this token's own
+            # `Event` instead of a `Future`'s.
+            self._event.set()
         with self._lock:
             procs = list(self._processes)
             mp_procs = list(self._mp_processes)
@@ -365,25 +383,58 @@ class CancellationToken:
         instead — a retry backoff in a ``finally:`` must not abort early
         just because the run it's cleaning up from was already cancelled.
 
-        Polls :attr:`_event` in short slices rather than one single
-        ``wait(timeout=seconds)`` for the whole backoff (#385 follow-up,
-        same reasoning as :func:`as_completed_promptly`): a retry backoff
-        can run on the *main* thread too (a sequential chain's own retry,
-        not just a tree-flow worker's), and a single long wait there is
-        exactly the kind of blocking call that defers a signal delivered
-        to some *other* thread (a ``Live`` refresh thread, the MCP
-        client's own pool thread) until it returns on its own — this
-        thread never gets to execute the bytecode that would run the
-        pending handler until then. Slicing the wait means this thread
-        returns to bytecode at least every poll interval regardless of
-        which thread the signal reached.
+        Polls in short slices rather than one single wait for the whole
+        backoff (#385 follow-up, same reasoning as
+        :func:`as_completed_promptly`): a retry backoff can run on the
+        *main* thread too (a sequential chain's own retry, not just a
+        tree-flow worker's), and a single long wait there is exactly the
+        kind of blocking call that defers a signal delivered to some
+        *other* thread (a ``Live`` refresh thread, the MCP client's own
+        pool thread) until it returns on its own — this thread never gets
+        to execute the bytecode that would run the pending handler until
+        then. Slicing the wait means this thread returns to bytecode at
+        least every poll interval regardless of which thread the signal
+        reached.
+
+        On the *main* thread, each slice is a plain ``time.sleep`` plus
+        :attr:`_event`'s lock-free :meth:`~threading.Event.is_set` --
+        never :meth:`~threading.Event.wait` there (delta review of PR
+        #553, P1-2): ``Event.wait`` sits on a ``threading.Condition``,
+        whose pure-Python ``__exit__`` a first signal's own handler
+        raising mid-release would leak, the same #555 mechanism found
+        against a ``Future``'s lock, just against this token's ``Event``
+        instead -- and the main thread is exactly where that handler
+        runs. A worker thread never runs a signal handler directly
+        (CPython only ever raises one on the main thread), so it keeps
+        the lower-latency ``Event.wait`` -- there is nothing for it to
+        leak.
         """
         if self.in_cleanup():
             time.sleep(max(0.0, seconds))
             return
         remaining = max(0.0, seconds)
+        # Lock-free on the main thread (delta review of PR #553, P1-2):
+        # `Event.wait` sits on a `Condition`, whose own pure-Python
+        # `__exit__` a first signal's handler raising mid-release would
+        # leak (the same #555 mechanism, against this token's own
+        # `Event` instead of a `Future`'s) -- and the main thread is
+        # exactly where that handler runs. `time.sleep` plus
+        # `Event.is_set()` (a plain attribute read with no lock at all)
+        # has no such exposure: a signal interrupts the sleep itself, the
+        # same way it always interrupted a bare `time.sleep` before this
+        # module existed. Worker threads never run a signal handler
+        # directly (CPython only ever raises one on the main thread), so
+        # they keep the lower-latency `Event.wait` -- it has nothing to
+        # leak there.
+        on_main_thread = threading.current_thread() is threading.main_thread()
         while True:
-            if self._event.wait(timeout=min(remaining, _SIGNAL_POLL_SECONDS)):
+            slice_seconds = min(remaining, _SIGNAL_POLL_SECONDS)
+            if on_main_thread:
+                time.sleep(slice_seconds)
+                cancelled = self._event.is_set()
+            else:
+                cancelled = self._event.wait(timeout=slice_seconds)
+            if cancelled:
                 raise RunCancelledBySignal("run cancelled during backoff")
             remaining -= _SIGNAL_POLL_SECONDS
             if remaining <= 0:
@@ -537,7 +588,16 @@ def _take_deferred_signal_exception() -> BaseException | None:
 
 def check_deferred_signal() -> None:
     """Raise a signal's exception parked by
-    :func:`defer_first_signal_exception`, if one is waiting (#555).
+    :func:`defer_first_signal_exception`, if one is waiting (#555) --
+    unless the main thread is still nested inside a
+    :func:`deferred_signal_region` (checked here too, not just by callers:
+    a cancel path's own wait -- :func:`wait_for_cancelled_branches` via
+    :func:`as_completed_promptly`'s poll -- runs *inside* the same region
+    that wraps the ``executor.shutdown(cancel_futures=True)`` ahead of it,
+    specifically so a first signal landing during that wait doesn't cut it
+    short (#555 follow-up, P1): the exception stays parked until every
+    already-running branch has actually finished and the outermost region
+    exits, exactly as it would if it had landed anywhere else inside one).
 
     Call this from a coordination loop's own poll, outside any lock --
     the whole point of parking the exception in the first place was to
@@ -550,6 +610,8 @@ def check_deferred_signal() -> None:
         # The parked exception is the main thread's own: a coordination
         # loop on a worker thread (a tree nested inside a tree branch) must
         # never take it and raise it there instead.
+        return
+    if _defer_depth > 0:
         return
     exc = _take_deferred_signal_exception()
     if exc is not None:
@@ -627,11 +689,17 @@ def submit_with_context(
     The *caller* must already be inside its own :func:`deferred_signal_region`
     that also covers recording the future this returns somewhere the
     cancellation path will see it (e.g. ``futures[future] = idx`` right
-    after this call, in the same region) (#555 follow-up). ``submit`` can
-    call ``Thread.start`` the first time the pool grows a worker, which
-    waits on that thread's own startup ``Event`` -- a lock a first
-    signal's handler raising mid-release would leak, wedging the new
-    thread before it even starts -- so this call itself needs the same
+    after this call, in the same region) (#555 follow-up). The actual lock
+    this call itself risks leaking isn't ``Thread.start``'s own startup
+    ``Event`` -- by the time ``submit`` returns from waiting on that, the
+    new thread has already called ``Event.set()`` and never touches that
+    lock again, so a signal leaking it there wedges nothing. It's
+    ``ThreadPoolExecutor._adjust_thread_count``'s own ``_idle_semaphore``,
+    which ``submit`` tries to acquire (``timeout=0``, still a
+    ``Condition``-backed call) every time, and which every worker thread
+    releases after each work item it finishes -- a first signal's handler
+    raising mid-release of *that* lock wedges the next worker to call
+    ``_idle_semaphore.release()``. So this call itself needs the same
     protection :func:`deferred_signal_region` gives any other call in
     #555's audit. It does not open one of its own, though: nesting a
     region here that closes before returning would raise the moment *this*

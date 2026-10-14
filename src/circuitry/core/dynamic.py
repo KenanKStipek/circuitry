@@ -552,17 +552,47 @@ class DynamicRuntime:
                         # actually notice its just-killed subprocess and
                         # return before this re-raises.
                         #
-                        # Wrapped in `deferred_signal_region` (#555):
-                        # `cancel_futures=True` calls `Future.cancel()` on
-                        # every not-yet-dequeued one, which a worker
-                        # racing to dequeue the same one also touches
-                        # (`set_running_or_notify_cancel`) -- a second
-                        # signal arriving here would otherwise risk
-                        # leaking that future's own lock and wedging that
-                        # worker forever.
+                        # One region around both calls, not two (delta
+                        # review of PR #553, P1-1): `shutdown(cancel_
+                        # futures=True)` itself calls `Future.cancel()` on
+                        # every not-yet-dequeued future -- it dequeues
+                        # those with its own `get_nowait()`, so no worker
+                        # races it for them, but that `cancel()` still
+                        # touches each one's own lock a worker could be
+                        # mid-release of, the same #555 exposure. If the
+                        # region ended here instead, a first signal
+                        # landing during `wait_for_cancelled_branches`
+                        # would raise immediately and cut that wait
+                        # short: `sigterm_as_interrupt`'s own `finally`
+                        # would then reset the token while an already-
+                        # running branch the kill can't reach is still
+                        # mid-step, letting it pass its next `check()` and
+                        # start the next one after cancellation was
+                        # already reported. Keeping both calls in one
+                        # region means `check_deferred_signal` (polled by
+                        # `as_completed_promptly` inside the wait) leaves
+                        # the signal's exception parked until every
+                        # already-submitted branch has actually finished
+                        # and this region's own exit raises it -- a
+                        # second signal still ends the process at once,
+                        # region or not.
+                        #
+                        # When this `except` was entered by something
+                        # other than a signal (`executor.submit` itself
+                        # raising, or an observer callback raising) and a
+                        # first signal then lands during the wait: the
+                        # region's exit raises that signal's exception,
+                        # chained (via the implicit `__context__` this
+                        # `except` clause is already handling) onto the
+                        # original one, and it is the signal's exception
+                        # -- not the original -- that reaches `runtime_
+                        # shim` and picks the exit code (130/143/129): a
+                        # cancelled run reports cancellation, with the
+                        # original failure preserved as context rather
+                        # than lost.
                         with deferred_signal_region():
                             executor.shutdown(wait=False, cancel_futures=True)
-                        wait_for_cancelled_branches(all_submitted)
+                            wait_for_cancelled_branches(all_submitted)
                         raise
                     else:
                         # No cancellation: every future is already done —

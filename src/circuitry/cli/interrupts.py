@@ -144,14 +144,21 @@ class _SignalCount:
 def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
     def _handler(signum: int, frame: FrameType | None) -> None:
         del frame
-        # Idempotent, and still the only thing that sets the token's flag
-        # and kills tracked processes on a platform with no `_SignalWatcher`
-        # at all (Windows -- `signal.set_wakeup_fd` there requires a
-        # socket, not a plain `os.pipe()` fd, see `sigterm_as_interrupt`)
-        # -- never delete this call, even though on POSIX `_SignalWatcher`
-        # now ordinarily beats it to the same `request()`.
-        get_token().request(signum=signum)
-        if not signal_count.note():
+        # Counted before touching the token at all (delta review of PR
+        # #553, P1-2): a second signal's own `request()` call -- which
+        # calls `self._event.set()`, itself a `Condition`-backed call the
+        # same way any `concurrent.futures` lock #555 audited is -- has
+        # the identical exposure if the *first* signal's own handler
+        # raised while the main thread was mid-release of that lock
+        # elsewhere (`sleep_or_raise`'s `Event.wait`, this same `set()`
+        # call, ...): a second signal that then blocks on it would never
+        # reach its own `os._exit`/SIGHUP no-op below. Deciding first-vs-
+        # second, and exiting, before ever calling `request()` again
+        # removes that risk outright for the second signal -- the first
+        # one already requested cancellation, so there is nothing further
+        # to request.
+        first = signal_count.note()
+        if not first:
             if signum == getattr(signal, "SIGHUP", None):
                 # Every further SIGHUP is a no-op once cancellation has
                 # already been requested by any signal (#357 follow-up) —
@@ -163,6 +170,15 @@ def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
             # running ends the run at once, same exit code, no traceback
             # (#356) — the first signal's own cleanup gets no further say.
             os._exit(_EXIT_CODES.get(signum, 128 + signum))
+        # Idempotent, and still the only thing that sets the token's flag
+        # and kills tracked processes on a platform with no `_SignalWatcher`
+        # at all (Windows -- `signal.set_wakeup_fd` there requires a
+        # socket, not a plain `os.pipe()` fd, see `sigterm_as_interrupt`)
+        # -- never delete this call, even though on POSIX `_SignalWatcher`
+        # now ordinarily beats it to the same `request()`. Only reached
+        # for a genuinely first signal (checked above) -- a second one
+        # never calls this at all any more.
+        get_token().request(signum=signum)
         if is_deferring_first_signal():
             # The main thread is inside a `core.cancellation.
             # deferred_signal_region` -- ordinarily touching a lock a

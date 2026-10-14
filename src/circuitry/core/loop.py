@@ -710,17 +710,39 @@ class LoopRuntime:
                             # not no-wait-at-all) for an already-running
                             # pass's worker thread.
                             #
-                            # Wrapped in `deferred_signal_region` (#555),
-                            # same reasoning as dynamic.py's own identical
-                            # call: `cancel_futures=True` calls
-                            # `Future.cancel()` on every not-yet-dequeued
-                            # one, which a worker racing to dequeue the
-                            # same one also touches.
-                            with deferred_signal_region():
-                                executor.shutdown(wait=False, cancel_futures=True)
+                            # One region around both calls, not two --
+                            # see dynamic.py's own identical call for the
+                            # full reasoning (delta review of PR #553,
+                            # P1-1): `shutdown(cancel_futures=True)`
+                            # dequeues not-yet-started futures itself
+                            # (`get_nowait()`, no worker races it for
+                            # them), but its own `Future.cancel()` still
+                            # touches a lock a worker could be mid-
+                            # release of; splitting this into two regions
+                            # let a first signal landing during the wait
+                            # below cut it short, reset the token while a
+                            # still-running pass was mid-step, and let it
+                            # start its next step after cancellation had
+                            # already been reported. One region keeps the
+                            # signal's exception parked (via `check_
+                            # deferred_signal`, polled inside `as_
+                            # completed_promptly`) until every already-
+                            # submitted pass has actually finished; a
+                            # second signal still ends the process at
+                            # once regardless. When this `except` was
+                            # entered by something other than a signal and
+                            # one then lands during the wait, it is the
+                            # signal's exception that reaches the top
+                            # (chained onto the original via the implicit
+                            # `__context__` this `except` is already
+                            # handling) and picks the exit code -- a
+                            # cancelled run reports cancellation.
+                            #
                             # `all_submitted`, not `future_to_idx.keys()`
                             # (#555 follow-up, F2): a strict superset.
-                            wait_for_cancelled_branches(all_submitted)
+                            with deferred_signal_region():
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                wait_for_cancelled_branches(all_submitted)
                             raise
                         else:
                             # No cancellation: every future is already done
