@@ -1,0 +1,31 @@
+name: c389-cel-date-attribute-unresolved
+interface:
+  inputs:
+    d: {default: 2026-10-14}
+effects:
+  - type: if
+    name: year_gate
+    if: {mode: cel, expr: "state.input.d.year == 2026"}
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: has_gate
+    if: {mode: cel, expr: "has(state.input.d.year)"}
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

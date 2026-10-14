@@ -2328,6 +2328,38 @@
           [
             {
               "t": "str",
+              "v": "d"
+            },
+            {
+              "t": "date",
+              "v": "2026-10-14"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "isoformat"
+            },
+            {
+              "t": "str",
+              "v": "OUTER"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "OUTER",
+      "template": "{{#d}}{{isoformat}}{{/d}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
               "v": "dt"
             },
             {
@@ -2366,6 +2398,105 @@
       "render_err": null,
       "render_ok": "",
       "template": "{{dt.isoformat}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "n"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#n}}{{real}}{{/n}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "bits": "3ff8000000000000",
+              "t": "float"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "",
+      "template": "{{#x}}{{imag}}{{/x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "__doc__"
+            },
+            {
+              "t": "str",
+              "v": "OUTER"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "OUTER",
+      "template": "{{__doc__}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "dt"
+            },
+            {
+              "naive": "2020-01-02T03:04:05.000000",
+              "offset_seconds": 0,
+              "t": "datetime"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "tzinfo"
+            },
+            {
+              "t": "str",
+              "v": "OUTER"
+            }
+          ]
+        ]
+      },
+      "json_aware": false,
+      "label": "template",
+      "render_err": null,
+      "render_ok": "OUTER",
+      "template": "{{#dt}}{{tzinfo}}{{/dt}}"
     },
     {
       "ctx": {

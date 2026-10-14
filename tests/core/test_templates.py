@@ -97,6 +97,34 @@ def test_date_method_name_falls_through_instead_of_rendering_a_bound_method() ->
     assert render_template("{{d.isoformat}}", {"d": d, "isoformat": "OUTER"}) == ""
 
 
+def test_date_method_name_falls_through_to_an_outer_scope_inside_a_section() -> None:
+    """``{{#d}}{{isoformat}}{{/d}}`` pushes the date as the current scope; a
+    miss there falls through to the enclosing scope's own ``isoformat`` key,
+    unlike the dotted form above, which never crosses a scope boundary."""
+    d = date(2026, 10, 14)
+    assert (
+        render_template("{{#d}}{{isoformat}}{{/d}}", {"d": d, "isoformat": "OUTER"}) == "OUTER"
+    )
+
+
+def test_non_date_attribute_fallback_is_a_miss() -> None:
+    """The ``getattr`` fallback resolves only a date/datetime's own calendar
+    fields (#389); every other attribute — an int/float's own numeric
+    attributes, a dunder — is a miss, like any other missing key."""
+    assert render_template("{{#n}}{{real}}{{/n}}", {"n": 5}) == ""
+    assert render_template("{{__doc__}}", {"__doc__": "OUTER"}) == "OUTER"
+
+
+def test_datetime_attribute_fallback_is_restricted_to_its_own_fields() -> None:
+    """``tzinfo`` is a real attribute of ``datetime.datetime`` but not one of
+    the named calendar fields, so it is a miss, not the timezone."""
+    from datetime import datetime, timezone
+
+    dt = datetime(2026, 10, 14, 9, 30, tzinfo=timezone.utc)
+    assert render_template("{{dt.hour}}", {"dt": dt}) == "9"
+    assert render_template("{{#dt}}{{tzinfo}}{{/dt}}", {"dt": dt, "tzinfo": "OUTER"}) == "OUTER"
+
+
 def test_render_template_refuses_a_partial_and_never_reads_the_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

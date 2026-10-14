@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #389",
+  "description": "A CEL `if` condition reading a date's own data attribute (`state.input.d.year`, `has(state.input.d.year)`) treats the path as unresolved, exactly like a missing key: the attribute fallback a Mustache tag gets never extends to a `state.`-path read, on either engine. `state.input.d.year == 2026` logs a warning and evaluates false (the non-strict default); `has(state.input.d.year)` is also false, with no warning (a `has()`-guarded path is exempt from the unresolved-path warning). Both `if` effects take their `else` branch.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

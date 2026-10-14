@@ -348,6 +348,15 @@ def build_render_cases() -> list[dict]:
             {"d": datetime.date(2026, 10, 14), "isoformat": "OUTER"},
         )
     )
+    # The section form falls through to the enclosing scope's own
+    # `isoformat` key, unlike the dotted form above, which never crosses
+    # a scope boundary.
+    cases.append(
+        render_case(
+            "{{#d}}{{isoformat}}{{/d}}",
+            {"d": datetime.date(2026, 10, 14), "isoformat": "OUTER"},
+        )
+    )
     cases.append(
         render_case(
             "{{dt.year}}-{{dt.month}}-{{dt.day}} {{dt.hour}}:{{dt.minute}}:{{dt.second}}",
@@ -355,6 +364,16 @@ def build_render_cases() -> list[dict]:
         )
     )
     cases.append(render_case("{{dt.isoformat}}", {"dt": utc_dt}))
+    # The attribute fallback resolves only the named calendar fields --
+    # every other attribute (int/float's own numeric attributes,
+    # datetime's own `tzinfo`, any dunder) is a miss and falls through,
+    # same as a method name.
+    cases.append(render_case("{{#n}}{{real}}{{/n}}", {"n": 5}))
+    cases.append(render_case("{{#x}}{{imag}}{{/x}}", {"x": 1.5}))
+    cases.append(render_case("{{__doc__}}", {"__doc__": "OUTER"}))
+    cases.append(
+        render_case("{{#dt}}{{tzinfo}}{{/dt}}", {"dt": utc_dt, "tzinfo": "OUTER"})
+    )
     cases.append(
         render_case("{{#tags}}{{.}} ({{title}}) {{/tags}}", {"tags": ["a", "b"], "title": "Outer"})
     )

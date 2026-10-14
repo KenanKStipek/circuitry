@@ -188,8 +188,10 @@ fn wrapped_index(len: usize, n: i64) -> Option<usize> {
 }
 
 /// One dotted-path segment: a dict key by name, a list/str/bytes index
-/// (parsed as an int, Python's negative-index wraparound included), or
-/// (on any other scalar) a render failure.
+/// (parsed as an int, Python's negative-index wraparound included), one
+/// of a `Date`/`DateTime`'s own named calendar fields (`year`, `month`,
+/// ...), or (on any other scalar, and on a `Date`/`DateTime` segment
+/// that isn't one of those named fields) a render failure.
 ///
 /// A dict lookup that misses by string key never falls back to an int
 /// key (confirmed against real chevron: `scope[child]` on a dict raises

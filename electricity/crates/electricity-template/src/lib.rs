@@ -875,6 +875,20 @@ mod tests {
     }
 
     #[test]
+    fn date_method_name_falls_through_to_an_outer_scope_inside_a_section() {
+        use chrono::NaiveDate;
+        let d = Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap());
+        let ctx = dict(vec![
+            ("d", d),
+            ("isoformat", Value::Str("OUTER".to_string())),
+        ]);
+        assert_eq!(
+            render_template("{{#d}}{{isoformat}}{{/d}}", &ctx, &PlainCtx, "t").unwrap(),
+            "OUTER"
+        );
+    }
+
+    #[test]
     fn datetime_named_data_attributes_render() {
         use chrono::{NaiveDate, NaiveDateTime};
         let naive: NaiveDateTime = NaiveDate::from_ymd_opt(2026, 10, 14)

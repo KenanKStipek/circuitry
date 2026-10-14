@@ -149,6 +149,34 @@ fn live_child(store: &Store, step: &LiveStep, part: &str) -> Result<Option<LiveS
     }
 }
 
+/// [`project_live`]'s own child step -- `electricity_cel::paths::
+/// project`'s dict-only descent (a `state.`-path read never follows a
+/// Mustache attribute, a list/str/bytes index, or a date/datetime
+/// field: `electricity_cel::paths::first_unresolved` doesn't either),
+/// continued against a [`LiveStep`] instead of a plain [`Value`]. Using
+/// [`live_child`] here instead -- as this once did -- let a
+/// [`LiveStep::Value`] leaf that happens to be a `Date`/`DateTime` step
+/// past its own `year`/`month`/... fields, narrowing `state.x.d.year`
+/// into a *resolved* projected state even though `project`/
+/// `first_unresolved` against a full snapshot treat the same path as
+/// unresolved (a `Date` isn't a `Value::Dict`) -- disagreeing with cof,
+/// and with what this crate's own non-live `evaluate_condition` path
+/// does for the exact same expression (electricity#549's parity
+/// invariant).
+fn project_live_child(store: &Store, step: &LiveStep, part: &str) -> Option<LiveStep> {
+    match step {
+        LiveStep::Node(node) => {
+            let key = Value::Str(part.to_string());
+            store.peek(node, &key).map(slot_step)
+        }
+        LiveStep::Value(Value::Dict(dict)) => dict
+            .get(&Value::Str(part.to_string()))
+            .cloned()
+            .map(LiveStep::Value),
+        LiveStep::Value(_) => None,
+    }
+}
+
 /// A [`CtxChain`] plus the [`Store`] it chains into, as a lazily
 /// resolved `ctx`/`state` root -- see this module's own doc comment.
 /// Cheap to construct and to pass by reference: two borrows, no store
@@ -305,8 +333,11 @@ fn python_list_index(len: usize, index: i64) -> Option<usize> {
 /// insertion order and the same "stop, don't overwrite" rule once a
 /// shorter path already placed a leaf a longer one tries to extend
 /// past), except that `source`'s own descent happens through
-/// [`chain_first_segment`]/[`live_child`] rather than a plain `Value`
-/// dict-get. *paths* are raw, `state.`-prefixed
+/// [`chain_first_segment`]/[`project_live_child`] rather than a plain
+/// `Value` dict-get -- and, like `project` itself, never through a
+/// Mustache attribute, a list/str/bytes index, or a date/datetime field
+/// (see [`project_live_child`]'s own doc comment). *paths* are raw,
+/// `state.`-prefixed
 /// ([`electricity_cel::condition_paths`]'s own shape) -- the leading
 /// `state` segment is this function's own conceptual root (*chain*
 /// itself), stripped the same way `project`'s own loop skips it.
@@ -327,9 +358,9 @@ pub(crate) fn project_live(store: &Store, chain: &CtxChain, paths: &[String]) ->
         let mut target = &mut root;
         for (index, part) in segments.iter().enumerate() {
             if index > 0 {
-                match live_child(store, &current, part) {
-                    Ok(Some(next)) => current = next,
-                    Ok(None) | Err(_) => break,
+                match project_live_child(store, &current, part) {
+                    Some(next) => current = next,
+                    None => break,
                 }
             }
             let key = Value::Str(part.to_string());
@@ -394,6 +425,7 @@ mod differential_tests {
 
     use super::*;
     use crate::params::ParamsCtx;
+    use chrono::NaiveDate;
     use electricity_template::{PlainCtx, ScopeRoot, render_template, render_template_with_root};
     use indexmap::IndexMap;
     use std::rc::Rc;
@@ -426,6 +458,18 @@ mod differential_tests {
         // None" rule (finding 3: a strict CEL read of this path must
         // raise the same way a missing one does).
         store.set_leaf(&prime, k("nullable"), Value::None);
+
+        // A date leaf, one level under `prime` -- `project`/
+        // `first_unresolved` only ever descend through `Value::Dict`,
+        // so a CEL path reading one of this date's own named fields
+        // (`prime.today.year`) must come out *unresolved*, never
+        // narrowed into a resolved int the way a Mustache tag's own
+        // `getattr` fallback would (PR #551 review finding 1).
+        store.set_leaf(
+            &prime,
+            k("today"),
+            Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap()),
+        );
 
         store.set_leaf(
             &prime,
@@ -643,6 +687,13 @@ mod differential_tests {
         "has(state.missing.key)",
         "state.missing.key == 1",
         "size(state) >= 0",
+        // `prime.today` is a `Value::Date`, never a `Value::Dict` --
+        // `state.prime.today.year` must read as unresolved (false,
+        // non-strict) on both paths alike, never narrowed by the live
+        // path into a resolved `2026` the way a Mustache tag's own
+        // `getattr` fallback would (finding 1).
+        "state.prime.today.year == 2026",
+        "has(state.prime.today.year)",
     ];
 
     /// Exercised with `strict: true` -- `evaluate_condition`'s `strict`
@@ -660,6 +711,10 @@ mod differential_tests {
         "state.prime.nullable == null",
         // A plain missing key, strict's ordinary case.
         "state.missing.key == 1",
+        // A date's own field, which the attribute fallback never
+        // resolves in a `state.`-path read (finding 1) -- strict
+        // raises here too, on both paths alike.
+        "state.prime.today.year == 2026",
     ];
 
     #[test]

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #389",
+  "description": "A yield effect's own `inputs:` merge raw values straight into the top-level template scope, so a tag whose name matches one of the value's own attributes never resolves to Python's description of that attribute: `{{#title}}{{title}}{{/title}}` over the string \"Intro\" renders the string, not `str.title`; a list section over `[\"a\", \"b\"]` using `{{count}}`/`{{index}}` (both `str` methods) falls through to the enclosing scope's own `count`/`index` keys on every pass; `{{d.year}}` on a date still resolves (a named data attribute); `{{d.isoformat}}` (a method) is a miss and renders empty; `{{#d}}{{isoformat}}{{/d}}` falls through to the enclosing scope's own `isoformat` key.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
