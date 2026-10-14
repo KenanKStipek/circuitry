@@ -240,6 +240,16 @@ def kill_tracked_process(proc: BaseProcess) -> None:
             pass
 
 
+#: Bound at import time, not read off `threading.Event` fresh inside
+#: :meth:`CancellationToken.reset` (round 4 follow-up): a test that
+#: monkeypatches `threading.Event` itself for its own duration (e.g.
+#: `test_as_completed_promptly_no_longer_uses_a_private_threading_event`)
+#: must not also break every *other* test's own autouse teardown calling
+#: `reset()` -- this name was already bound to the real class long before
+#: any such patch could apply.
+_Event = threading.Event
+
+
 class CancellationToken:
     """Run-wide cancellation flag plus the subprocess registry it kills.
 
@@ -250,7 +260,7 @@ class CancellationToken:
     """
 
     def __init__(self) -> None:
-        self._event = threading.Event()
+        self._event = _Event()
         # RLock, not a plain Lock (#356 review F4): the signal handler's
         # own call to request() takes this same lock from the *main*
         # thread, synchronously, wherever that thread's Python bytecode
@@ -277,17 +287,28 @@ class CancellationToken:
         embedder running several orchestrations in one process must not see
         an earlier run's cancellation leak into the next one.
 
-        ``_event.clear()`` is itself a ``Condition``-backed call, the same
-        #555-style exposure :meth:`sleep_or_raise`/:meth:`request` are
-        audited for (delta review of PR #553, P1-2) -- but
-        ``sigterm_as_interrupt`` only ever calls this on the main thread
-        either before its own SIGINT/SIGTERM handlers are installed, or
-        after they have already been restored to whatever was there
-        before, so a signal landing on either call never reaches a
-        handler that could defer (or raise asynchronously into) this
-        method itself; both are safe without a region of their own.
+        Builds a fresh :class:`threading.Event` rather than calling
+        ``clear()`` on the existing one (delta review of PR #553, round
+        4, P2-2): the earlier reasoning here -- that ``sigterm_as_
+        interrupt`` only ever calls this before its own handlers are
+        installed or after they've been restored, so a signal landing on
+        either call can't reach a handler that could leak this lock --
+        was wrong. The *default* SIGINT handler installed at either of
+        those points still raises ``KeyboardInterrupt`` asynchronously,
+        same as always, and :meth:`request`'s own ``Event.set()`` (the
+        one call on this object that *does* still touch its lock, since
+        :meth:`sleep_or_raise` is lock-free on the main thread) could
+        already have left that lock owned by the time this runs -- in
+        which case the old ``clear()`` call would try to take the same
+        non-reentrant lock on the same thread and deadlock this method,
+        and every later run in the same process, forever. Replacing the
+        object outright instead of touching its lock makes that leak (if
+        one ever happened) irrelevant: nothing ever touches the old
+        ``Event`` again. Safe because no worker thread ever waits on
+        :attr:`_event` at either call site this runs from -- entry, before
+        any branch exists; exit, after every one has already been joined.
         """
-        self._event.clear()
+        self._event = _Event()
         with self._lock:
             self._processes.clear()
             self._mp_processes.clear()
@@ -874,9 +895,35 @@ def acquire_promptly(
     ``max_in_flight``) must keep returning to bytecode, or a signal
     delivered to some *other* thread goes unnoticed until whoever holds
     the slot releases it, however long that takes.
+
+    Each ``sem.acquire(...)`` call is wrapped in its own
+    ``deferred_signal_region`` (delta review of PR #553, round 4, P2-3):
+    a plain ``threading.Semaphore`` is ``Condition``-backed, the same
+    #555-style exposure the dispatch sites and :class:`core.concurrency.
+    RunConcurrencyLimiter` are audited for, and this is called on the
+    main thread whenever a chain runs sequentially (``adapters.
+    cyberdiner``'s own ``max_in_flight`` gate). Unlike
+    ``RunConcurrencyLimiter.acquire()``, this function's own caller has
+    no ``held`` list and no ``try`` block active yet when it calls this
+    -- its ``finally: sem.release()`` is written *after* this call
+    returns, so a deferred exception raised at this function's own
+    region exit, right after a successful acquire, would otherwise
+    escape before that ``finally`` is ever registered, leaking the slot
+    with nothing left to release it. Caught here instead: if the region
+    raises after the semaphore was actually acquired, this releases it
+    again itself before re-raising, so the caller never has to.
     """
-    while not sem.acquire(timeout=poll_seconds):
-        pass
+    while True:
+        acquired = False
+        try:
+            with deferred_signal_region():
+                acquired = sem.acquire(timeout=poll_seconds)
+        except BaseException:
+            if acquired:
+                sem.release()
+            raise
+        if acquired:
+            return
 
 
 def poll_promptly(
