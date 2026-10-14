@@ -1,8 +1,9 @@
 //! `convert::to_cel`'s own recursion must stay bounded by
 //! [`electricity_value::MAX_DEPTH`] (`convert.rs`'s module docs) -- the
 //! one depth limit in this crate that *is* the shared one, unlike
-//! [`electricity_cel::MAX_NESTING_DEPTH`] (`nesting_limit.rs`), because
-//! this bounds a `Value` tree, not CEL expression syntax. Reachable only
+//! [`electricity_cel::MAX_BRACKET_NESTING_DEPTH`]/
+//! [`electricity_cel::MAX_CHAIN_NESTING_DEPTH`] (`nesting_limit.rs`),
+//! because this bounds a `Value` tree, not CEL expression syntax. Reachable only
 //! through a run-time-built `state`/`value`/`meta`: this workspace's own
 //! JSON/YAML readers can never produce a `Value` this deep to begin
 //! with. Every test runs on an explicit 2 MiB stack, the default a

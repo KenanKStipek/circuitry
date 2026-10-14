@@ -102,9 +102,34 @@ def encode(value: object) -> dict:
 # ---------------------------------------------------------------------
 
 
-def _outcome(call: Any) -> dict:
+#: How many extra Python call frames separate this generator's own,
+#: shallow top-level call into `evaluate_cel` from the deepest of the
+#: three real call contexts measured for issue #403 (a CEL condition
+#: inside a `use` child's own nested run) -- `electricity-cel`'s
+#: `nesting.rs` module docs carry the full measurement. Circuitry's
+#: `RecursionError`-bounded shapes (nested brackets, long operator
+#: chains) accept a few terms *more* at this generator's own shallow
+#: depth than they do in that deepest real context, so a boundary case
+#: padded with anything less than this would record "accepted" for a
+#: depth real runs, in their most constrained context, actually reject.
+_DEEPEST_CONTEXT_PAD = 12
+
+
+def _at_depth(pad: int, call: Any) -> Any:
+    """Calls *call* after recursing *pad* frames deeper first.
+
+    Reproduces, from this generator's own shallow top-level call stack,
+    how much Python recursion budget `evaluate_cel` actually has left in
+    a real run's deepest measured context -- seee `_DEEPEST_CONTEXT_PAD`.
+    """
+    if pad <= 0:
+        return call()
+    return _at_depth(pad - 1, call)
+
+
+def _outcome(call: Any, *, pad: int = 0) -> dict:
     try:
-        result = call()
+        result = _at_depth(pad, call)
     except CelEvaluationError:
         return {"kind": "error", "message": None}
     return {"kind": "ok", "result": result}
@@ -124,9 +149,12 @@ def condition(
     *,
     strict: bool = False,
     exact_error: bool = False,
+    pad: int = 0,
 ) -> dict:
-    make_outcome = _outcome_exact if exact_error else _outcome
-    outcome = make_outcome(lambda: evaluate_cel(expr, state, strict=strict))
+    def call() -> bool:
+        return evaluate_cel(expr, state, strict=strict)
+
+    outcome = _outcome_exact(call) if exact_error else _outcome(call, pad=pad)
     return {
         "mode": "condition",
         "expr": expr,
@@ -164,6 +192,30 @@ def expect(
 # ---------------------------------------------------------------------
 # The corpus itself
 # ---------------------------------------------------------------------
+
+
+def _nested_list(depth: int) -> Any:
+    """*depth* singleton lists deep, bottoming out at a truthy leaf.
+
+    Pairs with a `state[0][0]...` expression of the same *depth*: each
+    `[0]` unwraps exactly one level.
+    """
+    value: Any = True
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def _nested_dict(depth: int) -> Any:
+    """*depth* levels of `{"a": ...}` deep, bottoming out at a truthy leaf.
+
+    Pairs with a `state.a.a...` expression of the same *depth*: each
+    `.a` descends exactly one level.
+    """
+    value: Any = True
+    for _ in range(depth):
+        value = {"a": value}
+    return value
 
 
 def build_corpus() -> list[dict]:
@@ -758,6 +810,101 @@ def build_corpus() -> list[dict]:
         # A failing index *expression* (not just the lookup it performs)
         # inside `has()`.
         condition("has(state.m[state.k].x)", {"m": {"a": {"x": 1}}}),
+    ]
+
+    # --- issue #403: nesting boundaries per expression shape, matching
+    # Circuitry's own electricity-side caps as closely as it is safe to
+    # (electricity-cel's `nesting.rs` module docs carry the full
+    # measurement and the three-call-context methodology behind each
+    # number). Only depths clearly inside the range every measured call
+    # context accepted, and clearly above both electricity's own cap and
+    # Circuitry's measured floor, are pinned here -- never a depth inside
+    # the narrow band where different call contexts (a top-level `if`,
+    # a CEL `while` loop, an `if` inside a `use` child) disagreed, which
+    # is not a stable target for either engine to match.
+    cases += [
+        # Nested parentheses, list literals, map literals: electricity
+        # shares ONE bracket-nesting cap (48) across all three bracket
+        # kinds (`nesting.rs`'s module docs), set to the *tightest* of
+        # their individual Circuitry floors -- 48, list/map literals'
+        # own floor in every context measured (parentheses alone tolerate
+        # more, 53, but sharing one counter keeps the scan simple and the
+        # cap only ever conservative, never past any shape's own floor).
+        # 48 is pinned as accepted for all three; 100 (not 1000 -- see
+        # below) as rejected for all three, since 100 already exceeds
+        # every bracket shape's own Circuitry floor (53 at most). Not
+        # pinned: 49 through 53, where parentheses alone are still
+        # accepted by Circuitry but rejected by electricity's shared cap
+        # -- a known, narrow, *stricter* divergence for parentheses
+        # specifically (`nesting.rs`'s module docs), not a range either
+        # engine is unstable about, but not a parity claim this corpus
+        # should make either.
+        #
+        # (100, not 1000, is as far above the boundary as this generator
+        # can safely probe: Circuitry's own path-collection walk over the
+        # parse tree -- run before evaluation even starts, with no
+        # recursion guard of its own -- hits a bare, uncaught
+        # `RecursionError` by 500 levels of bracket nesting, which would
+        # crash this script, not just fail the expression.)
+        condition("(" * 10 + "1" + ")" * 10, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("(" * 48 + "1" + ")" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("(" * 100 + "1" + ")" * 100, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("[" * 10 + "1" + "]" * 10, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("[" * 48 + "1" + "]" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("[" * 49 + "1" + "]" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("[" * 100 + "1" + "]" * 100, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("{'a':" * 10 + "1" + "}" * 10, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("{'a':" * 48 + "1" + "}" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("{'a':" * 49 + "1" + "}" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("{'a':" * 100 + "1" + "}" * 100, {}, pad=_DEEPEST_CONTEXT_PAD),
+        # Arithmetic (`+`) chain: 242 accepted, 243 failed, identically
+        # in every context measured -- the one shape where electricity's
+        # own cap matches Circuitry's measured floor exactly. Padded to
+        # that deepest context (`_DEEPEST_CONTEXT_PAD`): at this
+        # generator's own, shallower call depth, Circuitry still accepts
+        # 243 and beyond, which would misrecord the boundary.
+        condition("0" + "+1" * 100, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "+1" * 242, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "+1" * 243, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "+1" * 500, {}, pad=_DEEPEST_CONTEXT_PAD),
+        # Relational (`<`) chain: same boundary, 242 / 243.
+        condition("0" + "<1" * 100, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "<1" * 242, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "<1" * 243, {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("0" + "<1" * 500, {}, pad=_DEEPEST_CONTEXT_PAD),
+        # Member-access (`.`) and index (`[]`) chains: Circuitry accepts
+        # these far deeper than 242 (615 for member access, measured
+        # identically across two of the three contexts and one term
+        # tighter in the third; index chains did not fail at all within
+        # the character cap) -- electricity-cel's own cap, shared across
+        # every chain shape (`nesting.rs`'s module docs), is deliberately
+        # tighter here, so only the accepted side is pinned; the reject
+        # side is electricity's own, Rust-only safety margin
+        # (`nesting_limit.rs`), not a Circuitry parity claim.
+        # (20, not the full 242, so the corpus fixture's own tagged
+        # JSON encoding of a matching, equally deep `state` value --
+        # several JSON container levels per logical level -- stays well
+        # under `serde_json`'s own default recursion limit when the
+        # fixture is parsed back on the Rust side; this crate's own
+        # dependencies may never add `serde_json`'s `unbounded_depth`
+        # feature to work around that, so the fixture itself has to stay
+        # shallow instead. The point of these two cases is only "clearly
+        # inside both caps, with a real matching state so the expression
+        # actually evaluates rather than hitting the absent-path rule" --
+        # the exact arithmetic/relational boundary above already pins
+        # the tight parity case.)
+        condition("state" + ".a" * 20, _nested_dict(20)),
+        condition("state" + "[0]" * 20, _nested_list(20)),
+        # Nested function calls (`size(size(...))`): governed by the
+        # same bracket-nesting cap as parentheses/list/map literals (a
+        # global call's own `(` nests the same way), but fails for an
+        # unrelated reason well before that cap matters at all --
+        # `size()` returns an `int`, which has no `size()` of its own, so
+        # Circuitry's own evaluator (and electricity-cel's `cel`
+        # dependency, the same stdlib function) rejects any depth beyond
+        # 1 on a type mismatch, not a recursion limit.
+        condition("size(state)", [1, 2, 3]),
+        condition("size(size(state))", [1, 2, 3]),
     ]
 
     return cases

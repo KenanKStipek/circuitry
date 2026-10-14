@@ -149,7 +149,7 @@ use std::sync::{Arc, OnceLock};
 use cel::{Context, Env};
 use electricity_value::Value;
 
-pub use nesting::MAX_NESTING_DEPTH;
+pub use nesting::{MAX_BRACKET_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH};
 
 /// Python's `repr()` of a `str`, used to match `core/cel_eval.py`'s own
 /// `{expr!r}`/`{unresolved!r}` messages word for word: a message
@@ -202,10 +202,11 @@ impl CelError {
     }
 
     /// Whether this is a nesting-too-deep failure: either the expression
-    /// itself nested more than [`MAX_NESTING_DEPTH`] levels of brackets
-    /// deep (rejected before parsing, `nesting.rs`'s module docs), or a
-    /// `value`/`meta`/`state` argument nested more than
-    /// [`electricity_value::MAX_DEPTH`] levels deep (rejected while
+    /// itself nested more than [`MAX_BRACKET_NESTING_DEPTH`] levels of
+    /// brackets, or more than [`MAX_CHAIN_NESTING_DEPTH`] operator/
+    /// accessor links, deep (rejected before parsing, `nesting.rs`'s
+    /// module docs), or a `value`/`meta`/`state` argument nested more
+    /// than [`electricity_value::MAX_DEPTH`] levels deep (rejected while
     /// converting it, `convert.rs`'s module docs) — never a
     /// parse/compile/evaluation failure against well-formed, bounded
     /// input.
@@ -247,21 +248,46 @@ fn check_length(expr: &str) -> Result<(), CelError> {
     Ok(())
 }
 
-/// Rejects an expression nested (parens/brackets/map-and-list literals)
-/// more than [`MAX_NESTING_DEPTH`] levels deep, *before* handing it to
-/// `cel`'s own parser — see `nesting.rs`'s module docs for why this
-/// crate needs its own limit, measured independently of
-/// [`electricity_value::MAX_DEPTH`], and the measurements behind the
-/// specific number.
+/// Rejects an expression whose bracket nesting ([`MAX_BRACKET_NESTING_DEPTH`])
+/// or operator/accessor chain ([`MAX_CHAIN_NESTING_DEPTH`]) runs too
+/// deep, *before* handing it to `cel`'s own parser — see `nesting.rs`'s
+/// module docs for why this crate needs its own limits, measured
+/// independently of [`electricity_value::MAX_DEPTH`], and the
+/// measurements behind the specific numbers.
+///
+/// Worded the same way a genuine parse/evaluation failure is
+/// (`"CEL evaluation failed for {expr!r}: ..."`, matching
+/// `core/cel_eval.py`'s own form for the cases Circuitry itself
+/// reports as an evaluation failure, not a bare, uncaught exception
+/// — see `nesting.rs`'s module docs on why Circuitry's own deeper
+/// boundary isn't a single, stable number this crate can reproduce
+/// exactly), rather than this crate's own prior, bespoke wording.
 fn check_nesting_depth(expr: &str) -> Result<(), CelError> {
-    let depth = nesting::max_nesting_depth(expr);
-    if depth > MAX_NESTING_DEPTH {
+    let depths = nesting::max_nesting_depths(expr);
+    if depths.bracket > MAX_BRACKET_NESTING_DEPTH {
         return Err(CelError {
             too_deeply_nested: true,
             ..CelError::new(
                 expr,
                 format!(
-                    "CEL expression nesting too deep ({depth} levels, max {MAX_NESTING_DEPTH})."
+                    "CEL evaluation failed for {}: expression nesting too deep ({} levels of brackets, max {}).",
+                    py_repr(expr),
+                    depths.bracket,
+                    MAX_BRACKET_NESTING_DEPTH
+                ),
+            )
+        });
+    }
+    if depths.chain > MAX_CHAIN_NESTING_DEPTH {
+        return Err(CelError {
+            too_deeply_nested: true,
+            ..CelError::new(
+                expr,
+                format!(
+                    "CEL evaluation failed for {}: expression nesting too deep ({} operator/accessor links, max {}).",
+                    py_repr(expr),
+                    depths.chain,
+                    MAX_CHAIN_NESTING_DEPTH
                 ),
             )
         });
@@ -492,8 +518,11 @@ pub enum CelSyntaxError {
     /// `validate_cel_syntax` has no nesting-depth check) -- a Rust-only
     /// safety addition, the same reason [`CelError::is_too_deeply_nested`]
     /// exists, so a compile-time syntax check can't itself stack-overflow
-    /// on deeply nested input.
-    TooDeeplyNested(usize),
+    /// on deeply nested input. Bracket nesting past
+    /// [`MAX_BRACKET_NESTING_DEPTH`] and an operator/accessor chain past
+    /// [`MAX_CHAIN_NESTING_DEPTH`] are reported the same way.
+    TooDeeplyNestedBrackets(usize),
+    TooDeeplyNestedChain(usize),
     Parse(String),
 }
 
@@ -506,7 +535,9 @@ impl CelSyntaxError {
     pub fn is_parse_error(&self) -> bool {
         matches!(
             self,
-            CelSyntaxError::Parse(_) | CelSyntaxError::TooDeeplyNested(_)
+            CelSyntaxError::Parse(_)
+                | CelSyntaxError::TooDeeplyNestedBrackets(_)
+                | CelSyntaxError::TooDeeplyNestedChain(_)
         )
     }
 }
@@ -519,9 +550,13 @@ impl fmt::Display for CelSyntaxError {
                 f,
                 "expression is too long ({len} chars, max {MAX_EXPR_LENGTH})."
             ),
-            CelSyntaxError::TooDeeplyNested(depth) => write!(
+            CelSyntaxError::TooDeeplyNestedBrackets(depth) => write!(
                 f,
-                "expression nesting too deep ({depth} levels, max {MAX_NESTING_DEPTH})."
+                "expression nesting too deep ({depth} levels of brackets, max {MAX_BRACKET_NESTING_DEPTH})."
+            ),
+            CelSyntaxError::TooDeeplyNestedChain(depth) => write!(
+                f,
+                "expression nesting too deep ({depth} operator/accessor links, max {MAX_CHAIN_NESTING_DEPTH})."
             ),
             CelSyntaxError::Parse(msg) => write!(f, "expression does not parse ({msg})."),
         }
@@ -543,8 +578,8 @@ impl std::error::Error for CelSyntaxError {}
 /// [`CelSyntaxError::Parse`] mirror Python's own three raises, in the
 /// same order (empty is checked before length, matching
 /// `core/cel_eval.py`'s own `if not expr ... ; if len(expr) > ...`).
-/// [`CelSyntaxError::TooDeeplyNested`] has no Python counterpart (see
-/// its own docs).
+/// [`CelSyntaxError::TooDeeplyNestedBrackets`]/[`CelSyntaxError::TooDeeplyNestedChain`]
+/// have no Python counterpart (see their own docs).
 pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
     if expr.trim().is_empty() {
         return Err(CelSyntaxError::Empty);
@@ -553,9 +588,12 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
     if len > MAX_EXPR_LENGTH {
         return Err(CelSyntaxError::TooLong(len));
     }
-    let depth = nesting::max_nesting_depth(expr);
-    if depth > MAX_NESTING_DEPTH {
-        return Err(CelSyntaxError::TooDeeplyNested(depth));
+    let depths = nesting::max_nesting_depths(expr);
+    if depths.bracket > MAX_BRACKET_NESTING_DEPTH {
+        return Err(CelSyntaxError::TooDeeplyNestedBrackets(depths.bracket));
+    }
+    if depths.chain > MAX_CHAIN_NESTING_DEPTH {
+        return Err(CelSyntaxError::TooDeeplyNestedChain(depths.chain));
     }
     let env = stdlib_env();
     env.compile(expr)
