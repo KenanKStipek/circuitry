@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/use.py, issue #528's own comment",
+  "description": "A calendar-invalid YAML timestamp inside an inline `use` child: PyYAML's own bare `ValueError` (`month must be in 1..12`) escapes uncaught -- the `use` effect's own location prefix wraps it, but never a location mark or an \"Inline orchestration validation failed:\" list the way an ordinary parse error would be.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

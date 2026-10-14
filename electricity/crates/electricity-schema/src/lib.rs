@@ -13,6 +13,19 @@
 //! same engine Circuitry's own JSON Schema validation and `regex` tool use
 //! (§7.3) -- nothing further is added for either.
 //!
+//! [`orchestration_errors`]' own primary path is the exception to
+//! everything below about the `jsonschema` crate's own text (issue #528):
+//! whenever its own engine (ported from `engine`/`python_message`, built
+//! for prompt schemas by issue #498, with draft-07 semantics added) can
+//! stand as sole authority for the bundled orchestration schema and
+//! agrees with the crate on accept/reject, its *message* text matches
+//! `core.document_check.schema_errors`'s own (Python `jsonschema`) wording
+//! exactly, in the same order `sorted(iter_errors(orch), key=str)` would
+//! put them in -- see [`orchestration_errors`]' own doc comment. Only the
+//! crate-fallback path -- [`profile_errors`] always, [`orchestration_errors`]
+//! whenever the engine can't stand as authority or disagrees with it --
+//! keeps every rule the rest of this module doc describes.
+//!
 //! Message *text* from the underlying `jsonschema` crate is not required to
 //! match Circuitry's own (Python) `jsonschema` text word for word -- only to
 //! fail at the same instance path, with a non-empty message (`DESIGN.md`
@@ -34,14 +47,17 @@
 //! JSON (`error.rs`'s `Display` impl in that crate) exactly where Python's
 //! message starts with `repr(err.instance)`, so the same prefix-replace
 //! applies even though the two renderings are spelled differently. The
-//! best-matching `oneOf`/`anyOf` sub-error suffix is **not** replicated and
-//! has no known-gap workaround short of re-validating every branch by hand:
-//! `jsonschema` 0.26's `ValidationErrorKind::OneOfNotValid`/`AnyOf` carry no
-//! sub-error list to pick from (`error.rs` in that crate). `DESIGN.md` §4
-//! step 2.2 and `docs/spec/runtime-semantics.md`'s "deepest `oneOf`
-//! sub-error appended" line describe Circuitry's own compile-time pipeline,
-//! which this crate's caller (not this crate) is responsible for keeping
-//! accurate against that gap.
+//! best-matching `oneOf`/`anyOf` sub-error suffix is **not** replicated on
+//! this (crate-fallback) path, and has no known-gap workaround short of
+//! re-validating every branch by hand: `jsonschema` 0.26's
+//! `ValidationErrorKind::OneOfNotValid`/`AnyOf` carry no sub-error list to
+//! pick from (`error.rs` in that crate). `DESIGN.md` §4 step 2.2 and
+//! `docs/spec/runtime-semantics.md`'s "deepest `oneOf` sub-error appended"
+//! line describe Circuitry's own compile-time pipeline, which this
+//! crate's caller (not this crate) is responsible for keeping accurate
+//! against that gap on this path -- [`orchestration_errors`]' own primary
+//! (engine) path produces this suffix itself instead (its own
+//! `best_match`, issue #528).
 //!
 //! Two pieces of wrapping *text* this crate deliberately does not produce,
 //! because they belong to callers this crate doesn't have (and doesn't

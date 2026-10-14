@@ -350,6 +350,22 @@ pub fn validate_plan(plan: &Plan, max_chunks: i64, runtime_config: &Value) -> Ve
     }
 
     let parsed = match electricity_yaml::load_yaml(&yaml) {
+        // `core/decompose.py::_validate_plan`'s own `_validate_inline_yaml`
+        // call never catches a calendar-invalid timestamp's bare
+        // `ValueError` (issue #528's own comment) -- it escapes uncaught,
+        // discarding every `problems` entry gathered so far and
+        // propagating past `_validate_plan`/`maybe_decompose` entirely,
+        // to the same generic, retryable-attempt path any other uncaught
+        // dispatch exception reaches. This stays inside the `"invalid_
+        // plan"` shape instead (a narrower, documented divergence,
+        // `DESIGN.md` §13) -- matching that control flow needs routing
+        // through `exec::prompt`'s own retry machinery, not just this
+        // function's own text. Only the message itself is matched
+        // exactly: no location, no "YAML parse error:" prefix.
+        Err(electricity_yaml::YamlError::InvalidTimestampValue { message, .. }) => {
+            problems.push(message);
+            return problems;
+        }
         Err(err) => {
             problems.push(format!("YAML parse error: {err}"));
             return problems;
@@ -1270,6 +1286,17 @@ mod tests {
                 .iter()
                 .any(|p| p.contains("the budget is 5"))
         );
+    }
+
+    #[test]
+    fn validate_plan_reports_a_calendar_invalid_timestamp_with_no_location() {
+        // Issue #528's own comment: PyYAML's bare `ValueError` for a
+        // calendar-invalid timestamp carries no location -- unlike
+        // every other `YamlError`, whose own `Display` text does.
+        let yaml = "effects: []\nwhen: 2024-02-30\n";
+        let p = ok_plan(yaml, "prime.merge.value");
+        let problems = validate_plan(&p, 5, &Value::None);
+        assert_eq!(problems, vec!["day is out of range for month".to_string()]);
     }
 
     #[test]

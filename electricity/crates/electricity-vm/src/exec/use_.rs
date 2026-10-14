@@ -489,6 +489,18 @@ async fn load_child<R: ParamsCtx>(
             // the bare "...must be a YAML mapping..." text with no
             // wrapper, since `_validate_inline_yaml` is never called.
             let document = if validate {
+                // A calendar-invalid timestamp's bare `ValueError`
+                // (issue #528's own comment) is never a `yaml.YAMLError`
+                // `_validate_inline_yaml`'s own `except` could catch, so
+                // it escapes uncaught -- no "Inline orchestration
+                // validation failed:" wrapper, no `errors` list, just
+                // the message alone, matched *before* any other parse
+                // error is turned into an ordinary error-list entry.
+                if let Err(e @ electricity_yaml::YamlError::InvalidTimestampValue { .. }) =
+                    electricity_yaml::load_yaml(&cleaned)
+                {
+                    return Err(e.cof_message());
+                }
                 let errors: Vec<String> = match electricity_yaml::load_yaml(&cleaned) {
                     Err(e) => vec![format!("YAML parse error: {e}")],
                     Ok(parsed) => match validate_inline_yaml(&parsed) {
@@ -509,7 +521,7 @@ async fn load_child<R: ParamsCtx>(
                 electricity_yaml::load_yaml(&cleaned)
                     .map_err(|e| format!("YAML parse error: {e}"))?
             } else {
-                let parsed = electricity_yaml::load_yaml(&cleaned).map_err(|e| e.to_string())?;
+                let parsed = electricity_yaml::load_yaml(&cleaned).map_err(|e| e.cof_message())?;
                 if parsed.as_dict().is_none() {
                     return Err(
                         "Inline orchestration must be a YAML mapping with an 'effects' key."

@@ -1,14 +1,11 @@
 {
-  "spec_case": "issue #521's own acceptance section, validate-yaml-third-party-texts",
-  "description": "A PyYAML scan error and a JSON-Schema violation, both third-party text (DESIGN.md \u00a71, \u00a712): compared by location only, via third_party_text on each tool's own value.errors.0, meta.raw.errors.0 and meta.stderr.",
+  "spec_case": "issue #521's own acceptance section, validate-yaml-third-party-texts; issue #528",
+  "description": "A PyYAML scan error stays third-party text (DESIGN.md \u00a71, \u00a712), compared by location only via third_party_text on scan_error's own value.errors.0, meta.raw.errors.0 and meta.stderr. A JSON-Schema violation (schema_error) no longer is (issue #528): electricity's own text now matches Circuitry's exactly, so it's pinned by the ordinary exact-state comparison below instead.",
   "engines": ["python", "electricity"],
   "expect": "success",
   "third_party_text": [
     {"location": "prime.scan_error.value.errors.0", "pattern": "(?s)YAML parse error: .+"},
     {"location": "prime.scan_error.meta.raw.errors.0", "pattern": "(?s)YAML parse error: .+"},
-    {"location": "prime.scan_error.meta.stderr", "pattern": "(?s)YAML parse error: .+"},
-    {"location": "prime.schema_error.value.errors.0", "pattern": "(?s)effects\\[0\\]: .+"},
-    {"location": "prime.schema_error.meta.raw.errors.0", "pattern": "(?s)effects\\[0\\]: .+"},
-    {"location": "prime.schema_error.meta.stderr", "pattern": "(?s)effects\\[0\\]: .+"}
+    {"location": "prime.scan_error.meta.stderr", "pattern": "(?s)YAML parse error: .+"}
   ]
 }
