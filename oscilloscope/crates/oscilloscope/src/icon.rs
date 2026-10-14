@@ -1,10 +1,12 @@
 //! The oscilloscope icon (DESIGN.md §6.3, issue #535): a small scope
 //! drawn in text, left of the header, 3 rows high (the header's own
-//! height) and about 16 columns wide. The trace itself comes from
-//! `oscilloscope_core::icon::trace_dots`; this module only ever turns
-//! those dots into braille glyphs and draws the bezel around them —
-//! the one place in this crate that knows what a scope should look
-//! like.
+//! height) and about 17 columns wide, drawn as one device — the
+//! screen and the knob strip share a single bezel, split by a
+//! `┬`/`┴` divider, rather than two separate boxes. The trace itself
+//! comes from `oscilloscope_core::icon::trace_dots`; this module only
+//! ever turns those dots into braille glyphs and draws the bezel
+//! around them — the one place in this crate that knows what a scope
+//! should look like.
 
 use oscilloscope_core::icon::trace_dots;
 use oscilloscope_core::model::RunStatus;
@@ -13,8 +15,9 @@ use ratatui::text::{Line, Span};
 
 use crate::theme::Theme;
 
-/// The whole icon's own width (issue #535: "about 16 columns").
-pub const ICON_WIDTH: u16 = 16;
+/// The whole icon's own width (issue #535: "about 16 columns", one
+/// frame wider once the knob strip moved inside the bezel).
+pub const ICON_WIDTH: u16 = 17;
 /// The header's own height — the icon must never make the header
 /// row taller (issue #535).
 pub const ICON_HEIGHT: u16 = 3;
@@ -22,6 +25,8 @@ pub const ICON_HEIGHT: u16 = 3;
 /// The screen's own text width inside the bezel (12 columns, 24
 /// braille dot-columns — `trace_dots`' own `width`).
 const SCREEN_COLS: usize = 12;
+/// The knob strip's own width, right of the screen's own divider.
+const KNOB_COLS: usize = 2;
 const SCREEN_DOTS_WIDE: usize = SCREEN_COLS * 2;
 /// One text row of braille is 4 dot-rows tall.
 const SCREEN_DOTS_TALL: usize = 4;
@@ -39,27 +44,30 @@ pub fn lines(frame: u64, status: RunStatus, theme: &Theme) -> Vec<Line<'static>>
     let bezel_style = Style::default().fg(theme.icon_bezel);
     let trace_style = Style::default().fg(trace_color);
 
-    let top = Line::from(vec![
-        Span::styled(format!("╭{}╮ ", "─".repeat(SCREEN_COLS)), bezel_style),
-        Span::styled("◉", trace_style),
-    ]);
+    let top = Line::from(vec![Span::styled(
+        format!("╭{}┬{}╮", "─".repeat(SCREEN_COLS), "─".repeat(KNOB_COLS)),
+        bezel_style,
+    )]);
     let middle = Line::from(vec![
         Span::styled("│", bezel_style),
         Span::styled(screen, trace_style),
-        Span::styled("│ │", bezel_style),
+        Span::styled("│", bezel_style),
+        Span::styled("◉", trace_style),
+        Span::styled(" ", bezel_style),
+        Span::styled("│", bezel_style),
     ]);
-    let bottom = Line::from(vec![
-        Span::styled(format!("╰{}╯ ", "─".repeat(SCREEN_COLS)), bezel_style),
-        Span::styled("◎", trace_style),
-    ]);
+    let bottom = Line::from(vec![Span::styled(
+        format!("╰{}┴{}╯", "─".repeat(SCREEN_COLS), "─".repeat(KNOB_COLS)),
+        bezel_style,
+    )]);
     vec![top, middle, bottom]
 }
 
 fn trace_color(status: RunStatus, theme: &Theme) -> Color {
     match status {
         RunStatus::Running | RunStatus::Ok => theme.icon_trace_ok,
-        RunStatus::Failed | RunStatus::Aborted => theme.icon_trace_failed,
-        RunStatus::Cancelled => theme.icon_trace_cancelled,
+        RunStatus::Failed => theme.icon_trace_failed,
+        RunStatus::Cancelled | RunStatus::Aborted => theme.icon_trace_cancelled,
     }
 }
 
@@ -112,13 +120,13 @@ mod tests {
     }
 
     #[test]
-    fn frame_zero_is_three_rows_of_sixteen_columns() {
+    fn frame_zero_is_three_rows_of_seventeen_columns() {
         let theme = resolve(ThemeName::Terminal, ColorMode::TrueColor).theme;
         let rows = lines(0, RunStatus::Running, &theme);
         assert_eq!(rows.len(), 3);
         for line in &rows {
             let width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-            assert_eq!(width, 16, "{line:?}");
+            assert_eq!(width, 17, "{line:?}");
         }
     }
 
@@ -149,7 +157,7 @@ mod tests {
         );
         assert_eq!(
             trace_color(RunStatus::Aborted, &theme),
-            theme.icon_trace_failed
+            theme.icon_trace_cancelled
         );
         assert_eq!(
             trace_color(RunStatus::Cancelled, &theme),
