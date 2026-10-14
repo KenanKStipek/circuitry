@@ -1071,14 +1071,8 @@ need restructuring `run_action`'s early-return paths for a case this preview can
 construct (no filesystem-mutating tool exists to fail a *later* write instead); `core/cel_eval.py`'s
 own `logger.error` for a genuine CEL evaluation exception (not a compile/path error — division by
 zero, say) embeds the underlying Python exception's own `repr`, which has no Rust equivalent to
-reproduce byte for byte, so that one `ERROR:` line is not ported; a tree `dynamic` with two or more
-failed branches and `on_error: skip`/`continue` folds each branch's own continuation line through
-`combine_tree_errors`, which still lacks the reference's own exception class name per branch (#442's
-first item, "the multi-failure tree error text lacks Python's exception class names" — unfixed, so
-the fold's own continuation lines, unlike its first line, are not byte for byte either; the
-conformance suite's own harness only ever compares a case's prefixed `WARNING:`/`Warning:` lines, so
-this divergence is invisible to it today); and a dynamic interrupted mid-body whose `finally:` then
-also fails logs `meta.error`'s own "Interrupted (...)" wording on this warning line
+reproduce byte for byte, so that one `ERROR:` line is not ported; and a dynamic interrupted mid-body
+whose `finally:` then also fails logs `meta.error`'s own "Interrupted (...)" wording on this warning line
 (`exec/dynamic.rs::error_text`), where the reference logs the interrupting exception's raw `str()`
 instead — `''` for a real signal caught in the main thread (`KeyboardInterrupt`/`SigTermInterrupt`),
 or `"run cancelled"` for a tree branch's own cooperative cancellation check on a worker thread

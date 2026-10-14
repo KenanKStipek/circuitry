@@ -1,0 +1,24 @@
+name: c20-group-in-tree-loop
+runtime:
+  concurrency_groups:
+    g: 1
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: "[1, 2]"}
+  - type: loop
+    name: shots
+    flow: tree
+    each: {in: "prime.seed.value", as: "item"}
+    body:
+      - type: tool
+        name: a
+        provider: json
+        group: g
+        params: {mode: stringify, input: {item: "{{item}}", which: "a"}}
+      - type: tool
+        name: b
+        provider: json
+        group: g
+        params: {mode: stringify, input: {item: "{{item}}", which: "b"}}

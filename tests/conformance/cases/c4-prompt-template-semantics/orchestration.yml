@@ -1,0 +1,19 @@
+name: c4-prompt-template-semantics
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '{"a": {"b": 1}}'}
+  - type: tool
+    name: items
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+  - type: prompt
+    name: ask
+    template: >-
+      missing=[{{missing}}]
+      partial=[{{prime.seed.value.a.b.c}}]
+      list=[{{#prime.items.value}}<{{.}}>{{/prime.items.value}}]
+      invflag=[{{^missing_flag}}shown{{/missing_flag}}]

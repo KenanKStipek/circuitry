@@ -1,0 +1,7 @@
+{
+  "spec_case": "C12 (d)",
+  "description": "A `shell` tool's `params_json` tries to set `allowed_commands` -- rejected at run time (`params_json` is runtime-built and can carry model-generated content, so it is never the source of a plugin's own allowlist), with `core/tool.py`'s own exact message (`_reject_params_json_security_overrides`; `exec/tool.rs`'s own mirror).",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

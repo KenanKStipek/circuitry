@@ -1,0 +1,26 @@
+{"v":1,"seq":0,"ts":"2026-10-14T01:24:35.907Z","ev":"run_start","run_id":"752f3493-dc18-45fc-bad3-3fd7c8ba7062","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":22115}
+{"v":1,"seq":1,"ts":"2026-10-14T01:24:35.917Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-14T01:24:35.917Z","ev":"start","id":1,"path":"prime.fan"}
+{"v":1,"seq":3,"ts":"2026-10-14T01:24:35.917Z","ev":"dispatch","path":"prime.fan","branches":5,"concurrency":1}
+{"v":1,"seq":4,"ts":"2026-10-14T01:24:35.918Z","ev":"start","id":2,"path":"prime.fan.bad_json"}
+{"v":1,"seq":5,"ts":"2026-10-14T01:24:35.926Z","ev":"end","id":2,"path":"prime.fan.bad_json","ok":false,"ms":8,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":6,"ts":"2026-10-14T01:24:35.926Z","ev":"start","id":3,"path":"prime.fan.inner"}
+{"v":1,"seq":7,"ts":"2026-10-14T01:24:35.926Z","ev":"dispatch","path":"prime.fan.inner","branches":2,"concurrency":1}
+{"v":1,"seq":8,"ts":"2026-10-14T01:24:35.930Z","ev":"start","id":4,"path":"prime.fan.inner.x"}
+{"v":1,"seq":9,"ts":"2026-10-14T01:24:35.930Z","ev":"end","id":4,"path":"prime.fan.inner.x","ok":false,"ms":1,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":10,"ts":"2026-10-14T01:24:35.936Z","ev":"start","id":5,"path":"prime.fan.inner.y"}
+{"v":1,"seq":11,"ts":"2026-10-14T01:24:35.936Z","ev":"end","id":5,"path":"prime.fan.inner.y","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":12,"ts":"2026-10-14T01:24:35.936Z","ev":"end","id":3,"path":"prime.fan.inner","ok":false,"ms":11,"error":"2 effects failed in parallel:\n  [1] ValueError: inner.x: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [2] ValueError: inner.y: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":13,"ts":"2026-10-14T01:24:35.937Z","ev":"start","id":6,"path":"prime.fan.child"}
+{"v":1,"seq":14,"ts":"2026-10-14T01:24:35.942Z","ev":"start","id":7,"path":"prime.fan.child.z"}
+{"v":1,"seq":15,"ts":"2026-10-14T01:24:35.942Z","ev":"end","id":7,"path":"prime.fan.child.z","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":16,"ts":"2026-10-14T01:24:35.942Z","ev":"end","id":6,"path":"prime.fan.child","ok":false,"ms":6,"error":"prime.z: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":17,"ts":"2026-10-14T01:24:35.943Z","ev":"start","id":8,"path":"prime.fan.lp"}
+{"v":1,"seq":18,"ts":"2026-10-14T01:24:35.943Z","ev":"start","id":9,"path":"prime.fan.lp.iter_0.w"}
+{"v":1,"seq":19,"ts":"2026-10-14T01:24:35.943Z","ev":"end","id":9,"path":"prime.fan.lp.iter_0.w","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":20,"ts":"2026-10-14T01:24:35.943Z","ev":"end","id":8,"path":"prime.fan.lp","ok":false,"ms":0,"error":"w: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":21,"ts":"2026-10-14T01:24:35.943Z","ev":"start","id":10,"path":"prime.fan.shell_bad"}
+{"v":1,"seq":22,"ts":"2026-10-14T01:24:35.943Z","ev":"end","id":10,"path":"prime.fan.shell_bad","ok":false,"ms":0,"error":"shell: command 'rm' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."}
+{"v":1,"seq":23,"ts":"2026-10-14T01:24:35.944Z","ev":"end","id":1,"path":"prime.fan","ok":false,"ms":27,"error":"5 effects failed in parallel:\n  [1] ValueError: fan.bad_json: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [2] TreeExecutionError: fan.inner: 2 effects failed in parallel:\n  [1] ValueError: inner.x: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [2] ValueError: inner.y: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [3] RuntimeError: fan.child: use 'child' -> inline: prime.z: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [4] "}
+{"v":1,"seq":24,"ts":"2026-10-14T01:24:35.944Z","ev":"end","id":0,"path":"prime","ok":true,"ms":28}
+{"v":1,"seq":25,"ts":"2026-10-14T01:24:35.944Z","ev":"run_end","ok":true}

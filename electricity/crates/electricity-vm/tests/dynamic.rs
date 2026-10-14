@@ -622,9 +622,18 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
     .await
     .unwrap_err();
 
-    let VmError::Message(text) = err else {
-        panic!("expected a Message error, got {err:?}");
+    let VmError::Raised {
+        py_class,
+        message: text,
+        ..
+    } = &err
+    else {
+        panic!("expected a Raised error, got {err:?}");
     };
+    // Issue #442's first item (#537): the combined error is itself a
+    // `Raised` of `TreeExecutionError`, not a bare `Message` -- so a
+    // further-nested tree's own combine can show this class too.
+    assert_eq!(*py_class, electricity_tools::PyExc::TreeExecutionError);
     assert!(
         text.starts_with("2 effects failed in parallel:\n"),
         "got {text:?}"
@@ -637,8 +646,16 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
     // _effect_path`'s `container_name` is always a bare name, not a
     // path (see `an_absorbed_failure_lets_the_parent_continue_and_
     // records_meta_error`'s own identical fix for one level of this).
-    assert!(text.contains(&format!("[1] prime.x0: x0.b: {TOOL_FAIL_TEXT}")));
-    assert!(text.contains(&format!("[2] prime.x1: x1.b: {TOOL_FAIL_TEXT}")));
+    // The displayed class on each line is `RuntimeError` -- `x0`'s own
+    // chain wrap's class, `err.__cause__ or err`'s one-level-only unwrap
+    // (`core/dynamic.py:56-57`), not `b`'s own leaf `ValueError` two
+    // levels down.
+    assert!(text.contains(&format!(
+        "[1] RuntimeError: prime.x0: x0.b: {TOOL_FAIL_TEXT}"
+    )));
+    assert!(text.contains(&format!(
+        "[2] RuntimeError: prime.x1: x1.b: {TOOL_FAIL_TEXT}"
+    )));
 
     // Both branches still ran (and failed) and both are merged in.
     let snapshot = store.snapshot(&store.root);

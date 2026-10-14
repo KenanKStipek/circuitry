@@ -22,6 +22,7 @@ from .normalize import (
     prepare_for_comparison,
     redact_events_text,
     redact_runtime_strings,
+    redact_third_party_text_lines,
 )
 
 CASE_DIRS = harness.list_case_dirs()
@@ -36,6 +37,7 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     item): compared regardless of `expect` -- a case can log a warning
     on its way to either a success or a failure."""
     actual = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    actual = redact_third_party_text_lines(actual, metadata.get("third_party_text", []))
     expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
     expected = [line for line in expected_text.splitlines() if line]
     assert actual == expected, (
@@ -91,6 +93,12 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
 
+    harness.assert_no_leaked_credentials(
+        harness.run_result_texts(result, events_path=events_path, live_state_path=live_state_path),
+        case_name=case_dir.name,
+        fake_credentials=metadata.get("fake_credentials"),
+    )
+
     _assert_warnings_match(case_dir, metadata, result.stderr)
     _assert_run_warnings_match(case_dir, metadata, result.stderr)
 
@@ -135,6 +143,11 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
             assert pretty_result.returncode == 0, (
                 f"expected success (--pretty), got exit {pretty_result.returncode}\n"
                 f"stdout: {pretty_result.stdout}\nstderr: {pretty_result.stderr}"
+            )
+            harness.assert_no_leaked_credentials(
+                harness.run_result_texts(pretty_result),
+                case_name=case_dir.name,
+                fake_credentials=metadata.get("fake_credentials"),
             )
             actual_pretty_text = pretty_out.read_text(encoding="utf-8")
             assert_out_serialization(actual_pretty_text, pretty=True)

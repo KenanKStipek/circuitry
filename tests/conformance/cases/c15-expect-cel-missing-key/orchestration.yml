@@ -1,0 +1,9 @@
+name: c15-expect-cel-missing-key
+effects:
+  - type: tool
+    name: result
+    provider: json
+    params: {mode: parse, input: '{"present": 1}'}
+    expect: {mode: cel, expr: "value.missing_key == 1"}
+    retries: {max_attempts: 2, backoff_ms: 1}
+    on_error: continue

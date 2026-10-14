@@ -1,0 +1,6 @@
+{
+  "spec_case": "C20",
+  "description": "Two tools share `group: g` under `concurrency_groups: {g: 1}`, inside a `flow: tree` `each` loop (two passes, each dispatched concurrently): `concurrency-group` and `prompt-tree-group` only ever join a group from inside a tree `dynamic`, never a tree loop's own body.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

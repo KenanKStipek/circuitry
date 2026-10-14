@@ -1,0 +1,7 @@
+{
+  "spec_case": "C1",
+  "description": "`interface.inputs` declares all six `type`s: `number` and `boolean` present (CLI `-e` JSON-sniffs `5`/`true`), `integer` absent (its `default: 7` fills in), `string` present as `-e s=1.50` (restored to the exact raw text \"1.50\", undoing the CLI's own JSON-sniff into the float `1.5`), and `array`/`object` present as JSON-sniffed structured values (`-e arr=[1,2,3]`, `-e obj={\"x\":1}`). `req` is `required: true` and present -- `c1-interface-inputs-required-missing` is this document's own failure companion, omitting it.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "n=5", "-e", "flag=true", "-e", "s=1.50", "-e", "arr=[1,2,3]", "-e", "obj={\"x\":1}", "-e", "req=present"]
+}

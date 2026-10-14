@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-14T01:53:02.982Z","ev":"run_start","run_id":"f2278ce1-d504-4a09-a1f9-9b0e4898bbc9","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":73688}
+{"v":1,"seq":1,"ts":"2026-10-14T01:53:02.995Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-14T01:53:02.995Z","ev":"start","id":1,"path":"prime.seed"}
+{"v":1,"seq":3,"ts":"2026-10-14T01:53:02.996Z","ev":"end","id":1,"path":"prime.seed","ok":true,"ms":1}
+{"v":1,"seq":4,"ts":"2026-10-14T01:53:02.996Z","ev":"start","id":2,"path":"prime.items"}
+{"v":1,"seq":5,"ts":"2026-10-14T01:53:02.996Z","ev":"end","id":2,"path":"prime.items","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-14T01:53:02.997Z","ev":"start","id":3,"path":"prime.ask"}
+{"v":1,"seq":7,"ts":"2026-10-14T01:53:02.998Z","ev":"end","id":3,"path":"prime.ask","ok":true,"ms":1}
+{"v":1,"seq":8,"ts":"2026-10-14T01:53:02.998Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":9,"ts":"2026-10-14T01:53:02.998Z","ev":"run_end","ok":true}

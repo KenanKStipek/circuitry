@@ -1,0 +1,6 @@
+{
+  "spec_case": "§7 case 3",
+  "description": "`mode: stringify` on `{\"name\": \"café\"}` with no `indent` key, `indent: null`, and `indent: 2`: the first two are identical (no `indent` key and an explicit `null` both mean no pretty-printing), the third pins the two-space pretty form -- all three keep `ensure_ascii=False` (the non-ASCII `é` byte, not `\\u00e9`). C23's own case covers non-ASCII without an `indent`; the Rust corpus covers `indent: 2` on ASCII only.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

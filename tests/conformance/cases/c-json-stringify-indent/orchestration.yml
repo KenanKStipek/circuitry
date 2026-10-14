@@ -1,0 +1,14 @@
+name: c-json-stringify-indent
+effects:
+  - type: tool
+    name: no_indent
+    provider: json
+    params: {mode: stringify, input: {name: "café"}}
+  - type: tool
+    name: null_indent
+    provider: json
+    params: {mode: stringify, input: {name: "café"}, indent: null}
+  - type: tool
+    name: indent_2
+    provider: json
+    params: {mode: stringify, input: {name: "café"}, indent: 2}

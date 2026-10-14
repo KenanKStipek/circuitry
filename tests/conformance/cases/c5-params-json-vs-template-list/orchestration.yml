@@ -1,0 +1,17 @@
+name: c5-params-json-vs-template-list
+adapter: scripted
+model: test
+effects:
+  - type: prompt
+    name: items
+    prompt_type: array
+    template: "give me items"
+    schema: {type: array}
+  - type: tool
+    name: as_params_json
+    provider: json
+    params: {mode: stringify}
+    params_json: '{"input": {{{prime.items.value}}}}'
+  - type: prompt
+    name: as_template
+    template: "list=[{{{prime.items.value}}}]"

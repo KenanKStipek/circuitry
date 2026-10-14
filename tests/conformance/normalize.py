@@ -356,6 +356,38 @@ def _redact_third_party_patterns(value: Any, patterns: Sequence[str]) -> Any:
     return value
 
 
+def redact_third_party_text_lines(
+    lines: Sequence[str], third_party_text: Sequence[dict[str, str]]
+) -> list[str]:
+    """`_redact_third_party_patterns`, applied to each of *lines* --
+    `expected.warnings.txt`'s own `WARNING:`/`ERROR:` lines can embed a
+    third-party exception's own text (`core/cel_eval.py`'s own
+    `logger.error` call for a failed `if`/`while` CEL condition, among
+    others) the same way a tool's `meta.error` can, so this follows the
+    same substring (never `fullmatch`) convention `redact_events_text`
+    already uses for `--events` lines -- applied both before a case's
+    `expected.warnings.txt` is ever written and at comparison time (both
+    pytest runners), so the two can never drift.
+
+    `core/cel_eval.py::evaluate_cel`'s own `logger.error` call spells a
+    CEL evaluation failure "for expr %r", never "for %r" the way its
+    own raise-site text does (`cel_eval.py:132/157/194/207`) -- the one
+    place `expr` appears only on the log line, both engines' own
+    `log::error!`/`logger.error` call alike. Normalized back to the
+    raise-site's own wording first, so a `third_party_text` pattern
+    crafted against `meta.error`'s own text (never "for expr") still
+    matches this line's text too.
+    """
+    if not third_party_text:
+        return list(lines)
+    patterns = [spec["pattern"] for spec in third_party_text]
+    normalized = [
+        line.replace("CEL evaluation failed for expr ", "CEL evaluation failed for ")
+        for line in lines
+    ]
+    return [_redact_third_party_patterns(line, patterns) for line in normalized]
+
+
 def redact_events_text(
     text: str,
     replacements: Sequence[tuple[str, str]],

@@ -1,0 +1,45 @@
+name: tree-failure-class-names
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 1
+    on_error: continue
+    effects:
+      - type: tool
+        name: bad_json
+        provider: json
+        params: {mode: parse, input: "not valid json"}
+      - type: dynamic
+        name: inner
+        flow: tree
+        max_concurrency: 1
+        effects:
+          - type: tool
+            name: x
+            provider: json
+            params: {mode: parse, input: "not valid json x"}
+          - type: tool
+            name: y
+            provider: json
+            params: {mode: parse, input: "not valid json y"}
+      - type: use
+        name: child
+        inline: |
+          effects:
+            - type: tool
+              name: z
+              provider: json
+              params: {mode: parse, input: "not valid json z"}
+      - type: loop
+        name: lp
+        each: {in: "input.items", as: "item"}
+        body:
+          - type: tool
+            name: w
+            provider: json
+            params: {mode: parse, input: "not valid json w"}
+      - type: tool
+        name: shell_bad
+        provider: shell
+        params: {command: rm, args: ["-rf", "/"]}

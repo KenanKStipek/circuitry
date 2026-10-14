@@ -1,0 +1,13 @@
+name: c12-allowed-commands-from
+interface:
+  inputs:
+    cmds:
+      type: array
+      default: ["ls"]
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params:
+      command: ls
+      allowed_commands: {from: input.cmds}

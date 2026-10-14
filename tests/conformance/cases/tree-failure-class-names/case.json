@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #442's first item (#537): a tree dynamic's combined failure text names each branch's own exception class",
+  "description": "A `flow: tree` dynamic (`max_concurrency: 1`, `on_error: continue`) with five branches that each fail a different way: a `tool` leaf (ValueError), a nested tree with two failing leaves of its own (TreeExecutionError, the nested combine's own class), a `use` (inline) branch (RuntimeError), an `each` loop branch (RuntimeError), and a `shell` allowlist denial (PermissionError). `fan.meta.error` names every branch's own displayed class, `err.__cause__ or err`'s one-level unwrap (`core/dynamic.py::TreeExecutionError._format`), matched by `electricity_vm::VmError::displayed_class`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "items=[1]"]
+}

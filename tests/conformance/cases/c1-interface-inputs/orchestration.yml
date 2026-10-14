@@ -1,0 +1,24 @@
+name: c1-interface-inputs
+interface:
+  inputs:
+    n: {type: number}
+    i: {type: integer, default: 7}
+    flag: {type: boolean}
+    s: {type: string}
+    arr: {type: array}
+    obj: {type: object}
+    req: {type: string, required: true}
+effects:
+  - type: tool
+    name: echo
+    provider: json
+    params:
+      mode: stringify
+      input:
+        n: {from: input.n}
+        i: {from: input.i}
+        flag: {from: input.flag}
+        s: {from: input.s}
+        arr: {from: input.arr}
+        obj: {from: input.obj}
+        req: {from: input.req}
