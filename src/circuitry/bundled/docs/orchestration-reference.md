@@ -828,6 +828,16 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 - **`meta.params_rendered`** (the effect's rendered `params`, merged with
   any `params_json`) is redacted the same way before storage; the plugin
   itself still receives the real, unredacted values.
+- **`meta.tokens_sent`/`meta.tokens_received`/`meta.cost_usd`** are set, the
+  same fields a prompt effect uses, when the plugin's result reports a
+  value that isn't `None` — absent otherwise, so a tool that spends no
+  model usage gains no new meta keys. Only `agent` reports them today (its
+  session's usage over every turn, see its own docs); `runtime.last_run.totals`
+  and a running orchestration's live token counts include it like any other
+  effect. A retried tool's `tokens_sent_total`/`tokens_received_total` sum
+  every attempt the same way a retried prompt's do; the non-total fields are
+  the attempt that decided the outcome, and usage an earlier, failed attempt
+  spent still counts toward the total.
 
 **Supported providers:**
 

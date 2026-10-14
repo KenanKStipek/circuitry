@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import signal
 import threading
 import time
@@ -1261,6 +1262,9 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
+_ITER_KEY = re.compile(r"iter_\d+")
+
+
 def _sum_tokens(d: dict) -> tuple[int, int]:
     """Recursively sum tokens_sent/received from all prompt meta dicts in a store subtree."""
     sent = recv = 0
@@ -1277,7 +1281,15 @@ def _sum_tokens(d: dict) -> tuple[int, int]:
         if isinstance(expect, dict):
             sent += expect.get("tokens_sent") or 0
             recv += expect.get("tokens_received") or 0
-    for v in d.values():
+    # A named loop's `last` is an alias of its final completed pass's own
+    # node (`node["last"] is node["iter_<N>"]`, see LoopRuntime._link_last),
+    # so walking it too would count that pass twice. Only a loop node has
+    # `iter_<N>` children (the names are reserved), so a `last` next to them
+    # is that alias, while an effect a dynamic itself names `last` still counts.
+    is_loop_node = any(isinstance(k, str) and _ITER_KEY.fullmatch(k) for k in d)
+    for key, v in d.items():
+        if key == "last" and is_loop_node:
+            continue
         if isinstance(v, dict):
             s, r = _sum_tokens(v)
             sent += s
