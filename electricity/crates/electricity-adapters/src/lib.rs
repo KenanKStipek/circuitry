@@ -17,8 +17,8 @@
 //!   [`replicate`], [`watsonx`], [`curl_text`]: lane F2's own
 //!   (#503/#504) real network-backed providers and the shared curl
 //!   failure-text helper.
-//! - [`cyberdiner`]: the vendor-broker adapter (issue #515, N1, merged
-//!   in #523).
+//! - [`cyberdiner`]: the vendor-broker adapter (issue #515, merged in
+//!   #523).
 //! - [`claude_code`], [`pi`], and their shared `agent_cli` half: the
 //!   two coding-agent-CLI adapters and their shared retry/`check()`/
 //!   result-builder code (issue #520, merged in #525 and #531);
@@ -74,8 +74,8 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("pi", Box::new(pi::build_pi));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
-    // `replicate`/`watsonx` last. Issue #515 (N1) ports `cyberdiner`
-    // too, and issue #520 (this lane) registers `claude_code`/`pi`
+    // `replicate`/`watsonx` last. Issue #515 ports `cyberdiner`
+    // too, and issue #520 registers `claude_code`/`pi`
     // above, so the unbuildable set is now `litellm` alone
     // (`host_claude`'s own builder always fails, deliberately -- see
     // this file's own module doc comment -- so it is never part of
