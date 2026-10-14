@@ -325,8 +325,40 @@ fn draw_header(
         Some(planned) => format!("{}/{planned}", header.effects_done),
         None => header.effects_done.to_string(),
     };
+    let elapsed = format_duration(header.elapsed_s);
+    let tokens = format!("↑{} ↓{}", header.tokens_sent, header.tokens_received);
+    // The icon widening by one column (issue #535) left a long
+    // document path able to push `effects`/the token counts past the
+    // header's own right edge with nothing left to draw them at all
+    // -- `Paragraph` clips a line that doesn't fit rather than
+    // wrapping it. The fixed-width part of the line is measured
+    // first, so the document path truncates itself (keeping its own
+    // tail, where the filename is) instead.
+    let mut suffix_len = 2
+        + header.engine.chars().count()
+        + 2
+        + status_text.chars().count()
+        + 2
+        + elapsed.chars().count()
+        + 2
+        + "effects ".len()
+        + effects.chars().count()
+        + 2
+        + tokens.chars().count();
+    if let Some(eta) = header.innermost_loop_eta_s {
+        suffix_len += 2 + "ETA ".len() + format_duration(eta).chars().count();
+    }
+    if let Some(run_id) = &header.run_id {
+        suffix_len += 2 + run_id.chars().count();
+    }
+    if let Some(name) = ctx.theme_banner {
+        suffix_len += 2 + "theme: ".len() + name.chars().count();
+    }
+    let available = area.width.saturating_sub(2) as usize;
+    let doc_budget = available.saturating_sub(suffix_len).max(1);
+    let document = truncate_label_from_left(&header.document, doc_budget);
     let mut line = vec![
-        Span::raw(format!("{}  ", header.document)),
+        Span::raw(format!("{document}  ")),
         Span::styled(header.engine.clone(), Style::default().fg(ctx.theme.dim)),
         Span::raw("  "),
         Span::styled(
@@ -336,13 +368,13 @@ fn draw_header(
                 ctx.highlight("header:status"),
             ),
         ),
-        Span::raw(format!("  {}", format_duration(header.elapsed_s))),
+        Span::raw(format!("  {elapsed}")),
         Span::styled(
             format!("  effects {effects}"),
             with_highlight(Style::default(), ctx.highlight("header:effects")),
         ),
         Span::styled(
-            format!("  ↑{} ↓{}", header.tokens_sent, header.tokens_received),
+            format!("  {tokens}"),
             with_highlight(Style::default(), ctx.highlight("header:tokens")),
         ),
     ];
@@ -415,11 +447,53 @@ fn draw_tree(
     frame.render_widget(list, area);
 }
 
-fn details_lines(details: &Details, kind: RowKind, ctx: &DrawCtx) -> Vec<Line<'static>> {
+/// The `sent`/`received` snippet's own cap (finding M1): three
+/// *wrapped* lines at the pane's current inner width, not the
+/// issue's original flat 200-character cut — at the golden-section
+/// split's own narrower details pane, a long snippet at 200 characters
+/// still ran past both blocks fitting on screen at once. `v` still
+/// opens the untruncated text either way.
+const SNIPPET_MAX_LINES: usize = 3;
+
+fn details_lines(
+    details: &Details,
+    kind: RowKind,
+    ctx: &DrawCtx,
+    inner_width: u16,
+) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("path   {}", details.path)),
         Line::from(format!("type   {}", kind.label())),
     ];
+    // Issue #535/finding 6: these two blocks come right after path/
+    // type, before plan/meta/error -- at the pane's own golden-
+    // section height, a prompt's meta list could otherwise push both
+    // snippets below the fold.
+    if let Some(sent) = &details.sent {
+        lines.push(Line::from(""));
+        let style = with_highlight(Style::default(), ctx.highlight("details:sent"));
+        lines.push(token_block_header("sent", '↑', sent).style(style));
+        if let Some(snippet) = &sent.snippet {
+            for line in snippet_lines(snippet, inner_width, SNIPPET_MAX_LINES) {
+                lines.push(Line::from(line));
+            }
+        }
+    }
+    if let Some(received) = &details.received {
+        lines.push(Line::from(""));
+        let style = with_highlight(Style::default(), ctx.highlight("details:received"));
+        lines.push(token_block_header("received", '↓', received).style(style));
+        if received.waiting {
+            lines.push(Line::styled(
+                "waiting for the reply",
+                Style::default().fg(ctx.theme.dim),
+            ));
+        } else if let Some(snippet) = &received.snippet {
+            for line in snippet_lines(snippet, inner_width, SNIPPET_MAX_LINES) {
+                lines.push(Line::from(line));
+            }
+        }
+    }
     if !details.plan_summary.is_empty() {
         lines.push(Line::from(format!("plan   {}", details.plan_summary)));
     }
@@ -434,29 +508,6 @@ fn details_lines(details: &Details, kind: RowKind, ctx: &DrawCtx) -> Vec<Line<'s
             format!("error  {error}"),
             Style::default().fg(ctx.theme.error),
         ));
-    }
-    // Issue #535: a node with `prompt_sent` gets these two blocks
-    // instead of the plain `prompt_sent`/`value` ones below.
-    if let Some(sent) = &details.sent {
-        lines.push(Line::from(""));
-        let style = with_highlight(Style::default(), ctx.highlight("details:sent"));
-        lines.push(token_block_header("sent", '↑', sent).style(style));
-        if let Some(snippet) = &sent.snippet {
-            lines.push(Line::from(snippet.clone()));
-        }
-    }
-    if let Some(received) = &details.received {
-        lines.push(Line::from(""));
-        let style = with_highlight(Style::default(), ctx.highlight("details:received"));
-        lines.push(token_block_header("received", '↓', received).style(style));
-        if received.waiting {
-            lines.push(Line::styled(
-                "waiting for the reply",
-                Style::default().fg(ctx.theme.dim),
-            ));
-        } else if let Some(snippet) = &received.snippet {
-            lines.push(Line::from(snippet.clone()));
-        }
     }
     if details.sent.is_none() {
         if let Some(prompt_sent) = &details.prompt_sent {
@@ -473,6 +524,86 @@ fn details_lines(details: &Details, kind: RowKind, ctx: &DrawCtx) -> Vec<Line<'s
         }
     }
     lines
+}
+
+/// Greedy word-wrap at `width` columns, one hard split per
+/// overlength word rather than overflowing it (finding M1).
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current: Vec<char> = Vec::new();
+    for word in text.split(' ') {
+        let word_chars: Vec<char> = word.chars().collect();
+        if !current.is_empty() && current.len() + 1 + word_chars.len() > width {
+            lines.push(current.iter().collect());
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.extend(word_chars.iter());
+        while current.len() > width {
+            let (head, tail) = current.split_at(width);
+            lines.push(head.iter().collect());
+            current = tail.to_vec();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current.iter().collect());
+    }
+    lines
+}
+
+/// [`wrap_lines`], capped to `max_lines` -- any remaining text
+/// collapses into the last line's own trailing `…` (finding M1).
+fn snippet_lines(text: &str, width: u16, max_lines: usize) -> Vec<String> {
+    let width = width as usize;
+    let wrapped = wrap_lines(text, width);
+    if wrapped.len() <= max_lines {
+        return wrapped;
+    }
+    let mut capped: Vec<String> = wrapped.into_iter().take(max_lines).collect();
+    if let Some(last) = capped.last_mut() {
+        let keep = width.saturating_sub(1);
+        let mut chars: Vec<char> = last.chars().take(keep).collect();
+        chars.push('…');
+        *last = chars.into_iter().collect();
+    }
+    capped
+}
+
+#[cfg(test)]
+mod snippet_wrap_tests {
+    use super::*;
+
+    #[test]
+    fn wrap_lines_breaks_on_whole_words_within_width() {
+        let lines = wrap_lines("the quick brown fox jumps", 10);
+        assert_eq!(lines, vec!["the quick", "brown fox", "jumps"]);
+    }
+
+    #[test]
+    fn wrap_lines_hard_splits_a_single_overlong_word() {
+        let lines = wrap_lines("abcdefghij", 4);
+        assert_eq!(lines, vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn snippet_lines_fits_within_the_cap_untouched() {
+        let lines = snippet_lines("one two three", 20, 3);
+        assert_eq!(lines, vec!["one two three"]);
+    }
+
+    #[test]
+    fn snippet_lines_caps_at_three_and_ends_with_an_ellipsis() {
+        let text = "one two three four five six seven eight nine ten";
+        let lines = snippet_lines(text, 10, 3);
+        assert_eq!(lines.len(), 3);
+        assert!(lines.last().unwrap().ends_with('…'), "{lines:?}");
+        for line in &lines {
+            assert!(line.chars().count() <= 10, "{line:?} exceeds width");
+        }
+    }
 }
 
 /// One `sent`/`received` block's own header line (issue #535):
@@ -516,12 +647,12 @@ fn draw_details(
     } else {
         Style::default().fg(ctx.theme.border)
     };
+    let inner_width = area.width.saturating_sub(2);
     let text = details
-        .map(|d| details_lines(d, kind, ctx))
+        .map(|d| details_lines(d, kind, ctx, inner_width))
         .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
     let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
-    let inner_width = area.width.saturating_sub(2);
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     // Finding F8: `text.len()` counts *logical* lines; a long
     // `prompt_sent`/value wraps to more rendered lines than that on a
@@ -541,17 +672,22 @@ fn draw_details(
     frame.render_widget(paragraph, area);
 }
 
-fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], ctx: &DrawCtx) {
+/// `log_total` is the plain running count of every line ever pushed
+/// onto `log_lines` (finding 4), not `log_lines.len()` -- a line's
+/// own highlight key is its own sequence number
+/// (`log_total - log_lines.len() + its own index`), which survives
+/// `MAX_LOG_LINES`' own trim from the front; a plain buffer index
+/// would shift under an already-marked key the moment the trim ran.
+fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], log_total: u64, ctx: &DrawCtx) {
     let height = area.height.saturating_sub(2) as usize;
     let start = log_lines.len().saturating_sub(height);
+    let seq_start = log_total.saturating_sub(log_lines.len() as u64);
     let text: Vec<Line> = log_lines[start..]
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            let style = with_highlight(
-                Style::default(),
-                ctx.highlight(&format!("log:{}", start + i)),
-            );
+            let seq = seq_start + (start + i) as u64;
+            let style = with_highlight(Style::default(), ctx.highlight(&format!("log:{seq}")));
             Line::from(l.clone()).style(style)
         })
         .collect();
@@ -575,6 +711,38 @@ fn truncate_label(label: &str, max: usize) -> String {
                 .take(max.saturating_sub(1))
                 .collect::<String>()
         )
+    }
+}
+
+/// [`truncate_label`], but keeping the *tail* and dropping the
+/// front, prefixed with `…` -- a path's own identifying part (the
+/// filename) is usually at the end, not the start.
+fn truncate_label_from_left(label: &str, max: usize) -> String {
+    let count = label.chars().count();
+    if count <= max {
+        label.to_string()
+    } else {
+        let skip = count - max.saturating_sub(1);
+        format!("…{}", label.chars().skip(skip).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod truncate_label_from_left_tests {
+    use super::*;
+
+    /// The icon widening by one column (issue #535) could push a
+    /// long document path's own `effects`/token counts past the
+    /// header's right edge with nothing drawn there at all --
+    /// `draw_header` truncates the document name first so those
+    /// always have room; this pins the helper that does it.
+    #[test]
+    fn keeps_the_tail_and_marks_the_cut_with_a_leading_ellipsis() {
+        assert_eq!(truncate_label_from_left("short.yml", 20), "short.yml");
+        assert_eq!(
+            truncate_label_from_left("/var/folders/abc/do.yml", 10),
+            "…bc/do.yml"
+        );
     }
 }
 
@@ -864,24 +1032,30 @@ fn draw_token_bar(
     let in_bar = bar(header.tokens_sent, max, bar_width);
     let out_bar = bar(header.tokens_received, max, bar_width);
     let tokenbar_highlight = ctx.highlight("tokenbar");
+    // Finding 14: a totals change alone (the header's own `tokens_
+    // sent`/`tokens_received`, `header:tokens` in `changes::diff`)
+    // doesn't necessarily change the in-flight `TokenBar` struct
+    // `tokenbar` keys on, but this line shows those totals, not the
+    // in-flight estimate -- it must light up on either key.
+    let totals_highlight = tokenbar_highlight.or_else(|| ctx.highlight("header:tokens"));
     let line1 = Line::from(vec![
         Span::raw("in  "),
         Span::styled(
             in_bar,
-            with_highlight(Style::default().fg(ctx.theme.token_in), tokenbar_highlight),
+            with_highlight(Style::default().fg(ctx.theme.token_in), totals_highlight),
         ),
         Span::styled(
             format!(" {sent_str}   "),
-            with_highlight(Style::default(), tokenbar_highlight),
+            with_highlight(Style::default(), totals_highlight),
         ),
         Span::raw("out  "),
         Span::styled(
             out_bar,
-            with_highlight(Style::default().fg(ctx.theme.token_out), tokenbar_highlight),
+            with_highlight(Style::default().fg(ctx.theme.token_out), totals_highlight),
         ),
         Span::styled(
             format!(" {received_str}"),
-            with_highlight(Style::default(), tokenbar_highlight),
+            with_highlight(Style::default(), totals_highlight),
         ),
     ]);
     let line2 = if token_bar.prompts_running == 0 {
@@ -932,6 +1106,12 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
+/// Finding 19: `Clear` resets the popup's own area to the terminal's
+/// bare default (no background, no foreground) — a named theme's own
+/// base fill (`draw`'s own `Block` at the top of this file) never
+/// reaches back over a popup drawn on top of it, so every overlay
+/// repaints its own area with the theme's `background`/`text` right
+/// after clearing it, the same pair `draw`'s own base fill sets.
 fn draw_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -939,9 +1119,16 @@ fn draw_overlay(
     text: Vec<Line<'static>>,
     w: u16,
     h: u16,
+    ctx: &DrawCtx,
 ) {
     let popup = centered(area, w, h);
     frame.render_widget(Clear, popup);
+    if let Some(bg) = ctx.theme.background {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg).fg(ctx.theme.text)),
+            popup,
+        );
+    }
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
         .alignment(Alignment::Left)
@@ -1001,6 +1188,7 @@ pub fn draw(
     state: &oscilloscope_core::render::RenderState,
     details: Option<&Details>,
     log_lines: &[String],
+    log_total: u64,
     app: &mut App,
     raw_state: Option<&serde_json::Value>,
     ctx: &DrawCtx,
@@ -1008,7 +1196,16 @@ pub fn draw(
 ) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
-        frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+        // Finding 7: a named theme's own base fill must set both
+        // roles, not just `bg` -- with only `bg` painted, a dark-
+        // background theme on a *light* terminal (solarized-light,
+        // gruvbox-light, catppuccin-latte) drew that terminal's own
+        // default foreground over it, which can be as light as the
+        // terminal's own default background, not the theme's `text`.
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg).fg(ctx.theme.text)),
+            area,
+        );
     }
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -1063,7 +1260,7 @@ pub fn draw(
             .split(body);
         draw_details(frame, parts[0], details, selected_kind, app, ctx);
         draw_tree(frame, parts[1], &visible, app, &state.header.document, ctx);
-        draw_log(frame, parts[2], log_lines, ctx);
+        draw_log(frame, parts[2], log_lines, log_total, ctx);
     } else {
         let left_width = oscilloscope_core::layout::left_column_width(body.width);
         let columns = Layout::default()
@@ -1107,17 +1304,17 @@ pub fn draw(
                 ctx,
             );
             draw_state(frame, right[1], &state_visible, app, ctx);
-            draw_log(frame, right[2], log_lines, ctx);
+            draw_log(frame, right[2], log_lines, log_total, ctx);
         } else if show_state {
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(40), Constraint::Min(5)])
                 .split(columns[1]);
             draw_state(frame, right[0], &state_visible, app, ctx);
-            draw_log(frame, right[1], log_lines, ctx);
+            draw_log(frame, right[1], log_lines, log_total, ctx);
         } else {
             app.state_viewport = 0;
-            draw_log(frame, columns[1], log_lines, ctx);
+            draw_log(frame, columns[1], log_lines, log_total, ctx);
         }
     }
 
@@ -1131,6 +1328,7 @@ pub fn draw(
                 text,
                 HELP_OVERLAY_WIDTH,
                 HELP_TEXT.len() as u16 + 2,
+                ctx,
             );
         }
         Dialog::ConfirmCancel { .. } => {
@@ -1139,7 +1337,7 @@ pub fn draw(
                 Line::from(""),
                 Line::from("y = cancel   n/esc = back"),
             ];
-            draw_overlay(frame, area, " confirm ", text, 36, 5);
+            draw_overlay(frame, area, " confirm ", text, 36, 5, ctx);
         }
         Dialog::FullValue(field) => {
             // Finding 5: reads straight from `raw_state`, bypassing
@@ -1157,6 +1355,7 @@ pub fn draw(
                 text,
                 area.width.saturating_sub(4),
                 area.height.saturating_sub(4),
+                ctx,
             );
         }
         Dialog::FilterInput(buf) => {
@@ -1164,7 +1363,7 @@ pub fn draw(
                 Line::from(format!("/{buf}")),
                 Line::from("enter = apply   esc = cancel"),
             ];
-            draw_overlay(frame, area, " filter ", text, 40, 4);
+            draw_overlay(frame, area, " filter ", text, 40, 4, ctx);
         }
         Dialog::None => {}
     }
@@ -1465,6 +1664,7 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     log_lines,
+                    log_lines.len() as u64,
                     &mut app,
                     state,
                     &test_ctx,
@@ -1498,8 +1698,8 @@ mod golden_tests {
 
     /// [`snapshot`], at 70×20 — below
     /// [`thresholds::TWO_COLUMN_MIN_WIDTH`], so the one-column
-    /// fallback (orchestration/details/log stacked) is what gets
-    /// exercised.
+    /// fallback (issue #535: details/orchestration/log stacked, in
+    /// that order) is what gets exercised.
     #[allow(clippy::too_many_arguments)]
     fn snapshot_one_column(
         plan: &PlanTree,
@@ -1881,6 +2081,33 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Finding F6/M1: a selected, finished prompt at 120×40 -- the
+    /// `sent`/`received` blocks must land right after `path`/`type`,
+    /// before `plan`/the meta list, and each snippet must cap at
+    /// [`SNIPPET_MAX_LINES`] wrapped lines so both blocks stay on
+    /// screen together rather than one pushing the other past the
+    /// details pane's own golden-section height.
+    #[test]
+    fn full_layout_with_a_selected_finished_prompts_sent_received_blocks() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let long_prompt = "summarize the quarterly report and call out every risk factor you can find in the appendix tables, in plain prose, no bullet points";
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "the summary text", "meta": {"created_at": "t0", "completed_at": "t1", "adapter": "scripted", "prompt_sent": long_prompt, "tokens_sent_total": 120, "tokens_received_total": 340}},
+            "b": {"value": "ok\n", "meta": {"created_at": "t1", "completed_at": "t2", "provider": "shell"}}
+        }});
+        let text = snapshot_full_layout(
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            "cof",
+            "prime.a",
+            &[],
+        );
+        insta::assert_snapshot!(text);
+    }
+
     /// Finding F1: the two boundary sizes between the full layout and
     /// the one-column fallback, each exercising a different tier
     /// [`thresholds`] documents -- read alongside
@@ -1998,6 +2225,7 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     &[],
+                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -2130,6 +2358,7 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     &[],
+                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -2221,6 +2450,7 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     &[],
+                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -2294,6 +2524,7 @@ mod golden_tests {
                     &rendered,
                     Some(&details),
                     &[],
+                    0,
                     &mut app,
                     Some(&state),
                     &test_ctx,
@@ -2431,7 +2662,7 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], &mut app_t0, None, &ctx_t0, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app_t0, None, &ctx_t0, 0))
             .unwrap();
         let buffer_t0 = terminal.backend().buffer().clone();
         let (x, y) = find_row_cell(&buffer_t0);
@@ -2452,13 +2683,105 @@ mod highlight_tests {
         let backend2 = TestBackend::new(100, 24);
         let mut terminal2 = Terminal::new(backend2).unwrap();
         terminal2
-            .draw(|f| draw(f, &rendered, None, &[], &mut app_after, None, &ctx_after, 0))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    0,
+                    &mut app_after,
+                    None,
+                    &ctx_after,
+                    0,
+                )
+            })
             .unwrap();
         let buffer_after = terminal2.backend().buffer().clone();
         assert_eq!(
             buffer_after[(x, y)].bg,
             theme.background.unwrap(),
             "once the fade has ended, the cell reads the painted background, not the tint"
+        );
+    }
+
+    /// Finding 15: an explicit buffer test for the icon's own
+    /// narrow-terminal rule -- hidden below `TWO_COLUMN_MIN_WIDTH`
+    /// (80 columns), drawn at and above it.
+    #[test]
+    fn the_icon_is_hidden_below_eighty_columns_and_shown_at_it() {
+        let rendered = minimal_render_state();
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let tracker = Tracker::new();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let has_bezel_corner = |width: u16| -> bool {
+            let mut app = App::new(false);
+            let backend = TestBackend::new(width, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+                .unwrap();
+            terminal.backend().buffer()[(0, 0)].symbol() == "╭"
+        };
+        assert!(
+            !has_bezel_corner(79),
+            "below 80 columns, the icon must not draw"
+        );
+        assert!(has_bezel_corner(80), "at 80 columns, the icon must draw");
+    }
+
+    /// Finding 14: the token bar's own totals line must highlight on
+    /// `header:tokens` too, not only `tokenbar` -- a totals change
+    /// with no in-flight `TokenBar` change (an estimate or a running
+    /// count that happens to land the same either side) must not
+    /// leave this line dark.
+    #[test]
+    fn the_token_bar_totals_line_highlights_on_header_tokens_alone() {
+        let mut rendered = minimal_render_state();
+        rendered.header.tokens_sent = 120;
+        rendered.header.tokens_received = 340;
+        let theme = Theme::for_name(ThemeName::Dracula);
+        let mut tracker = Tracker::new();
+        let now = std::time::Instant::now();
+        tracker.mark("header:tokens", now);
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now,
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app = App::new(false);
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let needle: Vec<char> = "120".chars().collect();
+        let mut found = None;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let matches = needle.iter().enumerate().all(|(i, &c)| {
+                    x + (i as u16) < buffer.area.width
+                        && buffer[(x + i as u16, y)].symbol() == c.to_string()
+                });
+                if matches {
+                    found = Some((x, y));
+                }
+            }
+        }
+        let (x, y) = found.expect("the sent total \"120\" should appear in the token bar");
+        assert_ne!(
+            buffer[(x, y)].bg,
+            theme.background.unwrap(),
+            "header:tokens alone should still tint the totals line"
         );
     }
 
@@ -2483,10 +2806,41 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, theme.background.unwrap());
+    }
+
+    /// Finding 7: the base fill set only `bg`, so a named theme's
+    /// own `text` colour never actually painted anything -- a plain
+    /// cell (nothing drawn over it but the header block's borderless
+    /// fill) must read the theme's `text`, not the terminal's own
+    /// default foreground. `(80, 1)` is blank space inside the
+    /// header box, to the right of its own text -- `(0, 0)` is the
+    /// scope icon's own bezel corner now (issue #535), styled with
+    /// `icon_bezel`, not a plain untouched cell any more.
+    #[test]
+    fn a_named_theme_paints_the_default_text_colour_of_an_empty_cell() {
+        let rendered = minimal_render_state();
+        let theme = Theme::for_name(ThemeName::SolarizedLight);
+        let tracker = Tracker::new();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app = App::new(false);
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(80, 1)].symbol(), " ");
+        assert_eq!(buffer[(80, 1)].fg, theme.text);
     }
 
     #[test]
@@ -2505,7 +2859,7 @@ mod highlight_tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, None, &[], &mut app, None, &ctx, 0))
+            .draw(|f| draw(f, &rendered, None, &[], 0, &mut app, None, &ctx, 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);
