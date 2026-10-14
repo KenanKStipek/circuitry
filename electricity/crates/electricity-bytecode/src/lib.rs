@@ -28,6 +28,11 @@
 //! - [`refusal_text`] — [`refusal_text::format_refusal`]/
 //!   [`refusal_text::format_refused_child`]: the preview-marker text a
 //!   [`refusal::Refusal`] renders as, up front or mid-run.
+//! - [`plugin_names`] — [`plugin_names::PLUGIN_NAMES`]: every tool-plugin
+//!   name Circuitry itself recognizes, generated from
+//!   `plugins/factory.py::PLUGIN_REGISTRY` -- lives here so
+//!   [`refusal::first_unsupported`] can tell a known-but-unbuilt plugin
+//!   from one that is not a cof plugin at all (issue #511).
 //!
 //! # Which Python field lives where
 //!
@@ -81,6 +86,7 @@ pub mod effects;
 pub mod op;
 pub mod param;
 pub mod path;
+pub mod plugin_names;
 pub mod program;
 pub mod refusal;
 pub mod refusal_text;

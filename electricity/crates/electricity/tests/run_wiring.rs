@@ -890,3 +890,58 @@ async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker
     assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
     assert!(error.contains("comfyui"));
 }
+
+/// Issue #511: a `provider:` that is not a cof plugin at all is never
+/// refused by the walker (unlike the `comfyui` case just above, a
+/// Circuitry-known plugin this build has no builder for) -- it reaches
+/// preflight's own real "Unknown plugin" failure instead, the same as
+/// `cof run`, with the same `--out` (`runtime.last_run`, no `prime`)
+/// a real preflight failure always writes.
+#[tokio::test]
+async fn a_tool_naming_a_provider_that_is_not_a_cof_plugin_reaches_preflights_real_failure() {
+    let dir = temp_dir("unknown-tool-provider");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: x\n    provider: nonexistent_tool\n    params: {}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    let error = result.error.unwrap();
+    assert!(
+        !error.contains(electricity_bytecode::PREVIEW_MARKER),
+        "a genuinely unknown provider must never get the preview marker: {error}"
+    );
+    assert_eq!(
+        error,
+        "Preflight failed: tool:nonexistent_tool: not ready — Unknown plugin: \
+         'nonexistent_tool'. Supported plugins: \
+         7z, agent, awk, base64, clock, comfyui, csv, diff_patch, discord, dns, docker, \
+         email_smtp, embed, env_vars, exiftool, ffmpeg, fs, gcalendar, gdrive, gh, git, \
+         github, gpg, gzip, hash, hex, html_extract, http, imagemagick, jira, json, \
+         kubectl, linear, linter, math, mcp, mediainfo, notion, ocr, pandoc, pdf_extract, \
+         pdf_render, ping, playwright, port_check, process_list, pytest, python_eval, \
+         regex, rerank, ripgrep, rss, s3, screenshot, sed, service, shell, slack, \
+         surrealdb, system_info, tar, traceroute, uuid, validate_yaml, vector_search, \
+         weather, web_fetch, web_search, webhook, whois, wikipedia, xml, yt_dlp, zip. \
+         Check the 'provider' field on your tool effect.. Re-run with --skip-preflight \
+         to bypass."
+    );
+    let state = result
+        .state
+        .expect("a real preflight failure still writes --out, unlike a walker refusal");
+    let dict = state.as_dict().unwrap();
+    assert!(
+        dict.get(&electricity_value::Value::Str("prime".to_string()))
+            .is_none(),
+        "cof's own preflight failure writes runtime.last_run with no prime key"
+    );
+    assert!(
+        dict.get(&electricity_value::Value::Str("runtime".to_string()))
+            .is_some()
+    );
+}
