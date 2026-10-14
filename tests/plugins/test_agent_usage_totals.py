@@ -253,3 +253,34 @@ def test_a_named_loops_last_alias_does_not_double_count_its_final_pass(
     sent, received = _sum_tokens(result.state["prime"])
     assert sent == 3 * (5 + 11)
     assert received == 3 * (2 + 4)
+
+
+def test_an_effect_a_dynamic_names_last_still_counts() -> None:
+    """Only a loop node's `last` (next to its own `iter_<N>` passes) is an
+    alias of a pass: `last` is a legal effect name, and a dynamic's own
+    child of that name spends tokens like any other."""
+    state = {
+        "d": {
+            "value": None,
+            "meta": {},
+            "last": {"value": "x", "meta": {"tokens_sent": 5, "tokens_received": 7}},
+        }
+    }
+    assert _sum_tokens(state) == (5, 7)
+
+
+def test_a_loops_last_counts_once_even_as_a_copy_of_its_final_pass() -> None:
+    """The alias is skipped by position (next to `iter_<N>`), not by identity,
+    so a state whose `last` is a separate copy of the final pass counts that
+    pass once too."""
+    final_pass = {"step": {"value": "y", "meta": {"tokens_sent": 3, "tokens_received": 4}}}
+    state = {
+        "lp": {
+            "value": None,
+            "meta": {},
+            "iter_0": {"step": {"value": "x", "meta": {"tokens_sent": 1, "tokens_received": 2}}},
+            "iter_1": final_pass,
+            "last": {"step": {"value": "y", "meta": {"tokens_sent": 3, "tokens_received": 4}}},
+        }
+    }
+    assert _sum_tokens(state) == (4, 6)
