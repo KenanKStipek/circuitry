@@ -1,0 +1,18 @@
+prime.lp.iter_0.big.plan:
+- text: '{"say": "two chunks plus a merge", "chunks": [{"name": "a", "job": "do a"}, {"name": "b", "job": "do b"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"chunk a\"\n  - type: prompt\n    name: b\n    template: \"chunk b\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+prime.lp.iter_0.big.a:
+- text: chunk a result
+prime.lp.iter_0.big.b:
+- text: chunk b result
+prime.lp.iter_1.big.plan:
+- text: '{"say": "two chunks plus a merge", "chunks": [{"name": "a", "job": "do a"}, {"name": "b", "job": "do b"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"chunk a\"\n  - type: prompt\n    name: b\n    template: \"chunk b\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+prime.lp.iter_1.big.a:
+- text: chunk a result
+prime.lp.iter_1.big.b:
+- text: chunk b result
+prime.u.big.plan:
+- text: '{"say": "two chunks plus a merge", "chunks": [{"name": "a", "job": "do a"}, {"name": "b", "job": "do b"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"chunk a\"\n  - type: prompt\n    name: b\n    template: \"chunk b\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+prime.u.big.a:
+- text: chunk a result
+prime.u.big.b:
+- text: chunk b result

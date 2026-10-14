@@ -1,0 +1,12 @@
+prime.bad_allowlist.plan:
+- text: '{"say": "two chunks, but the yaml only has one effect", "chunks": [{"name": "a", "job": "do a"}, {"name": "b", "job": "do b"}], "yaml": "effects:\n  - type: tool\n    name: fingerprint\n    provider: hash\n    params: {algorithm: sha256, input: \"x\"}\n"}'
+prime.bad_allowlist:
+- text: bad_allowlist routed up
+prime.bad_chunks.plan:
+- &id001
+  text: '{"say": "just one chunk", "chunks": [{"name": "merge", "job": "do everything"}], "yaml": "effects:\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+- *id001
+- *id001
+- *id001
+prime.bad_chunks:
+- text: bad_chunks routed up

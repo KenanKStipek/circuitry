@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 4: decomposition route-up at the depth ceiling",
+  "description": "Routing on, the score in a low band, max_depth: 0: route_up, reason: max_depth, no error, dispatch on the catch-all (meta.model and fallback_attempts[0].model), model_reason stays \"router\", no planner reply consumed. A prompt with its own model: runs as is instead, model_reason: \"explicit\".",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

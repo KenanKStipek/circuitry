@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 2: a successful decomposition",
+  "description": "max_depth: 1; one valid plan reply at prime.big.plan; chunk and merge replies at prime.big.*, with tokens; a downstream json tool reads {{prime.big.value}}. Pins meta.decomposition, the merged value, fallback_attempts/tokens_* staying from the pre-dispatch block, the event order, and last_run.totals.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

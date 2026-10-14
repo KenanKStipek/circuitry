@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 9: on_failure: fail with on_error: continue",
+  "description": "An invalid plan (no top-level merge effect) under on_failure: fail, with on_error: continue absorbing it: outcome: failed and fallback_model: null; meta.error is \"decomposition of 'big' failed (invalid_plan): ...\"; fallback_attempts: [] and no retries_used.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

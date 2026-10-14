@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 7: planner_failed, three ways",
+  "description": "planner_failed three ways, each running as is (no routing configured): a reply missing yaml (raw_payload is the reply); a 2,500-character non-JSON reply (JSON schema validation failed: model returned None..., raw_payload uncapped); a scripted server_error (no raw_payload). Each logs the planner WARNING.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

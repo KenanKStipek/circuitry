@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 12: a chunk whose own plan re-emits the parent's plan is a cycle",
+  "description": "max_depth: 2, with the threshold tuned so only big and chunk a cross it. a's own planner (prime.big.a.plan) re-emits the parent's exact plan text -> cycle -> a runs as is. Pins the child WARNING for 'a', the prime.big.a.* events, and that the parent (big) still decomposes.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

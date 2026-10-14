@@ -1,0 +1,13 @@
+name: decompose-planner-failed
+adapter: scripted
+model: m
+effects:
+- type: prompt
+  name: missing_yaml
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+- type: prompt
+  name: non_json
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+- type: prompt
+  name: server_error_case
+  template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.

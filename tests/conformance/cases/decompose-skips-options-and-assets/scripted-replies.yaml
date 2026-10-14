@@ -1,0 +1,12 @@
+prime.a.plan:
+- text: '{"say": "two chunks plus a merge", "chunks": [{"name": "x", "job": "do x"}, {"name": "y", "job": "do y"}], "yaml": "effects:\n  - type: prompt\n    name: x\n    template: \"chunk x\"\n  - type: prompt\n    name: y\n    template: \"chunk y\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+prime.a.x:
+- text: chunk x result
+prime.a.y:
+- text: chunk y result
+prime.b.plan:
+- text: '{"say": "two chunks, no merge", "chunks": [{"name": "p", "job": "do p"}, {"name": "q", "job": "do q"}], "yaml": "effects:\n  - type: prompt\n    name: p\n    template: \"chunk p\"\n  - type: prompt\n    name: q\n    template: \"chunk q\"\n"}'
+prime.b:
+- text: b ran as is
+prime.c.plan:
+- text: '{"say": "two chunks, no merge", "chunks": [{"name": "p", "job": "do p"}, {"name": "q", "job": "do q"}], "yaml": "effects:\n  - type: prompt\n    name: p\n    template: \"chunk p\"\n  - type: prompt\n    name: q\n    template: \"chunk q\"\n"}'

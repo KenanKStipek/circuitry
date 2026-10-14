@@ -1,0 +1,15 @@
+prime.chunk_fails.plan:
+- text: '{"say": "two chunks plus a merge", "chunks": [{"name": "x", "job": "do x"}, {"name": "y", "job": "do y"}], "yaml": "effects:\n  - type: prompt\n    name: x\n    template: \"chunk x\"\n  - type: prompt\n    name: y\n    template: \"chunk y\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''\"merged\"''}\n"}'
+prime.chunk_fails.x:
+- error:
+    kind: server_error
+prime.chunk_fails:
+- text: chunk_fails ran as is
+prime.merge_null.plan:
+- text: '{"say": "two chunks plus a merge that yields null", "chunks": [{"name": "a", "job": "do a"}, {"name": "b", "job": "do b"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"chunk a\"\n  - type: prompt\n    name: b\n    template: \"chunk b\"\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: ''null''}\n"}'
+prime.merge_null.a:
+- text: chunk a result
+prime.merge_null.b:
+- text: chunk b result
+prime.merge_null:
+- text: merge_null ran as is

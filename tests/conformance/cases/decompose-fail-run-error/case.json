@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #522 acceptance case 10: decomposition on_failure: fail propagates as the run's own failure",
+  "description": "expect: failure, error_compare: exact. An invalid plan (no top-level merge effect) under on_failure: fail, with the default on_error: fail: the run fails with \"prime.big: decomposition of 'big' failed (invalid_plan): ...\", plus expected.out.json.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

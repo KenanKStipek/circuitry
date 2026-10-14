@@ -1,20 +1,29 @@
-//! Decomposition's pure helpers (`core/decompose.py`), issue #521
-//! (M1 lane L2a of #448). This file ports every part of runtime
-//! decomposition that needs no `prompt`-effect wiring: the route-up
-//! model, the planner's input/output shapes, `_validate_plan`, the
-//! `meta.decomposition` record builders, the plan's identity and
-//! cycle text, and the decomposition child's seed state.
-//!
-//! Every function here is `pub` so nothing is dead code before lane
-//! L2b (#522) -- which needs them unchanged -- calls them from the
-//! `prompt` effect. Nothing in this crate calls them yet.
+//! Runtime decomposition (`core/decompose.py`) -- issue #521 (M1 lane
+//! L2a of #448) ported every pure part that needs no `prompt`-effect
+//! wiring: the route-up model, the planner's input/output shapes,
+//! `_validate_plan`, the `meta.decomposition` record builders, the
+//! plan's identity and cycle text, and the decomposition child's seed
+//! state. [`maybe_decompose`] (issue #522, lane L2b) is the call-site
+//! wiring: `exec::prompt::execute_prompt` calls it once, right after
+//! the retry policy is resolved and before `build_options`, and acts
+//! on whichever of [`Posture`]'s three cases comes back.
 //!
 //! `_check_capability_ceiling` (`core/decompose.py:582-607`) is not
 //! ported (#448's Settled question 9): electricity never installs a
 //! capability ceiling, so that check is always `[]` here, and
 //! [`validate_plan`] never calls an equivalent of it at all.
 
-use crate::exec::use_::{allowlist_names, resolve_dot_path, sha256_hex, validate_inline_yaml};
+use std::rc::Rc;
+
+use crate::exec::prompt::prompt_type_str;
+use crate::exec::use_::{
+    allowlist_names, resolve_dot_path, run_isolated, sha256_hex, validate_inline_yaml,
+};
+use crate::exec::{CtxChain, live_ctx};
+use crate::{CancellationToken, Frame, RunContext, RunObserver, Store, VmError};
+use electricity_bytecode::effects::{PromptContent, PromptOp};
+use electricity_bytecode::{EffectPath, Op, first_unsupported};
+use electricity_compiler::DocumentOrigin;
 use electricity_config::{ComplexitySettings, DecompositionSettings};
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
@@ -557,6 +566,377 @@ pub fn child_seed_state(ctx: &Value, result_path: &str) -> Value {
 /// (`:729-734`).
 pub fn missing_result_error(result_path: &str) -> String {
     format!("the decomposition child completed but left nothing at result_path '{result_path}'")
+}
+
+/// `core/prompt.py:1066`'s own `self.defn.template or prompt_sent` --
+/// the raw, un-rendered template source the emitted plan can
+/// re-declare `{{...}}` references from, for a `template:` prompt;
+/// *prompt_sent* (already materialized, self-contained) for a
+/// `messages:` prompt, which has no single template, or an empty
+/// `template:` (Python's `or` is falsy on `""` too).
+fn planner_source_template<'a>(prompt: &'a PromptOp, prompt_sent: &'a str) -> &'a str {
+    match &prompt.content {
+        PromptContent::Template(text) if !text.source.is_empty() => &text.source,
+        _ => prompt_sent,
+    }
+}
+
+/// The numeric `score` `core/prompt.py::_maybe_decompose` reads out of
+/// the pre-dispatch `meta.complexity` block before ever calling into
+/// this module -- `None` when scoring is off, scoring itself failed,
+/// or (defensively) the key is present but not a number, matching
+/// Python's own `isinstance(score, (int, float))` guard.
+fn complexity_score(complexity_meta: Option<&Value>) -> Option<f64> {
+    let score = complexity_meta?
+        .as_dict()?
+        .get(&Value::Str("score".to_string()))?;
+    match score {
+        Value::Float(f) => Some(*f),
+        Value::Int(electricity_value::IntValue::Small(n)) => Some(*n as f64),
+        _ => None,
+    }
+}
+
+/// `core/decompose.py::_rejected_payload_text`'s own chain walk has no
+/// equivalent here: a [`VmError`] carries no exception chain of its
+/// own, only a *cause* that survives a chain/tree wrap unchanged
+/// (`exec::wrap_effect_error`'s own doc comment) -- so recovering the
+/// planner's rejected reply text is just reading whatever *cause* the
+/// error already carries, if any.
+fn rejected_payload_text(err: &VmError) -> Option<String> {
+    match err {
+        VmError::Raised {
+            cause: electricity_tools::ErrorCause::SchemaRejected { raw_response_text },
+            ..
+        } => Some(raw_response_text.clone()),
+        _ => None,
+    }
+}
+
+/// The planner's and the plan's own `Frame`, one level deeper than the
+/// triggering prompt's -- `Frame::nested` doesn't apply
+/// `with_display_depth` itself (callers chain it, same convention `use`
+/// children already follow), so this helper does both steps for
+/// either child. No `push_use`: only the plan's own frame needs one
+/// (issue #522's Settled question 6's cycle guard), chained onto this
+/// helper's result by the one caller that needs it.
+fn child_frame(frame: &Frame, op_path: &EffectPath) -> Frame {
+    frame
+        .nested(op_path)
+        .with_display_depth(crate::complexity::depth::use_child_root(
+            frame.display_depth(),
+        ))
+}
+
+/// The planner's and the plan's own `RunContext` -- the caller's own,
+/// except always unlocked (`core/decompose.py::_run_isolated`'s own
+/// `DynamicRuntime(model_locked=False)` default, issue #522's Settled
+/// question 2) and never a dry run, with *complexity*/*decomposition_depth*
+/// and the child program's own declared-prompts/effect-names tables
+/// supplied by the one caller that knows which child this is (the
+/// planner keeps the run's own `decomposition_depth` unchanged; the
+/// plan increments it, issue #522's own Scope section 2 steps 4/7).
+fn child_run_ctx<'a>(
+    run_ctx: &RunContext<'a>,
+    complexity: &'a ComplexitySettings,
+    decomposition_depth: u32,
+    declared_prompts: &'a indexmap::IndexMap<String, String>,
+    effect_names: &'a std::collections::BTreeSet<String>,
+) -> RunContext<'a> {
+    RunContext {
+        registry: run_ctx.registry,
+        limiter: run_ctx.limiter,
+        model: run_ctx.model,
+        adapter: run_ctx.adapter,
+        runtime_config: run_ctx.runtime_config,
+        dry_run: false,
+        armed: run_ctx.armed,
+        adapters: run_ctx.adapters,
+        default_adapter: Rc::clone(&run_ctx.default_adapter),
+        model_locked: false,
+        adapter_timeout_seconds: run_ctx.adapter_timeout_seconds,
+        complexity,
+        decomposition_depth,
+        orchestration_dir: run_ctx.orchestration_dir,
+        declared_prompts,
+        effect_names,
+        supported: run_ctx.supported,
+    }
+}
+
+/// `core/prompt.py::_maybe_decompose` + `core/decompose.py::
+/// maybe_decompose`, merged into this one call site (issue #522,
+/// M1-L2b): `exec::prompt::execute_prompt` calls this once, right
+/// after the retry policy is resolved and before `build_options`. See
+/// this module's own doc comment for *why* there, and issue #522's own
+/// Scope section 2 for the step-by-step this function follows. `Ok(None)`
+/// means decomposition did not trigger at all (the caller dispatches
+/// unchanged); `Err` only ever carries a fatal [`VmError`]
+/// (`VmError::is_fatal`) -- a cancellation, or Settled question 6's own
+/// refused-plan case -- which the caller returns unchanged, writing
+/// nothing more.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn maybe_decompose(
+    op: &Op,
+    prompt: &PromptOp,
+    complexity_meta: Option<&Value>,
+    prompt_sent: &str,
+    render_chain: &CtxChain,
+    store: &Store,
+    frame: &Frame,
+    run_ctx: &RunContext<'_>,
+    observer: &dyn RunObserver,
+    token: &CancellationToken,
+) -> Result<Option<DecompositionResult>, VmError> {
+    let name = op.name.as_deref().unwrap_or("");
+    let settings = run_ctx.complexity;
+    let dset = &settings.decomposition;
+
+    if !dset.enabled {
+        return Ok(None);
+    }
+    let Some(score) = complexity_score(complexity_meta) else {
+        return Ok(None);
+    };
+    if score <= dset.threshold {
+        return Ok(None);
+    }
+
+    let depth = run_ctx.decomposition_depth;
+    let fallback = route_up_model(settings, prompt.model.as_deref());
+    let mut base = base_meta(score, dset, depth);
+
+    if i64::from(depth) >= dset.max_depth {
+        return Ok(Some(max_depth_result(base, fallback)));
+    }
+
+    let planner_warning = || {
+        log::warn!(
+            "Decomposition planner failed for prompt {}",
+            Value::Str(name.to_string()).py_repr()
+        );
+    };
+    let child_warning = || {
+        log::warn!(
+            "Decomposition child failed for prompt {}",
+            Value::Str(name.to_string()).py_repr()
+        );
+    };
+
+    // -- Plan: the synced planner runs isolated, decomposition off,
+    // scoring/routing left as configured. --
+    let parsed_planner = electricity_yaml::load_yaml(PLANNER_YAML).expect(
+        "PLANNER_YAML is a build-time constant, already pinned to parse by this module's own tests",
+    );
+    let planner_program =
+        electricity_compiler::compile_document(&parsed_planner, &DocumentOrigin::Generated).expect(
+            "PLANNER_YAML is a build-time constant, already pinned to compile by this module's own tests",
+        );
+
+    let planner_ctx = live_ctx(render_chain, store);
+    let planner_initial_state = match planner_input(
+        planner_source_template(prompt, prompt_sent),
+        &planner_ctx,
+        prompt_type_str(prompt.prompt_type),
+        prompt.schema.as_ref(),
+        dset.max_chunks,
+    ) {
+        Ok(state) => state,
+        Err(err) => {
+            planner_warning();
+            return Ok(Some(failure_result(
+                base,
+                dset,
+                "planner_failed",
+                err.to_string(),
+                fallback,
+                None,
+            )));
+        }
+    };
+
+    let planner_settings_value = planner_settings(settings);
+    let planner_frame = child_frame(frame, &op.path);
+    let planner_run_ctx = child_run_ctx(
+        run_ctx,
+        &planner_settings_value,
+        run_ctx.decomposition_depth,
+        &planner_program.prompts,
+        &planner_program.effect_names,
+    );
+
+    let planner_store = match run_isolated(
+        &planner_program,
+        planner_initial_state,
+        &planner_frame,
+        &planner_run_ctx,
+        observer,
+        token,
+    )
+    .await
+    {
+        Err(err) if err.is_fatal() => return Err(err),
+        Err(err) => {
+            planner_warning();
+            let raw_payload = rejected_payload_text(&err);
+            return Ok(Some(failure_result(
+                base,
+                dset,
+                "planner_failed",
+                err.to_string(),
+                fallback,
+                raw_payload,
+            )));
+        }
+        Ok(store) => store,
+    };
+
+    let plan = read_plan(&planner_store.snapshot(&planner_store.root));
+    with_plan(&mut base, &plan);
+
+    // -- Validate. --
+    let problems = validate_plan(&plan, dset.max_chunks, run_ctx.runtime_config);
+    if !problems.is_empty() {
+        return Ok(Some(failure_result(
+            base,
+            dset,
+            "invalid_plan",
+            problems.join("; "),
+            fallback,
+            None,
+        )));
+    }
+
+    // -- Execute. --
+    let yaml_text = plan.yaml.clone().unwrap_or_default();
+    let parsed = match electricity_yaml::load_yaml_last_key_wins(&yaml_text) {
+        Ok(value) => value,
+        Err(err) => {
+            child_warning();
+            return Ok(Some(failure_result(
+                base,
+                dset,
+                "execution_failed",
+                err.to_string(),
+                fallback,
+                None,
+            )));
+        }
+    };
+    if parsed.as_dict().is_none() {
+        child_warning();
+        return Ok(Some(failure_result(
+            base,
+            dset,
+            "execution_failed",
+            "the emitted orchestration is not a YAML mapping".to_string(),
+            fallback,
+            None,
+        )));
+    }
+
+    let identity = plan_identity(&yaml_text);
+    if let Some(message) = cycle_error(name, frame.use_call_stack(), &identity) {
+        child_warning();
+        return Ok(Some(failure_result(
+            base,
+            dset,
+            "execution_failed",
+            message,
+            fallback,
+            None,
+        )));
+    }
+
+    let plan_program =
+        match electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated) {
+            Ok(program) => program,
+            Err(err) => {
+                child_warning();
+                return Ok(Some(failure_result(
+                    base,
+                    dset,
+                    "execution_failed",
+                    err.0,
+                    fallback,
+                    None,
+                )));
+            }
+        };
+
+    // Settled question 6: a plan whose content this build can't run is
+    // a fatal, unrecorded refusal -- never `execution_failed`, never
+    // absorbed by `on_error`/`on_failure`, nothing written to
+    // `meta.decomposition` at all. Checked before anything below ever
+    // touches *base* again.
+    if let Some(refusal) = first_unsupported(&plan_program, false, &run_ctx.supported) {
+        return Err(VmError::Refused {
+            refusal,
+            child_label: Some(format!("decomposition plan of '{name}'")),
+        });
+    }
+
+    let seed_ctx = live_ctx(render_chain, store);
+    let seed_state = child_seed_state(&seed_ctx, &plan.result_path);
+
+    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    let plan_run_ctx = child_run_ctx(
+        run_ctx,
+        run_ctx.complexity,
+        depth + 1,
+        &plan_program.prompts,
+        &plan_program.effect_names,
+    );
+
+    let child_store = match run_isolated(
+        &plan_program,
+        seed_state,
+        &plan_frame,
+        &plan_run_ctx,
+        observer,
+        token,
+    )
+    .await
+    {
+        Err(VmError::Refused {
+            refusal,
+            child_label,
+        }) => {
+            return Err(VmError::Refused {
+                refusal,
+                child_label: child_label
+                    .or_else(|| Some(format!("decomposition plan of '{name}'"))),
+            });
+        }
+        Err(err) if err.is_fatal() => return Err(err),
+        Err(err) => {
+            child_warning();
+            return Ok(Some(failure_result(
+                base,
+                dset,
+                "execution_failed",
+                err.to_string(),
+                fallback,
+                None,
+            )));
+        }
+        Ok(store) => store,
+    };
+
+    let value = resolve_dot_path(&child_store.snapshot(&child_store.root), &plan.result_path);
+    if matches!(value, Value::None) {
+        child_warning();
+        return Ok(Some(failure_result(
+            base,
+            dset,
+            "execution_failed",
+            missing_result_error(&plan.result_path),
+            fallback,
+            None,
+        )));
+    }
+
+    Ok(Some(success_result(base, value)))
 }
 
 #[cfg(test)]
@@ -1164,5 +1544,247 @@ mod tests {
             missing_result_error("prime.merge.value"),
             "the decomposition child completed but left nothing at result_path 'prime.merge.value'"
         );
+    }
+
+    #[test]
+    fn complexity_score_reads_a_float_or_small_int_score_key() {
+        let meta = dict(vec![("score", Value::Float(12.5))]);
+        assert_eq!(complexity_score(Some(&meta)), Some(12.5));
+        let meta = dict(vec![("score", Value::from(7i64))]);
+        assert_eq!(complexity_score(Some(&meta)), Some(7.0));
+    }
+
+    #[test]
+    fn complexity_score_is_none_without_a_numeric_score() {
+        assert_eq!(complexity_score(None), None);
+        let meta = dict(vec![("no_score", Value::Float(1.0))]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        let meta = dict(vec![("score", Value::Str("nope".to_string()))]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        let meta = dict(vec![("score", Value::None)]);
+        assert_eq!(complexity_score(Some(&meta)), None);
+        assert_eq!(complexity_score(Some(&Value::None)), None);
+    }
+
+    fn template_op(source: &str) -> PromptOp {
+        PromptOp {
+            content: PromptContent::Template(electricity_bytecode::template::TemplateText::new(
+                source,
+                true,
+                electricity_bytecode::template::Escape::None,
+            )),
+            prompt_type: electricity_bytecode::effects::PromptType::Text,
+            schema: None,
+            model: None,
+            provider: None,
+            provider_fallbacks: Vec::new(),
+            routing_override: None,
+            model_params: None,
+            timeout_ms: None,
+            deterministic: false,
+            inputs: None,
+            assets: Vec::new(),
+            retries: None,
+            description: None,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn planner_source_template_prefers_the_raw_template_source() {
+        let op = template_op("hi {{input.topic}}");
+        assert_eq!(
+            planner_source_template(&op, "hi topic-rendered"),
+            "hi {{input.topic}}"
+        );
+    }
+
+    #[test]
+    fn planner_source_template_falls_back_to_prompt_sent_when_the_template_is_empty() {
+        let op = template_op("");
+        assert_eq!(planner_source_template(&op, "materialized"), "materialized");
+    }
+
+    #[test]
+    fn planner_source_template_falls_back_to_prompt_sent_for_a_messages_prompt() {
+        let mut op = template_op("unused");
+        op.content = PromptContent::Messages(Vec::new());
+        assert_eq!(planner_source_template(&op, "materialized"), "materialized");
+    }
+
+    #[test]
+    fn rejected_payload_text_reads_the_schema_rejected_cause() {
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::SchemaValidationError,
+            message: "bad".to_string(),
+            cause: electricity_tools::ErrorCause::SchemaRejected {
+                raw_response_text: "the whole rejected reply".to_string(),
+            },
+            cause_class: None,
+        };
+        assert_eq!(
+            rejected_payload_text(&err),
+            Some("the whole rejected reply".to_string())
+        );
+    }
+
+    #[test]
+    fn rejected_payload_text_is_none_without_that_cause() {
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: "boom".to_string(),
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        };
+        assert_eq!(rejected_payload_text(&err), None);
+        assert_eq!(rejected_payload_text(&VmError::Cancelled), None);
+    }
+
+    #[test]
+    fn rejected_payload_text_survives_a_wrap_since_cause_passes_through_unchanged() {
+        // `exec::wrap_effect_error` rewrites `py_class` to `RuntimeError`
+        // and sets `cause_class`, but never touches `cause` itself --
+        // the same shape a chain/tree wrap of the planner's own
+        // rejected reply would carry.
+        let err = VmError::Raised {
+            py_class: electricity_tools::PyExc::RuntimeError,
+            message: "prime.plan: bad".to_string(),
+            cause: electricity_tools::ErrorCause::SchemaRejected {
+                raw_response_text: "still here after a wrap".to_string(),
+            },
+            cause_class: Some(electricity_tools::PyExc::SchemaValidationError),
+        };
+        assert_eq!(
+            rejected_payload_text(&err),
+            Some("still here after a wrap".to_string())
+        );
+    }
+
+    fn minimal_run_ctx_parts() -> (
+        electricity_tools::ToolRegistry,
+        crate::Limiter,
+        Value,
+        crate::adapter::AdapterRegistry,
+        std::path::PathBuf,
+        indexmap::IndexMap<String, String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        (
+            electricity_tools::ToolRegistry::new(),
+            crate::Limiter::new(),
+            Value::None,
+            crate::adapter::AdapterRegistry::new(),
+            std::path::PathBuf::from("."),
+            indexmap::IndexMap::new(),
+            std::collections::BTreeSet::new(),
+        )
+    }
+
+    #[test]
+    fn child_run_ctx_is_unlocked_and_never_a_dry_run_whatever_the_caller_was() {
+        // `_run_isolated`'s own `DynamicRuntime(model_locked=False)`
+        // default (issue #522's Settled question 2) -- even a caller
+        // locked by a profile's run-level `model:`, mid-dry-run, hands
+        // the planner/plan an unlocked, non-dry-run context.
+        let (registry, limiter, runtime_config, adapters, dir, prompts, names) =
+            minimal_run_ctx_parts();
+        let complexity = ComplexitySettings::default();
+        let caller = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: true,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: true,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 3,
+            orchestration_dir: &dir,
+            declared_prompts: &prompts,
+            effect_names: &names,
+            supported: electricity_bytecode::Supported::current(&[]),
+        };
+        let child_complexity = ComplexitySettings::default();
+        let child = child_run_ctx(
+            &caller,
+            &child_complexity,
+            caller.decomposition_depth,
+            &prompts,
+            &names,
+        );
+        assert!(!child.model_locked);
+        assert!(!child.dry_run);
+        // Every other field is the caller's own, unchanged.
+        assert_eq!(child.model, "m");
+        assert_eq!(child.adapter_timeout_seconds, 120);
+    }
+
+    #[test]
+    fn child_run_ctx_takes_the_decomposition_depth_the_caller_passes_in() {
+        // The planner keeps the run's own depth unchanged; the plan
+        // increments it (issue #522's own Scope section 2 steps 4/7) --
+        // this helper just takes whatever the caller computed, so both
+        // calls go through the one assertion here.
+        let (registry, limiter, runtime_config, adapters, dir, prompts, names) =
+            minimal_run_ctx_parts();
+        let complexity = ComplexitySettings::default();
+        let caller = RunContext {
+            registry: &registry,
+            limiter: &limiter,
+            model: "m",
+            adapter: "_noop",
+            runtime_config: &runtime_config,
+            dry_run: false,
+            armed: false,
+            adapters: &adapters,
+            default_adapter: Rc::new(crate::adapter::NoopAdapter),
+            model_locked: false,
+            adapter_timeout_seconds: 120,
+            complexity: &complexity,
+            decomposition_depth: 5,
+            orchestration_dir: &dir,
+            declared_prompts: &prompts,
+            effect_names: &names,
+            supported: electricity_bytecode::Supported::current(&[]),
+        };
+        let planner_child = child_run_ctx(
+            &caller,
+            &complexity,
+            caller.decomposition_depth,
+            &prompts,
+            &names,
+        );
+        assert_eq!(planner_child.decomposition_depth, 5);
+        let plan_child = child_run_ctx(
+            &caller,
+            &complexity,
+            caller.decomposition_depth + 1,
+            &prompts,
+            &names,
+        );
+        assert_eq!(plan_child.decomposition_depth, 6);
+    }
+
+    #[test]
+    fn child_frame_bumps_display_depth_by_one_and_composes_the_path() {
+        let frame = Frame::root().with_display_depth(2);
+        let op_path = electricity_bytecode::EffectPath::root().push_name("big");
+        let child = child_frame(&frame, &op_path);
+        assert_eq!(child.display_depth(), 3);
+        assert_eq!(child.use_call_stack(), frame.use_call_stack());
+    }
+
+    #[test]
+    fn only_the_plans_own_frame_pushes_a_use_call_stack_entry() {
+        let frame = Frame::root();
+        let op_path = electricity_bytecode::EffectPath::root().push_name("big");
+        let planner_frame = child_frame(&frame, &op_path);
+        assert!(planner_frame.use_call_stack().is_empty());
+        let plan_frame = child_frame(&frame, &op_path).push_use("inline:abc".to_string());
+        assert_eq!(plan_frame.use_call_stack(), &["inline:abc".to_string()]);
     }
 }

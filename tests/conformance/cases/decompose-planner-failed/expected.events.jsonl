@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-10-13T21:42:51.723Z","ev":"run_start","run_id":"2b67a14c-b281-4847-9fc2-b31fbcd8a26a","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":66379}
+{"v":1,"seq":1,"ts":"2026-10-13T21:42:51.726Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T21:42:51.727Z","ev":"start","id":1,"path":"prime.missing_yaml"}
+{"v":1,"seq":3,"ts":"2026-10-13T21:42:51.751Z","ev":"start","id":2,"path":"prime.missing_yaml.plan"}
+{"v":1,"seq":4,"ts":"2026-10-13T21:42:51.753Z","ev":"end","id":2,"path":"prime.missing_yaml.plan","ok":false,"ms":3,"error":"Schema validation failed: 'yaml' is a required property"}
+{"v":1,"seq":5,"ts":"2026-10-13T21:42:51.755Z","ev":"end","id":1,"path":"prime.missing_yaml","ok":true,"ms":28}
+{"v":1,"seq":6,"ts":"2026-10-13T21:42:51.756Z","ev":"start","id":3,"path":"prime.non_json"}
+{"v":1,"seq":7,"ts":"2026-10-13T21:42:51.775Z","ev":"start","id":4,"path":"prime.non_json.plan"}
+{"v":1,"seq":8,"ts":"2026-10-13T21:42:51.775Z","ev":"end","id":4,"path":"prime.non_json.plan","ok":false,"ms":0,"error":"JSON schema validation failed: model returned None (JSON could not be parsed). Check the model's response format."}
+{"v":1,"seq":9,"ts":"2026-10-13T21:42:51.776Z","ev":"end","id":3,"path":"prime.non_json","ok":true,"ms":20}
+{"v":1,"seq":10,"ts":"2026-10-13T21:42:51.776Z","ev":"start","id":5,"path":"prime.server_error_case"}
+{"v":1,"seq":11,"ts":"2026-10-13T21:42:51.795Z","ev":"start","id":6,"path":"prime.server_error_case.plan"}
+{"v":1,"seq":12,"ts":"2026-10-13T21:42:51.795Z","ev":"end","id":6,"path":"prime.server_error_case.plan","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.server_error_case.plan'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":13,"ts":"2026-10-13T21:42:51.796Z","ev":"end","id":5,"path":"prime.server_error_case","ok":true,"ms":20}
+{"v":1,"seq":14,"ts":"2026-10-13T21:42:51.796Z","ev":"end","id":0,"path":"prime","ok":true,"ms":70}
+{"v":1,"seq":15,"ts":"2026-10-13T21:42:51.796Z","ev":"run_end","ok":true}

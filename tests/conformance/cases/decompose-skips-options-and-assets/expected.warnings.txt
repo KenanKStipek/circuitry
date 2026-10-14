@@ -1,0 +1,1 @@
+WARNING: prompt 'b': asset kind 'file' is not sent to any adapter; only images are (notes.txt)

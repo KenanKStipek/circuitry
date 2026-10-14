@@ -1,0 +1,14 @@
+prime.big.plan:
+- text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.a:
+- text: chunk a result
+  tokens_sent: 11
+  tokens_received: 13
+prime.big.b:
+- text: chunk b result
+  tokens_sent: 17
+  tokens_received: 19
+prime.big.merge:
+- text: merged result
+  tokens_sent: 23
+  tokens_received: 29

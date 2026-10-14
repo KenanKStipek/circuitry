@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 6: invalid_plan, two ways",
+  "description": "enabled_tools: [json, validate_yaml], routing on. bad_allowlist's plan lacks merge and names provider: hash -- both problems joined with '; ', then route-up. bad_chunks gets a one-chunk plan four times: the planner repairs three times, its loop's own WARNING line appears, four plan/check event pairs, the done-gate and chunk-count problems, chunk_count: 1.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

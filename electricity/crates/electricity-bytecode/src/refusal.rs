@@ -303,7 +303,7 @@ impl<'a> Supported<'a> {
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
-            decomposition: false,
+            decomposition: true,
             providers,
         }
     }
@@ -585,11 +585,13 @@ mod tests {
         // lane K2 (#448, #516): `complexity` is `true` now -- asserted
         // directly rather than against `m0.complexity` (always
         // `false`), the one field this lane's own PR flips.
-        // `decomposition` (L2b's own flag, #522) stays unflipped, same
-        // as `m0.decomposition`.
         assert!(current.complexity);
         assert!(!m0.complexity);
-        assert_eq!(current.decomposition, m0.decomposition);
+        // lane L2b (#448, #522): `decomposition` is `true` now --
+        // asserted directly rather than against `m0.decomposition`
+        // (always `false`), the one field this lane's own PR flips.
+        assert!(current.decomposition);
+        assert!(!m0.decomposition);
     }
 
     fn tool_op(params: ParamNode) -> ToolOp {

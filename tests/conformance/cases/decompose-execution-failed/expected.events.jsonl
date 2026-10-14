@@ -1,0 +1,32 @@
+{"v":1,"seq":0,"ts":"2026-10-13T21:43:59.285Z","ev":"run_start","run_id":"90571140-b050-4e5f-879b-2c00e5ab25c5","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":67307}
+{"v":1,"seq":1,"ts":"2026-10-13T21:43:59.288Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-13T21:43:59.289Z","ev":"start","id":1,"path":"prime.chunk_fails"}
+{"v":1,"seq":3,"ts":"2026-10-13T21:43:59.312Z","ev":"start","id":2,"path":"prime.chunk_fails.plan"}
+{"v":1,"seq":4,"ts":"2026-10-13T21:43:59.314Z","ev":"end","id":2,"path":"prime.chunk_fails.plan","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-10-13T21:43:59.314Z","ev":"start","id":3,"path":"prime.chunk_fails.check"}
+{"v":1,"seq":6,"ts":"2026-10-13T21:43:59.315Z","ev":"end","id":3,"path":"prime.chunk_fails.check","ok":true,"ms":1}
+{"v":1,"seq":7,"ts":"2026-10-13T21:43:59.316Z","ev":"start","id":4,"path":"prime.chunk_fails.result_path"}
+{"v":1,"seq":8,"ts":"2026-10-13T21:43:59.316Z","ev":"end","id":4,"path":"prime.chunk_fails.result_path","ok":true,"ms":0}
+{"v":1,"seq":9,"ts":"2026-10-13T21:43:59.316Z","ev":"start","id":5,"path":"prime.chunk_fails.done"}
+{"v":1,"seq":10,"ts":"2026-10-13T21:43:59.316Z","ev":"end","id":5,"path":"prime.chunk_fails.done","ok":true,"ms":0}
+{"v":1,"seq":11,"ts":"2026-10-13T21:43:59.319Z","ev":"start","id":6,"path":"prime.chunk_fails.x"}
+{"v":1,"seq":12,"ts":"2026-10-13T21:43:59.319Z","ev":"end","id":6,"path":"prime.chunk_fails.x","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: server_error at 'prime.chunk_fails.x'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":13,"ts":"2026-10-13T21:43:59.321Z","ev":"end","id":1,"path":"prime.chunk_fails","ok":true,"ms":32}
+{"v":1,"seq":14,"ts":"2026-10-13T21:43:59.321Z","ev":"start","id":7,"path":"prime.merge_null"}
+{"v":1,"seq":15,"ts":"2026-10-13T21:43:59.340Z","ev":"start","id":8,"path":"prime.merge_null.plan"}
+{"v":1,"seq":16,"ts":"2026-10-13T21:43:59.341Z","ev":"end","id":8,"path":"prime.merge_null.plan","ok":true,"ms":1}
+{"v":1,"seq":17,"ts":"2026-10-13T21:43:59.341Z","ev":"start","id":9,"path":"prime.merge_null.check"}
+{"v":1,"seq":18,"ts":"2026-10-13T21:43:59.342Z","ev":"end","id":9,"path":"prime.merge_null.check","ok":true,"ms":1}
+{"v":1,"seq":19,"ts":"2026-10-13T21:43:59.343Z","ev":"start","id":10,"path":"prime.merge_null.result_path"}
+{"v":1,"seq":20,"ts":"2026-10-13T21:43:59.343Z","ev":"end","id":10,"path":"prime.merge_null.result_path","ok":true,"ms":0}
+{"v":1,"seq":21,"ts":"2026-10-13T21:43:59.344Z","ev":"start","id":11,"path":"prime.merge_null.done"}
+{"v":1,"seq":22,"ts":"2026-10-13T21:43:59.344Z","ev":"end","id":11,"path":"prime.merge_null.done","ok":true,"ms":0}
+{"v":1,"seq":23,"ts":"2026-10-13T21:43:59.347Z","ev":"start","id":12,"path":"prime.merge_null.a"}
+{"v":1,"seq":24,"ts":"2026-10-13T21:43:59.347Z","ev":"end","id":12,"path":"prime.merge_null.a","ok":true,"ms":0}
+{"v":1,"seq":25,"ts":"2026-10-13T21:43:59.347Z","ev":"start","id":13,"path":"prime.merge_null.b"}
+{"v":1,"seq":26,"ts":"2026-10-13T21:43:59.347Z","ev":"end","id":13,"path":"prime.merge_null.b","ok":true,"ms":0}
+{"v":1,"seq":27,"ts":"2026-10-13T21:43:59.347Z","ev":"start","id":14,"path":"prime.merge_null.merge"}
+{"v":1,"seq":28,"ts":"2026-10-13T21:43:59.348Z","ev":"end","id":14,"path":"prime.merge_null.merge","ok":true,"ms":0}
+{"v":1,"seq":29,"ts":"2026-10-13T21:43:59.348Z","ev":"end","id":7,"path":"prime.merge_null","ok":true,"ms":26}
+{"v":1,"seq":30,"ts":"2026-10-13T21:43:59.348Z","ev":"end","id":0,"path":"prime","ok":true,"ms":60}
+{"v":1,"seq":31,"ts":"2026-10-13T21:43:59.348Z","ev":"run_end","ok":true}

@@ -416,6 +416,57 @@ async fn a_schema_decode_failure_is_retried_down_then_across_passes() {
 }
 
 #[tokio::test]
+async fn an_answer_parse_error_carries_no_raw_payload_cause() {
+    // Issue #522 §3: `ErrorCause::SchemaRejected` is only ever set for
+    // a bare `SchemaValidationError` re-raise -- never for
+    // `AnswerParseError` (`decode_output`'s own failure for a
+    // `number` prompt given a non-numeric reply).
+    let mut op = template_prompt("give a number");
+    op.prompt_type = PromptType::Number;
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![FakeAdapter::text("not a number")],
+    ));
+    let adapters = registry_with_scripted();
+    let (_store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    let VmError::Raised {
+        cause_class, cause, ..
+    } = result.unwrap_err()
+    else {
+        panic!("expected VmError::Raised");
+    };
+    assert_eq!(cause_class, Some(PyExc::AnswerParseError));
+    assert_eq!(cause, electricity_tools::ErrorCause::None);
+}
+
+#[tokio::test]
+async fn an_empty_reply_carries_no_raw_payload_cause_even_under_a_schema_rejection() {
+    // The same `SchemaValidationError`/"model returned None" path
+    // `a_schema_decode_failure_is_retried_down_then_across_passes`
+    // exercises with a non-empty reply, but with an empty one -- the
+    // non-empty-reply guard in `exec/prompt.rs` must still exclude it.
+    let mut schema = Dict::new();
+    schema.insert(
+        Value::Str("type".to_string()),
+        Value::Str("object".to_string()),
+    );
+    let mut op = template_prompt("give json");
+    op.prompt_type = PromptType::Json;
+    op.schema = Some(Value::Dict(schema));
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("")]));
+    let adapters = registry_with_scripted();
+    let (_store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    let VmError::Raised {
+        cause_class, cause, ..
+    } = result.unwrap_err()
+    else {
+        panic!("expected VmError::Raised");
+    };
+    assert_eq!(cause_class, Some(PyExc::SchemaValidationError));
+    assert_eq!(cause, electricity_tools::ErrorCause::None);
+}
+
+#[tokio::test]
 async fn a_bad_params_option_fails_before_any_attempt() {
     let mut op = template_prompt("hi");
     let mut params = Dict::new();

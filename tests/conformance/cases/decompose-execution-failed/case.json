@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #522 acceptance case 8: execution_failed, two ways",
+  "description": "A chunk's scripted server_error. A plan whose merge yields null -> the missing-result text. Both log the child WARNING.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,36 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "{\"say\": \"two chunks plus a merge\", \"chunks\": [{\"name\": \"a\", \"job\": \"do a\"}, {\"name\": \"b\", \"job\": \"do b\"}], \"yaml\": \"effects: [{type: prompt, name: a, template: \\\"chunk a for {{input.topic}} ({{greeting}})\\\"}, {type: prompt, name: b, template: \\\"chunk b\\\"}, {type: prompt, name: merge, template: \\\"merge {{prime.a.value}} / {{prime.b.value}} on {{input.topic}}\\\"}]\"}"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "chunk a reply"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "chunk b reply"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "merged widgets"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 7, "completion_tokens": 5}}'

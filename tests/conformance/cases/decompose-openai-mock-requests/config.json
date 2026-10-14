@@ -1,0 +1,18 @@
+{
+  "runtime": {
+    "adapters": {
+      "lmstudio": {"base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/v1"}
+    },
+    "complexity": {
+      "scoring": {"enabled": true},
+      "routing": {
+        "enabled": true,
+        "bands": [
+          {"max": 50, "model": "small-model"},
+          {"model": "big-model"}
+        ]
+      },
+      "decomposition": {"enabled": true, "threshold": 10, "max_depth": 1, "max_chunks": 5}
+    }
+  }
+}

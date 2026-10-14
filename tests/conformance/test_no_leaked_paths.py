@@ -25,8 +25,18 @@ _LEAK_PATTERNS = [
     # A real Windows path, JSON-encoded, has a *doubled* backslash
     # (`"C:\\Users\\..."`) — single-backslash `d:\n` inside ordinary
     # error text (an escaped newline right after a word ending in a letter)
-    # must not false-positive here.
-    re.compile(r"[A-Za-z]:\\\\"),
+    # must not false-positive here. Neither must a *doubled* backslash
+    # that isn't a path at all: a mock HTTP request/response body
+    # recording a JSON string that itself holds JSON text (issue #522's
+    # own decomposition planner prompt, multi-line, JSON-encoded inside
+    # the chat message `content` field, then JSON-encoded again as the
+    # recorded body) escapes every `\n` in it a second time into `\\n`
+    # — structurally identical to a Windows path's own doubling, but
+    # the letter before the colon is always the last letter of an
+    # ordinary word (`schema:\\n`), never a lone drive-letter token
+    # (`C:\\Users`). `\b` anchors on that distinction: a drive letter is
+    # preceded by a quote/space/start-of-string, never another letter.
+    re.compile(r"\b[A-Za-z]:\\\\"),
 ]
 
 # Only flag the username embedded in a path (`/home/runner/...`,

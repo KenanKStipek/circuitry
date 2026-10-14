@@ -116,6 +116,11 @@ pub enum PyExc {
     /// `block.get(...)` on a non-dict content block, ...): CPython's
     /// own `'<type>' object has no attribute '<name>'`.
     AttributeError,
+    /// `core/decompose.py::DecompositionError` (electricity M1-L2b,
+    /// issue #522) -- a `RuntimeError` subclass, raised under
+    /// `on_failure: fail` when a decomposition attempt ends in
+    /// `planner_failed`/`invalid_plan`/`execution_failed`.
+    DecompositionError,
 }
 
 impl PyExc {
@@ -150,6 +155,7 @@ impl PyExc {
             PyExc::IncompleteRead => "IncompleteRead",
             PyExc::InvalidURL => "InvalidURL",
             PyExc::AttributeError => "AttributeError",
+            PyExc::DecompositionError => "DecompositionError",
         }
     }
 }
@@ -1371,5 +1377,14 @@ mod urlencode_tests {
         let params = pairs(vec![("a", Value::Bytes(b"bytes val".to_vec()))]);
         assert_eq!(urlencode(&params, true).unwrap(), "a=bytes+val");
         assert_eq!(urlencode(&params, false).unwrap(), "a=bytes+val");
+    }
+
+    #[test]
+    fn decomposition_error_displays_as_its_bare_class_name_and_is_not_a_value_error() {
+        // Issue #522 §4: a `RuntimeError` subclass, never a `ValueError`
+        // one -- #442's tree text prints it as `[i] DecompositionError: ...`.
+        assert_eq!(PyExc::DecompositionError.name(), "DecompositionError");
+        assert_eq!(PyExc::DecompositionError.to_string(), "DecompositionError");
+        assert!(!PyExc::DecompositionError.is_value_error_class());
     }
 }

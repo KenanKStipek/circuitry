@@ -63,7 +63,17 @@ pub fn is_tool_failure_retryable(
     match cause {
         Some(electricity_tools::ErrorCause::Http { status, .. }) => status_is_retryable(*status),
         Some(electricity_tools::ErrorCause::NoReply) => true,
-        Some(electricity_tools::ErrorCause::None) | None => false,
+        // Issue #522: a prompt's own bare `SchemaValidationError` cause
+        // carries the planner's rejected reply for `raw_payload`, never a
+        // retry classification of its own -- this `http`-provider-only
+        // branch never even runs for a `prompt` effect's own decode/schema
+        // failure (that retry decision is `exec/prompt.rs`'s own
+        // `decode_failed`/`schema_invalid` rule, independent of *cause*),
+        // but an exhaustive match still has to place it somewhere, and
+        // Python has no classification for it either.
+        Some(electricity_tools::ErrorCause::SchemaRejected { .. })
+        | Some(electricity_tools::ErrorCause::None)
+        | None => false,
     }
 }
 

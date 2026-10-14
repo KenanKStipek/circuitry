@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #522 acceptance case 13: a decomposition's own HTTP requests, byte for byte",
+  "description": "lmstudio plus a mock_http_fixture, a profile lock and routing. The recorded requests pin, byte for byte: the planner prompt (source_template, source_interface listing the single declared input, source_output) and its json_schema; each call's model (chunks routed despite the lock); the chunk and merge bodies.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "profile": "profiles/p.yml",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "topic=widgets"]
+}
