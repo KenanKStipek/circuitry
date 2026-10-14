@@ -108,7 +108,7 @@ pub struct PromptOp {
     /// `params` — the adapter's own model parameters, not a tool's
     /// `params:` (that's [`ToolOp::params`]).
     pub model_params: Option<ParamNode>,
-    pub timeout_ms: Option<u64>,
+    pub timeout_ms: Option<i64>,
     /// Default `false`.
     pub deterministic: bool,
     pub inputs: Option<ParamNode>,
@@ -138,7 +138,7 @@ pub struct ToolOp {
     pub params_json: Option<TemplateText>,
     pub prompt: Option<TemplateText>,
     pub model: Option<String>,
-    pub timeout_ms: Option<u64>,
+    pub timeout_ms: Option<i64>,
     pub retries: RetryPolicy,
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
