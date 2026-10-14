@@ -616,7 +616,7 @@ def check_deferred_signal() -> None:
     :func:`as_completed_promptly`'s poll -- runs *inside* the same region
     that wraps the ``executor.shutdown(cancel_futures=True)`` ahead of it,
     specifically so a first signal landing during that wait doesn't cut it
-    short (#555 follow-up, P1): the exception stays parked until every
+    short (#555): the exception stays parked until every
     already-running branch has actually finished and the outermost region
     exits, exactly as it would if it had landed anywhere else inside one).
 
