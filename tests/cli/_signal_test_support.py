@@ -7,7 +7,6 @@ modules otherwise defined (word for word) on its own.
 from __future__ import annotations
 
 import os
-import select
 import signal
 import subprocess
 import time
@@ -21,10 +20,18 @@ import pytest
 _SITECUSTOMIZE_DIR = Path(__file__).parent / "_fixtures" / "_sigusr1_sitecustomize"
 
 #: Every signal-test module starts its children through `_sandboxed_env`
-#: with no `-I`/`-E` flag, so whenever the platform has SIGUSR1 at all,
-#: every child `_diagnose_and_fail`/`_diagnose_and_fail_no_pipes` ever
-#: signal already has that handler registered.
+#: with no `-I`/`-E`/`-S` flag, so whenever the platform has SIGUSR1 at
+#: all, every child `_diagnose_and_fail`/`_diagnose_and_fail_no_pipes`
+#: ever signals already has that handler registered. `-I`/`-E` disable
+#: `PYTHONPATH`, and `-S` disables `site` outright (so `sitecustomize`
+#: never runs); `_child_can_have_sigusr1_handler` below still checks for
+#: those on *proc*'s own args, in case a future caller adds one.
 _HAS_SIGUSR1 = hasattr(signal, "SIGUSR1")
+
+#: Interpreter flags that stop a child from running
+#: `_SITECUSTOMIZE_DIR`'s `sitecustomize.py`, so a child started with one
+#: of them can't have registered the SIGUSR1 dump handler.
+_SITECUSTOMIZE_SKIP_FLAGS = frozenset({"-I", "-E", "-S"})
 
 #: Credential env vars that must never reach a spawned `cof run` here —
 #: none of this suite configures a real adapter, so none of them are
@@ -201,6 +208,22 @@ def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
     return "\n\n".join(sections)
 
 
+def _child_can_have_sigusr1_handler(proc: subprocess.Popen[str]) -> bool:
+    """Whether *proc* could have run `_SITECUSTOMIZE_DIR`'s
+    `sitecustomize.py` and registered the SIGUSR1 dump handler: the
+    platform has SIGUSR1 at all, and *proc*'s own argv has none of
+    `_SITECUSTOMIZE_SKIP_FLAGS` (today, every caller's argv passes:
+    see the comment on `_HAS_SIGUSR1` above).
+    """
+    if not _HAS_SIGUSR1:
+        return False
+    args = proc.args
+    return not (
+        isinstance(args, (list, tuple))
+        and any(str(arg) in _SITECUSTOMIZE_SKIP_FLAGS for arg in args)
+    )
+
+
 def _dump_every_thread_stack_then_kill(proc: subprocess.Popen[str]) -> None:
     """Make a still-running *proc* dump every thread's Python stack to
     stderr, then end it without a macOS crash report (#558).
@@ -208,33 +231,30 @@ def _dump_every_thread_stack_then_kill(proc: subprocess.Popen[str]) -> None:
     Sends SIGUSR1 — which `_sandboxed_env`'s own `sitecustomize.py`
     (first on the child's PYTHONPATH) has already registered a
     faulthandler dump on, in every child any of this module's callers
-    start — and waits up to a second for that dump to actually reach
-    stderr (polled with `select`, when the caller hasn't already closed
-    its read end) before SIGKILL, which unlike SIGABRT writes no crash
-    report.
+    start — then drains stdout/stderr with `communicate(timeout=1.0)`
+    so the dump can actually finish writing (faulthandler writes it in
+    many small `write()` calls; a pipe that fills while unread would
+    otherwise block the dump itself) before SIGKILL, which unlike
+    SIGABRT writes no crash report. `communicate` on a closed pipe is a
+    no-op for that pipe, so this is safe for a caller that already
+    closed its own read end (`_diagnose_and_fail_no_pipes`). Whatever it
+    reads here is not lost: the caller's own later `communicate`/`wait`
+    picks up from where this left off.
 
     Falls back to the old SIGABRT (relying on `PYTHONFAULTHANDLER=1`
-    alone) only when the platform has no SIGUSR1 to send — today, never:
-    every caller starts its child through `_sandboxed_env` with no
-    `-I`/`-E` flag, and both CI (Linux) and this suite's own development
-    platform (macOS) have SIGUSR1.
+    alone) when `_child_can_have_sigusr1_handler` says *proc* can't have
+    registered the handler — today, never: see `_HAS_SIGUSR1` above.
     """
     if proc.poll() is not None:
         return
-    if not _HAS_SIGUSR1:
+    if not _child_can_have_sigusr1_handler(proc):
         proc.send_signal(signal.SIGABRT)
         return
     proc.send_signal(signal.SIGUSR1)
-    stderr = proc.stderr
-    pollable = stderr is not None and not stderr.closed
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and proc.poll() is None:
-        if pollable and stderr is not None:
-            ready, _, _ = select.select([stderr], [], [], 0.05)
-            if ready:
-                break
-        else:
-            time.sleep(0.05)
+    try:
+        proc.communicate(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
     if proc.poll() is None:
         proc.kill()
 
