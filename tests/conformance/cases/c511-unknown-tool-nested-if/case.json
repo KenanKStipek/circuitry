@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A tool naming a provider that is not a cof plugin at all, nested inside an if's then: branch inside an inline use child.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

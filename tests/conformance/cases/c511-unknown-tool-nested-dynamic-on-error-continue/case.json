@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #511",
+  "description": "A tool naming a provider that is not a cof plugin at all, nested inside a dynamic, with on_error: continue on the dynamic itself rather than the tool: the dynamic's own on_error absorbs the Unknown plugin failure from its own effect, run succeeds.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

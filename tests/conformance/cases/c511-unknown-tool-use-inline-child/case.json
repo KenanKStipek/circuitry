@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A use effect's own inline: child names a provider that is not a cof plugin at all -- the issue's own repro. prime.u.meta.child_errors carries both the child's own path and the inner 'x' node's own text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

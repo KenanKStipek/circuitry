@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A tool naming a provider that is not a cof plugin at all, nested inside a loop inside an inline use child -- the refusal walker's own recursion into control-flow regions must not catch this leaf differently than a top-level one.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

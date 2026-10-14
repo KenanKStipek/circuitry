@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A top-level tool effect naming a provider that is not a cof plugin at all: preflight fails with the real \"Unknown plugin\" error, not the preview refusal; --out still gets written (runtime.last_run, no prime).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

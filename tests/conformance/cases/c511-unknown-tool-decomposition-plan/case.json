@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A decomposition plan names a tool provider that is not a cof plugin at all, under on_failure: fail: the run's own failure is decomposition of 'big' failed (execution_failed), carrying the real Unknown plugin text, not the preview refusal.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}
