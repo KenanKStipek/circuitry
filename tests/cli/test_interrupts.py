@@ -167,46 +167,81 @@ def test_watcher_sets_the_cancellation_flag_from_a_signal_delivered_to_a_worker_
     after a third, independent poller thread already observed the
     token cancelled.
     """
-    with sigterm_as_interrupt():
-        token = get_token()
-        seen_promptly = threading.Event()
+    seen_promptly = threading.Event()
+    observed_signum: list[int | None] = [None]
 
-        def _poll_for_cancellation() -> None:
-            deadline = time.monotonic() + 1.0
-            while time.monotonic() < deadline:
-                if token.is_set():
-                    seen_promptly.set()
-                    return
-                time.sleep(0.005)
+    def _poll_for_cancellation(token) -> None:
+        # Generous even under heavy CPU contention (this suite's own
+        # bounded-load gate uses three CPU-bound processes): the watcher
+        # thread's `os.read()` wakes the instant the signal is delivered,
+        # independent of the GIL, but it still has to acquire the GIL to
+        # run `CancellationToken.request()`, which this process's other
+        # threads are also contending for.
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            if token.is_set():
+                observed_signum[0] = token.signum
+                seen_promptly.set()
+                return
+            time.sleep(0.005)
 
-        def _signal_self_then_keep_the_main_thread_blocked() -> None:
-            poller = threading.Thread(target=_poll_for_cancellation)
-            poller.start()
-            signal.pthread_kill(threading.get_ident(), signal.SIGINT)
-            # Outlasts the poller's own 1.0s window -- the main thread's
-            # `join()` below cannot return, and so cannot run its own
-            # handler, until this thread does.
-            time.sleep(1.5)
-            poller.join(timeout=5.0)
+    def _signal_self_then_keep_the_main_thread_blocked(token) -> None:
+        # Gives the main thread time to actually reach and enter its own
+        # blocking `join()` call below before the signal is sent --
+        # without this, starting this thread and reaching the
+        # `pthread_kill` below can race the main thread merely getting as
+        # far as calling `join()` at all, and if this thread wins that
+        # race, the main thread's own pending-call check fires on some
+        # earlier bytecode instead, well before it is actually blocked --
+        # defeating the scenario this test exists to drive.
+        time.sleep(0.2)
+        poller = threading.Thread(target=_poll_for_cancellation, args=(token,))
+        poller.start()
+        signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+        # Outlasts the poller's own window -- the main thread's `join()`
+        # below cannot return, and so cannot run its own handler, until
+        # this thread does.
+        time.sleep(7.0)
+        poller.join(timeout=10.0)
 
-        worker = threading.Thread(target=_signal_self_then_keep_the_main_thread_blocked)
-        worker.start()
-        try:
-            worker.join(timeout=10.0)
-        except KeyboardInterrupt:
-            # Expected: the main thread's own Python-level handler also
-            # raises here, the instant it next gets to check for a
-            # pending call once `join()` itself returns -- this test is
-            # only interested in `seen_promptly`, set well before that by
-            # the watcher thread, not in this handler's own behaviour
-            # (covered by the rest of this module).
-            pass
+    try:
+        with sigterm_as_interrupt():
+            token = get_token()
+            worker = threading.Thread(
+                target=_signal_self_then_keep_the_main_thread_blocked,
+                args=(token,),
+            )
+            worker.start()
+            worker.join(timeout=20.0)
+            # Drains a real SIGINT this main thread is still delayed in
+            # noticing under heavy CPU contention: CPython only ever
+            # services a signal's pending Python-level handler the next
+            # time *this* thread's own bytecode eval loop checks for one,
+            # and a thread merely being unblocked by `join()` doesn't by
+            # itself guarantee the OS schedules it again instantly under
+            # load. Actively running bytecode here (rather than leaving
+            # the `with` scope, which would restore the previous SIGINT
+            # handler and could then misattribute an unserviced pending
+            # signal to some later, unrelated scope's own handler) gives
+            # the eval breaker many chances to catch it while this test's
+            # own `except KeyboardInterrupt:` below is still the thing
+            # watching for it.
+            pump_deadline = time.monotonic() + 5.0
+            while time.monotonic() < pump_deadline:
+                time.sleep(0.01)
+    except KeyboardInterrupt:
+        # Expected: the main thread's own Python-level handler also
+        # raises eventually -- this test is only interested in
+        # `seen_promptly`, set well before that by the watcher thread,
+        # not in this handler's own behaviour (covered by the rest of
+        # this module).
+        pass
 
-        assert seen_promptly.is_set(), (
-            "the watcher never set the cancellation flag while the main "
-            "thread was still blocked in worker.join()"
-        )
-        assert token.signum == signal.SIGINT
+    assert seen_promptly.is_set(), (
+        "the watcher never set the cancellation flag while the main "
+        "thread was still blocked in worker.join()"
+    )
+    assert observed_signum[0] == signal.SIGINT
 
 
 def test_a_signal_the_watcher_already_flagged_is_still_the_handler_s_first_signal(
