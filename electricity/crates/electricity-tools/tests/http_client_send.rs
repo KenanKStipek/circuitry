@@ -392,9 +392,7 @@ async fn a_total_timeout_catches_several_under_budget_phases_summing_past_it() {
 
 #[tokio::test]
 async fn connection_refused_is_a_connect_error() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let addr = closed_port();
     let client = http_client::build_client().unwrap();
     let err = http_client::send(
         &client,
@@ -542,4 +540,20 @@ async fn dropping_the_send_future_aborts_the_connection() {
         closed,
         "the server should observe the client closing the connection"
     );
+}
+
+/// A loopback address nothing answers: port 1, which nothing listens on in
+/// CI or on a developer machine, and which is below the ephemeral range,
+/// so a parallel test binding `127.0.0.1:0` is never handed it. Binding
+/// `127.0.0.1:0` and dropping the listener freed a port that a parallel
+/// test's mock server could take and answer instead. (A bound socket that
+/// never listens isn't portable: macOS lets a connect to it time out
+/// rather than refusing it.)
+fn closed_port() -> std::net::SocketAddr {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+    assert!(
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_err(),
+        "127.0.0.1:1 accepts connections on this machine; these tests need it closed"
+    );
+    addr
 }
