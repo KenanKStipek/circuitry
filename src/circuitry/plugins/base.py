@@ -81,6 +81,15 @@ class ToolResult:
     #: 4xx/5xx response instead of raising on it) set this; everything else
     #: defaults to ``True`` and keeps raising for real errors.
     ok: bool = True
+    #: A plugin that spends model usage (currently only ``agent``, over its
+    #: session's turns) reports it here; ``None`` otherwise. ToolRuntime
+    #: copies a value that isn't ``None`` into ``meta.tokens_sent``,
+    #: ``meta.tokens_received`` and ``meta.cost_usd`` — the same fields a
+    #: ``prompt`` effect sets — so the run's totals and the ``dynamic``
+    #: tree's token sums count it without a special case.
+    tokens_sent: int | None = None
+    tokens_received: int | None = None
+    cost_usd: float | None = None
 
 
 def _as_bool(value: Any, *, default: bool = False) -> bool:
