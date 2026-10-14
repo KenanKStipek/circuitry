@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from .cancellation import get_token
+from .cancellation import deferred_signal_region, get_token
 
 #: The dict key under which the run's one :class:`RunConcurrencyLimiter` (if
 #: any) rides inside every ``runtime_config`` — see the module docstring.
@@ -183,8 +183,17 @@ class RunConcurrencyLimiter:
                 held.append(self._global_sem)
             yield
         finally:
-            for sem in reversed(held):
-                sem.release()
+            # `deferred_signal_region` (delta review of PR #553, P2-1):
+            # `Semaphore.release()` is a `Condition`-backed call, the same
+            # #555-style exposure a `Future`'s own lock has -- this often
+            # runs on the main thread (a plain sequential chain's own
+            # leaf effect), and a first signal's handler raising
+            # mid-release here would leak the lock, wedging whichever
+            # worker thread's own later `acquire()` needs the same slot
+            # next.
+            with deferred_signal_region():
+                for sem in reversed(held):
+                    sem.release()
 
     #: How often a blocked acquire re-checks cancellation (#356) — short
     #: enough that a cancelled run's waiting leaf stops promptly, long
@@ -199,12 +208,26 @@ class RunConcurrencyLimiter:
         on_wait: Callable[[str], None] | None,
         on_acquired: Callable[[], None] | None,
     ) -> None:
-        if sem.acquire(blocking=False):
+        # Each `sem.acquire(...)` wrapped individually in its own
+        # `deferred_signal_region` (delta review of PR #553, P2-1), same
+        # reasoning as `acquire()`'s own `release()` loop above: a plain
+        # `threading.Semaphore` is `Condition`-backed, and this often runs
+        # on the main thread. Only the single call needs covering, not the
+        # whole retry loop -- unlike `wait_for_cancelled_branches`, a
+        # signal deferred until just after one 0.2s-bounded attempt costs
+        # nothing a cancelled run would otherwise have to wait out.
+        with deferred_signal_region():
+            acquired = sem.acquire(blocking=False)
+        if acquired:
             return
         if on_wait is not None:
             on_wait(label)
         token = get_token()
-        while not sem.acquire(timeout=cls._POLL_SECONDS):
+        while True:
+            with deferred_signal_region():
+                acquired = sem.acquire(timeout=cls._POLL_SECONDS)
+            if acquired:
+                break
             # A blocked wait for a concurrency slot is itself a place a
             # cancelled run must not let a new effect start (#356) — the
             # main thread's own KeyboardInterrupt/SigTermInterrupt never
