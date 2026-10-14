@@ -68,7 +68,7 @@ release alongside the Python distributions, marked as a preview.
   supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512);
-  mid-run `--live-state` of a tree (#465); lint advisories (#428).
+  lint advisories (#428).
 
 ## Build and test
 
