@@ -47,7 +47,7 @@ cases/<name>/
 | `mock_http_fixture` | filename (relative to the case dir) of a mock-HTTP-server fixture; enables the mock server for this case, see "Mock HTTP server" below |
 | `sort_http_requests` | bool, default `false` -- a tree-flow case whose concurrent branches may dispatch their own HTTP calls in a different wall-clock order on either engine; compares the recorded requests re-ordered by their own canonical JSON form instead of arrival order, see "Mock HTTP server" below |
 | `known_divergence` | a deliberate, temporary engine disagreement — `{"location": "<dotted state path>", "electricity_value": <value>}`; see "Known divergence" below |
-| `electricity_preview_ok` | bool, default `false` — a *success* case whose document uses content the electricity preview genuinely doesn't support yet (`shell`/`http`/a real model adapter/...); see "Running it" below |
+| `electricity_preview_ok` | bool, default `false` — a case (success or failure) whose document uses content the electricity preview genuinely doesn't support yet (`shell`/`http`/a real model adapter/...); see "Running it" below |
 | `sort_warnings` | a case whose document dispatches a tree `dynamic` — `expected.warnings.txt` is written, and compared, as a sorted set rather than `cof run`'s own real order, since two branches' own warnings can land in either relative order between runs |
 | `env` | a mapping of extra environment variables set for both engines' own subprocess (applied after the credential/`CIRCUITRY_*` filter, so it can set a name the filter would otherwise drop) — for a case that needs a controlled variable neither engine's own process otherwise sees, e.g. `env_vars`'s own `list` mode |
 | `profile` | a path relative to the case directory, of the form `profiles/<name>.yml` or `profiles/<name>.yaml` — exactly one of the two suffixes must exist. `cof run` gets `--profile <name>` (discovery finds it under the orchestration directory, the case directory); electricity gets `--profile <case_dir>/<profile>` (the absolute path) |
@@ -68,10 +68,9 @@ fine but don't work: `also_pretty` together with `mock_http_fixture` (the
 `--pretty` re-run gets neither a fresh mock server nor a fresh
 leftover-replies path, and runs after the server has already stopped);
 `known_divergence` together with `also_pretty` (the `--pretty` comparison
-never applies the override); and `electricity_preview_ok: true` on
-anything but a *success* case that lists `electricity` in `engines` (it
-names a case electricity is expected to refuse, which is meaningless
-otherwise).
+never applies the override); and `electricity_preview_ok: true` on a case
+that doesn't list `electricity` in `engines` (it names a case electricity
+is expected to refuse, which is meaningless otherwise).
 
 A case document calls no real model or network — a case that needs one
 uses the `scripted` adapter (a replies file) or the harness's own mock
@@ -403,19 +402,21 @@ only when `cargo` isn't on `PATH` (a contributor machine that genuinely has
 no Rust toolchain; the ordinary `pytest -q -m 'not integration'` gate
 itself *does* have one — CI's `ubuntu-latest` image ships `cargo`, so each
 of `quality.yml`'s pytest jobs builds this crate once). electricity runs
-a real document end to end (`electricity/README.md`'s preview section is
-the single source of truth for what it runs), so a case that lists
+documents end to end (`electricity/README.md`'s preview section is the
+single source of truth for what it runs), so a case that lists
 `electricity` in its own `engines` and expects success now actually runs
 and is diffed against the same `expected.json`/`expected.events.jsonl`
-the Python runner uses — not skipped. A *failure* case may still
-legitimately skip for electricity if
-its document uses content this preview genuinely doesn't support yet: the
-binary refuses those up front with a message containing the preview marker
-(`is a preview and can't run this orchestration`,
-`electricity_bytecode::PREVIEW_MARKER`), and the runner treats that refusal as an expected skip
-rather than a failure. The same refusal on a case that expects *success*
-is never skipped — it fails the test, since a success case electricity
-wrongly refuses is a real regression.
+the Python runner uses — not skipped. Skipping through the preview
+refusal (the binary's up-front message containing the preview marker,
+`is a preview and can't run this orchestration`,
+`electricity_bytecode::PREVIEW_MARKER`) is opt-in, on a success or a
+failure case alike: only a case that declares `case.json`'s own
+`electricity_preview_ok: true` gets treated as an expected skip rather
+than a failure. Any other case that hits this marker fails the test
+loudly — a case electricity wrongly refuses this way, success or
+failure, is a real regression (letting a failure case through
+unconditionally would silently mask a refusal returning for content this
+build is actually meant to run and fail on its own terms, issue #511).
 
 electricity is invoked with the case's own `fakes/` first on `PATH` and no
 credential/`CIRCUITRY_*` env vars, same as the Python runner
@@ -426,21 +427,25 @@ placeholder baseline for the electricity runner only (see that file's
 comment in `test_electricity_runner.py`).
 
 `case.json`'s `electricity_preview_ok: true` is the one declared exception
-to "a success case electricity wrongly refuses is a real regression": a
-sample case (#450) whose document uses content the electricity preview
+to "a case electricity wrongly refuses is a real regression": a sample
+case (#450) whose document uses content the electricity preview
 genuinely doesn't support yet (`shell`/`http`/a real model adapter/...)
-still passes on the Python engine, and is deliberately still refused by
-electricity until the lane that implements that capability flips it — at
-which point the flag is simply removed, and the case's own success
-assertion starts applying to electricity too, with no other change. Never
-use `known_divergence` for this: that key means *both* engines succeeded,
-with one documented, stated difference — not applicable when one engine
-never ran the document at all. No case sets it today: `c-shell-path-fake`
-ran on both engines once `shell` landed, `c-scripted-prompt` once lane G
-(issue #498) landed the `prompt` effect through the `scripted` adapter,
-and `c-http-mock-server`/`c-openai-compatible-mock-server` once lane E's
-`http` tool and lane F2's (issue #503) real model adapters landed. The
-flag stays declared and validated for the next lane that needs it.
+still passes (or, for a failure case, still fails the *right* way) on the
+Python engine, and is deliberately still refused by electricity until the
+lane that implements that capability flips it — at which point the flag
+is simply removed, and the case's own assertion starts applying to
+electricity too, with no other change. Never use `known_divergence` for
+this: that key means *both* engines succeeded, with one documented,
+stated difference — not applicable when one engine never ran the
+document at all. One case sets it today, a failure case:
+`document-adapter-preflight-not-ready` (`litellm`, a Circuitry-known
+adapter with no Rust builder, settled ruling 3, electricity/DESIGN.md
+§13). `c-shell-path-fake` ran on both engines once `shell` landed,
+`c-scripted-prompt` once lane G (issue #498) landed the `prompt` effect
+through the `scripted` adapter, and `c-http-mock-server`/
+`c-openai-compatible-mock-server` once lane E's `http` tool and lane F2's
+(issue #503) real model adapters landed; the flag stays declared and
+validated for the next lane that needs it.
 
 ## M1 acceptance map
 

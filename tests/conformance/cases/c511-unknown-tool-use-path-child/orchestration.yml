@@ -1,0 +1,5 @@
+name: c511-unknown-tool-use-path-child
+effects:
+  - type: use
+    name: u
+    path: child.yml

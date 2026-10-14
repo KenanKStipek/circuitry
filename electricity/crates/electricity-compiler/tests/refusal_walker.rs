@@ -125,7 +125,13 @@ fn a_provider_written_with_whitespace_and_mixed_case_is_still_accepted() {
 }
 
 #[test]
-fn a_test_tools_provider_is_refused_unless_the_caller_lists_it() {
+fn a_test_tools_provider_is_never_refused_it_is_not_a_cof_plugin_at_all() {
+    // `sleep` is the `test-tools` cargo feature's own synthetic
+    // provider, never a name in Circuitry's own registry -- issue
+    // #511's fix means the walker leaves it for the real "Unknown
+    // plugin" dispatch failure, with or without it listed in
+    // *providers* (unlike a genuine, known-but-unbuilt cof plugin,
+    // which stays refused until its own M1 lane lands).
     let program = compile_doc(
         "sleep",
         "effects:\n\
@@ -134,15 +140,13 @@ fn a_test_tools_provider_is_refused_unless_the_caller_lists_it() {
          \x20   provider: sleep\n\
          \x20   params: {ms: 10}\n",
     );
-    let refusal = electricity_bytecode::first_unsupported(
-        &program,
-        false,
-        &electricity_bytecode::Supported::m0(&["json"]),
-    )
-    .unwrap();
     assert_eq!(
-        refusal.reason,
-        RefusalReason::UnsupportedToolProvider("sleep".to_string())
+        electricity_bytecode::first_unsupported(
+            &program,
+            false,
+            &electricity_bytecode::Supported::m0(&["json"]),
+        ),
+        None
     );
     assert_eq!(
         electricity_bytecode::first_unsupported(

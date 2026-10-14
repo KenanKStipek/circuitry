@@ -1,0 +1,15 @@
+name: c511-unknown-tool-nested-if-tool-on-error-continue
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: if
+          name: cond
+          if: {mode: cel, expr: "true"}
+          then:
+            - type: tool
+              name: x
+              provider: nonexistent_tool
+              params: {}
+              on_error: continue

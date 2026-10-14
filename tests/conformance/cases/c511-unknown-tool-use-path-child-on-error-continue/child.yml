@@ -1,0 +1,5 @@
+effects:
+  - type: tool
+    name: x
+    provider: nonexistent_tool
+    params: {}

@@ -1,0 +1,13 @@
+name: c511-unknown-tool-nested-dynamic
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: dynamic
+          name: dyn
+          effects:
+            - type: tool
+              name: x
+              provider: nonexistent_tool
+              params: {}

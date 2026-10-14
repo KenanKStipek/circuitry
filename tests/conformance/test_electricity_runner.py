@@ -1,13 +1,11 @@
 """Runs the `electricity` binary (built from `electricity/` with cargo when
 available) on each conformance case applicable to it and compares the same
-way the Python runner does (electricity/DESIGN.md §12). A case that
-expects *failure* still skips when electricity refuses it with the
-preview marker -- by M1, this fires for exactly one case
-(`document-adapter-preflight-not-ready`, a document-level `adapter:
-litellm`, which electricity refuses for good, DESIGN.md §13), not a whole
-class of still-unported effect types; a case that expects *success* never
-does -- a success case electricity wrongly refuses is a real regression,
-and must fail the test, not silently skip it.
+way the Python runner does (electricity/DESIGN.md §12). A case only ever
+skips through the preview refusal when it declares `case.json`'s own
+`electricity_preview_ok: true` -- content the preview genuinely doesn't
+support yet, on either a success or a failure case. Any other preview
+refusal fails the test loudly, never a silent skip: a case electricity
+wrongly refuses this way is a real regression.
 """
 
 from __future__ import annotations
@@ -36,12 +34,15 @@ CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 #: The stable substring every electricity preview refusal carries
 #: (issue #476), matched in lockstep by `electricity_bytecode::
-#: PREVIEW_MARKER` and osp's own e2e test -- a case that expects
-#: *failure* and lists `electricity` in its own engines may still
-#: legitimately get refused this way (content this preview truly
-#: doesn't support yet); a case that expects *success* must not
-#: (PR #441 review finding 6: a success case wrongly refused is a
-#: real regression, and must fail loudly, not skip).
+#: PREVIEW_MARKER` and osp's own e2e test -- only a case that opts in
+#: with `case.json`'s own `electricity_preview_ok: true` may legitimately
+#: get refused this way, success or failure case alike (issue #511's own
+#: review: letting every failure case through unconditionally would mask
+#: a regression that brings a refusal back for content this build is
+#: actually supposed to run and fail on its own terms). Any other case
+#: that hits this marker fails loudly, never skips (PR #441 review
+#: finding 6: a case electricity wrongly refuses this way is a real
+#: regression).
 PREVIEW_MESSAGE_MARKER = "is a preview and can't run this orchestration"
 
 #: electricity's CLI has no notion yet of "no config file" the way `cof
@@ -220,27 +221,27 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
     if (
         result.returncode == 1
         and PREVIEW_MESSAGE_MARKER in combined_output
-        and (metadata["expect"] != "success" or metadata["electricity_preview_ok"])
+        and metadata["electricity_preview_ok"]
     ):
         pytest.skip(
-            "this case's real document is content electricity refuses for "
-            "good (adapter: litellm, DESIGN.md §13) — electricity/crates/electricity-cli"
+            "this case's real document is content this preview doesn't "
+            "support yet, declared by case.json's own electricity_preview_ok"
         )
-    # A *success* case never skips through the preview marker on its own
-    # (PR #441 review finding 6) -- a success case electricity wrongly
-    # refuses is a real regression, and must fail loudly. The one declared
-    # exception is `case.json`'s own `electricity_preview_ok: true` (issue
-    # #450): a sample case whose document uses content the preview doesn't
-    # support yet, kept passing on the Python engine and deliberately
-    # still refused by electricity until the lane that implements that
-    # capability flips it (never `known_divergence`, which means *both*
-    # engines succeeded with one documented difference -- not applicable
-    # when one engine never ran the document at all). By M1, the only
-    # refusal either path can actually hit is `document-adapter-
-    # preflight-not-ready`'s own `adapter: litellm`, which electricity
-    # refuses for good -- `electricity_preview_ok` stays declared and
-    # validated for the next lane that needs it, even though none does
-    # today.
+    # Skipping through the preview marker is opt-in, on every case
+    # regardless of `expect` (issue #511's own review: letting any preview
+    # text through unconditionally would silently mask a regression that
+    # brings the refusal back for content this build is actually supposed
+    # to run and fail on its own terms). The one way a case opts in is
+    # `case.json`'s own `electricity_preview_ok: true` (issue #450): a
+    # sample case whose document uses content the preview genuinely
+    # doesn't support yet (`prompt`/`shell`/`http`/a document-level
+    # `adapter:`/...), kept passing (or, for a failure case, kept failing
+    # the *right* way) on the Python engine and deliberately still refused
+    # by electricity until the lane that implements that capability flips
+    # it (never `known_divergence`, which means *both* engines succeeded
+    # with one documented difference -- not applicable when one engine
+    # never ran the document at all). Without the flag, any other preview
+    # refusal fails the test loudly, success or failure case alike.
 
     harness.assert_no_leftover_replies(
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name

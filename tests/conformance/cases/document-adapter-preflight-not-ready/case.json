@@ -3,5 +3,6 @@
   "description": "A document whose own top-level `adapter: litellm` fails `cof run`'s preflight check before any effect dispatches (`cli/runtime_shim.py::preflight`, `cli/allowlist.py::walk_orchestration_refs`'s own top-level-adapter inclusion): the `litellm` library isn't installed. electricity ports preflight (issue #495), but `litellm` is the one Circuitry-known adapter electricity refuses for good, with no Rust builder planned (settled ruling 3, electricity/DESIGN.md §13) -- `claude_code`, `cyberdiner` and `pi`, refused the same way through M1-H, all got real adapters by M1 (issues #515, #520). This is the one case electricity still skips, with the preview marker, instead of running preflight at all; it was `openai` before F2 built that adapter.",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "exact"
+  "error_compare": "exact",
+  "electricity_preview_ok": true
 }

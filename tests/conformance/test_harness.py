@@ -480,10 +480,12 @@ def test_load_case_rejects_known_divergence_with_also_pretty(tmp_path: Path) -> 
         harness.load_case(case_dir)
 
 
-def test_load_case_rejects_electricity_preview_ok_on_a_failure_case(tmp_path: Path) -> None:
-    """PR #455 review finding P2-4: `electricity_preview_ok` names a case
-    electricity is expected to refuse, which is meaningless on anything but
-    a success case."""
+def test_load_case_accepts_electricity_preview_ok_on_a_failure_case(tmp_path: Path) -> None:
+    """Issue #511's own review: a failure case may also declare
+    `electricity_preview_ok` -- a document whose real failure electricity
+    can't reach yet because the preview refuses it first (e.g. a
+    Circuitry-known adapter with no Rust builder), the same way a success
+    case can."""
     case_dir = _write_case(
         tmp_path,
         {
@@ -492,8 +494,8 @@ def test_load_case_rejects_electricity_preview_ok_on_a_failure_case(tmp_path: Pa
             "electricity_preview_ok": True,
         },
     )
-    with pytest.raises(ValueError, match="'electricity_preview_ok' only applies to"):
-        harness.load_case(case_dir)
+    metadata = harness.load_case(case_dir)
+    assert metadata["electricity_preview_ok"] is True
 
 
 def test_load_case_rejects_electricity_preview_ok_without_electricity_in_engines(
