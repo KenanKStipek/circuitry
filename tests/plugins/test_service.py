@@ -970,8 +970,13 @@ def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path, target: st
         for k, v in os.environ.items()
         if k not in ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
     }
+    # pytest-cov's own subprocess hooks (`COV_CORE_*`) would make the nested
+    # run, and every server it starts, collect coverage too: slower to start,
+    # and not this test's concern.
+    env = {k: v for k, v in env.items() if not k.startswith("COV_CORE_")}
     env = {**env, "HOME": str(tmp_path / "home"), "CIRCUITRY_TEST_SERVER_MARKER": marker}
     repo_root = Path(__file__).resolve().parents[2]
+    nested_log = tmp_path / "nested.log"
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -984,12 +989,13 @@ def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path, target: st
         ],
         cwd=repo_root,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=nested_log.open("wb"),
+        stderr=subprocess.STDOUT,
     )
     try:
-        assert _wait_until(lambda: bool(_pids_with_marker(marker)), timeout=30), (
-            "the nested run never started a marked server or watchdog"
+        assert _wait_until(lambda: bool(_pids_with_marker(marker)), timeout=60), (
+            "the nested run never started a marked server or watchdog; its output:\n"
+            + nested_log.read_text(errors="replace")[-3000:]
         )
         pgids: set[int] = set()
         for pid in _pids_with_marker(marker):
