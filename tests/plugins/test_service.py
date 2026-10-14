@@ -95,8 +95,10 @@ def _group_alive(pgid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # EPERM: the id now belongs to another user's process. One this test
-        # started is always signalable by it, so that one is gone (#559).
+        # EPERM: nothing left in that group this process may signal. On macOS
+        # that is a group of unreaped zombies only (see the service plugin's
+        # own _group_exists); elsewhere the id now names another user's
+        # group. Either way the group this test started is gone (#559).
         return False
     return True
 
