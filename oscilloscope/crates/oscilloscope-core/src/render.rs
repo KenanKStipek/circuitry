@@ -320,7 +320,7 @@ pub fn build(
         &all_paths,
     );
     let rows = build_rows(plan, &flat, &statuses, &all_paths, now);
-    let state_rows = build_state_rows(&flat, &statuses, now);
+    let state_rows = build_state_rows(&flat, &statuses);
     let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
     // A tree-loop pass's prompt, and
     // (on cof) a `use` child's, never appear in `flat` while they run
@@ -409,16 +409,19 @@ fn state_subtree_recency(
 /// model for a prompt, else the provider for a tool; the duration
 /// once finished; `retries N` when `retries_used > 0`; and `n/total`
 /// for a loop. `None` when there's nothing to show.
-fn state_row_dim(node: &NodeMeta, now: &str) -> Option<String> {
+fn state_row_dim(node: &NodeMeta) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(model) = node.meta.get("model").and_then(Value::as_str) {
         parts.push(model.to_string());
     } else if let Some(provider) = node.meta.get("provider").and_then(Value::as_str) {
         parts.push(provider.to_string());
     }
-    if let Some(created) = &node.created_at {
-        let end = node.completed_at.as_deref().unwrap_or(now);
-        if let Some(secs) = duration_seconds(created, end) {
+    // Finding 2: a duration shows only once finished -- while a row
+    // is still running, `now` ticked with every rebuild (K4's own
+    // once-a-second floor alone), so a live row's `dim` kept
+    // changing every redraw and the row never stopped highlighting.
+    if let (Some(created), Some(completed)) = (&node.created_at, &node.completed_at) {
+        if let Some(secs) = duration_seconds(created, completed) {
             parts.push(format_duration_dim(secs));
         }
     }
@@ -445,7 +448,17 @@ fn format_duration_dim(secs: f64) -> String {
     if secs < 60.0 {
         format!("{secs:.1}s")
     } else {
-        format!("{}m{:02.0}s", (secs / 60.0) as u64, secs % 60.0)
+        // Finding 17: rounding `secs % 60.0` to a whole number of
+        // seconds independently of the minutes below it could print
+        // `1m60s` (119.7s: 1m and a seconds remainder of 59.7,
+        // `{:02.0}` rounds that up to 60) -- rounding the *whole*
+        // duration to a whole number of seconds first, then deriving
+        // minutes and seconds from that single integer, carries
+        // correctly (119.7s rounds to 120s, "2m00s").
+        let total_seconds = secs.round() as u64;
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        format!("{minutes}m{seconds:02}s")
     }
 }
 
@@ -525,11 +538,10 @@ fn aggregate_container_status(node: &StateTreeNode) -> RowStatus {
 fn build_state_rows(
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
-    now: &str,
 ) -> Vec<StateRow> {
     let tree = build_state_tree(flat);
     let mut out = Vec::new();
-    flatten_state_tree(&tree, "prime", 0, flat, statuses, now, &mut out);
+    flatten_state_tree(&tree, "prime", 0, flat, statuses, &mut out);
     out
 }
 
@@ -540,7 +552,6 @@ fn flatten_state_tree(
     depth: usize,
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
-    now: &str,
     out: &mut Vec<StateRow>,
 ) {
     let mut entries: Vec<(&String, &StateTreeNode, String)> = nodes
@@ -560,7 +571,7 @@ fn flatten_state_tree(
         let status = state_row_status(&full_path, node, statuses);
         let (sent, received) = subtree_tokens(&full_path, flat);
         let tokens = (sent > 0 || received > 0).then_some((sent, received));
-        let dim = node.own.and_then(|own| state_row_dim(own, now));
+        let dim = node.own.and_then(state_row_dim);
         out.push(StateRow {
             path: full_path
                 .strip_prefix("prime.")
@@ -573,15 +584,7 @@ fn flatten_state_tree(
             dim,
             tokens,
         });
-        flatten_state_tree(
-            &node.children,
-            &full_path,
-            depth + 1,
-            flat,
-            statuses,
-            now,
-            out,
-        );
+        flatten_state_tree(&node.children, &full_path, depth + 1, flat, statuses, out);
     }
 }
 
@@ -716,8 +719,14 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
     let (sent, received) = if has_prompt_sent {
         let sent_block = build_sent_block(meta, node);
         // "A prompt that failed before any reply shows its error as
-        // today, and no received snippet" (issue #535).
-        let received_block = if node.error.is_some() {
+        // today, and no received snippet" (issue #535) -- finding 18:
+        // that's narrower than "any error". A reply that arrived and
+        // then failed later (an `expect`/parsing mismatch, say) still
+        // left `meta.answer` or the node's own value behind, so only
+        // an error with neither counts as "before any reply".
+        let got_reply =
+            meta.get("answer").and_then(Value::as_str).is_some() || !node.value.is_null();
+        let received_block = if node.error.is_some() && !got_reply {
             None
         } else {
             Some(build_received_block(meta, node))
@@ -2379,6 +2388,31 @@ mod tests {
         assert_eq!(details.error.as_deref(), Some("adapter unreachable"));
     }
 
+    /// Finding 18: a reply that arrived and *then* failed (an
+    /// `expect`/parsing mismatch, here) still gets a `received`
+    /// block -- only a failure with no reply at all drops it.
+    #[test]
+    fn a_prompt_that_failed_after_a_reply_still_has_a_received_block() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "gate": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "yes or no?", "answer": "maybe",
+                "error": "expected a boolean reply, got \"maybe\""
+            }}
+        }});
+        let details = details_for("prime.gate", &plan, Some(&state_json));
+        assert!(details.sent.is_some());
+        let received = details
+            .received
+            .expect("a reply that arrived before the failure keeps its received block");
+        assert_eq!(received.snippet.as_deref(), Some("maybe"));
+        assert_eq!(
+            details.error.as_deref(),
+            Some("expected a boolean reply, got \"maybe\"")
+        );
+    }
+
     #[test]
     fn a_non_prompt_node_gets_no_sent_received_blocks() {
         let plan = PlanTree::empty();
@@ -2425,6 +2459,45 @@ mod tests {
         assert_eq!(paths, vec!["c", "b", "a"]);
     }
 
+    /// Finding 15: latest-first ordering at a *nested* level, not
+    /// just the top -- `older` and `newer` are both bare containers
+    /// (no `{value, meta}` node of their own) two levels under
+    /// `fan`, sorted by the latest update anywhere in their own
+    /// subtree, same as the top level.
+    #[test]
+    fn state_rows_order_nested_containers_by_their_latest_child_update() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "older": {
+                    "p": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"}}
+                },
+                "newer": {
+                    "q": {"value": "y", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:09Z"}}
+                }
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            9.0,
+            "2026-01-01T00:00:09Z",
+            &[],
+        );
+        let paths: Vec<&str> = rendered
+            .state_rows
+            .iter()
+            .filter(|r| r.depth == 1)
+            .map(|r| r.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["fan.newer", "fan.older"]);
+    }
+
     /// Issue #535: the state pane no longer shows any value or error
     /// text at all — just the key, status, dim meta and tokens.
     #[test]
@@ -2462,6 +2535,82 @@ mod tests {
             .find(|r| r.path == "bad")
             .unwrap();
         assert_eq!(bad.status.kind, StatusKind::Failed);
+    }
+
+    /// Finding 2: the state tree's own dim meta shows a duration only
+    /// once a row has finished -- a running row's `dim` must not
+    /// depend on `now` at all (two real RFC 3339 `now` values, a
+    /// second apart, give the exact same dim for it), while a
+    /// finished row's own duration is already pinned by its own
+    /// `completed_at`, not by whichever `now` happened to rebuild it.
+    #[test]
+    fn a_running_rows_dim_never_shows_a_duration_at_any_now() {
+        let plan = PlanTree::empty();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "running": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null}},
+            "done": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z"}}
+        }});
+        let mut model_a = RunModel::new();
+        let at_t1 = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_a,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T00:00:01Z",
+            &[],
+        );
+        let mut model_b = RunModel::new();
+        let at_t9 = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_b,
+            Some(&state),
+            ProcessState::Running,
+            9.0,
+            "2026-01-01T00:00:09Z",
+            &[],
+        );
+        let running_dim = |r: &RenderState| {
+            r.state_rows
+                .iter()
+                .find(|row| row.path == "running")
+                .unwrap()
+                .dim
+                .clone()
+        };
+        assert_eq!(running_dim(&at_t1), None, "a running row shows no duration");
+        assert_eq!(
+            running_dim(&at_t1),
+            running_dim(&at_t9),
+            "a running row's dim must not depend on `now`"
+        );
+        let done_dim = |r: &RenderState| {
+            r.state_rows
+                .iter()
+                .find(|row| row.path == "done")
+                .unwrap()
+                .dim
+                .clone()
+        };
+        assert_eq!(done_dim(&at_t1).as_deref(), Some("5.0s"));
+        assert_eq!(
+            done_dim(&at_t1),
+            done_dim(&at_t9),
+            "a finished row's duration is pinned by its own completed_at, not `now`"
+        );
+    }
+
+    /// Finding 17: rounding the seconds remainder independently of
+    /// the minutes could carry into a bogus `1m60s` at 119.7s.
+    #[test]
+    fn format_duration_dim_carries_seconds_into_minutes_correctly() {
+        assert_eq!(format_duration_dim(119.7), "2m00s");
+        assert_eq!(format_duration_dim(119.4), "1m59s");
+        assert_eq!(format_duration_dim(65.0), "1m05s");
     }
 
     #[test]
