@@ -801,9 +801,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_reports_missing_host_for_a_closed_port() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let adapter = OllamaAdapter {
             base_url: Value::Str(format!("http://{addr}")),
         };
@@ -814,9 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_masks_userinfo_in_the_missing_host_text() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let adapter = OllamaAdapter {
             base_url: Value::Str(format!("http://user:secret@{addr}")),
         };

@@ -55,6 +55,9 @@ pub mod scripted;
 pub mod transport;
 pub mod watsonx;
 
+#[cfg(test)]
+mod test_support;
+
 use electricity_vm::adapter::{AdapterRegistry, GenerateOptions};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
