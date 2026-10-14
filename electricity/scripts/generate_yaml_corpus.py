@@ -573,30 +573,63 @@ def merge_cases() -> list[dict]:
             "effect:\n"
             "  <<: *defaults\n"
         ),
+        # a merge source nested three levels deep (`a.b.c`), merged in by
+        # a top-level mapping -- deeper than the single-level nesting the
+        # case above already covers.
+        (
+            "base: &base {r: 1, t: 5}\n"
+            "a:\n"
+            "  b:\n"
+            "    c: &c\n"
+            "      <<: *base\n"
+            "      r: 2\n"
+            "top:\n"
+            "  <<: *c\n"
+        ),
         # the same shape, with the merge source itself reached through
-        # a list of merges (`<<: [*a, *b]`) rather than a single alias.
+        # a list of merges (`<<: [*a, *b]`) rather than a single alias --
+        # `mid`'s own list-of-merges sits nested under `t:`, deeper than
+        # the top-level `top:` that merges it in.
         (
             "a: &a {x: 1, y: 2}\n"
             "b: &b {y: 20, z: 3}\n"
-            "mid: &mid\n"
-            "  <<: [*a, *b]\n"
-            "  y: 200\n"
+            "t:\n"
+            "  mid: &mid\n"
+            "    <<: [*a, *b]\n"
+            "    y: 200\n"
             "top:\n"
             "  <<: *mid\n"
         ),
         # a merge chain three levels deep, each level overriding one of
-        # the keys the level below merged in.
+        # the keys the level below merged in -- each source at a
+        # different depth (`l2` under `x:`, `l3` under `x: {y: ...}`,
+        # `l4` back at the top level) rather than top-level siblings.
         (
             "l1: &l1 {r: 1, t: 5}\n"
-            "l2: &l2\n"
-            "  <<: *l1\n"
-            "  r: 2\n"
-            "l3: &l3\n"
-            "  <<: *l2\n"
-            "  t: 50\n"
+            "x:\n"
+            "  l2: &l2\n"
+            "    <<: *l1\n"
+            "    r: 2\n"
+            "  y:\n"
+            "    l3: &l3\n"
+            "      <<: *l2\n"
+            "      t: 50\n"
             "l4:\n"
             "  <<: *l3\n"
             "  r: 3\n"
+        ),
+        # circuitry#390: a real duplicate *inside* a nested merge source
+        # (not a merge-vs-own-key override) is still rejected, naming the
+        # source's own two lines.
+        (
+            "base: &base {retries: 1}\n"
+            "templates:\n"
+            "  defaults: &defaults\n"
+            "    <<: *base\n"
+            "    retries: 2\n"
+            "    retries: 3\n"
+            "effect:\n"
+            "  <<: *defaults\n"
         ),
     ]
     return [case(y) for y in yaml_texts]
