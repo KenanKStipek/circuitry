@@ -187,6 +187,11 @@ fn run_resolve_config_case(case: &Dict, root: &Path) {
             );
             let expected_runtime = get(expected_config, "runtime").cloned();
             assert_eq!(cfg.runtime, expected_runtime, "case {name}: runtime");
+            if let (Some(actual_runtime), Some(expected_runtime)) =
+                (&cfg.runtime, &expected_runtime)
+            {
+                assert_same_key_order(actual_runtime, expected_runtime, "runtime");
+            }
         }
         (Err(err), false) => {
             let expected_error = s(expect, "error").replace("<root>", &root_str);

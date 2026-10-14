@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #536",
-  "description": "A use child with validate: false reaches schema validation's own timeout_ms minimum: 0 past the compiler -- a negative timeout_ms is still Python-truthy (core/tool.py:519-520), so it resolves to a 1-second timeout rather than falling back to runtime.tools.timeout_seconds the way an explicit 0 does. A child that ignores SIGTERM and never exits on its own is killed once that 1-second budget elapses.",
+  "description": "A use child with validate: false skips schema validation (timeout_ms minimum: 0), so a negative timeout_ms reaches the compiler -- it is still Python-truthy (core/tool.py:519-520), so it resolves to a 1-second timeout rather than falling back to runtime.tools.timeout_seconds the way an explicit 0 does. A child that ignores SIGTERM and never exits on its own is killed once that 1-second budget elapses.",
   "engines": ["python", "electricity"],
   "expect": "failure",
   "error_compare": "exact"
