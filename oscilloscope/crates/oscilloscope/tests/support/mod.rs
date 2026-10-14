@@ -54,12 +54,30 @@ pub fn e2e_electricity_enabled() -> bool {
 pub const SCRIPTED_CONFIG: &str =
     r#"{"default_adapter":"scripted","default_model":"scripted-model"}"#;
 
-/// electricity's M0-H VM never dispatches a prompt effect (the
-/// `_noop` adapter, issue #431's run wiring), so none of its own e2e
-/// tests need `default_adapter`/`default_model` at all -- an empty
-/// config is exactly what `electricity/crates/electricity/tests/
-/// run_wiring.rs`'s own tests already use.
+/// Every electricity e2e test that dispatches no prompt effect at all
+/// (the `tool`-only and signal tests below) uses this empty config --
+/// the same one `electricity/crates/electricity/tests/run_wiring.rs`'s
+/// own tests already use. A test that does dispatch a prompt effect
+/// (issue #538's B1) builds its own config instead, with
+/// [`scripted_config`].
 pub const ELECTRICITY_CONFIG: &str = "{}";
+
+/// A `runtime.adapters.scripted.replies_file` config pointing at
+/// *replies_path* (an absolute path in the test's own temp directory),
+/// for an electricity e2e test whose document sets its own
+/// document-level `adapter: scripted`/`model:` (issue #538's B1): no
+/// `default_adapter`/`default_model` of its own, since the document
+/// already names both.
+pub fn scripted_config(replies_path: &Path) -> String {
+    serde_json::json!({
+        "runtime": {
+            "adapters": {
+                "scripted": {"replies_file": replies_path.to_string_lossy()}
+            }
+        }
+    })
+    .to_string()
+}
 
 /// How long every signal test waits before sending its first signal
 /// (a cold process start can legitimately take longer than this on a
