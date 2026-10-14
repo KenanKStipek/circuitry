@@ -166,7 +166,7 @@ def _isolated_pgid(
     return None if pgid == os.getpgrp() else pgid
 
 
-def _repeat_group_kill(pgid: int | None) -> None:
+def _repeat_group_kill(pgid: int | None) -> bool:
     """``os.killpg(pgid, SIGKILL)`` again, ignoring ``ProcessLookupError``
     (the whole group is already gone) and ``PermissionError`` (the
     group's last live member is now a zombie nothing has reaped yet --
@@ -189,15 +189,31 @@ def _repeat_group_kill(pgid: int | None) -> None:
     that window within one poll interval regardless of when exactly the
     fork lost the first race -- a pgid can never be reused while any
     member of it is still alive, so repeating the same ``killpg`` is
-    always safe, never reaches a different, unrelated process, and never
-    needs its own total time limit.
+    always safe, never reaches a different, unrelated process.
+
+    Returns whether this call found the group already gone
+    (``ProcessLookupError``, i.e. ``ESRCH``) -- the one outcome that
+    actually means the pgid is now free for the kernel to reuse; a live
+    member or an unreaped zombie (``PermissionError``, see
+    :func:`kill_process_group`'s own docstring) both still own it.
+    :func:`_communicate_promptly`'s own retry loop stops calling this
+    again for the same pgid once it returns ``True`` (#411): the leader
+    that could fork the escaping child this function exists to keep
+    chasing is itself gone the moment ``killpg`` reports ``ESRCH``, so
+    there is nothing left in this group for a further call to reach,
+    and continuing to call it for as long as something outside the
+    group still holds the step's own pipe open would otherwise leave a
+    window for that now-free pgid to be reused.
     """
     if pgid is None:
-        return
+        return True
     try:
         os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
+        return True
+    except PermissionError:
         pass
+    return False
 
 
 def kill_tracked_process(proc: BaseProcess) -> None:
@@ -732,7 +748,15 @@ def _communicate_promptly(
     a child the tracked process forks right at that instant (see that
     helper's own docstring), so this keeps retrying it, at the same
     cadence as everything else here, until ``communicate`` actually sees
-    EOF.
+    EOF. Stops calling it again, for the rest of this call, the first
+    time it reports the group already gone (#411) -- the leader can
+    exit on its own right before the signal, in which case
+    ``CancellationToken.request()``'s own ``kill_process_group`` finds
+    it already reaped and sends no ``killpg`` at all, leaving this loop
+    to send the first one; once that confirms the group is empty, the
+    pgid is free for the kernel to reuse, and a further ``killpg`` here
+    could then reach an unrelated process that happened to get it,
+    rather than this one's own already-gone group.
     """
     # getattr, not proc.stdin: a Popen-like test double that never
     # models a `stdin` attribute at all (most of this catalog's own
@@ -789,6 +813,7 @@ def _communicate_promptly(
         deadline = time.monotonic() + timeout
         full_timeout = timeout
     first = True
+    pgid_gone = False
     while True:
         if deadline is None:
             slice_timeout = poll_seconds
@@ -806,8 +831,8 @@ def _communicate_promptly(
         except subprocess.TimeoutExpired:
             first = False
             token = get_token()
-            if token.is_set() and not token.in_cleanup():
-                _repeat_group_kill(pgid)
+            if pgid is not None and not pgid_gone and token.is_set() and not token.in_cleanup():
+                pgid_gone = _repeat_group_kill(pgid)
 
 
 def run_tracked(

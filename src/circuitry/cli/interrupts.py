@@ -25,6 +25,11 @@ duration of one run:
     lets a tree-flow branch running on a worker thread — which a signal
     never reaches directly — see that the run was cancelled and stop
     promptly instead of running to completion while the main thread waits.
+  - A watcher thread sets the run's cancellation flag and kills every
+    tracked process directly off the raw signal itself, via
+    ``signal.set_wakeup_fd`` (#404) — see :class:`_SignalWatcher`'s own
+    docstring for why the main-thread handler above cannot be the only
+    thing that does this.
   - SIGHUP (a terminal hangup: the terminal window closing, an SSH
     disconnect) is handled exactly like SIGTERM — a hangup kills the
     terminal, not this process's session, and with every tracked child
@@ -93,11 +98,45 @@ class SigHupInterrupt(KeyboardInterrupt):
     during a run — treated exactly like :class:`SigTermInterrupt`."""
 
 
-def _make_handler(exc: type[BaseException]):
+class _SignalCount:
+    """How many countable signals the main-thread handler has itself seen
+    so far this scope — the first-vs-second-signal decision (#404).
+
+    Deliberately not derived from ``CancellationToken.request()``'s own
+    return value, the way it was before this class existed: once
+    :class:`_SignalWatcher` is installed, that call is no longer the
+    first thing to see a given signal — the watcher thread's own call to
+    ``request()`` off the raw signal itself (see that class's docstring)
+    now ordinarily beats the main thread's Python-level handler to it, so
+    by the time the handler below runs, even for a genuinely *first*
+    signal, ``request()`` would already report ``False``. Counting here
+    instead keeps the first/second decision exactly what it always was:
+    whether *this handler* has run before in this scope, not whether the
+    token's flag happened to already be set by the time it got around to
+    checking.
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def note(self) -> bool:
+        """Record one more countable signal; return whether this is the
+        first one this scope has seen."""
+        first = self._count == 0
+        self._count += 1
+        return first
+
+
+def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
     def _handler(signum: int, frame: FrameType | None) -> None:
         del frame
-        first = get_token().request(signum=signum)
-        if not first:
+        # Idempotent, and needed regardless of whether `_SignalWatcher`
+        # already did this off the raw signal itself (#404): a unit test
+        # that calls this handler directly (no real signal, no watcher
+        # involved) still relies on it to set the token's flag, kill
+        # every tracked process, and record `signum`.
+        get_token().request(signum=signum)
+        if not signal_count.note():
             if signum == getattr(signal, "SIGHUP", None):
                 # Every further SIGHUP is a no-op once cancellation has
                 # already been requested by any signal (#357 follow-up) —
@@ -114,6 +153,102 @@ def _make_handler(exc: type[BaseException]):
     return _handler
 
 
+def _watched_signals() -> frozenset[int]:
+    """Signals :class:`_SignalWatcher` reacts to — exactly the ones
+    `sigterm_as_interrupt` itself installs a main-thread handler for.
+
+    Built once `SIGHUP`'s own availability is known, not a module-level
+    literal, since it doesn't exist on Windows.
+    """
+    signums = {signal.SIGINT, signal.SIGTERM}
+    if hasattr(signal, "SIGHUP"):
+        signums.add(signal.SIGHUP)
+    return frozenset(signums)
+
+
+class _SignalWatcher:
+    """Sets the run's cancellation flag (and kills every tracked process)
+    directly off a SIGINT/SIGTERM/SIGHUP, on whichever thread the OS
+    happened to deliver it to — not whenever the main thread next gets
+    around to running the Python-level handler above (#404).
+
+    CPython only ever runs a ``signal.signal``-registered handler's
+    Python bytecode on the main thread, and only the next time that
+    thread's own eval loop checks for one — ordinarily within a fraction
+    of a second, but with no actual bound: a long call that holds the
+    GIL continuously (observed: a cyclic GC pass) or the OS simply not
+    scheduling that thread for a while can delay it past the point where
+    a tree-flow branch's own next step has already started (#399).
+    ``core.cancellation.CancellationToken.request`` — the thing that
+    actually matters for correctness, not the exit-code bookkeeping the
+    handler above still owns — does not need to wait for that: this
+    watcher calls it from a dedicated thread blocked in ``os.read()`` on
+    the read end of a pipe registered with ``signal.set_wakeup_fd``.
+    Writing to that fd happens inside the signal's own low-level,
+    async-signal-safe C trampoline — on whichever thread the signal
+    actually reached, with no dependency on the GIL or on any thread's
+    own bytecode eval loop — so this watcher's ``os.read()`` unblocks the
+    instant the signal is delivered, exactly like any other reader of a
+    pipe that just received data, regardless of what the main thread (or
+    any other thread) happens to be doing at that moment.
+
+    Confirmed with a real test before relying on this (not just
+    asyncio's own docs): a plain ``asyncio.run()`` with no signal handler
+    of its own registered — exactly what ``plugins.mcp_client`` does for
+    every MCP call — never touches ``signal.set_wakeup_fd`` at all, so
+    this watcher keeps working unaffected across one. Only code that
+    explicitly calls ``loop.add_signal_handler`` (asyncio's own opt-in
+    signal mechanism — unused anywhere in this package, directly or via
+    the ``mcp``/``anyio`` libraries the MCP client plugin depends on)
+    would replace the wakeup fd out from under this watcher; nothing
+    here does.
+    """
+
+    def __init__(self) -> None:
+        self._watched = _watched_signals()
+        read_fd, write_fd = os.pipe()
+        # `signal.set_wakeup_fd` requires its fd to be non-blocking: the
+        # write it does from inside a signal handler must never block.
+        os.set_blocking(write_fd, False)
+        self._read_fd = read_fd
+        self._write_fd = write_fd
+        self._previous_wakeup_fd = signal.set_wakeup_fd(write_fd)
+        self._thread = threading.Thread(
+            target=self._run, name="circuitry-signal-watcher", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            try:
+                data = os.read(self._read_fd, 1024)
+            except OSError:
+                return
+            if not data:
+                # The write end was closed by close() below -- the pipe
+                # has reached EOF, so this watcher is done.
+                return
+            for signum in data:
+                if signum in self._watched:
+                    get_token().request(signum=signum)
+
+    def close(self) -> None:
+        """Restore the previous wakeup fd and stop the watcher thread.
+
+        Order matters: the wakeup fd is restored *before* this closes
+        its own write end, so a signal arriving in between writes to
+        whatever the caller had registered before this watcher existed
+        (or nowhere, if it was -1) rather than to an fd this is about to
+        close. Closing the write end afterwards is what actually unblocks
+        the watcher thread's own ``os.read()`` -- a closed write end on a
+        pipe delivers EOF to the reader at once.
+        """
+        signal.set_wakeup_fd(self._previous_wakeup_fd)
+        os.close(self._write_fd)
+        self._thread.join(timeout=5.0)
+        os.close(self._read_fd)
+
+
 @contextmanager
 def sigterm_as_interrupt() -> Iterator[None]:
     """Make SIGINT/SIGTERM/SIGHUP cancel the ``with`` body's run promptly (#356).
@@ -128,8 +263,18 @@ def sigterm_as_interrupt() -> Iterator[None]:
     token = get_token()
     token.reset()
     token.arm()
-    previous_sigint = signal.signal(signal.SIGINT, _make_handler(KeyboardInterrupt))
-    previous_sigterm = signal.signal(signal.SIGTERM, _make_handler(SigTermInterrupt))
+    signal_count = _SignalCount()
+    # POSIX only: `signal.set_wakeup_fd` requires a *socket* handle on
+    # Windows, not a plain `os.pipe()` fd -- an unarmed watcher there
+    # leaves this exactly as it was before #404 (the main-thread handler
+    # alone), not worse.
+    watcher = _SignalWatcher() if os.name == "posix" else None
+    previous_sigint = signal.signal(
+        signal.SIGINT, _make_handler(KeyboardInterrupt, signal_count)
+    )
+    previous_sigterm = signal.signal(
+        signal.SIGTERM, _make_handler(SigTermInterrupt, signal_count)
+    )
     # SIGHUP is installed only when the platform has one (not Windows) and
     # it isn't already ignored on entry -- a caller that ran `cof` under
     # `nohup` (or otherwise set SIG_IGN) means it, and a hangup can't reach
@@ -140,7 +285,7 @@ def sigterm_as_interrupt() -> Iterator[None]:
         and signal.getsignal(signal.SIGHUP) is not signal.SIG_IGN
     )
     previous_sighup = (
-        signal.signal(signal.SIGHUP, _make_handler(SigHupInterrupt))
+        signal.signal(signal.SIGHUP, _make_handler(SigHupInterrupt, signal_count))
         if install_sighup
         else None
     )
@@ -167,5 +312,7 @@ def sigterm_as_interrupt() -> Iterator[None]:
             signal.signal(
                 signal.SIGHUP, signal.SIG_IGN if cancelled else previous_sighup
             )
+        if watcher is not None:
+            watcher.close()
         token.disarm()
         token.reset()

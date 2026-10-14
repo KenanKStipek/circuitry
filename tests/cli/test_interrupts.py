@@ -2,7 +2,9 @@
 bookkeeping (#357 follow-up): a repeated SIGHUP is a no-op while the
 handlers are installed, and a cancelled run leaves SIGHUP ignored past
 this scope's own exit rather than reverting to whatever handler it found
-on entry.
+on entry. Also covers `_SignalWatcher` itself (#404): it sets the
+cancellation flag off the raw signal, independent of the main thread's
+own Python-level handler, and survives a plain `asyncio.run()`.
 
 Fast, in-process checks of the signal-handler mechanism itself — the real
 end-to-end behavior (an actual hangup killing a running branch,
@@ -13,8 +15,11 @@ against a real subprocess by `tests/cli/test_run_sighup.py` and
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
+import threading
+import time
 from types import FrameType
 
 import pytest
@@ -143,3 +148,116 @@ def test_second_sigint_exits_on_a_platform_without_sighup(monkeypatch) -> None:
             signal.SIGHUP = previous_sighup
 
     assert exit_codes == [130]
+
+
+def test_watcher_sets_the_cancellation_flag_from_a_signal_delivered_to_a_worker_thread(
+) -> None:
+    """#404: the core of the fix. `_SignalWatcher` must set the token's
+    flag off the raw signal itself, not wait for the main thread's own
+    Python-level handler -- which only ever runs on the main thread's
+    own bytecode eval loop, and can be arbitrarily delayed if that
+    thread is blocked elsewhere (#399).
+
+    Proven here with the main thread genuinely parked: it blocks in
+    `Thread.join()` -- a C-level wait that a signal delivered to a
+    *different* thread's tid does not interrupt -- while a worker
+    thread self-delivers SIGINT via `signal.pthread_kill` and then keeps
+    running a while longer, so the main thread's own join() cannot
+    return (and so cannot reach bytecode to run its handler) until well
+    after a third, independent poller thread already observed the
+    token cancelled.
+    """
+    with sigterm_as_interrupt():
+        token = get_token()
+        seen_promptly = threading.Event()
+
+        def _poll_for_cancellation() -> None:
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if token.is_set():
+                    seen_promptly.set()
+                    return
+                time.sleep(0.005)
+
+        def _signal_self_then_keep_the_main_thread_blocked() -> None:
+            poller = threading.Thread(target=_poll_for_cancellation)
+            poller.start()
+            signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+            # Outlasts the poller's own 1.0s window -- the main thread's
+            # `join()` below cannot return, and so cannot run its own
+            # handler, until this thread does.
+            time.sleep(1.5)
+            poller.join(timeout=5.0)
+
+        worker = threading.Thread(target=_signal_self_then_keep_the_main_thread_blocked)
+        worker.start()
+        try:
+            worker.join(timeout=10.0)
+        except KeyboardInterrupt:
+            # Expected: the main thread's own Python-level handler also
+            # raises here, the instant it next gets to check for a
+            # pending call once `join()` itself returns -- this test is
+            # only interested in `seen_promptly`, set well before that by
+            # the watcher thread, not in this handler's own behaviour
+            # (covered by the rest of this module).
+            pass
+
+        assert seen_promptly.is_set(), (
+            "the watcher never set the cancellation flag while the main "
+            "thread was still blocked in worker.join()"
+        )
+        assert token.signum == signal.SIGINT
+
+
+def test_a_signal_the_watcher_already_flagged_is_still_the_handler_s_first_signal(
+) -> None:
+    """#404 regression: once `_SignalWatcher` exists, its own call to
+    `CancellationToken.request()` ordinarily beats the main thread's
+    Python-level handler to it, so `request()`'s return value can no
+    longer tell that handler whether *it* is seeing the first signal --
+    it would already read `False` even for a genuinely first SIGINT,
+    which (unfixed) would make the handler take the second-signal
+    `os._exit` path immediately, with no cleanup, on every run's very
+    first Ctrl-C. `_SignalCount` exists to keep this decision independent
+    of the token's own flag -- simulated directly here by setting the
+    flag (as the watcher would) before the handler itself ever runs.
+    """
+    with sigterm_as_interrupt():
+        token = get_token()
+        token.request(signum=signal.SIGINT)  # simulates the watcher winning the race
+
+        handler = signal.getsignal(signal.SIGINT)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGINT, None)
+
+
+def test_wakeup_fd_unaffected_by_asyncio_run_with_no_signal_handlers_registered() -> (
+    None
+):
+    """#404: before relying on `signal.set_wakeup_fd` for `_SignalWatcher`,
+    confirm with a real test -- not just asyncio's own docs -- that a
+    plain `asyncio.run()` never replaces it. `plugins.mcp_client`'s own
+    `_run_coroutine` calls exactly this (`asyncio.run(coro)` once per MCP
+    call, with no signal handler of its own registered), so the watcher
+    must keep working across one. ``asyncio.run()`` only ever touches the
+    wakeup fd via ``loop.add_signal_handler`` -- asyncio's own opt-in
+    mechanism, which nothing in this package or its `mcp`/`anyio`
+    dependencies calls.
+    """
+    with sigterm_as_interrupt():
+        registered_fd = signal.set_wakeup_fd(-1)
+        signal.set_wakeup_fd(registered_fd)
+        assert registered_fd != -1, "the watcher's own wakeup fd must be set"
+
+        async def _trivial() -> None:
+            await asyncio.sleep(0.01)
+
+        asyncio.run(_trivial())
+
+        after_fd = signal.set_wakeup_fd(-1)
+        signal.set_wakeup_fd(after_fd)
+        assert after_fd == registered_fd, (
+            "asyncio.run() replaced the watcher's own wakeup fd -- "
+            "_SignalWatcher would stop seeing real signals during an "
+            "MCP call"
+        )

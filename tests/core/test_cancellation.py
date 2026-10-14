@@ -957,3 +957,54 @@ def test_communicate_promptly_does_not_repeat_the_group_kill_when_not_cancelled(
     )
     assert result == ("out", "err")
     assert killpg_calls == []
+
+
+def test_communicate_promptly_stops_repeating_the_group_kill_once_the_group_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#411: the leader can exit (and get reaped) on its own just before
+    the signal arrives, so `CancellationToken.request()`'s own
+    `kill_process_group` finds it already gone and sends no `killpg` at
+    all -- the repeat loop here then sends the *first* `killpg` for this
+    pgid, which raises `ProcessLookupError` (the group is genuinely
+    empty by then). A process outside the group still holds the step's
+    pipe open regardless (the real-world shape: something that forked
+    before the leader died, inheriting the same stdout/stderr), so
+    `communicate()` keeps timing out -- `_communicate_promptly` must not
+    call `killpg` again for this pgid once it has seen that error, since
+    the pgid is free for the kernel to reuse from that point on.
+    """
+    token = CancellationToken()
+    token.request()
+    monkeypatch.setattr(cancellation, "_token", token)
+
+    killpg_calls: list[tuple[int, int]] = []
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        killpg_calls.append((pgid, sig))
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    class _FakeProc:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.args = ["x"]
+
+        def communicate(
+            self, input: Any = None, timeout: float | None = None
+        ) -> tuple[str, str]:
+            self.calls += 1
+            if self.calls < 4:
+                raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
+            return "out", "err"
+
+    proc = _FakeProc()
+    result = cancellation._communicate_promptly(
+        proc, input=None, timeout=None, pgid=777, poll_seconds=0.01  # type: ignore[arg-type]
+    )
+    assert result == ("out", "err")
+    assert proc.calls == 4
+    assert killpg_calls == [(777, signal.SIGKILL)]
