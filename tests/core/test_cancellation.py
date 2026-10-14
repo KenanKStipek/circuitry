@@ -32,6 +32,7 @@ from circuitry.core.cancellation import (
     acquire_promptly,
     as_completed_promptly,
     deferred_signal_region,
+    get_token,
     kill_process_group,
     kill_tracked_process,
     poll_promptly,
@@ -39,6 +40,26 @@ from circuitry.core.cancellation import (
     submit_with_context,
     wait_for_cancelled_branches,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_signal_state():
+    """Same fixture as `tests.cli.test_interrupts` (delta review of PR
+    #553, P2-5): this file's own `sigterm_as_interrupt`/real-SIGINT test
+    mutates process-wide signal handlers and the module-level
+    `CancellationToken` singleton -- undo both after every test here,
+    regardless of what the test itself left behind, so this file can
+    never leak state into a test that runs after it (e.g. a later `cof
+    run` subprocess test finding SIGHUP still `SIG_IGN`).
+    """
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        sigs.append(signal.SIGHUP)
+    previous = {sig: signal.getsignal(sig) for sig in sigs}
+    yield
+    for sig, handler in previous.items():
+        signal.signal(sig, handler)
+    get_token().reset()
 
 
 class _FakeTrackedProc:
@@ -1078,10 +1099,18 @@ def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
     and actually release the lock.
     """
     exit_code = threading.Condition.__exit__.__code__
+    # Saved and restored, never set to `None` (delta review of PR #553,
+    # P2-6): pytest-cov installs its own tracer via `sys.settrace`, and
+    # CI runs with `--cov` -- clobbering it with `None` (on the self-
+    # disarm below, or this context manager's own exit) silently drops
+    # coverage instrumentation on the main thread for every test that
+    # runs after this one. There's no `fail_under` configured, so nothing
+    # here would have failed CI, only under-reported its coverage numbers.
+    previous_trace = sys.gettrace()
 
     def _tracer(frame: Any, event: str, arg: Any) -> Any:
         if event == "call" and frame.f_code is exit_code:
-            sys.settrace(None)
+            sys.settrace(previous_trace)
             if cancellation.is_deferring_first_signal():
                 cancellation.defer_first_signal_exception(
                     KeyboardInterrupt(
@@ -1098,7 +1127,7 @@ def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
     try:
         yield
     finally:
-        sys.settrace(None)
+        sys.settrace(previous_trace)
 
 
 def test_bare_add_done_callback_under_a_signal_at_condition_exit_leaks_the_lock(
@@ -1252,30 +1281,22 @@ def test_a_worker_threads_deferred_region_never_defers_the_main_threads_signal()
         except BaseException as exc:  # pragma: no cover - the failure mode
             worker_outcome.append(type(exc).__name__)
 
-    # A cancelled run leaves SIGHUP ignored on its way out (by design): put
-    # back what this process had, so later tests see their own handlers.
-    saved = {
-        sig: signal.getsignal(sig)
-        for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None))
-        if sig is not None
-    }
-    try:
-        with sigterm_as_interrupt():
-            thread = threading.Thread(target=worker)
-            thread.start()
-            try:
-                assert in_region.wait(5)
-                assert not cancellation.is_deferring_first_signal()
-                with pytest.raises(KeyboardInterrupt):
-                    os.kill(os.getpid(), signal.SIGINT)
-                    for _ in range(100):
-                        time.sleep(0.02)
-            finally:
-                release.set()
-                thread.join(5)
-    finally:
-        for sig, handler in saved.items():
-            signal.signal(sig, handler)
+    # Handler restore and token reset are the autouse `_restore_process_
+    # signal_state` fixture's job now (delta review of PR #553, P2-5) --
+    # this used to restore inline.
+    with sigterm_as_interrupt():
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            assert in_region.wait(5)
+            assert not cancellation.is_deferring_first_signal()
+            with pytest.raises(KeyboardInterrupt):
+                os.kill(os.getpid(), signal.SIGINT)
+                for _ in range(100):
+                    time.sleep(0.02)
+        finally:
+            release.set()
+            thread.join(5)
     assert worker_outcome == ["ok"]
 
 
