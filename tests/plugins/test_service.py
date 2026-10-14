@@ -933,8 +933,10 @@ def test_a_service_stays_up_for_a_few_seconds_then_stops(
 
 
 def _pids_with_marker(marker: str) -> list[int]:
+    # `-ww`: unlimited width. Without it Linux's procps can cut every line at
+    # 80 columns (it does under pytest), and the marker sits past that.
     out = subprocess.run(
-        ["ps", "-eo", "pid,command"], capture_output=True, text=True, check=False
+        ["ps", "-ww", "-eo", "pid,command"], capture_output=True, text=True, check=False
     )
     pids: list[int] = []
     for line in out.stdout.splitlines()[1:]:
