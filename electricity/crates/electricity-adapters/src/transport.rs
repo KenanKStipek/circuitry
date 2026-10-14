@@ -804,9 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_connection_refused_maps_to_exit_7_and_is_retryable() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let url = format!("http://{addr}/x");
         let outcome = run_curl(&url, &[], None, 5).await.unwrap();
         assert_eq!(outcome.returncode, 7);
@@ -1149,9 +1147,7 @@ mod tests {
 
     #[tokio::test]
     async fn head_probe_fails_on_a_closed_port() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let url = format!("http://{addr}/api/tags");
         assert!(!head_probe(&url, Duration::from_secs(2)).await);
     }

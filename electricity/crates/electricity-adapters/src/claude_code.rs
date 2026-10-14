@@ -117,7 +117,6 @@ mod tests {
     use electricity_bytecode::EffectPath;
     use electricity_value::{CancellationToken, Dict};
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
 
     fn dict(pairs: &[(&str, Value)]) -> Value {
         let mut d = Dict::new();
@@ -142,12 +141,27 @@ mod tests {
     /// Claude Code's own `--output-format json` result object.
     fn write_fake_claude(dir: &std::path::Path, script: &str) -> String {
         let path = dir.join("claude");
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(script.as_bytes()).unwrap();
-        drop(file);
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o700);
-        std::fs::set_permissions(&path, perms).unwrap();
+        // Written by a short-lived child process rather than by this test
+        // process: if another test thread forked while this process held
+        // the file open for writing, the forked child would hold that
+        // handle until its own exec, and exec'ing the script in the
+        // meantime fails with ETXTBSY ("Text file busy") on Linux. A
+        // child's handle is never inherited by this process's forks.
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("cat > \"$1\" && chmod 700 \"$1\"")
+            .arg("sh")
+            .arg(&path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "writing the fake failed");
         path.to_string_lossy().into_owned()
     }
 
@@ -488,7 +502,9 @@ mod tests {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             tokio::select! {
-                _ = &mut fut => panic!("must not finish before the capture file is written"),
+                result = &mut fut => panic!(
+                    "must not finish before the capture file is written: {result:?}"
+                ),
                 () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
             }
             let written = std::fs::read_to_string(&capture).is_ok_and(|c| !c.trim().is_empty());

@@ -1208,9 +1208,7 @@ mod tests {
         // Review finding F1: `urllib.error.URLError` (a connect-phase
         // failure) is unconditionally retryable, the same as a curl
         // exit this crate already retries (6/7/28/35/52/56).
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let a = adapter(&format!("http://{addr}"));
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -1404,9 +1402,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_reports_missing_host_masking_userinfo_for_a_closed_port() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
+        let addr = crate::test_support::closed_port();
         let a = adapter(&format!("http://user:secret@{addr}"));
         let r = a.check().await;
         assert!(!r.ok);

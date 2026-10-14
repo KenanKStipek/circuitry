@@ -334,9 +334,7 @@ async fn a_non_utf8_body_decodes_with_replacement_characters() {
 
 #[tokio::test]
 async fn a_connection_refused_raises_the_wrapped_runtime_error() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let addr = closed_port();
     let token = CancellationToken::new();
     let url = format!("http://{addr}/");
     let err = ToolPlugin::execute(
@@ -373,4 +371,20 @@ async fn a_blank_url_is_a_value_error() {
 fn check_is_trivially_ok() {
     let check: CheckResult = electricity_tools::http::HttpPlugin.check();
     assert!(check.ok);
+}
+
+/// A loopback address nothing answers: port 1, which nothing listens on in
+/// CI or on a developer machine, and which is below the ephemeral range,
+/// so a parallel test binding `127.0.0.1:0` is never handed it. Binding
+/// `127.0.0.1:0` and dropping the listener freed a port that a parallel
+/// test's mock server could take and answer instead. (A bound socket that
+/// never listens isn't portable: macOS lets a connect to it time out
+/// rather than refusing it.)
+fn closed_port() -> std::net::SocketAddr {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+    assert!(
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_err(),
+        "127.0.0.1:1 accepts connections on this machine; these tests need it closed"
+    );
+    addr
 }
