@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #390",
+  "description": "A merge key inside a mapping that is itself merged into another mapping, two levels deep (base <- templates.defaults <- effect), with the merge source overriding one of its own merged-in keys. Breadth-first construction used to reach the shallower mapping (effect) before the merge source's own mapping (templates.defaults), raising a false DuplicateKeyError; the document loads and runs the same on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

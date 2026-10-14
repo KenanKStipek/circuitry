@@ -126,22 +126,6 @@ pub const MAX_NODES: usize = 1_000_000;
 // Known divergences from Circuitry's own loader (`core/yaml_load.py`)
 // ---------------------------------------------------------------------
 //
-// - **Merge-source mutation (circuitry#390).** Circuitry's own
-//   `_UniqueKeyLoader.construct_mapping` runs its duplicate-key pre-pass
-//   over a `MappingNode`'s `.value` list in place, but PyYAML's
-//   `SafeConstructor.flatten_mapping` *also* mutates that same list (in
-//   place) when expanding a `<<:` merge key -- so a merge source shared
-//   by two mappings (an anchor merged into one mapping that is itself
-//   anchored and merged into a third) can have *already* been expanded
-//   once by the time Circuitry's own pre-pass walks the second
-//   mapping's keys, producing a `DuplicateKeyError` that plain
-//   `yaml.safe_load` does not raise on the same document. This is a bug
-//   in Circuitry's own loader, not in the YAML it's loading -- filed as
-//   circuitry#390 -- and electricity-yaml must not reproduce it: it
-//   matches `yaml.safe_load`'s result instead, pinned by the golden
-//   corpus's `known_divergence_cases` (`generate_yaml_corpus.py`) with
-//   the expected value taken from `yaml.safe_load`, not from
-//   Circuitry's own `load_yaml`.
 // - **Unrepresentable tags** (`!!set`, `!!omap`, `!!pairs`, any unknown
 //   tag): `Value` has no set or tuple-list variant to hold what these
 //   construct in Python (`DESIGN.md` §3.1), so electricity-yaml refuses

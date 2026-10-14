@@ -35,8 +35,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml  # type: ignore[import-untyped]
-
 from circuitry.core.yaml_load import DuplicateKeyError, load_yaml
 
 OUTPUT = (
@@ -462,47 +460,6 @@ def _extra_known_divergence_cases() -> list[dict]:
     ]
 
 
-def merge_source_mutation_divergence_cases() -> list[dict]:
-    """circuitry#390: Circuitry's own `_UniqueKeyLoader.construct_mapping`
-    mutates a `MappingNode`'s `.value` list in its duplicate-key
-    pre-pass, but `SafeConstructor.flatten_mapping` *also* mutates that
-    same list in place when expanding a `<<:` merge key -- so a merge
-    source shared by two mappings (one merged into another that's itself
-    merged into a third) can already have been expanded once by the time
-    the pre-pass walks the second mapping's keys, raising a
-    `DuplicateKeyError` that plain `yaml.safe_load` does not raise on the
-    same document. This is a bug in Circuitry's own loader, not in the
-    YAML it's loading -- electricity-yaml must not reproduce it, so this
-    one case's expected value deliberately comes from `yaml.safe_load`,
-    not from `load_yaml` (every other case in this file's ground truth).
-    """
-    yaml_text = (
-        "base: &base\n"
-        "  retries: 1\n"
-        "  timeout: 5\n"
-        "templates:\n"
-        "  defaults: &defaults\n"
-        "    <<: *base\n"
-        "    retries: 2\n"
-        "effect:\n"
-        "  <<: *defaults\n"
-    )
-    return [
-        {
-            "yaml": yaml_text,
-            "kind": "value",
-            "repr": repr(yaml.safe_load(yaml_text)),
-            "note": (
-                "circuitry#390: Circuitry's own load_yaml raises a false "
-                "DuplicateKeyError on this document; electricity-yaml "
-                "matches yaml.safe_load instead -- a deliberate, "
-                "documented divergence from Circuitry's own loader, not "
-                "from this crate's ground truth in general."
-            ),
-        }
-    ]
-
-
 # ---------------------------------------------------------------------
 # `=` and `<<` standing alone as a value (not a merge/value tag use)
 # ---------------------------------------------------------------------
@@ -601,6 +558,46 @@ def merge_cases() -> list[dict]:
         # `{=: 5}` case) never goes through the outer pre-pass that would
         # otherwise fail on it first.
         "<<: {=: 1}\n",
+        # circuitry#390: a merge source overriding its own merged key is
+        # not a duplicate, even when breadth-first construction reaches
+        # a shallower mapping that merges it in before the source
+        # mapping itself is ever constructed directly.
+        (
+            "base: &base\n"
+            "  retries: 1\n"
+            "  timeout: 5\n"
+            "templates:\n"
+            "  defaults: &defaults\n"
+            "    <<: *base\n"
+            "    retries: 2\n"
+            "effect:\n"
+            "  <<: *defaults\n"
+        ),
+        # the same shape, with the merge source itself reached through
+        # a list of merges (`<<: [*a, *b]`) rather than a single alias.
+        (
+            "a: &a {x: 1, y: 2}\n"
+            "b: &b {y: 20, z: 3}\n"
+            "mid: &mid\n"
+            "  <<: [*a, *b]\n"
+            "  y: 200\n"
+            "top:\n"
+            "  <<: *mid\n"
+        ),
+        # a merge chain three levels deep, each level overriding one of
+        # the keys the level below merged in.
+        (
+            "l1: &l1 {r: 1, t: 5}\n"
+            "l2: &l2\n"
+            "  <<: *l1\n"
+            "  r: 2\n"
+            "l3: &l3\n"
+            "  <<: *l2\n"
+            "  t: 50\n"
+            "l4:\n"
+            "  <<: *l3\n"
+            "  r: 3\n"
+        ),
     ]
     return [case(y) for y in yaml_texts]
 
@@ -755,8 +752,7 @@ def non_ascii_cases() -> list[dict]:
 # without tripling every single case. Every variant's expected result is
 # *rederived from scratch* -- never copied from the original case --
 # through whichever of this file's own case-building paths produced the
-# original (`case()`, a `known_divergence`, or circuitry#390's own
-# `yaml.safe_load`-sourced expectation), so a transformation that
+# original (`case()` or a `known_divergence`), so a transformation that
 # happens to change the parsed value (the key rename does; the comment
 # never does) is still checked against the real loader's own answer,
 # never assumed to match the original case's.
@@ -799,14 +795,7 @@ def _rebuild_case(original: dict, new_yaml: str, original_index: int) -> dict:
     one-line comment -- adds on top of it, which should always be
     exactly zero.
     """
-    if original.get("note"):  # circuitry#390's own yaml.safe_load-sourced case
-        entry = {
-            "yaml": new_yaml,
-            "kind": "value",
-            "repr": repr(yaml.safe_load(new_yaml)),
-            "note": original["note"],
-        }
-    elif original["kind"] == "known_divergence":
+    if original["kind"] == "known_divergence":
         entry = _divergence_from_error(
             new_yaml,
             rust_error_tag=original.get("rust_error_tag"),
@@ -968,7 +957,6 @@ def build_corpus() -> list[dict]:
         + timestamp_cases()
         + explicit_tag_cases()
         + known_divergence_cases()
-        + merge_source_mutation_divergence_cases()
         + value_and_merge_tag_errors()
         + anchor_cases()
         + anchor_order_cases()
