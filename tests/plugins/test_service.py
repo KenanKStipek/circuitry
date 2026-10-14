@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from process_ownership_support import owned
 
 from circuitry.core.cancellation import RunCancelledBySignal, get_token
 from circuitry.plugins import service as service_mod
@@ -132,6 +133,21 @@ def _port_open(port: int) -> bool:
         return False
 
 
+def _owned(pgid: int) -> bool:
+    """Whether *pgid* still names a live group this module's own
+    ``_SERVER_MARKER`` can be found in (#561): a dead group's id, or one
+    reused since, never does, so a teardown must not killpg it either."""
+    return owned(pgid, (_SERVER_MARKER,), by="pgid")
+
+
+def _kill_owned_group(pgid: int) -> None:
+    if _owned(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 @pytest.fixture
 def state_dir(tmp_path: Path) -> Iterator[Path]:
     path = tmp_path / "state"
@@ -140,9 +156,9 @@ def state_dir(tmp_path: Path) -> Iterator[Path]:
     for record_path in path.glob("*.json"):
         try:
             pgid = int(json.loads(record_path.read_text())["pgid"])
-            os.killpg(pgid, signal.SIGKILL)
         except (OSError, ValueError, KeyError):
-            pass
+            continue
+        _kill_owned_group(pgid)
 
 
 @pytest.fixture
@@ -846,14 +862,30 @@ def _finally_orchestration(tmp_path: Path, port: int, middle: str) -> Path:
 
 @pytest.fixture
 def started_groups() -> Iterator[list[int]]:
-    """Process groups a whole-run test started — killed if a test left one."""
+    """Process groups a whole-run test started — killed if a test left one
+    and `_owned` still finds it ours (#561): a group already gone, or whose
+    id has since been reused, is skipped rather than killed."""
     pgids: list[int] = []
     yield pgids
     for pgid in pgids:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
+        _kill_owned_group(pgid)
+
+
+def test_started_groups_teardown_skips_a_group_already_seen_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group a `started_groups` teardown finds already gone -- or whose
+    id now names some other live process entirely -- is skipped, never
+    signalled (#561): exactly the check each pgid in that fixture's own
+    teardown loop runs."""
+    gone = subprocess.Popen(["true"], start_new_session=True)
+    gone.wait(timeout=10)
+    killpg_calls: list[int] = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killpg_calls.append(pgid))
+
+    _kill_owned_group(gone.pid)
+
+    assert killpg_calls == []
 
 
 @pytest.mark.parametrize("middle", ["succeed", "fail"])
