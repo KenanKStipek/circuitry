@@ -546,6 +546,11 @@ def check_deferred_signal() -> None:
     :func:`deferred_signal_region` exiting instead, which raises
     automatically (below), rather than call this itself from inside one.
     """
+    if threading.current_thread() is not threading.main_thread():
+        # The parked exception is the main thread's own: a coordination
+        # loop on a worker thread (a tree nested inside a tree branch) must
+        # never take it and raise it there instead.
+        return
     exc = _take_deferred_signal_exception()
     if exc is not None:
         raise exc
@@ -586,6 +591,14 @@ def deferred_signal_region() -> Iterator[None]:
     nothing to defer a second time regardless, since only ever one
     exception is parked.
     """
+    if threading.current_thread() is not threading.main_thread():
+        # A Python-level signal handler only ever runs on the main thread,
+        # so nothing is raised asynchronously on this one and there is
+        # nothing to defer. Counting this region would also make the main
+        # thread's own handler defer a signal it should raise, and hand
+        # that exception to this thread at the region's exit.
+        yield
+        return
     global _defer_depth
     _defer_depth += 1
     try:
@@ -630,7 +643,9 @@ def submit_with_context(
     its own narrower one, is what makes forgetting that loud instead of a
     rare, signal-timing-dependent lost branch.
     """
-    assert is_deferring_first_signal(), (
+    assert threading.current_thread() is not threading.main_thread() or (
+        is_deferring_first_signal()
+    ), (
         "submit_with_context must be called inside the caller's own "
         "deferred_signal_region, covering both this call and recording "
         "its returned future -- see this function's own docstring"

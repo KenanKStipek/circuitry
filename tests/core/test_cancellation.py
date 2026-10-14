@@ -1227,3 +1227,77 @@ def test_as_completed_promptly_no_longer_uses_a_private_threading_event(
     f: Future[None] = Future()
     f.set_result(None)
     assert list(as_completed_promptly([f])) == [f]
+
+
+def test_a_worker_threads_deferred_region_never_defers_the_main_threads_signal() -> None:
+    """A tree nested inside a tree branch dispatches from a worker thread,
+    inside its own `deferred_signal_region`. That region must not count for
+    the main thread: the main thread's first signal still raises on the
+    main thread, and the worker's region exit raises nothing."""
+    import os
+
+    from circuitry.cli.interrupts import sigterm_as_interrupt
+    from circuitry.core import cancellation
+
+    worker_outcome: list[str] = []
+    in_region = threading.Event()
+    release = threading.Event()
+
+    def worker() -> None:
+        try:
+            with cancellation.deferred_signal_region():
+                in_region.set()
+                release.wait(5)
+            worker_outcome.append("ok")
+        except BaseException as exc:  # pragma: no cover - the failure mode
+            worker_outcome.append(type(exc).__name__)
+
+    # A cancelled run leaves SIGHUP ignored on its way out (by design): put
+    # back what this process had, so later tests see their own handlers.
+    saved = {
+        sig: signal.getsignal(sig)
+        for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None))
+        if sig is not None
+    }
+    try:
+        with sigterm_as_interrupt():
+            thread = threading.Thread(target=worker)
+            thread.start()
+            try:
+                assert in_region.wait(5)
+                assert not cancellation.is_deferring_first_signal()
+                with pytest.raises(KeyboardInterrupt):
+                    os.kill(os.getpid(), signal.SIGINT)
+                    for _ in range(100):
+                        time.sleep(0.02)
+            finally:
+                release.set()
+                thread.join(5)
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+    assert worker_outcome == ["ok"]
+
+
+def test_check_deferred_signal_on_a_worker_thread_leaves_the_main_threads_exception() -> None:
+    from circuitry.core import cancellation
+
+    parked = KeyboardInterrupt()
+    cancellation.defer_first_signal_exception(parked)
+    try:
+        raised: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                cancellation.check_deferred_signal()
+            except BaseException as exc:  # pragma: no cover - the failure mode
+                raised.append(exc)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join(5)
+        assert raised == []
+        with pytest.raises(KeyboardInterrupt):
+            cancellation.check_deferred_signal()
+    finally:
+        cancellation.defer_first_signal_exception(None)  # type: ignore[arg-type]
