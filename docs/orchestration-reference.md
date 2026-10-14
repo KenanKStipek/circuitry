@@ -102,7 +102,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `provider` | string | no | — | Per-effect provider override |
 | `provider_fallbacks` | array | no | — | Ordered fallback providers. Tried on a dispatch failure *and* on a reply this effect can't use (an unreadable boolean/number, schema-invalid JSON) — either moves to the next provider before a retry is counted. Each attempt lands in `meta.fallback_attempts` with its own `tokens_sent`/`tokens_received` and, for an unusable reply, a size-capped `raw_reply` and a `decode_failed`/`schema_invalid` status |
 | `params` | object | no | — | Generation parameters. `temperature`, `max_tokens` and `stop` are mapped to each provider's own names; every other key goes to the provider unchanged (e.g. ollama `num_ctx`, OpenAI `top_p`) — see [Generation options](#generation-options-messages-and-images) |
-| `timeout_ms` | integer | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout |
+| `timeout_ms` | integer or `{from, default}` | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout. Or read it from state, `{from: <path>, default: <int>}`: see [`timeout_ms` from state](#timeout_ms-from-state) |
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
@@ -667,6 +667,28 @@ rest of the run.
 
 ---
 
+### `timeout_ms` from state
+
+A `prompt` or `tool` effect's `timeout_ms` is an integer literal, or a reference to a value in state that is read when the effect is dispatched:
+
+```yaml
+- type: tool
+  name: session
+  provider: agent
+  timeout_ms: {from: prime.spec.value.timeout_ms, default: 3600000}
+  params_json: "{{{prime.spec.value.agent}}}"
+```
+
+| Key | Type | Required | Constraints |
+|-----|------|----------|-------------|
+| `from` | string | yes | A state path, rooted like every other [`{from:}`](#params-by-reference): `input.`, `prime.`, `runtime.`, or an enclosing loop's binding (`each.as`, `iter`). `cof check` rejects any other root |
+| `default` | integer | no | A positive integer, used when the path is missing (or `null`) |
+
+- **When.** Resolved for each attempt, at the moment that attempt is dispatched, from current state, so a retry reads whatever the state holds by then. In a loop body it sees the iteration's bindings; in a `use` child it sees the child's own `input.*`. `use` has no `timeout_ms` of its own: a child's `prompt` and `tool` effects read theirs from the child's inputs, e.g. `timeout_ms: {from: input.budget_ms}`.
+- **What it must be.** A positive integer. A string (even `"5000"`), a float, a boolean, `0`, a negative number, an array or an object fails the effect, with an error that names the path: `Tool effect 'session': timeout_ms '{from: prime.spec.value.timeout_ms}' resolved to '90'; expected a positive integer.` A resolution failure is not retried: it fails the effect under its `on_error`, like a template that does not render.
+- **Missing.** A path that is missing or holds `null` takes `default`. Without a `default` it fails the effect: `timeout_ms '{from: <path>}' did not resolve to a value and has no default.`
+- **Everything else is as for a literal.** The resolved value is rounded up to whole seconds, a prompt's is capped by the adapter that attempt dispatches to, and `retries` and `on_error` apply as usual. A dry run (`--dry-run`) dispatches nothing and resolves nothing.
+
 ### `tool`
 
 Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously and writes its result to state. Tool effects do not require an `adapter` or `model` at the orchestration level — those fields only need to be set if the orchestration also contains `prompt` effects.
@@ -682,7 +704,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
 | `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. A leaf anywhere in `params` (any depth, in objects and lists), `{from: <path>}`, passes the value at that path unchanged instead of rendering it (see [Params by reference](#params-by-reference)). Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
 | `params_json` | string | no | — | A Mustache template rendered to text and parsed as JSON, producing a real array/object instead of a Mustache-rendered string. Deep-merged over `params` (wins on overlapping keys). See [`params_json`](#params_json) below |
-| `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
+| `timeout_ms` | integer or `{from, default}` | no | — | Per-effect timeout in milliseconds. Or read it from state, `{from: <path>, default: <int>}`: see [`timeout_ms` from state](#timeout_ms-from-state) |
 | `retries` | object | no | — | `{max_attempts, backoff_ms}` — see [Retries](#tool-retries) below |
 | `expect` | string or object | no | — | Output check, run after a successful attempt — see [`expect`](#tool-expect) below |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |

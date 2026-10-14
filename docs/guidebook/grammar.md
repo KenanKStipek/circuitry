@@ -64,7 +64,7 @@ Prompt ::= { type: 'prompt', name: NAME,
              model?: STRING, provider?: STRING, provider_fallbacks?: STRING*,
              params?: MAP, inputs?: MAP,                — inputs: prompt-local template vars
              assets?: Asset*, retries?: Retry,
-             timeout_ms?: INT, deterministic?: BOOL,
+             timeout_ms?: INT | {from: PATH, default?: INT}, deterministic?: BOOL,
              group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
              on_error?: OnError, description?: STRING }
 
@@ -133,7 +133,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            params?: MAP,                                 — string values Mustache-rendered; wins over prompt/model
            params_json?: TEMPLATE,                       — renders to a JSON object; deep-merged over params
            group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
-           timeout_ms?: INT, retries?: Retry, expect?: Expect,
+           timeout_ms?: INT | {from: PATH, default?: INT}, retries?: Retry, expect?: Expect,
            on_error?: OnError, description?: STRING }
 
 Expect ::= CEL                                           — shorthand for {mode: cel, expr: CEL}

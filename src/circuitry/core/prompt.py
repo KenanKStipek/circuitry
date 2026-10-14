@@ -41,6 +41,7 @@ from .prompt_compose import (
 )
 from .store import Store
 from .templates import render_template
+from .timeout_ref import TimeoutFrom, resolve_timeout_ms
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +309,9 @@ class PromptDefinition:
 
     # Execution parameters
     params: dict[str, Any] | None = None
-    timeout_ms: int | None = None
+    #: A literal, or ``{from: <path>, default: <int>}`` read from state at each
+    #: attempt's dispatch (#564).
+    timeout_ms: int | TimeoutFrom | None = None
     deterministic: bool = False
 
     # Prompt-local structured values
@@ -700,6 +703,15 @@ class PromptRuntime:
                         else:
                             _console.print(retry_line)
 
+                # Per attempt, from the state this attempt sees (#564). A
+                # reference that can't resolve fails the effect, not a retry:
+                # a retry reads the same state.
+                timeout_ms = resolve_timeout_ms(
+                    self.defn.timeout_ms,
+                    effective_ctx,
+                    effect_label=f"Prompt effect '{self.defn.name}'",
+                )
+
                 if self.verbose and self.cb_start is None:
                     from rich.live import Live
 
@@ -731,6 +743,7 @@ class PromptRuntime:
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
                             attempts=attempts,
+                            timeout_ms=timeout_ms,
                             options=options,
                             meta=meta,
                             option_warnings=option_warnings,
@@ -1116,9 +1129,10 @@ class PromptRuntime:
         run-default lookup also use."""
         return configured_timeout_seconds(adapter_name, self.runtime_config)
 
-    def _attempt_timeout_seconds(self, adapter_name: str) -> int:
-        """One attempt's budget: the effect's ``timeout_ms``, capped by the
-        timeout of the adapter this attempt actually dispatches to.
+    def _attempt_timeout_seconds(self, adapter_name: str, timeout_ms: int | None) -> int:
+        """One attempt's budget: the effect's ``timeout_ms`` (*timeout_ms*, already
+        resolved for this attempt), capped by the timeout of the adapter this
+        attempt actually dispatches to.
 
         Precedence: this effect's ``timeout_ms`` (rounded up to whole
         seconds) first; then ``runtime.adapters.<adapter_name>.timeout_seconds``
@@ -1131,9 +1145,9 @@ class PromptRuntime:
         adapter_budget = self._adapter_configured_timeout_seconds(adapter_name)
         if adapter_budget is None:
             adapter_budget = self.timeout_seconds
-        if not self.defn.timeout_ms:
+        if not timeout_ms:
             return adapter_budget
-        effect_seconds = max(1, math.ceil(self.defn.timeout_ms / 1000))
+        effect_seconds = max(1, math.ceil(timeout_ms / 1000))
         return min(effect_seconds, adapter_budget)
 
     def _generation_options(
@@ -1249,6 +1263,7 @@ class PromptRuntime:
         attempts: list[tuple[str, str]],
         meta: dict[str, Any],
         option_warnings: list[str],
+        timeout_ms: int | None = None,
         options: GenerateOptions | None = None,
     ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None]:
         """Try each ``(adapter, model)`` in order; the first reply that both
@@ -1285,7 +1300,7 @@ class PromptRuntime:
                     adapter,
                     model=model_name,
                     prompt=prompt,
-                    timeout_seconds=self._attempt_timeout_seconds(adapter_name),
+                    timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
                     options=options,
                 )
             except AllowlistError:

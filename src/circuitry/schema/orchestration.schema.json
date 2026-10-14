@@ -64,6 +64,17 @@
   "additionalProperties": true,
 
   "$defs": {
+    "TimeoutMs": {
+      "type": ["integer", "object"],
+      "minimum": 0,
+      "description": "Per-attempt timeout in milliseconds: an integer, or a reference {from: <path>, default: <positive integer>} read from state when each attempt is dispatched. The path is rooted at input./prime./runtime. or at an enclosing loop binding. The value must be a positive integer; a missing path takes 'default', or fails the effect without one.",
+      "required": ["from"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "default": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "NamePattern": {
       "type": "string",
       "allOf": [
@@ -320,7 +331,7 @@
           "description": "Ordered list of fallback providers."
         },
         "params": { "type": "object", "description": "Generation parameters. temperature, max_tokens and stop are mapped to each provider's names; other keys go to the provider unchanged." },
-        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "timeout_ms": { "$ref": "#/$defs/TimeoutMs" },
         "deterministic": { "type": "boolean", "description": "If true, temperature 0 (unless params sets one) and a fixed seed where the provider takes one." },
         "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
         "assets": {
@@ -574,7 +585,7 @@
           "type": "string",
           "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
         },
-        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "timeout_ms": { "$ref": "#/$defs/TimeoutMs" },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },

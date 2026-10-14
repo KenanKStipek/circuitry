@@ -33,6 +33,7 @@ from .prompt_compose import (
     render_with_composition,
 )
 from .store import Store
+from .timeout_ref import TimeoutFrom, TimeoutResolutionError, resolve_timeout_ms
 from .use import _resolve_reference
 
 logger = logging.getLogger(__name__)
@@ -393,7 +394,9 @@ class ToolDefinition:
     params_json: str | None = None
     prompt: str | None = None
     model: str | None = None
-    timeout_ms: int | None = None
+    #: A literal, or ``{from: <path>, default: <int>}`` read from state at each
+    #: attempt's dispatch (#564).
+    timeout_ms: int | TimeoutFrom | None = None
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
@@ -512,10 +515,11 @@ class ToolRuntime:
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
 
-    def _resolve_timeout_seconds(self) -> int:
-        """The tool's own timeout budget, in whole seconds.
+    def _resolve_timeout_seconds(self, ctx: dict[str, Any]) -> int:
+        """The tool's own timeout budget for one attempt, in whole seconds.
 
-        ``timeout_ms`` on the effect wins when set, rounded up so a
+        ``timeout_ms`` on the effect wins when set (a ``{from: <path>}`` one
+        is read from *ctx* now, #564), rounded up so a
         sub-second budget (e.g. 500) never floors to 0 and gets handed to
         a subprocess/curl/urlopen call as "no timeout" or "fail instantly"
         depending on the plugin. Otherwise ``runtime.tools.timeout_seconds``
@@ -525,8 +529,11 @@ class ToolRuntime:
         run on the no-op adapter, or one that just needs more time than the
         model's socket timeout allows, shouldn't be bound by either.
         """
-        if self.defn.timeout_ms:
-            return max(1, math.ceil(self.defn.timeout_ms / 1000))
+        timeout_ms = resolve_timeout_ms(
+            self.defn.timeout_ms, ctx, effect_label=f"Tool effect '{self.defn.name}'"
+        )
+        if timeout_ms:
+            return max(1, math.ceil(timeout_ms / 1000))
         tools_cfg = self.runtime_config.get("tools")
         raw = tools_cfg.get("timeout_seconds") if isinstance(tools_cfg, dict) else None
         if raw is None:
@@ -580,7 +587,6 @@ class ToolRuntime:
             node["meta"] = meta
 
         indent = "  " * self.depth
-        timeout_seconds = self._resolve_timeout_seconds()
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -729,6 +735,9 @@ class ToolRuntime:
                 meta["params_rendered"] = redact(rendered)
                 mtag = _model_tag(rendered)
 
+                # Per attempt, from the state this attempt sees (#564).
+                timeout_seconds = self._resolve_timeout_seconds(ctx)
+
                 # Build plugin early so we can use its target string in the spinner
                 # (require_tool/require_within_ceiling already checked once
                 # above, before the first attempt)
@@ -792,7 +801,9 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
-                retryable = self._is_retryable_failure(status_code=None, failure=e)
+                retryable = not isinstance(e, TimeoutResolutionError) and (
+                    self._is_retryable_failure(status_code=None, failure=e)
+                )
 
             if failure is not None:
                 meta["error"] = str(failure)
