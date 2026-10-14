@@ -1,0 +1,7 @@
+{
+  "spec_case": "electricity/docs/spec/tools-adapters-plugins.md §12 (run_binary parse: json)",
+  "description": "A `parse` value other than `json` fails before the process runs.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}
