@@ -1904,6 +1904,118 @@ mod tests {
         );
     }
 
+    /// Every violation *schema* has against *instance* under draft 7,
+    /// in Python's own `sorted(iter_errors(...), key=str)` order --
+    /// `render`'s own `(message, schema_path)` pairs, sorted the same
+    /// 4-tuple way [`describe_schema_error_engine`]'s own sort key is
+    /// (message, then `format_as_index(schema_path)`, since none of
+    /// these test schemas have a keyword tie to break further).
+    fn draft7_messages(
+        schema: &electricity_value::Value,
+        instance: &electricity_value::Value,
+    ) -> Vec<String> {
+        let mut violations = Vec::new();
+        engine::with_draft7_mode(|| {
+            assert!(
+                engine::schema_is_fully_supported(schema, schema),
+                "test schema must be one this engine's own gate accepts"
+            );
+            engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
+            let mut rendered: Vec<(String, String)> = violations
+                .iter()
+                .map(|v| (engine::render(v), engine::format_as_index(&v.schema_path)))
+                .collect();
+            rendered.sort();
+            rendered.into_iter().map(|(message, _)| message).collect()
+        })
+    }
+
+    #[test]
+    fn draft7_tuple_items_validates_each_slot_against_its_own_schema() {
+        // Verified directly against `jsonschema.Draft7Validator`:
+        // `{'items': [{'type': 'string'}, {'type': 'number'}]}` against
+        // `['x', 'y']` gives exactly `"'y' is not of type 'number'"`.
+        let schema = json!({"items": [{"type": "string"}, {"type": "number"}]});
+        let instance = json!(["x", "y"]);
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            vec!["'y' is not of type 'number'".to_string()]
+        );
+    }
+
+    #[test]
+    fn draft7_additional_items_false_reports_the_extras_once() {
+        // Verified: `{'items': [{'type': 'string'}], 'additionalItems':
+        // False}` against `['x', 1, 2]` gives exactly one error, `"Additional
+        // items are not allowed (1, 2 were unexpected)"`.
+        let schema = json!({"items": [{"type": "string"}], "additionalItems": false});
+        let instance = json!(["x", 1, 2]);
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            vec!["Additional items are not allowed (1, 2 were unexpected)".to_string()]
+        );
+    }
+
+    #[test]
+    fn draft7_additional_items_schema_validates_the_rest() {
+        // Verified: `{'items': [{'type': 'string'}], 'additionalItems':
+        // {'type': 'number'}}` against `['x', 'bad']` gives exactly
+        // `"'bad' is not of type 'number'"`.
+        let schema = json!({"items": [{"type": "string"}], "additionalItems": {"type": "number"}});
+        let instance = json!(["x", "bad"]);
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            vec!["'bad' is not of type 'number'".to_string()]
+        );
+    }
+
+    #[test]
+    fn draft7_ref_siblings_are_ignored_definitions_resolve() {
+        // Verified: `{'definitions': {'thing': {'type': 'string'}}, '$ref':
+        // '#/definitions/thing', 'type': 'number'}` against `'hi'` gives NO
+        // errors at all -- `$ref`'s own sibling `type: number` is never
+        // consulted under draft 7 (2020-12 would apply both).
+        let schema = json!({
+            "definitions": {"thing": {"type": "string"}},
+            "$ref": "#/definitions/thing",
+            "type": "number"
+        });
+        let instance = json!("hi");
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn draft7_dependencies_property_form_reports_the_missing_one() {
+        // Verified: `{'dependencies': {'a': ['b']}}` against `{'a': 1}`
+        // gives exactly `"'b' is a dependency of 'a'"`.
+        let schema = json!({"dependencies": {"a": ["b"]}});
+        let instance = json!({"a": 1});
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            vec!["'b' is a dependency of 'a'".to_string()]
+        );
+    }
+
+    #[test]
+    fn draft7_dependencies_schema_form_descends_into_the_dependency() {
+        // Verified: `{'dependencies': {'a': {'properties': {'b': {'type':
+        // 'string'}}, 'required': ['b']}}}` against `{'a': 1}` gives
+        // exactly `"'b' is a required property"`.
+        let schema = json!({
+            "dependencies": {
+                "a": {"properties": {"b": {"type": "string"}}, "required": ["b"]}
+            }
+        });
+        let instance = json!({"a": 1});
+        assert_eq!(
+            draft7_messages(&value_from_json(&schema), &value_from_json(&instance)),
+            vec!["'b' is a required property".to_string()]
+        );
+    }
+
     #[test]
     fn nested_missing_name_errors_sort_the_shorter_schema_path_first() {
         // Issue #528, review finding 1's repro: a container missing its own
