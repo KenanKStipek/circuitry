@@ -27,7 +27,6 @@ from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
 
-
 #: How much of an unparseable stdout ``parse: json`` quotes in its error.
 _PARSE_EXCERPT_CHARS = 200
 
