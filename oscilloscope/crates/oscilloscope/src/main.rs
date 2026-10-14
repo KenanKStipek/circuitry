@@ -83,7 +83,7 @@ struct RunArgs {
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
     /// this isn't given; `terminal` (today's look) otherwise.
-    #[arg(long, value_parser = theme::parse_theme_arg)]
+    #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
 }
 
@@ -120,19 +120,26 @@ struct WatchArgs {
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
     /// this isn't given; `terminal` (today's look) otherwise.
-    #[arg(long, value_parser = theme::parse_theme_arg)]
+    #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
 }
 
 /// `--theme`, else `OSP_THEME`, else `terminal` (DESIGN.md §6.3) --
 /// shared by both `osp <doc>` and `osp watch`, so the two can never
-/// resolve the same environment differently.
-fn resolve_theme_choice(cli_theme: Option<theme::ThemeName>) -> Result<theme::ThemeName, String> {
+/// resolve the same environment differently. `osp_theme_env` is the
+/// caller's own read of `OSP_THEME` (finding 13: kept pure, like
+/// `theme::ColorMode::detect`, rather than reading the process
+/// environment itself -- a test can then exercise every branch
+/// without mutating process-wide state at all).
+fn resolve_theme_choice(
+    cli_theme: Option<theme::ThemeName>,
+    osp_theme_env: Option<&str>,
+) -> Result<theme::ThemeName, String> {
     if let Some(t) = cli_theme {
         return Ok(t);
     }
-    match std::env::var("OSP_THEME") {
-        Ok(v) if !v.is_empty() => theme::ThemeName::parse(&v),
+    match osp_theme_env {
+        Some(v) if !v.is_empty() => theme::ThemeName::parse(v),
         _ => Ok(theme::ThemeName::Terminal),
     }
 }
@@ -433,7 +440,8 @@ fn do_run(args: RunArgs) -> ExitCode {
     // the signal watcher just below -- a bad `OSP_THEME` is a usage
     // error and should exit 2 before this function does anything
     // else, exactly as an invalid `--theme` already does via clap.
-    let theme_name = match resolve_theme_choice(args.theme) {
+    let osp_theme_env = std::env::var("OSP_THEME").ok();
+    let theme_name = match resolve_theme_choice(args.theme, osp_theme_env.as_deref()) {
         Ok(name) => name,
         Err(message) => {
             eprintln!("{message}");
@@ -748,6 +756,20 @@ fn finish_run(
 /// capped (for example 10 per second) and happen only when something
 /// changed").
 const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The scope icon's own frame number (issue #535): one `REDRAW_
+/// INTERVAL` tick is one frame while animated, pinned to 0 (the
+/// still frame) under `--no-animation` -- a plain function, not
+/// `Instant::now()` inline at each call site, so a unit test can
+/// pin both branches without a real clock.
+fn icon_frame_for(no_animation: bool, elapsed: Duration) -> u64 {
+    if no_animation {
+        0
+    } else {
+        (elapsed.as_millis() / REDRAW_INTERVAL.as_millis()) as u64
+    }
+}
+
 /// How long one loop tick waits for a key before giving the rest of
 /// the loop (signals, observation polling, the redraw check) another
 /// turn — short enough that navigation feels immediate, long enough
@@ -762,9 +784,15 @@ const MAX_LOG_LINES: usize = 10_000;
 
 /// Pushes one line onto the TUI's own log buffer, then trims it back
 /// to `MAX_LOG_LINES` (finding 13) — the oldest lines go first, same
-/// as a terminal's own scrollback eventually would.
-fn push_log_line(log_lines: &mut Vec<String>, line: String) {
+/// as a terminal's own scrollback eventually would. `next_seq` is a
+/// plain running count of every line ever pushed, bumped here and
+/// never reset or shifted by the trim above (finding 4) -- the log
+/// pane's own highlight key for a line is this sequence number, not
+/// its position in `log_lines`, which the trim would otherwise shift
+/// out from under an already-marked key.
+fn push_log_line(log_lines: &mut Vec<String>, next_seq: &mut u64, line: String) {
     log_lines.push(line);
+    *next_seq += 1;
     if log_lines.len() > MAX_LOG_LINES {
         log_lines.drain(0..log_lines.len() - MAX_LOG_LINES);
     }
@@ -796,6 +824,66 @@ fn mark_highlights(
     *prev = Some(new.clone());
 }
 
+/// Marks `log:<seq>` for every line pushed since the last rebuild
+/// (finding 4): `next_seq` is `push_log_line`'s own running count of
+/// every line ever pushed, immune to `MAX_LOG_LINES`' own trim, so a
+/// line's key stays stable even once the trim has dropped it from
+/// `log_lines` itself. `prev_total` is the same count as of the
+/// previous rebuild -- everything from there up to now is new.
+fn mark_new_log_lines(
+    highlights: &mut highlight::Tracker,
+    prev_total: &mut u64,
+    next_seq: u64,
+    no_animation: bool,
+) {
+    if !no_animation {
+        let now = Instant::now();
+        for seq in *prev_total..next_seq {
+            highlights.mark(&format!("log:{seq}"), now);
+        }
+    }
+    *prev_total = next_seq;
+}
+
+/// Marks `details:sent`/`details:received` when the *currently*
+/// selected path's own blocks changed since the last rebuild (finding
+/// 5) -- `prev` only ever compares against the same path: switching
+/// the selection to a different row, or to none, never counts as a
+/// change on its own, it just restarts the comparison from that new
+/// path's own first observation.
+fn mark_details_highlights(
+    highlights: &mut highlight::Tracker,
+    prev: &mut Option<(
+        String,
+        Option<oscilloscope_core::render::TokenBlock>,
+        Option<oscilloscope_core::render::TokenBlock>,
+    )>,
+    selected_path: Option<&str>,
+    plan: &PlanTree,
+    state: Option<&serde_json::Value>,
+    no_animation: bool,
+) {
+    let Some(path) = selected_path else {
+        *prev = None;
+        return;
+    };
+    let details = oscilloscope_core::render::details_for(path, plan, state);
+    if !no_animation {
+        if let Some((prev_path, prev_sent, prev_received)) = prev.as_ref() {
+            if prev_path == path {
+                let now = Instant::now();
+                if *prev_sent != details.sent {
+                    highlights.mark("details:sent", now);
+                }
+                if *prev_received != details.received {
+                    highlights.mark("details:received", now);
+                }
+            }
+        }
+    }
+    *prev = Some((path.to_string(), details.sent, details.received));
+}
+
 /// Sends one cancelling signal to the engine's process group and
 /// applies the same escalation `do_run`'s plain loop applies to a real
 /// forwarded signal (DESIGN.md §4.1) — shared by both, since `c`/a
@@ -812,6 +900,7 @@ fn cancel_once(
     signal_count: &mut u32,
     kill_deadline: &mut Option<Instant>,
     log_lines: &mut Vec<String>,
+    next_log_seq: &mut u64,
     clock: &mut Clock,
 ) {
     *signal_count += 1;
@@ -819,6 +908,7 @@ fn cancel_once(
     if *signal_count == 1 {
         push_log_line(
             log_lines,
+            next_log_seq,
             format_log_line(clock, None, "cancelling, finally running..."),
         );
     } else if *signal_count == 2 {
@@ -848,6 +938,7 @@ fn cancel_for_lost_terminal(
     signal_count: &mut u32,
     kill_deadline: &mut Option<Instant>,
     log_lines: &mut Vec<String>,
+    next_log_seq: &mut u64,
     clock: &mut Clock,
 ) {
     if exit_status.is_none() {
@@ -857,6 +948,7 @@ fn cancel_for_lost_terminal(
             signal_count,
             kill_deadline,
             log_lines,
+            next_log_seq,
             clock,
         );
     }
@@ -1007,6 +1099,11 @@ fn run_tui(
     let mut model = RunModel::new();
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
+    // Finding 4: a plain running count of every line ever pushed,
+    // never reset or shifted by `MAX_LOG_LINES`' own trim -- a log
+    // line's own highlight key is this sequence number, never its
+    // position in `log_lines` itself.
+    let mut next_log_seq: u64 = 0;
     let mut current_state: Option<serde_json::Value> = None;
     let start = Instant::now();
 
@@ -1021,10 +1118,24 @@ fn run_tui(
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
     if let Some(note) = resolved_theme.downgrade_note.take() {
-        push_log_line(&mut log_lines, format_log_line(&mut clock, None, &note));
+        push_log_line(
+            &mut log_lines,
+            &mut next_log_seq,
+            format_log_line(&mut clock, None, &note),
+        );
     }
     let mut highlights = highlight::Tracker::new();
     let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
+    // Finding 4/5: both start out already caught up with whatever
+    // the startup lines above just did, so the loop's own first real
+    // rebuild is the one that establishes the first real baseline --
+    // nothing from before the loop started ever counts as "new".
+    let mut prev_log_total: u64 = next_log_seq;
+    let mut prev_details_highlight: Option<(
+        String,
+        Option<oscilloscope_core::render::TokenBlock>,
+        Option<oscilloscope_core::render::TokenBlock>,
+    )> = None;
     let mut theme_banner_until: Option<Instant> = None;
 
     let guard_and_terminal = TerminalGuard::enter()
@@ -1080,7 +1191,19 @@ fn run_tui(
 
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
-    let mut dirty = true;
+    // Finding 1: a *rebuild* (`render::build` plus `mark_highlights`'
+    // own `changes::diff`) and a *draw* are no longer the same flag --
+    // `needs_rebuild` is only ever set by something that can actually
+    // change what gets built (an observation, a key, a resize, the 1s
+    // timer); the redraw rule's own animation/fade tick below sets
+    // only `needs_draw`, so a live run with nothing else happening no
+    // longer rebuilds on every ~30ms key-poll tick the way a single
+    // `dirty` flag did (K4's own regression -- about 20 rebuilds a
+    // second instead of about 1, since `needs_rebuild` used to stay
+    // true, re-triggering the rebuild block, for every tick between
+    // two actual draws, not just reset once a real draw happened).
+    let mut needs_rebuild = true;
+    let mut needs_draw = true;
     let mut exit_status: Option<std::process::ExitStatus> = None;
     // K1: set once a confirmed `q`, a Ctrl-C cancel, or an external
     // signal has happened — the only three things that make this loop
@@ -1098,12 +1221,12 @@ fn run_tui(
         &now_rfc3339(),
         &[],
     );
-    mark_highlights(
-        &mut highlights,
-        &mut prev_render_state,
-        &render_state,
-        no_animation,
-    );
+    // Finding 3: no `mark_highlights` call here -- `prev_render_state`
+    // stays `None` through this placeholder build (always built with
+    // `current_state: None`, before the loop has polled anything),
+    // so the loop's own first real rebuild below is genuinely the
+    // first observation (`changes::diff(None, _)`, which reports
+    // nothing by construction), not a diff against this empty one.
     if app.selected_path.is_none() {
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
     }
@@ -1121,11 +1244,13 @@ fn run_tui(
                         &mut signal_count,
                         &mut kill_deadline,
                         &mut log_lines,
+                        &mut next_log_seq,
                         &mut clock,
                     );
                 }
                 leave_once_exited = true;
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
         }
         // The engine already exited on its own (the finished screen is
@@ -1139,6 +1264,7 @@ fn run_tui(
             if Instant::now() >= deadline && matches!(child.try_wait(), Ok(None)) {
                 push_log_line(
                     &mut log_lines,
+                    &mut next_log_seq,
                     format_log_line(
                         &mut clock,
                         None,
@@ -1147,16 +1273,19 @@ fn run_tui(
                 );
                 child.kill_group();
                 kill_deadline = None;
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
         }
 
         for line in stderr_rx.try_iter() {
             push_log_line(
                 &mut log_lines,
+                &mut next_log_seq,
                 format_log_line(&mut clock, None, &format!("engine: {line}")),
             );
-            dirty = true;
+            needs_rebuild = true;
+            needs_draw = true;
         }
 
         if exit_status.is_none() {
@@ -1167,16 +1296,19 @@ fn run_tui(
                 &mut model,
                 &plan,
             );
-            dirty |= !lines.is_empty();
+            needs_rebuild |= !lines.is_empty();
+            needs_draw |= !lines.is_empty();
             for line in &lines {
                 push_log_line(
                     &mut log_lines,
+                    &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
             }
             if let Some(state) = state {
                 current_state = Some(state);
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
         }
 
@@ -1184,10 +1316,11 @@ fn run_tui(
         // with nothing else dirty, so the header's own elapsed time
         // still visibly ticks while the run is otherwise quiet.
         if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
-            dirty = true;
+            needs_rebuild = true;
+            needs_draw = true;
         }
 
-        if dirty {
+        if needs_rebuild {
             let process = match exit_status {
                 None => ProcessState::Running,
                 // DESIGN.md §2.1 rule 7: `likely_failed` is the real
@@ -1218,7 +1351,22 @@ fn run_tui(
                 &render_state,
                 no_animation,
             );
+            mark_new_log_lines(
+                &mut highlights,
+                &mut prev_log_total,
+                next_log_seq,
+                no_animation,
+            );
+            mark_details_highlights(
+                &mut highlights,
+                &mut prev_details_highlight,
+                app.selected_path.as_deref(),
+                &plan,
+                current_state.as_ref(),
+                no_animation,
+            );
             last_rebuild = Instant::now();
+            needs_rebuild = false;
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
                     app.select_tree_path(Some(target.to_string()));
@@ -1273,6 +1421,7 @@ fn run_tui(
                                     &mut signal_count,
                                     &mut kill_deadline,
                                     &mut log_lines,
+                                    &mut next_log_seq,
                                     &mut clock,
                                 );
                                 // K1: only a *confirmed* `q` leaves on
@@ -1291,6 +1440,7 @@ fn run_tui(
                                         &mut signal_count,
                                         &mut kill_deadline,
                                         &mut log_lines,
+                                        &mut next_log_seq,
                                         &mut clock,
                                     );
                                     leave_once_exited = true;
@@ -1300,20 +1450,38 @@ fn run_tui(
                                 }
                             }
                             keys::Action::CycleTheme => {
+                                // Finding 19: only logs the fallback
+                                // note on an actual transition into
+                                // (or out of) it -- on a 16-colour
+                                // terminal, `t` cycling past several
+                                // unsupported themes in a row used to
+                                // re-log the same note on every single
+                                // press, since every one of them
+                                // individually falls back. The banner/
+                                // log line both name the theme actually
+                                // applied, not whatever was requested,
+                                // so a fallback reads as "terminal",
+                                // never the unsupported name that can't
+                                // show.
+                                let previously_applied = resolved_theme.theme.name;
                                 theme_name = theme_name.next();
                                 resolved_theme = theme::resolve(theme_name, color_mode);
-                                if let Some(note) = resolved_theme.downgrade_note.take() {
-                                    push_log_line(
-                                        &mut log_lines,
-                                        format_log_line(&mut clock, None, &note),
-                                    );
+                                if resolved_theme.theme.name != previously_applied {
+                                    if let Some(note) = resolved_theme.downgrade_note.take() {
+                                        push_log_line(
+                                            &mut log_lines,
+                                            &mut next_log_seq,
+                                            format_log_line(&mut clock, None, &note),
+                                        );
+                                    }
                                 }
                                 push_log_line(
                                     &mut log_lines,
+                                    &mut next_log_seq,
                                     format_log_line(
                                         &mut clock,
                                         None,
-                                        &format!("theme: {}", theme_name.as_str()),
+                                        &format!("theme: {}", resolved_theme.theme.name.as_str()),
                                     ),
                                 );
                                 theme_banner_until =
@@ -1322,9 +1490,13 @@ fn run_tui(
                             keys::Action::Quit => break 'tui,
                             keys::Action::None => {}
                         }
-                        dirty = true;
+                        needs_rebuild = true;
+                        needs_draw = true;
                     }
-                    CEvent::Resize(_, _) => dirty = true,
+                    CEvent::Resize(_, _) => {
+                        needs_rebuild = true;
+                        needs_draw = true;
+                    }
                     _ => {}
                 },
             }
@@ -1336,6 +1508,7 @@ fn run_tui(
                 &mut signal_count,
                 &mut kill_deadline,
                 &mut log_lines,
+                &mut next_log_seq,
                 &mut clock,
             );
             lost_terminal = true;
@@ -1347,28 +1520,26 @@ fn run_tui(
         // icon's own trace keeps moving), mark the frame dirty every
         // tick -- the existing `REDRAW_INTERVAL` cap still paces the
         // actual draw. With neither, this adds no redraws beyond what
-        // was already dirty.
+        // was already dirty. Finding 1: this sets only `needs_draw`,
+        // never `needs_rebuild` -- an animation-only tick has nothing
+        // new to rebuild from.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
             if highlights.has_active(highlight_now) || exit_status.is_none() {
-                dirty = true;
+                needs_draw = true;
             }
         }
 
-        if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
             let details = app
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
-            let icon_frame = if no_animation {
-                0
-            } else {
-                (start.elapsed().as_millis() / REDRAW_INTERVAL.as_millis()) as u64
-            };
+            let icon_frame = icon_frame_for(no_animation, start.elapsed());
             let banner = theme_banner_until
                 .filter(|&until| highlight_now < until)
-                .map(|_| theme_name.as_str());
+                .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
                 highlights: &highlights,
@@ -1382,6 +1553,7 @@ fn run_tui(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
+                    next_log_seq,
                     &mut app,
                     current_state.as_ref(),
                     &ctx,
@@ -1389,7 +1561,7 @@ fn run_tui(
                 );
             });
             last_draw = Instant::now();
-            dirty = false;
+            needs_draw = false;
             if drew.is_err() {
                 cancel_for_lost_terminal(
                     &child,
@@ -1397,6 +1569,7 @@ fn run_tui(
                     &mut signal_count,
                     &mut kill_deadline,
                     &mut log_lines,
+                    &mut next_log_seq,
                     &mut clock,
                 );
                 lost_terminal = true;
@@ -1426,13 +1599,15 @@ fn run_tui(
                 for line in &lines {
                     push_log_line(
                         &mut log_lines,
+                        &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
                 }
                 if let Some(state) = out_state.or(last_live) {
                     current_state = Some(state);
                 }
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
                 if leave_once_exited {
                     break;
                 }
@@ -1785,7 +1960,8 @@ fn supervise_plain_watch(
 }
 
 fn do_watch(args: WatchArgs) -> ExitCode {
-    let theme_name = match resolve_theme_choice(args.theme) {
+    let osp_theme_env = std::env::var("OSP_THEME").ok();
+    let theme_name = match resolve_theme_choice(args.theme, osp_theme_env.as_deref()) {
         Ok(name) => name,
         Err(message) => {
             eprintln!("{message}");
@@ -1932,6 +2108,8 @@ fn run_tui_watch(
     let mut model = RunModel::new();
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
+    // Finding 4: see `run_tui`'s own `next_log_seq`.
+    let mut next_log_seq: u64 = 0;
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
     let events_path = run_dir.join("events.jsonl");
@@ -1947,10 +2125,21 @@ fn run_tui_watch(
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
     if let Some(note) = resolved_theme.downgrade_note.take() {
-        push_log_line(&mut log_lines, format_log_line(&mut clock, None, &note));
+        push_log_line(
+            &mut log_lines,
+            &mut next_log_seq,
+            format_log_line(&mut clock, None, &note),
+        );
     }
     let mut highlights = highlight::Tracker::new();
     let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
+    // Finding 4/5: see `run_tui`'s own comment above.
+    let mut prev_log_total: u64 = next_log_seq;
+    let mut prev_details_highlight: Option<(
+        String,
+        Option<oscilloscope_core::render::TokenBlock>,
+        Option<oscilloscope_core::render::TokenBlock>,
+    )> = None;
     let mut theme_banner_until: Option<Instant> = None;
 
     let guard_and_terminal = TerminalGuard::enter()
@@ -2000,7 +2189,9 @@ fn run_tui_watch(
 
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
-    let mut dirty = true;
+    // Finding 1: see `run_tui`'s own comment above.
+    let mut needs_rebuild = true;
+    let mut needs_draw = true;
     // K1: once the watched run has ended (by state, by events, or by
     // its pid going away), this loop keeps running — redrawing the
     // final state and reading keys — rather than detaching on its
@@ -2018,12 +2209,11 @@ fn run_tui_watch(
         &now_rfc3339(),
         &[],
     );
-    mark_highlights(
-        &mut highlights,
-        &mut prev_render_state,
-        &render_state,
-        no_animation,
-    );
+    // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
+    // own comment above (this placeholder build always has
+    // `last_state: None`; the loop's own first real rebuild is the
+    // genuine first observation, including when `osp watch` attaches
+    // to a run that had already finished).
     if app.selected_path.is_none() {
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
     }
@@ -2047,16 +2237,19 @@ fn run_tui_watch(
                 &mut model,
                 &plan,
             );
-            dirty |= !lines.is_empty();
+            needs_rebuild |= !lines.is_empty();
+            needs_draw |= !lines.is_empty();
             for line in &lines {
                 push_log_line(
                     &mut log_lines,
+                    &mut next_log_seq,
                     format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                 );
             }
             if let Some(state) = state {
                 last_state = Some(state);
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
 
             if last_state
@@ -2073,6 +2266,7 @@ fn run_tui_watch(
             {
                 push_log_line(
                     &mut log_lines,
+                    &mut next_log_seq,
                     format_log_line(
                         &mut clock,
                         None,
@@ -2081,7 +2275,8 @@ fn run_tui_watch(
                     ),
                 );
                 warned_no_events = true;
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
             if !ended && model.run_ended_by_events() {
                 ended = true;
@@ -2114,22 +2309,25 @@ fn run_tui_watch(
                 for line in &more_lines {
                     push_log_line(
                         &mut log_lines,
+                        &mut next_log_seq,
                         format_log_line(&mut clock, line.ts.as_deref(), &line.text),
                     );
                 }
                 if let Some(state) = out_state.or(last_live) {
                     last_state = Some(state);
                 }
-                dirty = true;
+                needs_rebuild = true;
+                needs_draw = true;
             }
         }
 
         // K4, same as `run_tui`.
         if last_rebuild.elapsed() >= RENDER_REBUILD_INTERVAL {
-            dirty = true;
+            needs_rebuild = true;
+            needs_draw = true;
         }
 
-        if dirty {
+        if needs_rebuild {
             let process = if ended {
                 // DESIGN.md §2.1 rule 7: `osp watch` owns no process
                 // of its own, so `run_end`'s own `ok` stands in for a
@@ -2159,7 +2357,22 @@ fn run_tui_watch(
                 &render_state,
                 no_animation,
             );
+            mark_new_log_lines(
+                &mut highlights,
+                &mut prev_log_total,
+                next_log_seq,
+                no_animation,
+            );
+            mark_details_highlights(
+                &mut highlights,
+                &mut prev_details_highlight,
+                app.selected_path.as_deref(),
+                &plan,
+                last_state.as_ref(),
+                no_animation,
+            );
             last_rebuild = Instant::now();
+            needs_rebuild = false;
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
                     app.select_tree_path(Some(target.to_string()));
@@ -2221,20 +2434,27 @@ fn run_tui_watch(
                                 break 'tui;
                             }
                             keys::Action::CycleTheme => {
+                                // Finding 19: see `run_tui`'s own
+                                // comment above.
+                                let previously_applied = resolved_theme.theme.name;
                                 theme_name = theme_name.next();
                                 resolved_theme = theme::resolve(theme_name, color_mode);
-                                if let Some(note) = resolved_theme.downgrade_note.take() {
-                                    push_log_line(
-                                        &mut log_lines,
-                                        format_log_line(&mut clock, None, &note),
-                                    );
+                                if resolved_theme.theme.name != previously_applied {
+                                    if let Some(note) = resolved_theme.downgrade_note.take() {
+                                        push_log_line(
+                                            &mut log_lines,
+                                            &mut next_log_seq,
+                                            format_log_line(&mut clock, None, &note),
+                                        );
+                                    }
                                 }
                                 push_log_line(
                                     &mut log_lines,
+                                    &mut next_log_seq,
                                     format_log_line(
                                         &mut clock,
                                         None,
-                                        &format!("theme: {}", theme_name.as_str()),
+                                        &format!("theme: {}", resolved_theme.theme.name.as_str()),
                                     ),
                                 );
                                 theme_banner_until =
@@ -2242,9 +2462,13 @@ fn run_tui_watch(
                             }
                             keys::Action::Cancel | keys::Action::None => {}
                         }
-                        dirty = true;
+                        needs_rebuild = true;
+                        needs_draw = true;
                     }
-                    CEvent::Resize(_, _) => dirty = true,
+                    CEvent::Resize(_, _) => {
+                        needs_rebuild = true;
+                        needs_draw = true;
+                    }
                     _ => {}
                 },
             }
@@ -2259,27 +2483,24 @@ fn run_tui_watch(
             break 'tui;
         }
 
+        // Finding 1: this sets only `needs_draw`, same as `run_tui`.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
             if highlights.has_active(highlight_now) || !ended {
-                dirty = true;
+                needs_draw = true;
             }
         }
 
-        if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
             let details = app
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
-            let icon_frame = if no_animation {
-                0
-            } else {
-                (start.elapsed().as_millis() / REDRAW_INTERVAL.as_millis()) as u64
-            };
+            let icon_frame = icon_frame_for(no_animation, start.elapsed());
             let banner = theme_banner_until
                 .filter(|&until| highlight_now < until)
-                .map(|_| theme_name.as_str());
+                .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
                 highlights: &highlights,
@@ -2293,6 +2514,7 @@ fn run_tui_watch(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
+                    next_log_seq,
                     &mut app,
                     last_state.as_ref(),
                     &ctx,
@@ -2300,7 +2522,7 @@ fn run_tui_watch(
                 );
             });
             last_draw = Instant::now();
-            dirty = false;
+            needs_draw = false;
             if drew.is_err() {
                 local_signal = Some(ForwardSignal::Hup);
                 lost_terminal = true;
@@ -2560,6 +2782,200 @@ mod tests {
         );
     }
 
+    /// Finding 3: the real call sequence both TUI loops take now --
+    /// `osp watch` attaching to a run that's already well under way
+    /// (full state from the very first real rebuild, nothing like
+    /// `run_tui`/`run_tui_watch`'s own placeholder build with `state:
+    /// None` ever gets diffed against). `prev_render_state` starts at
+    /// `None`, same as both functions leave it before their loop, and
+    /// the first `mark_highlights` call is the loop's first real
+    /// rebuild, not a second one against an empty placeholder.
+    #[test]
+    fn the_first_real_rebuild_is_silent_even_with_a_run_already_well_under_way() {
+        let plan = PlanTree::empty();
+        let already_progressed = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}},
+            "b": {"value": null, "meta": {"created_at": "t1", "completed_at": null}}
+        }});
+        let mut model = RunModel::new();
+        let first_real_build = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&already_progressed),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+
+        // No placeholder build is ever fed through `mark_highlights`
+        // in `run_tui`/`run_tui_watch` any more (finding 3) --
+        // `prev_render_state` starts exactly like this.
+        let mut prev_render_state = None;
+        let mut highlights = highlight::Tracker::new();
+        mark_highlights(
+            &mut highlights,
+            &mut prev_render_state,
+            &first_real_build,
+            false,
+        );
+        assert!(
+            !highlights.has_active(Instant::now()),
+            "attaching to an already-progressed run must open on a calm screen"
+        );
+
+        // A real, later change against that first real baseline does
+        // still mark -- the fix isn't "nothing ever highlights".
+        let next_state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}},
+            "b": {"value": "y", "meta": {"created_at": "t1", "completed_at": "t2"}}
+        }});
+        let second_real_build = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&next_state),
+            ProcessState::Running,
+            2.0,
+            "t2",
+            &[],
+        );
+        mark_highlights(
+            &mut highlights,
+            &mut prev_render_state,
+            &second_real_build,
+            false,
+        );
+        assert!(
+            highlights.has_active(Instant::now()),
+            "a real change against the first real baseline must still mark"
+        );
+    }
+
+    /// Finding 4: `mark_new_log_lines` marks every sequence number
+    /// from the previous rebuild's total up to the new one, and
+    /// nothing retroactively once a key has already been marked.
+    #[test]
+    fn mark_new_log_lines_marks_only_the_newly_pushed_sequence_numbers() {
+        let mut highlights = highlight::Tracker::new();
+        let mut prev_total = 0u64;
+        mark_new_log_lines(&mut highlights, &mut prev_total, 3, false);
+        let now = Instant::now();
+        assert!(
+            highlights
+                .style_for(
+                    "log:0",
+                    now,
+                    &theme::Theme::for_name(theme::ThemeName::Terminal),
+                    theme::ColorMode::TrueColor
+                )
+                .is_some()
+        );
+        assert!(
+            highlights
+                .style_for(
+                    "log:2",
+                    now,
+                    &theme::Theme::for_name(theme::ThemeName::Terminal),
+                    theme::ColorMode::TrueColor
+                )
+                .is_some()
+        );
+        assert_eq!(prev_total, 3);
+
+        // A second call only marks what's new since the last one.
+        mark_new_log_lines(&mut highlights, &mut prev_total, 5, false);
+        assert!(
+            highlights
+                .style_for(
+                    "log:3",
+                    now,
+                    &theme::Theme::for_name(theme::ThemeName::Terminal),
+                    theme::ColorMode::TrueColor
+                )
+                .is_some()
+        );
+        assert_eq!(prev_total, 5);
+
+        // `--no-animation` still advances `prev_total`, marks nothing.
+        let mut highlights_off = highlight::Tracker::new();
+        let mut prev_total_off = 0u64;
+        mark_new_log_lines(&mut highlights_off, &mut prev_total_off, 2, true);
+        assert!(!highlights_off.has_active(now));
+        assert_eq!(prev_total_off, 2);
+    }
+
+    /// Finding 5: `details:sent`/`details:received` mark only when
+    /// the *same* selected path's blocks actually changed, never on
+    /// a bare selection change to a different path.
+    #[test]
+    fn mark_details_highlights_ignores_a_bare_selection_change() {
+        let plan = PlanTree::empty();
+        let ask_running = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "prompt_sent": "hello"}},
+            "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        let ask_done = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "prompt_sent": "hello"}},
+            "other": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        let mut highlights = highlight::Tracker::new();
+        let mut prev = None;
+        mark_details_highlights(
+            &mut highlights,
+            &mut prev,
+            Some("prime.ask"),
+            &plan,
+            Some(&ask_running),
+            false,
+        );
+        assert!(
+            !highlights.has_active(Instant::now()),
+            "the first observation never marks"
+        );
+
+        // Selecting a *different* path never compares against `ask`'s
+        // own previous blocks, even though they did change underneath.
+        mark_details_highlights(
+            &mut highlights,
+            &mut prev,
+            Some("prime.other"),
+            &plan,
+            Some(&ask_done),
+            false,
+        );
+        assert!(
+            !highlights.has_active(Instant::now()),
+            "a bare selection change must never mark details:sent/received"
+        );
+
+        // Selecting `ask` again, now that it finished, does mark --
+        // the path matches the one just tracked for it below.
+        mark_details_highlights(
+            &mut highlights,
+            &mut prev,
+            Some("prime.ask"),
+            &plan,
+            Some(&ask_running),
+            false,
+        );
+        mark_details_highlights(
+            &mut highlights,
+            &mut prev,
+            Some("prime.ask"),
+            &plan,
+            Some(&ask_done),
+            false,
+        );
+        assert!(
+            highlights.has_active(Instant::now()),
+            "the same selected path's own changed blocks must mark"
+        );
+    }
+
     #[test]
     fn version_flag_exits_zero() {
         assert_eq!(run(args(&["--version"])), ExitCode::SUCCESS);
@@ -2583,6 +2999,10 @@ mod tests {
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Switches off the update highlights"));
         assert!(rendered.contains("The colour theme"));
+        // Finding 10: `--theme`'s possible values (a derived
+        // `ValueEnum`) are listed in `--help`, not just its own
+        // description text.
+        assert!(rendered.contains("dracula"), "{rendered}");
     }
 
     #[test]
@@ -2599,6 +3019,16 @@ mod tests {
         assert!(parsed.no_animation);
     }
 
+    /// Finding 15: an explicit icon test for `--no-animation` -- the
+    /// still frame (0) regardless of how long the run's been live,
+    /// versus a real frame number once animation is on.
+    #[test]
+    fn no_animation_pins_the_icon_at_frame_zero() {
+        assert_eq!(icon_frame_for(true, Duration::from_secs(5)), 0);
+        assert_eq!(icon_frame_for(true, Duration::from_secs(50)), 0);
+        assert!(icon_frame_for(false, Duration::from_millis(500)) > 0);
+    }
+
     #[test]
     fn theme_flag_parses_a_known_name_and_rejects_an_unknown_one() {
         let parsed = RunArgs::try_parse_from(args(&["--theme", "dracula", "do-thing.yml"]))
@@ -2607,28 +3037,33 @@ mod tests {
 
         let err = RunArgs::try_parse_from(args(&["--theme", "bogus", "do-thing.yml"]))
             .expect_err("an unknown theme name is a usage error");
-        assert!(err.to_string().contains("choose one of"));
+        // Finding 10: `--theme` is now a derived `ValueEnum`
+        // (clap's own usage error, not `ThemeName::parse`'s), so
+        // every valid name is listed right there in the error too.
+        assert!(err.to_string().contains("dracula"), "{err}");
     }
 
     #[test]
     fn resolve_theme_choice_prefers_the_cli_flag_over_osp_theme() {
-        // SAFETY: this test's own crate is single-threaded for env
-        // vars (no other test reads/writes `OSP_THEME`); `cargo test`
-        // runs each test's own process-wide env mutation sequentially
-        // enough for this not to race in practice here, same as the
-        // rest of this file's env-var tests.
-        unsafe {
-            std::env::set_var("OSP_THEME", "nord");
-        }
+        // Finding 13: `resolve_theme_choice` takes its own
+        // `OSP_THEME` reading as a plain argument now, so this test
+        // never touches the process environment at all.
         assert_eq!(
-            resolve_theme_choice(Some(theme::ThemeName::Dracula)),
+            resolve_theme_choice(Some(theme::ThemeName::Dracula), Some("nord")),
             Ok(theme::ThemeName::Dracula)
         );
-        assert_eq!(resolve_theme_choice(None), Ok(theme::ThemeName::Nord));
-        unsafe {
-            std::env::remove_var("OSP_THEME");
-        }
-        assert_eq!(resolve_theme_choice(None), Ok(theme::ThemeName::Terminal));
+        assert_eq!(
+            resolve_theme_choice(None, Some("nord")),
+            Ok(theme::ThemeName::Nord)
+        );
+        assert_eq!(
+            resolve_theme_choice(None, None),
+            Ok(theme::ThemeName::Terminal)
+        );
+        assert_eq!(
+            resolve_theme_choice(None, Some("")),
+            Ok(theme::ThemeName::Terminal)
+        );
     }
 
     #[test]
@@ -3090,8 +3525,9 @@ mod tests {
         // Finding 13: the TUI's own log buffer has nothing else
         // bounding it for as long as osp keeps running.
         let mut log_lines: Vec<String> = Vec::new();
+        let mut next_log_seq: u64 = 0;
         for n in 0..MAX_LOG_LINES + 5 {
-            push_log_line(&mut log_lines, format!("line {n}"));
+            push_log_line(&mut log_lines, &mut next_log_seq, format!("line {n}"));
         }
         assert_eq!(log_lines.len(), MAX_LOG_LINES);
         assert_eq!(log_lines.first().unwrap(), "line 5");
@@ -3099,6 +3535,10 @@ mod tests {
             log_lines.last().unwrap(),
             &format!("line {}", MAX_LOG_LINES + 4)
         );
+        // Finding 4: the sequence count keeps going regardless of
+        // the trim -- it's the key's own stable identity, not the
+        // buffer's own length.
+        assert_eq!(next_log_seq, (MAX_LOG_LINES + 5) as u64);
     }
 
     #[test]
