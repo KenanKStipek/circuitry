@@ -60,15 +60,7 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
 
     let mut old_treemap = BTreeMap::new();
     flatten_treemap(&old.treemap, &mut old_treemap);
-    let mut new_treemap = BTreeMap::new();
-    flatten_treemap(&new.treemap, &mut new_treemap);
-    for (path, total) in &new_treemap {
-        match old_treemap.get(path) {
-            None => changed.push(format!("treemap:{path}")),
-            Some(prev_total) if total > prev_total => changed.push(format!("treemap:{path}")),
-            _ => {}
-        }
-    }
+    mark_innermost_treemap_changes(&new.treemap, &old_treemap, &mut changed);
 
     for i in old.log.len()..new.log.len() {
         changed.push(format!("log:{i}"));
@@ -100,6 +92,50 @@ fn flatten_treemap(nodes: &[TreemapNode], out: &mut BTreeMap<String, u64>) {
     for node in nodes {
         out.insert(node.path.clone(), node.total);
         flatten_treemap(&node.children, out);
+    }
+}
+
+/// Whether `node`'s own total grew since `old_treemap`, or `node` is
+/// new outright -- the raw "did this cell change" predicate, before
+/// the innermost-only filter below is applied to it.
+fn treemap_cell_grew(node: &TreemapNode, old_treemap: &BTreeMap<String, u64>) -> bool {
+    match old_treemap.get(node.path.as_str()) {
+        None => true,
+        Some(prev_total) => node.total > *prev_total,
+    }
+}
+
+/// Pushes `treemap:<path>` for the innermost node of every grown
+/// subtree only (issue #535's treemap-highlight finding): a
+/// container's own total is always the sum of its children
+/// (`model::subtree_tokens`), so it rises whenever any child's does
+/// -- tinting it every time points at nothing, since the change
+/// never originated there. A node is reported only when its own
+/// total grew (or it's new) *and* none of its direct children also
+/// grew (or are new): that leaves exactly the leaf, or the deepest
+/// container, the change actually came from. Checking only *direct*
+/// children, not every descendant, is still enough to silence every
+/// ancestor up the chain: totals only ever grow here, so if a leaf's
+/// total rose, every proper ancestor's own total rose too, and each
+/// one's own direct child on the path down to that leaf rose right
+/// along with it -- `treemap_cell_grew` is true for that child, which
+/// is exactly what excludes the ancestor one level up, and the next
+/// one up from there, all the way to the root.
+fn mark_innermost_treemap_changes(
+    nodes: &[TreemapNode],
+    old_treemap: &BTreeMap<String, u64>,
+    changed: &mut Vec<String>,
+) {
+    for node in nodes {
+        let grew = treemap_cell_grew(node, old_treemap);
+        let a_child_grew = node
+            .children
+            .iter()
+            .any(|child| treemap_cell_grew(child, old_treemap));
+        if grew && !a_child_grew {
+            changed.push(format!("treemap:{}", node.path));
+        }
+        mark_innermost_treemap_changes(&node.children, old_treemap, changed);
     }
 }
 
@@ -192,9 +228,100 @@ mod tests {
                 .iter()
                 .any(|k| k.starts_with("treemap:") && k.contains('a'))
         );
+        // the fix this test now also covers: the root container's
+        // own total rose too (it's the sum of "a"'s), but the change
+        // came from "a", not from "prime" itself -- only the leaf is
+        // reported.
+        assert!(
+            !changed.contains(&"treemap:prime".to_string()),
+            "{changed:?}"
+        );
         // the reverse (shrinking) must not be reported.
         let shrunk = diff(Some(&new), &old);
         assert!(!shrunk.iter().any(|k| k.starts_with("treemap:")));
+    }
+
+    /// Builds a `TreemapNode` directly, bypassing `treemap::build_tree`
+    /// entirely -- these tests exercise `mark_innermost_treemap_changes`
+    /// in isolation, so a node's `total` can be set freely without
+    /// also having to construct flat state that would produce it
+    /// through `model::subtree_tokens`.
+    fn treemap_node(path: &str, total: u64, children: Vec<TreemapNode>) -> TreemapNode {
+        TreemapNode {
+            key: path.rsplit('.').next().unwrap_or(path).to_string(),
+            path: path.to_string(),
+            total,
+            status: None,
+            children,
+        }
+    }
+
+    /// Issue #535's treemap-highlight finding: a leaf's total growing
+    /// marks only that leaf, never the container above it even though
+    /// the container's own total (the sum of its children) grew too.
+    #[test]
+    fn a_leafs_growing_total_marks_only_the_leaf_not_its_ancestors() {
+        let mut old_treemap = BTreeMap::new();
+        old_treemap.insert("prime".to_string(), 5);
+        old_treemap.insert("prime.a".to_string(), 5);
+
+        let new_tree = vec![treemap_node(
+            "prime",
+            9,
+            vec![treemap_node("prime.a", 9, vec![])],
+        )];
+
+        let mut changed = Vec::new();
+        mark_innermost_treemap_changes(&new_tree, &old_treemap, &mut changed);
+        assert_eq!(changed, vec!["treemap:prime.a".to_string()]);
+    }
+
+    /// A new leaf appearing under an existing container marks only
+    /// that new leaf: the container's own total rose (it now sums one
+    /// more child), but the change still didn't originate there.
+    #[test]
+    fn a_new_leaf_under_an_existing_container_marks_only_the_new_leaf() {
+        let mut old_treemap = BTreeMap::new();
+        old_treemap.insert("prime".to_string(), 5);
+        old_treemap.insert("prime.a".to_string(), 5);
+
+        let new_tree = vec![treemap_node(
+            "prime",
+            8,
+            vec![
+                treemap_node("prime.a", 5, vec![]),
+                treemap_node("prime.b", 3, vec![]),
+            ],
+        )];
+
+        let mut changed = Vec::new();
+        mark_innermost_treemap_changes(&new_tree, &old_treemap, &mut changed);
+        assert_eq!(changed, vec!["treemap:prime.b".to_string()]);
+    }
+
+    /// A container whose own total rose with no child total rising is
+    /// marked itself -- it's the innermost node the change actually
+    /// reached, even though it isn't a leaf.
+    #[test]
+    fn a_containers_own_token_change_with_no_child_change_marks_the_container() {
+        let mut old_treemap = BTreeMap::new();
+        old_treemap.insert("prime".to_string(), 10);
+        old_treemap.insert("prime.c".to_string(), 6);
+        old_treemap.insert("prime.c.x".to_string(), 6);
+
+        let new_tree = vec![treemap_node(
+            "prime",
+            14,
+            vec![treemap_node(
+                "prime.c",
+                10,
+                vec![treemap_node("prime.c.x", 6, vec![])],
+            )],
+        )];
+
+        let mut changed = Vec::new();
+        mark_innermost_treemap_changes(&new_tree, &old_treemap, &mut changed);
+        assert_eq!(changed, vec!["treemap:prime.c".to_string()]);
     }
 
     #[test]

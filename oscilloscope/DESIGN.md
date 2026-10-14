@@ -884,7 +884,11 @@ the new one, keyed by stable strings (`row:<path>`, `state:<path>`,
 `:tokens`) — a row's status or loop progress changing, a state row that's
 new or whose status/dim meta/tokens changed, a treemap cell that's new
 or whose total grew (never a shrink), a new log line, the token bar, and
-the header's run state/effects/tokens. The first observation (`old:
+the header's run state/effects/tokens. A treemap cell marks only when
+its own total grew (or it's new) and no direct child's did too, since a
+container's total is always the sum of its children and tinting every
+ancestor whose own total rose along with a leaf's would point at
+nothing. The first observation (`old:
 None`) never reports anything, so `osp watch` attaching to an already-
 finished run opens on a calm screen; elapsed time, selection, scrolling,
 the filter, collapse sets and a resize are not part of `RenderState` at
