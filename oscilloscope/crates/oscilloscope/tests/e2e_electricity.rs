@@ -11,9 +11,9 @@
 //! `electricity/`, then that binary on `PATH` — `.github/workflows/
 //! oscilloscope.yml`'s own step does exactly this). Every test gets
 //! its own temporary `HOME`, a hard per-test timeout, and asserts
-//! exit codes and final statuses — never exact timings. `electricity`
-//! has no credentials of its own to strip (M0-H has no adapters that
-//! would read any), but the four variables this repository's
+//! exit codes and final statuses — never exact timings. The
+//! `scripted`/`claude_code` adapters the prompt tests below use read
+//! no real credentials, but the four variables this repository's
 //! `CLAUDE.md` names are still removed from every spawned process,
 //! the same as every other e2e test here.
 
@@ -37,8 +37,9 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
-    // M0-H only runs `tool`/`json` (DESIGN.md §4.2): `shell` is out of
-    // scope, so this success case uses the `json` provider where
+    // `shell` is out of osp's own scope here (`RunSpec` never passes a
+    // profile, and this suite never spawns a real process for a
+    // `tool` step): this success case uses the `json` provider where
     // `e2e_cof.rs`'s own equivalent uses `echo`.
     let doc = write_doc(
         work.path(),
@@ -86,8 +87,8 @@ fn on_error_continue_still_exits_ok() {
     }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
-    // `fail` (the `test-tools` feature's deterministic failure, never
-    // `shell`, which M0-H doesn't run) with `on_error: continue`. A
+    // `fail` (the `test-tools` feature's deterministic failure, chosen
+    // so this test never runs a real process) with `on_error: continue`. A
     // declared, required `interface.inputs` entry, set with `-e`,
     // exercises the plan side of scope item 3: `oscilloscope_core::
     // plan::compile` must accept the same `-e` electricity itself
@@ -488,5 +489,290 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+}
+
+/// Issue #538's B1, item 1 ("a scripted prompt"): `adapter: scripted`,
+/// one prompt, one reply with tokens. Asserts the `prime.<name>` line
+/// carries the `↑<sent> ↓<received>` suffix `oscilloscope-core::diff`'s
+/// own `result_summary` prints for a prompt whose meta has
+/// `tokens_sent`/`tokens_received` (never the plain `"ok"` fallback).
+///
+/// Runs `electricity` directly, then `osp watch` on the finished run
+/// (`watch_mirrors_a_run_osp_did_not_start`'s own shape above), rather
+/// than `osp run`: a prompt this fast can complete before osp's own
+/// state-polling loop ever catches up even once, and an `end` event
+/// processed with no matching state-sourced entry yet falls back to
+/// the plain `"ok"` summary (`diff.rs`'s own documented ordering,
+/// `Differ::event_failed`'s doc comment) -- a real timing race in
+/// `osp run`'s own live view, not something this test should assert
+/// around. `osp watch` has no such race: it renders once, from the
+/// finished run's own complete final state.
+#[test]
+fn a_scripted_prompt_prints_tokens_sent_and_received() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &support::scripted_config(&replies),
+    );
+    let run_dir = tempfile::tempdir().unwrap();
+
+    let mut electricity = Command::new("electricity");
+    electricity
+        .arg(&config)
+        .arg(&doc)
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        electricity.env_remove(key);
+    }
+    let status = wait_with_timeout(
+        electricity.spawn().expect("spawn electricity"),
+        Duration::from_secs(30),
+    );
+    assert!(status.success());
+
+    let mut watch = support::osp_command(&home);
+    watch.arg("watch").arg(run_dir.path());
+    let child = watch.spawn().expect("spawn osp watch");
+    let (watch_status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(10));
+
+    assert!(watch_status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+}
+
+/// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
+/// loop, `max_concurrency: 2`, three items, a `json` body -- short
+/// enough to finish quickly, but each pass sleeps first so this test
+/// has a real window, after the first pass starts and before the loop
+/// merges, to read `--live-state` directly and confirm issue #465's
+/// known gap: electricity's own `--live-state` file shows none of a
+/// tree's in-flight branches before the merge (unlike `cof`'s).
+#[test]
+fn a_tree_loop_merges_every_pass_and_shows_none_of_them_in_live_state_mid_run() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: seed\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"[1, 2, 3]\"}\n  - name: shots\n    type: loop\n    flow: tree\n    max_concurrency: 2\n    each: {in: \"prime.seed.value\", as: item}\n    body:\n      - name: step\n        type: tool\n        provider: sleep\n        params: {seconds: 2}\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+
+    wait_for_step_start(
+        &run_dir.join("events.jsonl"),
+        "prime.shots.iter_0.step",
+        Duration::from_secs(20),
+    );
+    let live_state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(run_dir.join("state.live.json")).unwrap())
+            .unwrap();
+    assert!(
+        live_state["prime"]["shots"]["iter_0"].is_null(),
+        "issue #465's known gap: --live-state must show none of a tree's in-flight \
+         branches before the merge: {live_state:?}"
+    );
+
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    for n in 0..3 {
+        assert!(
+            stdout.contains(&format!("prime.shots.iter_{n}.step")),
+            "stdout:\n{stdout}"
+        );
+    }
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+}
+
+/// Issue #538's B1, item 3 ("a `use`"): a `use: {path: child.yml}`
+/// child, which osp grafts into its own compiled plan
+/// (`oscilloscope_core::plan::try_graft_use`).
+#[test]
+fn a_use_path_child_grafts_into_the_plan() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    write_doc(
+        work.path(),
+        "child.yml",
+        "effects:\n  - name: inner\n    type: tool\n    provider: json\n    params:\n      mode: stringify\n      input: from-child\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: step\n    type: use\n    path: child.yml\n",
+    );
+    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+
+    let run_dir = work.path().join("run");
+    let child = osp_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("prime.step.inner"), "stdout:\n{stdout}");
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+}
+
+/// Issue #538's B1, item 4 ("decomposition"): the `decompose-success`
+/// conformance case's document, config and scripted replies
+/// (`tests/conformance/cases/decompose-success/`), inlined. The
+/// planner/chunk steps (`prime.big.plan`, `.check`, `.result_path`,
+/// `.done`) aren't in osp's compiled plan at all, so they render as
+/// observed-only rows; this only asserts the rows that are.
+#[test]
+fn decomposition_renders_the_planner_and_chunk_rows() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        r#"prime.big.plan:
+- text: '{"say": "Split into two chunks plus a merge step.", "chunks": [{"name": "a", "job": "handle the first half"}, {"name": "b", "job": "handle the second half"}], "yaml": "effects:\n  - type: prompt\n    name: a\n    template: \"Chunk A instructions.\"\n  - type: prompt\n    name: b\n    template: \"Chunk B instructions.\"\n  - type: prompt\n    name: merge\n    template: \"Combine the chunks.\"\n"}'
+prime.big.a:
+- text: chunk a result
+  tokens_sent: 11
+  tokens_received: 13
+prime.big.b:
+- text: chunk b result
+  tokens_sent: 17
+  tokens_received: 19
+prime.big.merge:
+- text: merged result
+  tokens_sent: 23
+  tokens_received: 29
+"#,
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"name: decompose-success
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: big
+    template: >-
+      Analyze and critique the following in great depth, cross-reference
+      every claim, and deduce the underlying causes, evaluate alternatives
+      and justify your conclusion with explicit reasoning. Analyze and
+      critique the following in great depth, cross-reference every claim,
+      and deduce the underlying causes, evaluate alternatives and justify
+      your conclusion with explicit reasoning. Analyze and critique the
+      following in great depth, cross-reference every claim, and deduce
+      the underlying causes.
+  - type: tool
+    name: downstream
+    provider: json
+    params:
+      mode: stringify
+      input: "{{prime.big.value}}"
+"#,
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &serde_json::json!({
+            "runtime": {
+                "complexity": {
+                    "scoring": {"enabled": true},
+                    "decomposition": {
+                        "enabled": true,
+                        "threshold": 10,
+                        "max_depth": 1,
+                        "max_chunks": 5
+                    }
+                },
+                "adapters": {
+                    "scripted": {"replies_file": replies.to_string_lossy()}
+                }
+            }
+        })
+        .to_string(),
+    );
+
+    let run_dir = work.path().join("run");
+    let child = osp_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    for path in [
+        "prime.big",
+        "prime.big.plan",
+        "prime.big.a",
+        "prime.big.b",
+        "prime.big.merge",
+        "prime.downstream",
+    ] {
+        assert!(stdout.contains(path), "missing {path} in stdout:\n{stdout}");
+    }
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
 }
