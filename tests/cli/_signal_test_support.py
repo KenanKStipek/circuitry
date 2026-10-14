@@ -1,6 +1,6 @@
 """Shared helpers for the signal-cancellation CLI test suite (#385 review
 P2): a sandboxed `cof run` child env, a poll-until-exists wait, and the
-SIGABRT-plus-stack-dump timeout diagnostics every one of those test
+dump-every-thread's-stack timeout diagnostics every one of those test
 modules otherwise defined (word for word) on its own.
 """
 
@@ -13,6 +13,25 @@ import time
 from pathlib import Path
 
 import pytest
+
+#: First on a sandboxed child's PYTHONPATH (#558) so its own
+#: ``sitecustomize.py`` registers a faulthandler dump on SIGUSR1 before
+#: anything else in the child runs.
+_SITECUSTOMIZE_DIR = Path(__file__).parent / "_fixtures" / "_sigusr1_sitecustomize"
+
+#: Every signal-test module starts its children through `_sandboxed_env`
+#: with no `-I`/`-E`/`-S` flag, so whenever the platform has SIGUSR1 at
+#: all, every child `_diagnose_and_fail`/`_diagnose_and_fail_no_pipes`
+#: ever signals already has that handler registered. `-I`/`-E` disable
+#: `PYTHONPATH`, and `-S` disables `site` outright (so `sitecustomize`
+#: never runs); `_child_can_have_sigusr1_handler` below still checks for
+#: those on *proc*'s own args, in case a future caller adds one.
+_HAS_SIGUSR1 = hasattr(signal, "SIGUSR1")
+
+#: Interpreter flags that stop a child from running
+#: `_SITECUSTOMIZE_DIR`'s `sitecustomize.py`, so a child started with one
+#: of them can't have registered the SIGUSR1 dump handler.
+_SITECUSTOMIZE_SKIP_FLAGS = frozenset({"-I", "-E", "-S"})
 
 #: Credential env vars that must never reach a spawned `cof run` here —
 #: none of this suite configures a real adapter, so none of them are
@@ -38,16 +57,28 @@ def _sandboxed_env(tmp_path: Path) -> dict[str, str]:
 
     ``PYTHONFAULTHANDLER=1`` costs nothing on a run that exits normally —
     it only matters the moment something here times out (see
-    ``_diagnose_and_fail``): it lets a SIGABRT sent to a stuck child dump
-    every thread's Python stack to stderr before it dies, instead of a
-    bare `TimeoutExpired`/`TimeoutError` with nothing to debug a future
-    CI failure from (#385 review).
+    ``_diagnose_and_fail``): it lets a genuinely fatal signal (a real
+    crash, not anything this suite sends) dump every thread's Python
+    stack to stderr before the child dies, instead of a bare
+    `TimeoutExpired`/`TimeoutError` with nothing to debug a future CI
+    failure from (#385 review).
+
+    Putting ``_SITECUSTOMIZE_DIR`` first on ``PYTHONPATH`` additionally
+    registers that same dump on SIGUSR1 (#558): a stuck child can then be
+    made to produce the dump deliberately from a signal — SIGUSR1, not
+    SIGABRT — that a SIGKILL can follow without macOS's ReportCrash
+    treating it as a crash to write a report for.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k not in _CREDENTIAL_ENV_VARS}
     env["HOME"] = str(home)
     env["PYTHONFAULTHANDLER"] = "1"
+    pythonpath = [str(_SITECUSTOMIZE_DIR)]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpath.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath)
     return env
 
 
@@ -96,9 +127,9 @@ def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
     """``ps``/``lsof`` evidence of *pid*'s own session and process group,
     taken before anything is killed (#385 round 3).
 
-    A stuck `cof run` child's own stack dump (from the SIGABRT below)
-    only ever showed that a worker thread was blocked in `communicate`'s
-    own `select()` — never *why* the pipe it was reading never reached
+    A stuck `cof run` child's own stack dump (from `_diagnose_and_fail`'s
+    SIGUSR1, below) only ever showed that a worker thread was blocked in
+    `communicate`'s own `select()` — never *why* the pipe it was reading never reached
     EOF. The actual answer, found this way: `tests/cli`'s own branch
     scripts are plain multi-statement `bash -c '...; sleep N'` strings,
     and macOS's `/bin/bash` (3.2) forks a *child* process for a non-tail
@@ -177,6 +208,57 @@ def _process_group_and_pipe_diagnostics(pid: int | None) -> str:
     return "\n\n".join(sections)
 
 
+def _child_can_have_sigusr1_handler(proc: subprocess.Popen[str]) -> bool:
+    """Whether *proc* could have run `_SITECUSTOMIZE_DIR`'s
+    `sitecustomize.py` and registered the SIGUSR1 dump handler: the
+    platform has SIGUSR1 at all, and *proc*'s own argv has none of
+    `_SITECUSTOMIZE_SKIP_FLAGS` (today, every caller's argv passes:
+    see the comment on `_HAS_SIGUSR1` above).
+    """
+    if not _HAS_SIGUSR1:
+        return False
+    args = proc.args
+    return not (
+        isinstance(args, (list, tuple))
+        and any(str(arg) in _SITECUSTOMIZE_SKIP_FLAGS for arg in args)
+    )
+
+
+def _dump_every_thread_stack_then_kill(proc: subprocess.Popen[str]) -> None:
+    """Make a still-running *proc* dump every thread's Python stack to
+    stderr, then end it without a macOS crash report (#558).
+
+    Sends SIGUSR1 — which `_sandboxed_env`'s own `sitecustomize.py`
+    (first on the child's PYTHONPATH) has already registered a
+    faulthandler dump on, in every child any of this module's callers
+    start — then drains stdout/stderr with `communicate(timeout=1.0)`
+    so the dump can actually finish writing (faulthandler writes it in
+    many small `write()` calls; a pipe that fills while unread would
+    otherwise block the dump itself) before SIGKILL, which unlike
+    SIGABRT writes no crash report. `communicate` on a closed pipe is a
+    no-op for that pipe, so this is safe for a caller that already
+    closed its own read end (`_diagnose_and_fail_no_pipes`). Whatever it
+    reads here is not lost: the caller's own later `communicate`/`wait`
+    picks up from where this left off.
+
+    Falls back to the old SIGABRT (relying on `PYTHONFAULTHANDLER=1`
+    alone) when `_child_can_have_sigusr1_handler` says *proc* can't have
+    registered the handler — today, never: see `_HAS_SIGUSR1` above.
+    """
+    if proc.poll() is not None:
+        return
+    if not _child_can_have_sigusr1_handler(proc):
+        proc.send_signal(signal.SIGABRT)
+        return
+    proc.send_signal(signal.SIGUSR1)
+    try:
+        proc.communicate(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+    if proc.poll() is None:
+        proc.kill()
+
+
 def _diagnose_and_fail(
     proc: subprocess.Popen[str],
     *,
@@ -188,26 +270,17 @@ def _diagnose_and_fail(
     """Fail the test with everything needed to debug a stuck `cof run`
     child: its own stdout/stderr, the branch's own process-group/pipe
     state (:func:`_process_group_and_pipe_diagnostics`, captured before
-    anything below is killed), plus (via SIGABRT + this module's own
-    `PYTHONFAULTHANDLER=1`) a dump of every thread's Python stack — never
-    a bare `TimeoutExpired`/`TimeoutError` with none of that (#385
-    review, round 3).
-
-    SIGABRT, not SIGKILL: faulthandler installs itself for exactly the
-    signals a fatal crash would send (SIGABRT included), dumps first,
-    then lets the signal's own default disposition finish the job — so
-    the child still exits, just not silently. Falls back to SIGKILL only
-    if SIGABRT itself doesn't finish the job in time.
+    anything below is killed), plus a dump of every thread's Python
+    stack from `_dump_every_thread_stack_then_kill` — never a bare
+    `TimeoutExpired`/`TimeoutError` with none of that (#385 review,
+    round 3).
     """
     diagnostics = _process_group_and_pipe_diagnostics(pid)
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGABRT)
-        try:
-            stdout, stderr = proc.communicate(timeout=10.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate(timeout=10.0)
-    else:
+    _dump_every_thread_stack_then_kill(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=10.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
         stdout, stderr = proc.communicate(timeout=10.0)
     header = _diagnosis_header(label=label, timeout=timeout, elapsed=elapsed, pid=pid)
     pytest.fail(
@@ -215,8 +288,8 @@ def _diagnose_and_fail(
         f"--- process group / pipe state at the moment of the timeout ---\n"
         f"{diagnostics}\n"
         f"--- stdout ---\n{stdout}\n"
-        "--- stderr (includes a PYTHONFAULTHANDLER stack dump of every "
-        "thread, from SIGABRT, if the child was still alive) ---\n"
+        "--- stderr (includes a stack dump of every thread, from SIGUSR1, "
+        "if the child was still alive) ---\n"
         f"{stderr}"
     )
 
@@ -233,20 +306,17 @@ def _diagnose_and_fail_no_pipes(
     can't be read here at all: the caller closed its own read end of both
     pipes already, to simulate a closed terminal."""
     diagnostics = _process_group_and_pipe_diagnostics(pid)
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGABRT)
-        try:
-            returncode = proc.wait(timeout=10.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            returncode = proc.wait(timeout=10.0)
-    else:
-        returncode = proc.returncode
+    _dump_every_thread_stack_then_kill(proc)
+    try:
+        returncode = proc.wait(timeout=10.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        returncode = proc.wait(timeout=10.0)
     header = _diagnosis_header(label=label, timeout=timeout, elapsed=elapsed, pid=pid)
     pytest.fail(
         f"{header} "
         f"(stdout/stderr already closed by this test; returncode after "
-        f"SIGABRT+kill: {returncode})\n"
+        f"SIGUSR1+kill: {returncode})\n"
         f"--- process group / pipe state at the moment of the timeout ---\n"
         f"{diagnostics}"
     )
