@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #511",
+  "description": "The same decomposition plan naming a provider that is not a cof plugin at all, but with complexity.decomposition's own default on_failure (skip, not fail): the plan's execution_failed outcome falls back to running the un-decomposed prompt as-is, scripted deterministically, so the run succeeds with the real Unknown plugin text recorded only on meta.decomposition.error, never the preview refusal.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

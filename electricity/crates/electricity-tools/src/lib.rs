@@ -32,7 +32,13 @@ pub mod http;
 pub mod http_client;
 pub mod imagemagick;
 pub mod json;
-pub mod plugin_names;
+// `PLUGIN_NAMES` itself lives in `electricity-bytecode` (issue #511): the
+// refusal walker there needs it to tell a known-but-unbuilt cof plugin
+// from one that is not a cof plugin at all, and can't depend on this
+// crate (which already depends on it) to get it. Re-exported here under
+// the same path so every existing `electricity_tools::plugin_names::
+// PLUGIN_NAMES` reference keeps working unchanged.
+pub use electricity_bytecode::plugin_names;
 pub mod process;
 pub mod regex;
 pub mod registry;

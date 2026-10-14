@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #511",
+  "description": "A tool naming a provider that is not a cof plugin at all, nested inside an if's then: branch, with on_error: continue on the tool itself: the branch absorbs the Unknown plugin failure at the tool, run succeeds.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

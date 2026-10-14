@@ -29,11 +29,18 @@
 //! `reflector`'s own `effects:`, an `if`'s own branches -- the walker
 //! still recurses into it once that lane's flag is `true`, so an
 //! unsupported effect *inside* an otherwise-supported container is
-//! still found). The walker's own body does not need to change again
-//! after this lane: [`Supported::m0`] is the exact value M0 ran with
-//! (every flag `false`), pinned by this module's own golden tests
-//! below so no later lane can silently widen what the walker accepts
-//! without a reviewed, intentional flip. [`Supported::preflight`] is
+//! still found). The walker's own body does not otherwise need to
+//! change again after this lane: [`Supported::m0`] is the exact value
+//! M0 ran with (every flag `false`), pinned by this module's own
+//! golden tests below so no later lane can silently widen what the
+//! walker accepts without a reviewed, intentional flip. The one
+//! exception is the tool-provider check itself (issue #511): it also
+//! consults [`crate::plugin_names::PLUGIN_NAMES`] directly, not only
+//! *supported*, to tell a cof plugin this build has no builder for yet
+//! (still refused, with the preview marker) from a provider that is
+//! not a cof plugin at all (never refused here -- it reaches the same
+//! "Unknown plugin" failure `cof run` gives it, at the same point).
+//! [`Supported::preflight`] is
 //! one such flag, added by #451: a document naming a top-level
 //! `adapter:` is refused while it's `false`, the same as every other
 //! capability here, even though it stands in for a safety check this
@@ -99,10 +106,17 @@ pub enum RefusalReason {
     DeclaredPrompts,
     /// A `tool` effect's own `provider:` (normalized the same way
     /// `plugins/factory.py::build_plugin` does, `.strip().lower()`)
-    /// isn't in [`Supported::providers`] -- the normalized name is
-    /// carried here (not the raw, as-written text) so a caller that
-    /// reports it in the refusal message shows the same spelling the
-    /// lookup itself judged.
+    /// isn't one this build can dispatch, but *is* a name Circuitry
+    /// itself recognizes ([`crate::plugin_names::PLUGIN_NAMES`]) -- a
+    /// cof plugin electricity doesn't run yet, like `web_fetch` or
+    /// `mcp`. Never produced for a name that isn't a cof plugin at
+    /// all: that case isn't refused by this walker (issue #511), so it
+    /// reaches the same "Unknown plugin" failure `cof run` gives it,
+    /// at the same point (preflight at the top level, ordinary
+    /// dispatch inside a `use` child or a generated plan). The
+    /// normalized name is carried here (not the raw, as-written text)
+    /// so a caller that reports it in the refusal message shows the
+    /// same spelling the lookup itself judged.
     UnsupportedToolProvider(String),
     /// The document's own top-level `adapter:` is a non-blank string,
     /// and [`Supported::preflight`] is `false` -- `cli/allowlist.py::
@@ -446,7 +460,20 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
             // lookup would miss on.
             let normalized_provider =
                 electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
-            if !supported.allows_provider(&normalized_provider) {
+            // Issue #511: a provider this build can't dispatch is only
+            // ever refused here when it names a plugin Circuitry itself
+            // knows (`crate::plugin_names::PLUGIN_NAMES`) -- a cof
+            // plugin electricity doesn't run yet, like `web_fetch` or
+            // `mcp`. A name that isn't a cof plugin at all isn't
+            // refused by this walker: it falls through to the same
+            // check `cof run` fails it on, at the same point
+            // (`electricity_tools::build_plugin`'s own "Unknown plugin"
+            // error, reached through preflight at the top level or
+            // ordinary dispatch inside a `use` child/generated plan),
+            // never the preview marker.
+            if !supported.allows_provider(&normalized_provider)
+                && crate::plugin_names::PLUGIN_NAMES.contains(&normalized_provider.as_str())
+            {
                 return refusal(
                     path,
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
@@ -790,6 +817,77 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_that_is_not_a_cof_plugin_at_all_is_never_refused_by_the_walker() {
+        // Issue #511: `nonexistent_tool` is in nobody's registry --
+        // `cof run` fails this at preflight/dispatch with "Unknown
+        // plugin", never with the preview marker, so the walker must
+        // not refuse it either; the caller falls through to that same
+        // real check.
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider(
+                "nonexistent_tool",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        assert!(first_unsupported(&program, false, &m0()).is_none());
+    }
+
+    #[test]
+    fn a_cof_plugin_this_build_cannot_dispatch_is_still_refused_with_the_preview_marker() {
+        // `web_fetch` and `mcp` are both in Circuitry's own registry
+        // (`crate::plugin_names::PLUGIN_NAMES`) but no M1 lane builds
+        // either -- unlike `nonexistent_tool` above, these keep the
+        // preview refusal (issue #511's own "keep the preview refusal"
+        // half).
+        for provider in ["web_fetch", "mcp"] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("run"),
+                LeafKind::Tool(tool_op_with_provider(
+                    provider,
+                    ParamNode::Map(IndexMap::new()),
+                )),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            let refusal = first_unsupported(&program, false, &m0()).unwrap();
+            assert_eq!(
+                refusal.reason,
+                RefusalReason::UnsupportedToolProvider(provider.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn a_document_with_both_an_unknown_name_and_a_known_unbuilt_plugin_still_refuses() {
+        // Issue #511's own requirement: a document holding both keeps
+        // the preview refusal -- here the unknown name comes *first* in
+        // document order, so the walker must keep walking past it
+        // (never refusing) until it reaches the known-but-unbuilt one
+        // later in the same document.
+        let unknown = leaf_op(
+            EffectPath::root().push_name("first"),
+            LeafKind::Tool(tool_op_with_provider(
+                "nonexistent_tool",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let known_unbuilt = leaf_op(
+            EffectPath::root().push_name("second"),
+            LeafKind::Tool(tool_op_with_provider(
+                "mcp",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![unknown, known_unbuilt]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("mcp".to_string())
+        );
+    }
+
+    #[test]
     fn fs_env_vars_hash_uuid_and_clock_are_all_accepted_once_tools_stdlib_is_set() {
         let supported = Supported {
             tools_stdlib: true,
@@ -916,11 +1014,18 @@ mod tests {
 
     #[test]
     fn an_extra_allowed_provider_is_accepted_only_when_listed() {
-        let tool_path = EffectPath::root().push_name("wait");
+        // `ripgrep` (not `sleep`): a real cof plugin no M1 lane builds,
+        // so it's still refused with the preview marker while absent
+        // from *providers* -- unlike `sleep`, which issue #511's own
+        // fix no longer refuses at all once it isn't the test-tools
+        // feature's own extra name (it is not a cof plugin, so the
+        // walker leaves it for the real "Unknown plugin" dispatch
+        // failure regardless of *providers*).
+        let tool_path = EffectPath::root().push_name("search");
         let tool = leaf_op(
             tool_path.clone(),
             LeafKind::Tool(tool_op_with_provider(
-                "sleep",
+                "ripgrep",
                 ParamNode::Map(IndexMap::new()),
             )),
         );
@@ -929,7 +1034,28 @@ mod tests {
             first_unsupported(&program, false, &m0()).unwrap().path,
             tool_path
         );
-        assert!(first_unsupported(&program, false, &Supported::m0(&["json", "sleep"])).is_none());
+        assert!(first_unsupported(&program, false, &Supported::m0(&["json", "ripgrep"])).is_none());
+    }
+
+    #[test]
+    fn the_test_tools_features_own_extra_providers_are_never_refused_regardless_of_the_allow_list()
+    {
+        // `sleep`/`fail` (the `test-tools` cargo feature's own synthetic
+        // tools) are not cof plugins at all -- issue #511's fix means
+        // the walker never refuses either, with or without them listed
+        // in *providers*, the same as any other name that isn't in
+        // `crate::plugin_names::PLUGIN_NAMES`.
+        for provider in ["sleep", "fail"] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("t"),
+                LeafKind::Tool(tool_op_with_provider(
+                    provider,
+                    ParamNode::Map(IndexMap::new()),
+                )),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            assert!(first_unsupported(&program, false, &m0()).is_none());
+        }
     }
 
     #[test]

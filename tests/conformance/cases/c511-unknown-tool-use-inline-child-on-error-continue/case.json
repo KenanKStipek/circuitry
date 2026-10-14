@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #511",
+  "description": "The same inline child naming a provider that is not a cof plugin at all, but under the use effect's own on_error: continue -- the run itself succeeds, with the child's own Unknown plugin error only recorded on prime.u.meta.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

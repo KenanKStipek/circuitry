@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-14T02:55:40.784Z","ev":"run_start","run_id":"dade970d-3a61-453d-81ac-cace8464909d","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":99276}
+{"v":1,"seq":1,"ts":"2026-10-14T02:55:40.788Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-14T02:55:40.788Z","ev":"start","id":1,"path":"prime.u"}
+{"v":1,"seq":3,"ts":"2026-10-14T02:55:40.790Z","ev":"start","id":2,"path":"prime.u.dyn"}
+{"v":1,"seq":4,"ts":"2026-10-14T02:55:40.790Z","ev":"start","id":3,"path":"prime.u.dyn.x"}
+{"v":1,"seq":5,"ts":"2026-10-14T02:55:40.790Z","ev":"end","id":3,"path":"prime.u.dyn.x","ok":false,"ms":0,"error":"Unknown plugin: 'nonexistent_tool'. Supported plugins: 7z, agent, awk, base64, clock, comfyui, csv, diff_patch, discord, dns, docker, email_smtp, embed, env_vars, exiftool, ffmpeg, fs, gcalendar, gdrive, gh, git, github, gpg, gzip, hash, hex, html_extract, http, imagemagick, jira, json, kubectl, linear, linter, math, mcp, mediainfo, notion, ocr, pandoc, pdf_extract, pdf_render, ping, playwright, port_check, process_list, pytest, python_eval, regex, rerank, ripgrep, rss, s3, screenshot, sed, serv"}
+{"v":1,"seq":6,"ts":"2026-10-14T02:55:40.790Z","ev":"end","id":2,"path":"prime.u.dyn","ok":false,"ms":0,"error":"dyn.x: Unknown plugin: 'nonexistent_tool'. Supported plugins: 7z, agent, awk, base64, clock, comfyui, csv, diff_patch, discord, dns, docker, email_smtp, embed, env_vars, exiftool, ffmpeg, fs, gcalendar, gdrive, gh, git, github, gpg, gzip, hash, hex, html_extract, http, imagemagick, jira, json, kubectl, linear, linter, math, mcp, mediainfo, notion, ocr, pandoc, pdf_extract, pdf_render, ping, playwright, port_check, process_list, pytest, python_eval, regex, rerank, ripgrep, rss, s3, screenshot, se"}
+{"v":1,"seq":7,"ts":"2026-10-14T02:55:40.790Z","ev":"end","id":1,"path":"prime.u","ok":true,"ms":2}
+{"v":1,"seq":8,"ts":"2026-10-14T02:55:40.790Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":9,"ts":"2026-10-14T02:55:40.790Z","ev":"run_end","ok":true}

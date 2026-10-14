@@ -345,14 +345,11 @@ def load_case(case_dir: Path) -> dict[str, Any]:
             "nor a fresh leftover-replies path, and runs after the server has already "
             "stopped"
         )
-    if metadata.get("electricity_preview_ok") and (
-        metadata["expect"] != "success" or "electricity" not in metadata["engines"]
-    ):
+    if metadata.get("electricity_preview_ok") and "electricity" not in metadata["engines"]:
         raise ValueError(
             f"{case_dir.name}: case.json 'electricity_preview_ok' only applies to a "
-            "'success' case that lists 'electricity' in 'engines' -- it names a case "
-            "electricity is expected to refuse, so there is nothing for it to mean "
-            "otherwise"
+            "case that lists 'electricity' in 'engines' -- it names a case electricity "
+            "is expected to refuse, so there is nothing for it to mean otherwise"
         )
     known_divergence = metadata["known_divergence"]
     if known_divergence is not None:

@@ -397,7 +397,7 @@ error).
 
 **Missing config.** With no config, osp tells the user that electricity needs one. It does not invent a `{}` config, because that would silently drop the user's global settings, which `cof` would have applied.
 
-**End-to-end tests** (`oscilloscope/crates/oscilloscope/tests/e2e_electricity.rs`, mirroring `e2e_cof.rs`) run behind `OSP_E2E_ELECTRICITY=1`, against an `electricity` built with `--features test-tools` (its `sleep`/`fail` providers stand in for `cof`'s `shell`, which M0-H doesn't run) on `PATH`. `oscilloscope.yml`'s own `e2e-electricity` job builds that binary and runs them on Linux and macOS.
+**End-to-end tests** (`oscilloscope/crates/oscilloscope/tests/e2e_electricity.rs`, mirroring `e2e_cof.rs`) run behind `OSP_E2E_ELECTRICITY=1`, against an `electricity` built with `--features test-tools` (its `sleep`/`fail` providers keep the signal tests deterministic without a real child process) on `PATH`. `oscilloscope.yml`'s own `e2e-electricity` job builds that binary and runs them on Linux and macOS.
 
 ---
 
@@ -829,7 +829,7 @@ the_redraw_interval` times one `TestBackend` draw of the same state too.
 
   Live tests are never run.
 - **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSP_E2E_ELECTRICITY=1`.
-- **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents built only from electricity's M0-H scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:`), recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
+- **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 
 ---
 

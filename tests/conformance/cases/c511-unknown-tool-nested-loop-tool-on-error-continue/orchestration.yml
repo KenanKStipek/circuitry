@@ -1,0 +1,19 @@
+name: c511-unknown-tool-nested-loop-tool-on-error-continue
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: tool
+          name: seed
+          provider: json
+          params: {mode: parse, input: "[1]"}
+        - type: loop
+          name: lp
+          each: {in: "prime.seed.value", as: it}
+          body:
+            - type: tool
+              name: x
+              provider: nonexistent_tool
+              params: {}
+              on_error: continue

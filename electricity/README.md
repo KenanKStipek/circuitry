@@ -49,9 +49,10 @@ release alongside the Python distributions, marked as a preview.
   any of the other 61 is refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
-  absorbs it. `mcp`, `surrealdb` and `email_smtp` are not built yet; the
-  external plugin bridge, which brings `python_eval` and the rest, isn't
-  either.
+  absorbs it. A name that isn't one of Circuitry's plugins at all fails
+  the way `cof run` does, with its `Unknown plugin` error. `mcp`,
+  `surrealdb` and `email_smtp` are not built yet; the external plugin
+  bridge, which brings `python_eval` and the rest, isn't either.
 - **Text encodings.** In `fs` and `hash`, any encoding other than UTF-8,
   ASCII or Latin-1 fails the effect with the preview message.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
@@ -65,12 +66,10 @@ release alongside the Python distributions, marked as a preview.
   `--dry-run`, `--validate-only`, `--verbose` or `--skip-preflight`.
   `.toon` documents and `use: {ref: ...}` are refused. Windows isn't
   supported.
-- **Known gaps, tracked:** an unknown tool provider is refused instead of
-  failing the way `cof run` does (#511); schema error wording and order
-  (#528); rare JSON Schema shapes (#507); a reflector plan containing a
-  date (#512); mid-run `--live-state` of a tree (#465); lint advisories
-  (#428); a negative effect `timeout_ms`, and two config-corpus gaps
-  (#536).
+- **Known gaps, tracked:** schema error wording and order (#528); rare
+  JSON Schema shapes (#507); a reflector plan containing a date (#512);
+  mid-run `--live-state` of a tree (#465); lint advisories (#428); a
+  negative effect `timeout_ms`, and two config-corpus gaps (#536).
 
 ## Build and test
 

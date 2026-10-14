@@ -1,0 +1,6 @@
+name: c511-unknown-tool-use-path-child-on-error-continue
+effects:
+  - type: use
+    name: u
+    path: child.yml
+    on_error: continue
