@@ -1,9 +1,12 @@
 """Direct subprocess tests for `fake`, the reusable PATH-fake binary (issue
-#450 item 4): every mode it supports, independent of any conformance case
-that happens to use one. `c-shell-path-fake` is the only case that uses it
-today (fixed stdout/exit code, via `shell`); `--sleep`/`--crlf`/
-`--invalid-utf8` aren't exercised by a committed case yet, so this is their
-only coverage until a future timeout/cancellation/encoding case lands.
+#450 item 4): every mode the base fake supports, independent of any
+conformance case that happens to use one. `c-shell-path-fake` uses
+`--stdout`/`--exit`; `c-shell-crlf` and `c-shell-invalid-utf8` use
+`--crlf`/`--invalid-utf8`; `c-shell-timeout` uses `--sleep` -- this module
+stays their direct, case-independent coverage either way. The pidfile
+flags (`--spawn-background`/`--check-pidfile`/`--kill-pidfile`) live only
+on the extended copy `c-shell-background-survives-normal-exit` keeps
+(issue #519); this module doesn't test them.
 """
 
 from __future__ import annotations

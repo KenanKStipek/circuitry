@@ -1,0 +1,3 @@
+ERROR: <THIRD_PARTY_TEXT>
+ERROR: <THIRD_PARTY_TEXT>
+WARNING: Dynamic 'fan': 3 effects failed in parallel:

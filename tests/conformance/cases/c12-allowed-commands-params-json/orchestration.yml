@@ -1,0 +1,7 @@
+name: c12-allowed-commands-params-json
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    params: {command: ls}
+    params_json: '{"allowed_commands": ["ls"]}'

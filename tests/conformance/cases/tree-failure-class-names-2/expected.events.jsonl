@@ -1,0 +1,32 @@
+{"v":1,"seq":0,"ts":"2026-10-14T03:08:43.161Z","ev":"run_start","run_id":"2c194e34-dfe0-45fa-a876-2ea9810feb2d","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":12066}
+{"v":1,"seq":1,"ts":"2026-10-14T03:08:43.164Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-14T03:08:43.165Z","ev":"start","id":1,"path":"prime.fan"}
+{"v":1,"seq":3,"ts":"2026-10-14T03:08:43.165Z","ev":"dispatch","path":"prime.fan","branches":4,"concurrency":1}
+{"v":1,"seq":4,"ts":"2026-10-14T03:08:43.165Z","ev":"start","id":2,"path":"prime.fan.gate"}
+{"v":1,"seq":5,"ts":"2026-10-14T03:08:43.165Z","ev":"start","id":3,"path":"prime.fan.gate.body"}
+{"v":1,"seq":6,"ts":"2026-10-14T03:08:43.165Z","ev":"end","id":3,"path":"prime.fan.gate.body","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":7,"ts":"2026-10-14T03:08:43.165Z","ev":"end","id":2,"path":"prime.fan.gate","ok":false,"ms":0,"error":"body: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":8,"ts":"2026-10-14T03:08:43.165Z","ev":"start","id":4,"path":"prime.fan.inner_one"}
+{"v":1,"seq":9,"ts":"2026-10-14T03:08:43.165Z","ev":"dispatch","path":"prime.fan.inner_one","branches":2,"concurrency":1}
+{"v":1,"seq":10,"ts":"2026-10-14T03:08:43.165Z","ev":"start","id":5,"path":"prime.fan.inner_one.ok"}
+{"v":1,"seq":11,"ts":"2026-10-14T03:08:43.165Z","ev":"end","id":5,"path":"prime.fan.inner_one.ok","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-10-14T03:08:43.166Z","ev":"start","id":6,"path":"prime.fan.inner_one.bad"}
+{"v":1,"seq":13,"ts":"2026-10-14T03:08:43.166Z","ev":"end","id":6,"path":"prime.fan.inner_one.bad","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":14,"ts":"2026-10-14T03:08:43.166Z","ev":"end","id":4,"path":"prime.fan.inner_one","ok":false,"ms":0,"error":"inner_one.bad: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":15,"ts":"2026-10-14T03:08:43.166Z","ev":"start","id":7,"path":"prime.fan.plan_it"}
+{"v":1,"seq":16,"ts":"2026-10-14T03:08:43.166Z","ev":"start","id":8,"path":"prime.fan.plan_it.inner"}
+{"v":1,"seq":17,"ts":"2026-10-14T03:08:43.168Z","ev":"start","id":9,"path":"prime.fan.plan_it.inner.propose_steps"}
+{"v":1,"seq":18,"ts":"2026-10-14T03:08:43.170Z","ev":"end","id":9,"path":"prime.fan.plan_it.inner.propose_steps","ok":true,"ms":2}
+{"v":1,"seq":19,"ts":"2026-10-14T03:08:43.170Z","ev":"end","id":8,"path":"prime.fan.plan_it.inner","ok":true,"ms":4}
+{"v":1,"seq":20,"ts":"2026-10-14T03:08:43.171Z","ev":"start","id":10,"path":"prime.fan.plan_it.generated.iter_0"}
+{"v":1,"seq":21,"ts":"2026-10-14T03:08:43.172Z","ev":"start","id":11,"path":"prime.fan.plan_it.generated.iter_0.check"}
+{"v":1,"seq":22,"ts":"2026-10-14T03:08:43.172Z","ev":"end","id":11,"path":"prime.fan.plan_it.generated.iter_0.check","ok":false,"ms":0,"error":"json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":23,"ts":"2026-10-14T03:08:43.172Z","ev":"end","id":10,"path":"prime.fan.plan_it.generated.iter_0","ok":false,"ms":2,"error":"prime.check: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":24,"ts":"2026-10-14T03:08:43.173Z","ev":"end","id":7,"path":"prime.fan.plan_it","ok":false,"ms":7,"error":"generated_exec_failed: use 'iter_0' -> inline: prime.check: json: parse failed: Expecting value: line 1 column 1 (char 0)"}
+{"v":1,"seq":25,"ts":"2026-10-14T03:08:43.173Z","ev":"start","id":12,"path":"prime.fan.big"}
+{"v":1,"seq":26,"ts":"2026-10-14T03:08:43.194Z","ev":"start","id":13,"path":"prime.fan.big.plan"}
+{"v":1,"seq":27,"ts":"2026-10-14T03:08:43.194Z","ev":"end","id":13,"path":"prime.fan.big.plan","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: no reply configured for path 'prime.fan.big.plan'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":28,"ts":"2026-10-14T03:08:43.197Z","ev":"end","id":12,"path":"prime.fan.big","ok":false,"ms":24,"error":"decomposition of 'big' failed (planner_failed): prime.plan: All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: no reply configured for path 'prime.fan.big.plan'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":29,"ts":"2026-10-14T03:08:43.197Z","ev":"end","id":1,"path":"prime.fan","ok":false,"ms":33,"error":"4 effects failed in parallel:\n  [1] RuntimeError: fan.gate: body: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [2] TreeExecutionError: fan.inner_one: inner_one.bad: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [3] RuntimeError: fan.plan_it: generated_exec_failed: use 'iter_0' -> inline: prime.check: json: parse failed: Expecting value: line 1 column 1 (char 0)\n  [4] DecompositionError: fan.big: decomposition of 'big' failed (planner_failed): prime.plan: All "}
+{"v":1,"seq":30,"ts":"2026-10-14T03:08:43.197Z","ev":"end","id":0,"path":"prime","ok":true,"ms":33}
+{"v":1,"seq":31,"ts":"2026-10-14T03:08:43.197Z","ev":"run_end","ok":true}

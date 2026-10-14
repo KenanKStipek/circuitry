@@ -55,13 +55,24 @@ impl ConditionKind {
 /// when the template render or the adapter dispatch raised, or in a
 /// dry run (no call at all); *verdict* is `Err` for a render failure,
 /// an adapter failure or an unparseable reply, carrying that failure's
-/// own text -- never raised past this function: the caller (`exec::
-/// conditional`/`exec::loop_`) is the one that applies `on_error`,
-/// exactly like a CEL condition's own evaluation error.
+/// own text and Python exception class -- never raised past this
+/// function: the caller (`exec::conditional`/`exec::loop_`) is the one
+/// that applies `on_error`, exactly like a CEL condition's own
+/// evaluation error.
 #[derive(Debug)]
 pub struct ModelConditionOutcome {
     pub generated: Option<GenerateResult>,
-    pub verdict: Result<bool, String>,
+    pub verdict: Result<bool, ModelConditionFailure>,
+}
+
+/// *py_class* is `core/templates.py::TemplateError` for a render
+/// failure, the adapter's own class for a dispatch failure, or
+/// `core/answers.py::AnswerParseError` for a reply that doesn't
+/// unambiguously read as yes/no (`parse_boolean_answer`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ModelConditionFailure {
+    pub py_class: PyExc,
+    pub message: String,
 }
 
 /// Renders *template*, dispatches it through *run_ctx*'s own default
@@ -95,7 +106,10 @@ pub async fn evaluate_model_condition(
         Err(err) => {
             return Ok(ModelConditionOutcome {
                 generated: None,
-                verdict: Err(err.to_string()),
+                verdict: Err(ModelConditionFailure {
+                    py_class: PyExc::TemplateError,
+                    message: err.to_string(),
+                }),
             });
         }
     };
@@ -115,7 +129,13 @@ pub async fn evaluate_model_condition(
     .await?
     {
         Ok(result) => {
-            let verdict = super::prompt::answers::parse_boolean_answer(&result.text);
+            let verdict =
+                super::prompt::answers::parse_boolean_answer(&result.text).map_err(|message| {
+                    ModelConditionFailure {
+                        py_class: PyExc::AnswerParseError,
+                        message,
+                    }
+                });
             Ok(ModelConditionOutcome {
                 generated: Some(result),
                 verdict,
@@ -123,7 +143,10 @@ pub async fn evaluate_model_condition(
         }
         Err(err) => Ok(ModelConditionOutcome {
             generated: None,
-            verdict: Err(err.message),
+            verdict: Err(ModelConditionFailure {
+                py_class: err.py_class,
+                message: err.message,
+            }),
         }),
     }
 }
@@ -581,7 +604,10 @@ mod tests {
             .expect("not cancelled");
             assert_eq!(
                 outcome.verdict,
-                Err("could not parse a yes/no answer from 'maybe'".to_string())
+                Err(ModelConditionFailure {
+                    py_class: PyExc::AnswerParseError,
+                    message: "could not parse a yes/no answer from 'maybe'".to_string(),
+                })
             );
             let generated = outcome.generated.expect("reply kept on a parse failure");
             assert_eq!(generated.text, "maybe");
@@ -638,7 +664,10 @@ mod tests {
             .expect("not cancelled");
             assert_eq!(
                 outcome.verdict,
-                Err("scripted adapter: server_error".to_string())
+                Err(ModelConditionFailure {
+                    py_class: PyExc::AdapterCallError,
+                    message: "scripted adapter: server_error".to_string(),
+                })
             );
             assert!(outcome.generated.is_none());
         });

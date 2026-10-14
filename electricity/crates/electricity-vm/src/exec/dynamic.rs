@@ -600,27 +600,52 @@ fn execute_tree<'a>(
 }
 
 /// `core/dynamic.py::TreeExecutionError._format` -- a single branch
-/// failure's own already-wrapped (`"<path>: <message>"`) text verbatim;
-/// two or more are folded into one numbered summary.
-///
-/// Known deviation (tracked in #442, the M0-H follow-ups issue): Python's
-/// own numbered lines additionally show each failure's *original*
-/// (pre-wrap) exception class name (`"[1]
-/// ValueError: <path>: <message>"`) by unwrapping one level of
-/// `__cause__` -- this crate's [`VmError`] does not carry a Python-style
-/// exception class name to reproduce that with, so each line here is
-/// just `"  [N] <already-wrapped message>"`. Acceptable for M0-H: no
-/// conformance case or acceptance criterion in issue #431 exercises two
-/// *simultaneous* tree-branch failures' combined text, only a single
-/// failure's (which this matches exactly) or `stop_on_error`'s dispatch
-/// behavior (which this does not touch).
+/// failure's own already-wrapped (`"<path>: <message>"`) text
+/// verbatim; two or more are folded into one numbered summary, each
+/// line also naming the failure's own displayed class (`"[i]
+/// {type(original).__name__}: {err}"`, `err.__cause__ or err`'s
+/// one-level-only unwrap -- [`VmError::displayed_class`] already
+/// implements the same rule). Either way, the combined error itself is
+/// always a [`VmError::Raised`] of [`electricity_tools::PyExc::
+/// TreeExecutionError`] (a `RuntimeError` subclass, like
+/// `DecompositionError`), never a bare [`VmError::Message`] and never
+/// the single branch's own *class* even when there is only one failure
+/// (`TreeExecutionError.__init__` always raises its own type; only its
+/// `_format`-built *message* varies with the branch count) -- a nested
+/// tree's own combined failure must keep the `TreeExecutionError` class
+/// for its *own* enclosing container's wrap to show
+/// (`"[N] TreeExecutionError: <path>: ..."`), the same way any other
+/// branch failure's class survives a chain/tree wrap, whether that
+/// nested tree had one failing branch or several. The single-error case
+/// keeps that one branch's own [`electricity_tools::ErrorCause`] rather
+/// than discarding it to [`electricity_tools::ErrorCause::None`] -- a
+/// bare pass-through of the one real underlying failure, same as a
+/// chain's own single-step wrap already does through [`wrap_effect_error`].
 fn combine_tree_errors(mut errors: Vec<VmError>) -> VmError {
     if errors.len() == 1 {
-        return errors.remove(0);
+        let err = errors.remove(0);
+        let cause = match &err {
+            VmError::Raised { cause, .. } => cause.clone(),
+            _ => electricity_tools::ErrorCause::None,
+        };
+        return VmError::Raised {
+            py_class: electricity_tools::PyExc::TreeExecutionError,
+            message: err.to_string(),
+            cause,
+            cause_class: None,
+        };
     }
     let mut parts = vec![format!("{} effects failed in parallel:", errors.len())];
     for (i, err) in errors.iter().enumerate() {
-        parts.push(format!("  [{}] {err}", i + 1));
+        match err.displayed_class() {
+            Some(class) => parts.push(format!("  [{}] {class}: {err}", i + 1)),
+            None => parts.push(format!("  [{}] {err}", i + 1)),
+        }
     }
-    VmError::Message(parts.join("\n"))
+    VmError::Raised {
+        py_class: electricity_tools::PyExc::TreeExecutionError,
+        message: parts.join("\n"),
+        cause: electricity_tools::ErrorCause::None,
+        cause_class: None,
+    }
 }

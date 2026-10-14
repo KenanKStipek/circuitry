@@ -741,3 +741,57 @@ def test_read_leftover_replies_absent_export_and_no_replies_file_is_empty(
     missing_export_path = tmp_path / "leftover.json"
 
     assert harness.read_leftover_replies(missing_export_path, replies_file=None) == {}
+
+
+def test_assert_no_leaked_credentials_passes_on_clean_text() -> None:
+    harness.assert_no_leaked_credentials(
+        {"stdout": "ok", "stderr": ""}, case_name="clean-case"
+    )
+
+
+def test_assert_no_leaked_credentials_catches_a_planted_live_looking_key() -> None:
+    """Case 22's own blanket check (issue #448's acceptance criterion,
+    #537): a real-looking credential planted in a run's own stdout fails
+    the case, proving the check actually catches a leak rather than
+    merely never firing on today's committed fixtures."""
+    with pytest.raises(AssertionError, match=r"sk-live-"):
+        harness.assert_no_leaked_credentials(
+            {"stdout": "Authorization: Bearer sk-live-FAKEKEY1234567890abcdef"},
+            case_name="planted-case",
+        )
+
+
+def test_assert_no_leaked_credentials_catches_the_fake_marker() -> None:
+    with pytest.raises(AssertionError, match=r"circuitry-test-fake-"):
+        harness.assert_no_leaked_credentials(
+            {"--out": '{"key": "circuitry-test-fake-key"}'}, case_name="planted-case"
+        )
+
+
+def test_assert_no_leaked_credentials_catches_a_cases_own_fake_credential_value() -> None:
+    # A value that carries neither of the two blanket patterns on its own
+    # (unlike a real `fake_credentials` value, which `load_case` always
+    # requires to start with `FAKE_CREDENTIAL_MARKER` -- this calls the
+    # check directly, bypassing that validation, to isolate this one
+    # pattern from the other two) -- proving the per-case addition itself
+    # catches a leak, not merely the two blanket patterns.
+    with pytest.raises(AssertionError, match=r"OPENAI-SYNTHETIC-9"):
+        harness.assert_no_leaked_credentials(
+            {"--events": '{"key": "OPENAI-SYNTHETIC-9"}'},
+            case_name="planted-case",
+            fake_credentials={"OPENAI_API_KEY": "OPENAI-SYNTHETIC-9"},
+        )
+
+
+def test_run_result_texts_omits_files_that_were_never_written(tmp_path: Path) -> None:
+    out_path = tmp_path / "out.json"
+    out_path.write_text("{}", encoding="utf-8")
+    result = harness.CaseResult(0, "out", "err", out_path)
+
+    texts = harness.run_result_texts(
+        result,
+        events_path=tmp_path / "events.jsonl",
+        live_state_path=tmp_path / "live.json",
+    )
+
+    assert texts == {"stdout": "out", "stderr": "err", "--out": "{}"}

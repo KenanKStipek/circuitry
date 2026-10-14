@@ -1574,8 +1574,18 @@ async fn run_while<'a>(
                     }
                     match outcome.verdict {
                         Ok(b) => b,
-                        Err(text) => {
-                            let e = VmError::Message(text);
+                        Err(failure) => {
+                            // The failure's own class (`TemplateError` for a
+                            // render failure, the adapter's own class for a
+                            // dispatch failure, `AnswerParseError` for an
+                            // unparseable reply) survives here, never a
+                            // bare `VmError::Message`.
+                            let e = VmError::Raised {
+                                py_class: failure.py_class,
+                                message: failure.message,
+                                cause: electricity_tools::ErrorCause::None,
+                                cause_class: None,
+                            };
                             match on_error {
                                 OnError::Fail => {
                                     state.termination_reason = "error".to_string();
@@ -1732,8 +1742,15 @@ fn evaluate_while_condition(
     store: &Store,
 ) -> Result<bool, VmError> {
     let state = super::live_scope::build_cel_state(cond_chain, store, expr);
-    electricity_cel::evaluate_condition(expr, &state, strict)
-        .map_err(|e| VmError::Message(e.to_string()))
+    // `core/cel_eval.py::CelEvaluationError` propagates bare, same as
+    // the `if` CEL arm (`exec::conditional::decide_and_run`) -- never a
+    // bare `VmError::Message`.
+    electricity_cel::evaluate_condition(expr, &state, strict).map_err(|e| VmError::Raised {
+        py_class: electricity_tools::PyExc::CelEvaluationError,
+        message: e.to_string(),
+        cause: electricity_tools::ErrorCause::None,
+        cause_class: None,
+    })
 }
 
 /// `meta["answer"]` through `meta["tokens_received_total"]`, in that

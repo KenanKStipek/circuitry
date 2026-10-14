@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: params_json must not set ['allowed_commands']: security-sensitive settings are only honoured from a document's literal params block."
+}

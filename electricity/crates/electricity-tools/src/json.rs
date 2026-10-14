@@ -8,16 +8,51 @@
 //! ReadError::Syntax`'s Display), not merely at the same character
 //! offset.
 
-use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_json::{Separators, WriteMode, dumps_default_str, loads};
 use electricity_value::{Dict, Value};
+
+/// `plugins/json.py` never raises anything but a bare `ValueError` for
+/// the path-token, mode-dispatch and parse failures (issue #442's
+/// tree-failure-class-names item, #537) -- raised directly, not wrapped
+/// in anything else, so every one of them needs this class rather than
+/// [`ToolError::message`]'s own `RuntimeError` default. The
+/// `int(indent)`-coercion failure is the one exception: Python's own
+/// `int(value)` raises `TypeError`, not `ValueError`, for a value of
+/// the wrong type outright (`python_int`'s own `PyIntError::Type` arm);
+/// only a numeric-looking value that still fails to parse (a non-numeric
+/// string, an out-of-range int) is a `ValueError`.
+fn value_error(message: impl Into<String>) -> ToolError {
+    ToolError {
+        py_class: PyExc::ValueError,
+        message: message.into(),
+        cause: ErrorCause::None,
+    }
+}
+
+fn type_error(message: impl Into<String>) -> ToolError {
+    ToolError {
+        py_class: PyExc::TypeError,
+        message: message.into(),
+        cause: ErrorCause::None,
+    }
+}
 
 /// `plugins/json.py::JsonPlugin` -- `mode: parse|stringify|extract`.
 pub struct JsonTool;
 
 fn get<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
     params.as_dict()?.get(&Value::Str(key.to_string()))
+}
+
+/// `python_int`'s own two Python exception classes -- a numeric-looking
+/// value that still fails to parse is a `ValueError`; a value of the
+/// wrong type outright is a `TypeError` (CPython's own `int()` builtin
+/// draws exactly this line).
+enum PyIntError {
+    Value(String),
+    Type(String),
 }
 
 /// Python's `int(value)` coercion, as far as [`JsonTool::execute`]'s own
@@ -27,22 +62,21 @@ fn get<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
 /// parses the same way `int("4")` does; anything else is a coercion
 /// failure, reported with CPython's own `int()` wording (third-party
 /// text, DESIGN.md §1/§12 -- only has to fail, not match verbatim).
-fn python_int(value: &Value) -> Result<i64, String> {
+fn python_int(value: &Value) -> Result<i64, PyIntError> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::Int(i) => i
             .to_string()
             .parse::<i64>()
-            .map_err(|_| format!("int too large to convert: {i}")),
+            .map_err(|_| PyIntError::Value(format!("int too large to convert: {i}"))),
         Value::Float(f) => Ok(f.trunc() as i64),
-        Value::Str(s) => s
-            .trim()
-            .parse::<i64>()
-            .map_err(|_| format!("invalid literal for int() with base 10: {:?}", s)),
-        other => Err(format!(
+        Value::Str(s) => s.trim().parse::<i64>().map_err(|_| {
+            PyIntError::Value(format!("invalid literal for int() with base 10: {:?}", s))
+        }),
+        other => Err(PyIntError::Type(format!(
             "int() argument must be a string, a bytes-like object or a real number, not '{}'",
             other.type_name()
-        )),
+        ))),
     }
 }
 
@@ -71,7 +105,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 end += 1;
             }
             if end == digits_start || end >= chars.len() || chars[end] != ']' {
-                return Err(ToolError::message(format!(
+                return Err(value_error(format!(
                     "json: invalid path token at offset {pos}"
                 )));
             }
@@ -112,7 +146,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 _ => return Ok((Value::None, false)),
             }
         } else {
-            return Err(ToolError::message(format!(
+            return Err(value_error(format!(
                 "json: invalid path token at offset {pos}"
             )));
         }
@@ -155,14 +189,14 @@ impl ToolPlugin for JsonTool {
                 let text = match get(&params, "input") {
                     Some(Value::Str(s)) => s.clone(),
                     _ => {
-                        return Err(ToolError::message(
+                        return Err(value_error(
                             "JsonPlugin: parse mode requires params['input'] as a string."
                                 .to_string(),
                         ));
                     }
                 };
                 let value = loads(&text)
-                    .map_err(|err| ToolError::message(format!("json: parse failed: {err}")))?;
+                    .map_err(|err| value_error(format!("json: parse failed: {err}")))?;
                 (value, mode.clone())
             }
             "stringify" => {
@@ -170,7 +204,10 @@ impl ToolPlugin for JsonTool {
                 let indent = match get(&params, "indent") {
                     None | Some(Value::None) => None,
                     Some(value) => {
-                        let parsed = python_int(value).map_err(ToolError::message)?;
+                        let parsed = python_int(value).map_err(|e| match e {
+                            PyIntError::Value(m) => value_error(m),
+                            PyIntError::Type(m) => type_error(m),
+                        })?;
                         Some(parsed.clamp(0, u8::MAX as i64) as u8)
                     }
                 };
@@ -190,7 +227,7 @@ impl ToolPlugin for JsonTool {
                 let mut subject = get(&params, "input").cloned().unwrap_or(Value::None);
                 if let Value::Str(text) = &subject {
                     subject = loads(text).map_err(|err| {
-                        ToolError::message(format!(
+                        value_error(format!(
                             "json: extract input is a string but not valid JSON: {err}"
                         ))
                     })?;
@@ -198,7 +235,7 @@ impl ToolPlugin for JsonTool {
                 let path = match get(&params, "path") {
                     Some(Value::Str(s)) if !s.is_empty() => s.clone(),
                     _ => {
-                        return Err(ToolError::message(
+                        return Err(value_error(
                             "JsonPlugin: extract mode requires params['path'].".to_string(),
                         ));
                     }
@@ -212,7 +249,7 @@ impl ToolPlugin for JsonTool {
                 (value, mode.clone())
             }
             _ => {
-                return Err(ToolError::message(format!(
+                return Err(value_error(format!(
                     "json: unknown mode {}",
                     Value::Str(mode).py_repr()
                 )));
@@ -334,6 +371,26 @@ mod tests {
         ]);
         let result = run(&tool, params).await.unwrap();
         assert_eq!(result.value, Value::from("{\n  \"a\": 1\n}"));
+    }
+
+    #[tokio::test]
+    async fn stringify_mode_rejects_a_non_numeric_indent_with_type_error() {
+        // `json.dumps({}, indent=[])` raises `TypeError: int() argument
+        // must be a string, a bytes-like object or a real number, not
+        // 'list'` -- not `ValueError`, unlike every other `json` tool
+        // failure (`value_error`'s own doc).
+        let tool = JsonTool;
+        let params = dict(vec![
+            ("mode", Value::from("stringify")),
+            ("input", Value::Dict(Dict::new())),
+            ("indent", Value::List(vec![])),
+        ]);
+        let err = run(&tool, params).await.unwrap_err();
+        assert_eq!(err.py_class, PyExc::TypeError);
+        assert_eq!(
+            err.message,
+            "int() argument must be a string, a bytes-like object or a real number, not 'list'"
+        );
     }
 
     #[tokio::test]

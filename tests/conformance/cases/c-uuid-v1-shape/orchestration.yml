@@ -1,0 +1,10 @@
+name: c-uuid-v1-shape
+effects:
+  - type: tool
+    name: v1_a
+    provider: uuid
+    params: {version: 1}
+  - type: tool
+    name: v1_b
+    provider: uuid
+    params: {version: 1, count: 2}

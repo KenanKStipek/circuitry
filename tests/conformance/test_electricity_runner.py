@@ -27,6 +27,7 @@ from .normalize import (
     prepare_for_comparison,
     redact_events_text,
     redact_runtime_strings,
+    redact_third_party_text_lines,
 )
 
 CASE_DIRS = harness.list_case_dirs()
@@ -51,10 +52,9 @@ PREVIEW_MESSAGE_MARKER = "is a preview and can't run this orchestration"
 #: `case.json`'s `"config"` gets this fixture (`{}`) instead — the same
 #: "nothing set" starting point `cof run` reaches when sandboxed HOME finds
 #: no project or global config — as a documented stand-in until electricity
-#: has its own config-discovery tiers to mirror. No case needs anything
-#: more today (none is model- or adapter-config-dependent yet); a case that
-#: does should set `"config"` explicitly for both engines instead of
-#: relying on this default.
+#: has its own config-discovery tiers to mirror. Many cases now set
+#: `"config"` explicitly for both engines (model/adapter config, allowed
+#: commands, …); this fixture only backs the cases that don't.
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "default_config.json"
 
 
@@ -68,6 +68,7 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     committed `expected.warnings.txt` (issue #442's "Warning lines on
     stderr" item)."""
     actual = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    actual = redact_third_party_text_lines(actual, metadata.get("third_party_text", []))
     expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
     expected = [line for line in expected_text.splitlines() if line]
     assert actual == expected, (
@@ -246,6 +247,12 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
 
+    harness.assert_no_leaked_credentials(
+        harness.run_result_texts(result, events_path=events_path, live_state_path=live_state_path),
+        case_name=case_dir.name,
+        fake_credentials=metadata.get("fake_credentials"),
+    )
+
     _assert_warnings_match(case_dir, metadata, result.stderr)
     _assert_run_warnings_match(case_dir, metadata, result.stderr)
 
@@ -302,6 +309,11 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
             assert pretty_result.returncode == 0, (
                 f"expected success (--pretty), got exit {pretty_result.returncode}\n"
                 f"stdout: {pretty_result.stdout}\nstderr: {pretty_result.stderr}"
+            )
+            harness.assert_no_leaked_credentials(
+                harness.run_result_texts(pretty_result),
+                case_name=case_dir.name,
+                fake_credentials=metadata.get("fake_credentials"),
             )
             actual_pretty_text = pretty_out_path.read_text(encoding="utf-8")
             assert_out_serialization(actual_pretty_text, pretty=True)

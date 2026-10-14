@@ -1,0 +1,2 @@
+WARNING: Decomposition planner failed for prompt 'big'
+WARNING: Dynamic 'fan': 4 effects failed in parallel:

@@ -405,6 +405,14 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
         convert::to_cel(&projected_state).map_err(|e| convert_err(expr, e))?,
     );
     let result = cel::Value::resolve(&tree, &ctx).map_err(|e| {
+        // `core/cel_eval.py::evaluate_cel`'s own `logger.error("CEL
+        // evaluation failed for expr %r: %s", expr, exc)` -- an `if`/
+        // `while` condition's genuine evaluation failure, not the
+        // absent-path-is-false case above (that one only ever warns).
+        // `evaluate_expect`'s own identical-looking error below never
+        // logs this: `core/cel_eval.py::evaluate_cel_expect` doesn't
+        // either.
+        log::error!("CEL evaluation failed for expr {}: {e}", py_repr(expr));
         CelError::new(
             expr,
             format!("CEL evaluation failed for {}: {e}", py_repr(expr)),

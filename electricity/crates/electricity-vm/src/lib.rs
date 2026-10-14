@@ -259,9 +259,12 @@ pub enum VmError {
     NotImplemented(String),
     /// A plain error message -- a chain/tree child's own failure already
     /// wrapped with its effect path (`"<path>: <message>"`,
-    /// `core/dynamic.py`'s own `RuntimeError(f"{effect_path}: {e}")`), a
-    /// `TreeExecutionError`-shaped multi-branch summary, a conditional
-    /// branch's own bare-name wrap, or a failed CEL evaluation's text.
+    /// `core/dynamic.py`'s own `RuntimeError(f"{effect_path}: {e}")`) in
+    /// a variant other than [`VmError::Raised`], a conditional branch's
+    /// own bare-name wrap, or a failed CEL evaluation's text. A tree's
+    /// combined multi-branch summary is a [`VmError::Raised`] of
+    /// [`electricity_tools::PyExc::TreeExecutionError`], not this
+    /// variant -- see `exec::dynamic::combine_tree_errors`.
     Message(String),
 }
 

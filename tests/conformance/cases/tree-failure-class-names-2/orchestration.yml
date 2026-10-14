@@ -1,0 +1,49 @@
+name: tree-failure-class-names-2
+adapter: scripted
+model: m
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 1
+    on_error: continue
+    effects:
+      - type: if
+        name: gate
+        if: {mode: cel, expr: "true"}
+        then:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "not valid json body"}
+      - type: dynamic
+        name: inner_one
+        flow: tree
+        max_concurrency: 1
+        effects:
+          - type: tool
+            name: ok
+            provider: json
+            params: {mode: parse, input: "{}"}
+          - type: tool
+            name: bad
+            provider: json
+            params: {mode: parse, input: "not valid json inner_one bad"}
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it."
+        effects:
+          - type: prompt
+            name: propose_steps
+            template: "propose steps"
+      - type: prompt
+        name: big
+        template: >-
+          Analyze and critique the following in great depth, cross-reference
+          every claim, and deduce the underlying causes, evaluate alternatives
+          and justify your conclusion with explicit reasoning. Analyze and
+          critique the following in great depth, cross-reference every claim,
+          and deduce the underlying causes, evaluate alternatives and justify
+          your conclusion with explicit reasoning. Analyze and critique the
+          following in great depth, cross-reference every claim, and deduce
+          the underlying causes.

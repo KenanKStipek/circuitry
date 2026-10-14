@@ -1,0 +1,34 @@
+name: tree-failure-class-names-3
+adapter: scripted
+model: m
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 1
+    on_error: continue
+    effects:
+      - type: if
+        name: cel_gate
+        if: {mode: cel, expr: "1 / 0"}
+        then:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "{}"}
+      - type: loop
+        name: cel_loop
+        while: {mode: cel, expr: "1 / 0"}
+        body:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "{}"}
+      - type: if
+        name: model_gate
+        if: {mode: model, template: "continue ok?"}
+        then:
+          - type: tool
+            name: body
+            provider: json
+            params: {mode: parse, input: "{}"}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "C1",
+  "description": "`c1-interface-inputs`'s own document, with its `required: true` input `req` omitted: fails before any effect ever dispatches, with `core/interface_inputs.py::check_interface_inputs`'s own exact text.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact",
+  "cli_args": ["-e", "n=5", "-e", "flag=true", "-e", "s=1.50", "-e", "arr=[1,2,3]", "-e", "obj={\"x\":1}"]
+}

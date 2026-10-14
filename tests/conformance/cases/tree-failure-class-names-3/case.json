@@ -1,0 +1,25 @@
+{
+  "spec_case": "issue #442's first item (#537): a tree dynamic's combined failure text names each branch's own exception class",
+  "description": "`tree-failure-class-names`'s second companion case (one document would otherwise get unwieldy): a `flow: tree` dynamic (`max_concurrency: 1`, `on_error: continue`) with three branches that each fail a broken condition, not a tool: a named `if` with a `mode: cel` expression that divides by zero (CelEvaluationError), a named `loop` with the same expression as its `while` condition (CelEvaluationError), and a named `if` in `mode: model` whose scripted reply (\"maybe\") doesn't parse as yes/no (AnswerParseError). `fan.meta.error` names every branch's own displayed class the same way `tree-failure-class-names` does.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "third_party_text": [
+    {
+      "location": "prime.fan.meta.error",
+      "pattern": "3 effects failed in parallel:\n  \\[1\\] CelEvaluationError: fan\\.cel_gate: CEL evaluation failed for '1 / 0': .*\n  \\[2\\] CelEvaluationError: fan\\.cel_loop: CEL evaluation failed for '1 / 0': .*\n  \\[3\\] AnswerParseError: fan\\.model_gate: could not parse a yes/no answer from 'maybe'"
+    },
+    {
+      "location": "prime.fan.cel_gate.meta.error",
+      "pattern": "CEL evaluation failed for '1 / 0': .*"
+    },
+    {
+      "location": "prime.fan.cel_loop.meta.error",
+      "pattern": "CEL evaluation failed for '1 / 0': .*"
+    },
+    {
+      "location": "prime.fan.cel_loop.value.termination.detail",
+      "pattern": "CEL evaluation failed for '1 / 0': .*"
+    }
+  ]
+}
