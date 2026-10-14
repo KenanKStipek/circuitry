@@ -2506,6 +2506,60 @@ mod tests {
             .collect()
     }
 
+    /// Issue #535's own `--no-animation` acceptance item: a unit test
+    /// showing it turns the tracker off -- a real status change
+    /// between two render states marks a highlight when animation is
+    /// on, and marks nothing at all when it's off.
+    #[test]
+    fn no_animation_turns_the_highlight_tracker_off() {
+        let plan = PlanTree::empty();
+        let running = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        }});
+        let done = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+        }});
+        let mut model = RunModel::new();
+        let old = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&running),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        let new = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&done),
+            ProcessState::Running,
+            1.0,
+            "t1",
+            &[],
+        );
+
+        let mut prev = Some(old.clone());
+        let mut tracker = highlight::Tracker::new();
+        mark_highlights(&mut tracker, &mut prev, &new, false);
+        assert!(
+            tracker.has_active(Instant::now()),
+            "animation on: the change should be marked"
+        );
+
+        let mut prev2 = Some(old);
+        let mut tracker2 = highlight::Tracker::new();
+        mark_highlights(&mut tracker2, &mut prev2, &new, true);
+        assert!(
+            !tracker2.has_active(Instant::now()),
+            "--no-animation: nothing should ever be marked"
+        );
+    }
+
     #[test]
     fn version_flag_exits_zero() {
         assert_eq!(run(args(&["--version"])), ExitCode::SUCCESS);
@@ -2527,6 +2581,54 @@ mod tests {
         assert!(rendered.contains("Which engine runs the orchestration"));
         assert!(rendered.contains("Keeps the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
+        assert!(rendered.contains("Switches off the update highlights"));
+        assert!(rendered.contains("The colour theme"));
+    }
+
+    #[test]
+    fn no_animation_parses_on_both_run_and_watch_args() {
+        let parsed = RunArgs::try_parse_from(args(&["--no-animation", "do-thing.yml"]))
+            .expect("--no-animation should parse");
+        assert!(parsed.no_animation);
+
+        let parsed = WatchArgs::try_parse_from(
+            std::iter::once("osp watch".to_string())
+                .chain(["--no-animation".to_string(), "dir".to_string()]),
+        )
+        .expect("--no-animation should parse on watch too");
+        assert!(parsed.no_animation);
+    }
+
+    #[test]
+    fn theme_flag_parses_a_known_name_and_rejects_an_unknown_one() {
+        let parsed = RunArgs::try_parse_from(args(&["--theme", "dracula", "do-thing.yml"]))
+            .expect("a known theme name should parse");
+        assert_eq!(parsed.theme, Some(theme::ThemeName::Dracula));
+
+        let err = RunArgs::try_parse_from(args(&["--theme", "bogus", "do-thing.yml"]))
+            .expect_err("an unknown theme name is a usage error");
+        assert!(err.to_string().contains("choose one of"));
+    }
+
+    #[test]
+    fn resolve_theme_choice_prefers_the_cli_flag_over_osp_theme() {
+        // SAFETY: this test's own crate is single-threaded for env
+        // vars (no other test reads/writes `OSP_THEME`); `cargo test`
+        // runs each test's own process-wide env mutation sequentially
+        // enough for this not to race in practice here, same as the
+        // rest of this file's env-var tests.
+        unsafe {
+            std::env::set_var("OSP_THEME", "nord");
+        }
+        assert_eq!(
+            resolve_theme_choice(Some(theme::ThemeName::Dracula)),
+            Ok(theme::ThemeName::Dracula)
+        );
+        assert_eq!(resolve_theme_choice(None), Ok(theme::ThemeName::Nord));
+        unsafe {
+            std::env::remove_var("OSP_THEME");
+        }
+        assert_eq!(resolve_theme_choice(None), Ok(theme::ThemeName::Terminal));
     }
 
     #[test]

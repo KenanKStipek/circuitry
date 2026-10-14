@@ -961,12 +961,13 @@ const HELP_TEXT: &[&str] = &[
     "PgUp PgDn    move a page",
     "Home End     jump to the first / last row",
     "g G          same as Home / End",
-    "← →          collapse / expand (orchestration pane)",
+    "← →          collapse / expand (orchestration or state)",
     "tab          orchestration → details → state",
     "f            follow the running row (on by default)",
     "e            errors only",
     "/            filter",
     "v            show the full value",
+    "t            cycle the colour theme",
     "c            cancel (confirm)",
     "q            quit (confirms while a run is going)",
     "?            this help",
@@ -976,9 +977,10 @@ const HELP_TEXT: &[&str] = &[
 ];
 
 /// Wide enough for every [`HELP_TEXT`] line with none of them
-/// wrapping (finding F7) — the longest is 51 columns; 4 columns of
-/// margin plus the 2-column border leaves room to spare.
-const HELP_OVERLAY_WIDTH: u16 = 57;
+/// wrapping (finding F7) — the longest (issue #535's own collapse/
+/// expand line) is 55 columns; 4 columns of margin plus the 2-column
+/// border leaves room to spare.
+const HELP_OVERLAY_WIDTH: u16 = 61;
 
 /// One redraw's whole layout (DESIGN.md §6.3, issue #535): the
 /// header; a left column of the details pane over the orchestration

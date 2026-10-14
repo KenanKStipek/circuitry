@@ -1015,4 +1015,47 @@ mod tests {
         app.handle_key(key(KeyCode::Home), &visible, &[], true, false);
         assert_eq!(app.details_scroll, 0);
     }
+
+    #[test]
+    fn t_returns_the_cycle_theme_action() {
+        let mut app = App::new(false);
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false),
+            Action::CycleTheme
+        );
+    }
+
+    fn state_row_with_children(path: &str, has_children: bool) -> StateRow {
+        let mut row = state_row(path);
+        row.has_children = has_children;
+        row
+    }
+
+    #[test]
+    fn left_right_collapse_and_expand_the_state_pane_independently_of_the_tree_pane() {
+        let rows = [
+            state_row_with_children("fan", true),
+            state_row("fan.iter_0"),
+        ];
+        let state_rows: Vec<&StateRow> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.pane = Pane::State;
+        app.state_selected_path = Some("fan".to_string());
+        app.handle_key(key(KeyCode::Left), &[], &state_rows, true, false);
+        assert!(app.state_collapsed.contains("fan"));
+        assert!(
+            app.collapsed.is_empty(),
+            "the orchestration pane's own collapsed set must be untouched"
+        );
+        let visible = visible_state_rows(&rows, &app);
+        assert_eq!(
+            visible.len(),
+            1,
+            "a collapsed row's own children are hidden"
+        );
+        app.handle_key(key(KeyCode::Right), &[], &state_rows, true, false);
+        assert!(!app.state_collapsed.contains("fan"));
+        let visible = visible_state_rows(&rows, &app);
+        assert_eq!(visible.len(), 2);
+    }
 }
