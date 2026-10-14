@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use support::{
     SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, assert_no_new_osp_dirs, e2e_enabled,
-    osp_command, snapshot_osp_dirs, wait_for_step_start, wait_with_timeout,
+    osp_command, scripted_config, snapshot_osp_dirs, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
@@ -465,6 +465,100 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+/// `cof`'s own twin of `e2e_electricity.rs`'s
+/// `a_scripted_prompt_prints_tokens_sent_and_received` (issue #545):
+/// comment 1 on the issue saw the same `ok` fallback with `cof`'s own
+/// TUI log pane, so the fix (and this test) is not electricity-only.
+#[test]
+fn a_scripted_prompt_prints_tokens_sent_and_received() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
+}
+
+/// #545's review finding 1: `cof`'s `--live-state` writer serialises
+/// whatever the shared state dict holds *when its own debounce
+/// interval next comes due*, not a copy taken at the triggering
+/// effect's own completion -- so a slow leading effect can leave that
+/// interval already overdue by the time it finally completes, and the
+/// very next write (woken by that completion) can land while `ask`,
+/// started right after, has already inserted its own running node
+/// (`completed_at: null`) but not yet finished. `osp`'s `known_node`
+/// must treat that running node the same as no node at all, or the
+/// `end` event resolves to `ok` immediately instead of holding.
+#[test]
+fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: warmup\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let run_dir = work.path().join("run");
+    let child = osp_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (status, stdout, stderr) =
+        wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
