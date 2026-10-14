@@ -455,7 +455,7 @@ effects:
     );
 }
 
-/// Lane I (issue #469), orchestrator ruling R3 on PR #472's review:
+/// Lane I (issue #469), ruling R3 on PR #472's review:
 /// a SIGINT while a `use` child is running must exit 130 and leave no
 /// trace of the child's own effect having run -- `VmError::Cancelled`
 /// bypasses `execute_use`'s own output-mapping/retry bookkeeping

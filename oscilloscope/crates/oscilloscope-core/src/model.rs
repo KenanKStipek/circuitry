@@ -964,7 +964,7 @@ mod tests {
     use serde_json::json;
 
     /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
-    /// rule 7), the function the orchestrator measured labelling a
+    /// rule 7), the function that labels a
     /// cancelled run `failed` and an invalid document `aborted`.
     #[test]
     fn run_status_follows_design_rule_7() {
@@ -1873,7 +1873,7 @@ mod tests {
         );
     }
 
-    /// The token rule (issue #527, orchestrator finding F4): a
+    /// The token rule (issue #527, finding F4): a
     /// retried prompt where the two candidate pairs actually
     /// *disagree*, so the test can tell them apart — unlike a
     /// retryable adapter error (which carries no tokens of its own),

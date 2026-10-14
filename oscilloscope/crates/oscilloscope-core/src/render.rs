@@ -202,7 +202,7 @@ pub struct TokenBar {
     pub estimated_input: u64,
     /// Set when at least one running prompt counted into
     /// `prompts_running` has no `meta.prompt_sent` in the live state to
-    /// estimate from (the orchestrator's own finding: a tree-loop pass
+    /// estimate from (a tree-loop pass
     /// or a `use` child's prompt never appears in state while it runs
     /// at all, DESIGN.md §1.4) — `estimated_input` then only counts
     /// the running prompts it actually has text for, so a front end
@@ -285,7 +285,7 @@ pub fn build(
     let rows = build_rows(plan, &flat, &statuses, &all_paths, now);
     let state_rows = build_state_rows(&flat, &statuses);
     let treemap = crate::treemap::build_tree("prime", &flat, &statuses);
-    // The orchestrator's own finding: a tree-loop pass's prompt, and
+    // A tree-loop pass's prompt, and
     // (on cof) a `use` child's, never appear in `flat` while they run
     // at all (DESIGN.md §1.4) -- only `rows` (built from `statuses`,
     // which events confirm `Running` for a path `flat` has never even
@@ -402,7 +402,7 @@ fn abbreviated_value(value: &Value) -> Option<String> {
 }
 
 /// The token bar's "what's in flight" line (DESIGN.md §6.3, issue
-/// #527, and the orchestrator's own follow-up finding): the running
+/// #527, and a follow-up finding): the running
 /// count comes from `rows`, not `flat` alone, since a tree-loop pass's
 /// prompt (both engines) and, on cof, a `use` child's, are confirmed
 /// `Running` by events while never once appearing in live state at all
@@ -583,7 +583,7 @@ fn build_header(
         let mut total = 0u64;
         let mut lower_bound = false;
         for leaf in &leaf_paths {
-            // The orchestrator's own finding: a `use` leaf's own
+            // A `use` leaf's own
             // children are the real planned units, not the `use` node
             // itself -- counting both (already true for a `path:`
             // child whose own children are separately grafted into
@@ -642,7 +642,7 @@ fn build_header(
             }
         })
         .count() as u64;
-    // The orchestrator's own invariant: "done" never outruns
+    // Invariant: "done" never outruns
     // "planned" -- true by construction once a `use` child's effects
     // are counted the same way on both sides above, but kept as an
     // explicit floor rather than trusting that invariant silently,
@@ -794,8 +794,8 @@ fn row_kind_for(path: &str, plan: &PlanTree, node: Option<&NodeMeta>) -> RowKind
 
 /// A `use` leaf's own contribution to "planned" (the header) and, by
 /// the identical rule applied again in `build_header`'s own
-/// `effects_done` filter, to "done" too (the orchestrator's own
-/// finding) -- for a `use` with no *static* children of its own
+/// `effects_done` filter, to "done" too --
+/// for a `use` with no *static* children of its own
 /// (`inline:`/`ref:`; a `path:` child is handled by the caller
 /// instead, via its own already-separate `leaf_paths` entries).
 /// Counts whatever of its children have actually been *discovered* in
@@ -962,8 +962,7 @@ fn build_rows(
 }
 
 #[allow(clippy::too_many_arguments)]
-/// A loop-pass container's own status (the orchestrator's own
-/// finding), derived from its *leaf* descendants at any depth —
+/// A loop-pass container's own status, derived from its *leaf* descendants at any depth —
 /// never from an intermediate container's own already-derived status,
 /// so a pass with a nested `if`/loop of its own is judged by what
 /// actually ran inside it, not by whether that nested container
@@ -1035,7 +1034,7 @@ fn walk_rows(
     let kind = row_kind_for(path, plan, node);
     let label = path.rsplit('.').next().unwrap_or(path).to_string();
     let status = statuses.get(path).cloned().unwrap_or_else(|| {
-        // The orchestrator's own finding: a loop pass container
+        // A loop pass container
         // (`prime.reviews.iter_N`) has no `{value, meta}` node of its
         // own (DESIGN.md §1.3) -- `kind == Pass` is exactly
         // `row_kind_for`'s own signal for "no node, no plan match, and
@@ -1477,8 +1476,7 @@ mod tests {
     }
 
     /// [`named_loop_with_one_leaf_program`], with two leaves per pass
-    /// instead of one -- the shape the orchestrator's own finding
-    /// needs: `prime.fan.iter_N` (the pass container) never gets a
+    /// instead of one -- the shape this needs: `prime.fan.iter_N` (the pass container) never gets a
     /// `{value, meta}` node of its own (DESIGN.md §1.3), so its row's
     /// status must be derived from `step_a`/`step_b`'s own, not read
     /// off a node that doesn't exist.
@@ -1668,7 +1666,7 @@ mod tests {
         assert_eq!(pass.status.kind, StatusKind::Failed);
     }
 
-    /// The orchestrator's own ask: a *chain*-flow loop's own
+    /// A *chain*-flow loop's own
     /// multi-step pass must be derived the identical way a tree-flow
     /// one is -- the pass container has no node of its own regardless
     /// of flow (DESIGN.md §1.3 names no distinction).
@@ -1706,9 +1704,8 @@ mod tests {
     }
 
     /// `named_loop_with_one_leaf_program`'s own single-step pass
-    /// (`fan.iter_0.nap`) must look exactly as it did before this fix
-    /// (the orchestrator's own "check that ... single-step passes
-    /// still look as before") -- it goes through the identical
+    /// (`fan.iter_0.nap`) must look exactly as it did before this fix --
+    /// single-step passes still look as before -- it goes through the identical
     /// derivation path (the pass container still has no node of its
     /// own), just with one leaf instead of two, and must still read
     /// done once that one leaf is.
@@ -1740,8 +1737,7 @@ mod tests {
         assert_eq!(pass.status.kind, StatusKind::Done);
     }
 
-    /// A real `use: inline:` document (the orchestrator's own
-    /// finding): before any of its children have been discovered in
+    /// A real `use: inline:` document: before any of its children have been discovered in
     /// state at all (DESIGN.md §1.4, "never in-flight"), "planned"
     /// falls back to counting the `use` node itself, as a lower bound
     /// -- there is no static plan for an inline child to count
@@ -1780,9 +1776,9 @@ mod tests {
     }
 
     /// [`effects_planned_for_an_inline_use_is_a_lower_bound_before_any_child_is_discovered`],
-    /// once one child has actually landed in state -- the orchestrator's
-    /// own ask: "count a use child's effects into planned once they
-    /// appear in state, not the use node itself". Both planned and
+    /// once one child has actually landed in state -- a use child's
+    /// effects count into planned once they
+    /// appear in state, not the use node itself. Both planned and
     /// done switch to counting the discovered child, not `my_use`'s
     /// own path, and `done` never outruns `planned`.
     #[test]
@@ -1899,7 +1895,7 @@ mod tests {
     /// A real `use: path:` document: its children are statically known
     /// (grafted into the plan, DESIGN.md §5), so "planned" is exact
     /// from the start -- counting the grafted children, never the
-    /// `use` node itself too (the orchestrator's own finding: the two
+    /// `use` node itself too (the two
     /// used to be counted together, double-counting against `done`).
     #[test]
     fn effects_planned_for_a_path_use_counts_its_grafted_children_not_the_use_node_too() {
@@ -2349,7 +2345,7 @@ mod tests {
         }
     }
 
-    /// The orchestrator's own finding: a tree-loop pass's prompt is
+    /// A tree-loop pass's prompt is
     /// confirmed `Running` by events while never once appearing in
     /// live state at all (DESIGN.md §1.4) -- the token bar must still
     /// count it, from `rows` (where its own `kind` is known via the
@@ -2387,7 +2383,7 @@ mod tests {
         );
     }
 
-    /// The orchestrator's own wording finding: when *some* running
+    /// When *some* running
     /// prompts have a known `prompt_sent` and *some* don't, the
     /// estimate is a nonzero lower bound (`≈5+`, not the `?` a wholly
     /// unknown one gets) -- one known prompt (`ready`, counted

@@ -3,7 +3,7 @@
 same as `_run_corpus.py`; run directly, e.g. `pytest
 electricity/scripts/test__run_corpus.py`).
 
-The orchestrator's own review of PR #432 asked for proof that
+The review of PR #432 asked for proof that
 `canonical_event_order`'s narrow, branch-region-only reordering cannot
 hide a genuinely broken event stream: a chain (no concurrent `dynamic`
 at all) keeps its real emission order byte for byte, so any corruption
@@ -57,7 +57,7 @@ def test_engine_pid_ts_ms_in_state_are_not_masked() -> None:
     # run metadata at all (a timer tool's own `ms:` param, say) --
     # `normalize_result` must leave `state`/`live_state` alone for
     # them, masking only an *event* object's own top-level `engine`/
-    # `pid`/`ts`/`ms` (orchestrator ruling on PR #432's review).
+    # `pid`/`ts`/`ms` (ruling on PR #432's review).
     result = {
         "returncode": 0,
         "stdout": "",

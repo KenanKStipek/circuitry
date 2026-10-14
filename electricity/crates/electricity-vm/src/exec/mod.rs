@@ -90,7 +90,7 @@ pub(crate) fn store_err(err: StoreError) -> VmError {
 /// decided here, by every container, from whichever `Store`/`NodeRef`
 /// it already has in scope at its own [`crate::RunObserver::
 /// effect_complete`] call, and carried through that hook's own
-/// *completed_at_is_truthy* parameter from there on (orchestrator fix,
+/// *completed_at_is_truthy* parameter from there on (fix,
 /// issue #506 lane L1's review round 2: `electricity` (lib)'s own
 /// `Observer::effect_complete` used to re-derive this by walking the
 /// *run's* own root store, segment by segment, from *path* alone --
@@ -232,7 +232,7 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// (the existing golden corpora, and loop's own conformance cases run
 /// on both engines -- control flow like this is covered by running
 /// real documents, not a golden-corpus replay; see this PR's own
-/// orchestrator-confirmed ruling).
+/// confirmed ruling).
 ///
 /// A `tool` leaf's own render and an `if`/`while` condition no longer
 /// call this function at all (issue #463, PR #482): `exec::live_scope`
@@ -601,7 +601,7 @@ mod wrap_effect_error_tests {
         // is_fatal`) -- never wrapped with an effect-path prefix through a
         // chain/tree container, even though, unlike a cancellation, it
         // still gets recorded like an ordinary failure on every
-        // container's own node (orchestrator ruling R1 on PR #462,
+        // container's own node (ruling R1 on PR #462,
         // `VmError::is_fatal`'s own doc comment) -- this wrap is strictly
         // a control-path no-op either way.
         let refused = VmError::Refused {

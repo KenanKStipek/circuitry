@@ -445,7 +445,7 @@ fn live_state_is_byte_identical_to_out_without_pretty() {
 
 /// The same four flags, but written `--flag=value` instead of `--flag
 /// value` -- `cof`'s own Click parser accepts both forms for a value
-/// flag (orchestrator ruling on PR #432's review).
+/// flag (ruling on PR #432's review).
 #[test]
 fn run_request_with_every_new_flag_in_equals_form_also_writes_out() {
     let (mut cmd, home) = command("run-new-flags-equals");
@@ -906,7 +906,7 @@ fn a_failure_before_the_profile_is_ever_loaded_writes_only_the_plain_out_flag() 
     assert!(!profile_out.exists());
 }
 
-/// Round-7 fix (issue #498's own orchestrator follow-up): a `$defs`
+/// Round-7 fix (issue #498's own follow-up): a `$defs`
 /// chain of 10000 single-hop `$ref`s in a `prompt` effect's own
 /// `schema:` used to overflow electricity's real main-thread native
 /// stack -- `thread 'main' has overflowed its stack`, process abort,

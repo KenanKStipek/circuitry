@@ -518,7 +518,7 @@ crossed loop's own total isn't known yet, "planned" is a lower bound,
 shown with a trailing `+` (`3/3+`).
 
 A `use` leaf's own children, not the `use` node itself, are the real
-planned/done units (the orchestrator's own finding: counting both, for
+planned/done units (counting both, for
 a `use: path:` child whose children are separately grafted into the
 plan, or neither, for a `use: inline:`/`ref:` child, which has no
 static plan at all, let "done" outrun "planned" once a `use` child's
@@ -549,7 +549,7 @@ A named loop's own pass container (`prime.fan.iter_N`) never has a
 `{value, meta}` node of its own (§1.3) — only its own steps do — so its
 row's status is derived from its leaf descendants, at any depth, rather
 than defaulting to pending regardless of how they actually finished
-(the orchestrator's own finding, reproduced with a multi-step tree-loop
+(reproduced with a multi-step tree-loop
 pass): any descendant still running makes the pass row running; else
 any unhandled failure makes it failed; else, once every descendant has
 reached a terminal status, it reads done; otherwise it stays pending.
@@ -672,7 +672,7 @@ the full bottom width, two content lines:
     finishes.
 
     The *count* comes from `render::Row`, not from the live state
-    alone (the orchestrator's own finding on issue #527's own PR): a
+    alone (issue #527's own PR): a
     tree-loop pass's prompt, and (on `cof`) a `use` child's, are
     confirmed `Running` by `--events` while never once appearing in
     live state at all for as long as they run (DESIGN.md §1.4) — a
@@ -699,8 +699,7 @@ the full bottom width, two content lines:
     *no* running prompt's `prompt_sent` is known at all, the estimate
     isn't merely low, it's entirely unknown — `≈0+` would read as a
     broken number (zero tokens, yet something's running?), so the
-    line shows a plain `?` instead (the orchestrator's own finding on
-    issue #527's own PR). With nothing running, the line says so
+    line shows a plain `?` instead (issue #527's own PR). With nothing running, the line says so
     ("nothing in flight").
 
 **The token rule** (`model::node_tokens`): one node's own

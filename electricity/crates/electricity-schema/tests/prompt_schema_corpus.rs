@@ -8,7 +8,7 @@
 //! replay (third-party message text never required to match, `DESIGN.md`
 //! §1/§12), this one *does* compare message text exactly: issue #498
 //! ruling 6 (tightened by PR #502's review finding 2 and its own
-//! orchestrator follow-up) requires `validate_prompt_schema`'s own text to
+//! follow-up) requires `validate_prompt_schema`'s own text to
 //! match Python's `jsonschema` output, including which violation
 //! `best_match` itself picks among several.
 //!

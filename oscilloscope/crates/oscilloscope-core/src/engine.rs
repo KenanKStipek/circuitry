@@ -54,7 +54,7 @@ impl RunSpec {
 }
 
 /// What this engine binary can do, detected once at startup (the
-/// orchestrator decision behind issue #424: detect `--events` support
+/// decision behind issue #424: detect `--events` support
 /// from `cof run --help` rather than assuming a version; issue #431's
 /// lane E2 detects `--live-state` the same way from `electricity
 /// --help`, since an older electricity built before M0-H has neither
@@ -471,8 +471,8 @@ mod tests {
 
     #[test]
     fn looks_swapped_is_false_for_the_documented_order() {
-        // `osp <orchestration> [config.json]` (DESIGN.md §4.2): the
-        // orchestrator's own regression -- `do_run` used to call this
+        // `osp <orchestration> [config.json]` (DESIGN.md §4.2): a
+        // regression -- `do_run` used to call this
         // with the two arguments flipped, warning on every correctly
         // ordered invocation and staying silent on a really swapped
         // one.

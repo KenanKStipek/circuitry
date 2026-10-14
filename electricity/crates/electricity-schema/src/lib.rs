@@ -614,7 +614,7 @@ pub enum PromptSchemaCheck {
     /// `jsonschema.ValidationError.message` text -- matched exactly
     /// against Python's own `jsonschema` output for the keyword
     /// families [`python_message::python_message`] covers (issue #498
-    /// ruling 6, tightened by PR #502's review finding 2/orchestrator
+    /// ruling 6, tightened by PR #502's review finding 2,
     /// ruling 2), `oneOf`/`anyOf` included (`engine::render`'s own
     /// text, not the `jsonschema` crate's `Display` -- PR #502's
     /// round-6 fix); the remaining gaps are narrower ones named in
@@ -668,7 +668,7 @@ const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 /// accept/reject authority, not just a text source, whenever
 /// [`is_2020_12_or_unset`] and [`engine::schema_is_fully_supported`]
 /// both hold -- and on that path, the `jsonschema` crate is never
-/// built or consulted *at all* (issue #498's own orchestrator
+/// built or consulted *at all* (issue #498's own
 /// follow-up, finding F5): the crate's own schema-compile step can
 /// fail on a document the engine understands perfectly well (a `$ref`
 /// an instance never actually reaches, lazily resolved exactly as
@@ -682,7 +682,7 @@ const FALLBACK_STACK_GUARD_BYTES: usize = 1024 * 1024;
 /// already an accepted, documented divergence (`DESIGN.md` §13).
 ///
 /// Runs [`validate_prompt_schema_impl`] on a dedicated, scoped thread
-/// with its own large stack (round-7 fix, issue #498's own orchestrator
+/// with its own large stack (round-7 fix, issue #498's own
 /// follow-up: a `$ref` chain thousands of hops deep -- well under
 /// [`engine::MAX_RECURSION_DEPTH`] -- overflowed the caller's own
 /// ordinary thread stack, an immediate process abort with no state
@@ -745,7 +745,7 @@ fn validate_prompt_schema_impl(
     // always a `SchemaError`, never routed to crate authority (whose
     // own ECMA-262 regex engine can silently accept syntax Python's
     // own `re` rejects) and never a wrong accept (issue #498's own
-    // orchestrator follow-up, finding V2).
+    // follow-up, finding V2).
     if let Some(message) = engine::find_invalid_pattern(schema) {
         return PromptSchemaCheck::SchemaError(message);
     }
@@ -768,7 +768,7 @@ fn validate_prompt_schema_impl(
         // discarded either way once that check fires.
         PromptSchemaCheck::Valid
     } else if fully_supported {
-        // Ruling R6 (orchestrator follow-up), tightened by finding F5:
+        // Ruling R6 (follow-up), tightened by finding F5:
         // the engine is the accept/reject authority whenever it fully
         // understands the schema, never the crate -- the crate's own
         // `serde_json::Value` can't even represent a `NaN`/`Infinity`
@@ -868,7 +868,7 @@ fn validate_prompt_schema_impl(
                             // _describe_schema_error`, [`orchestration_
                             // errors`]/[`profile_errors`]'s own
                             // compile-time convention), never this one
-                            // (orchestrator follow-up, finding N10).
+                            // (follow-up, finding N10).
                             let message = python_message::python_message(&err, &schema_json)
                                 .unwrap_or_else(|| err.to_string());
                             PromptSchemaCheck::Invalid(message)
@@ -879,14 +879,14 @@ fn validate_prompt_schema_impl(
         }
     };
 
-    // N6 (orchestrator follow-up): a self-referencing `$ref` recurses
+    // N6 (follow-up): a self-referencing `$ref` recurses
     // forever in both `schema_is_fully_supported` and `evaluate` --
     // caught by real cycle detection rather than a stack overflow, but
     // still not a real verdict, so whatever `result` above computed
     // (likely nonsense, built from a truncated walk) is discarded in
     // favour of the same shape a real, uncaught Python `RecursionError`
     // reaches `core/prompt.py` as: a generic, non-retryable failure,
-    // never `schema_invalid`. F11 (orchestrator follow-up): `multipleOf`
+    // never `schema_invalid`. F11 (follow-up): `multipleOf`
     // against a `NaN`/`Infinity` instance with a `float` divisor is the
     // same shape, with that exception's own text instead.
     if engine::take_recursion_exceeded() {
@@ -920,7 +920,7 @@ const KNOWN_OLDER_DRAFT_SCHEMAS: [&str; 5] = [
 /// authority unconditionally, `ignore_ref_siblings` quirk and all).
 ///
 /// Mirrors Python's own `jsonschema.validators.validator_for` exactly, not
-/// a `starts_with` guess (issue #498's own orchestrator follow-up, finding
+/// a `starts_with` guess (issue #498's own follow-up, finding
 /// F3): `$schema` absent, *or* present but not an exact match for one of
 /// [`KNOWN_OLDER_DRAFT_SCHEMAS`] (an unversioned/garbage/unrecognized URI,
 /// or `http://`'s own 2020-12 URI -- 2020-12 only ever registers under
@@ -1452,7 +1452,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unrecognized_schema_uri_defaults_to_the_latest_draft() {
-        // issue #498's own orchestrator follow-up, finding F3: Python's
+        // issue #498's own follow-up, finding F3: Python's
         // own `validator_for` falls back to the latest draft for *any*
         // `$schema` it doesn't recognize verbatim (an unversioned/old
         // URI included), with a warning, never an error -- not a
@@ -1465,7 +1465,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn an_unknown_keyword_is_an_annotation_never_a_reason_to_fall_back() {
-        // issue #498's own orchestrator follow-up, finding F4: Python's
+        // issue #498's own follow-up, finding F4: Python's
         // own `Draft202012Validator.VALIDATORS` dict has no `dependencies`
         // entry at all (a legacy Draft ≤7 keyword) and obviously no
         // `descripton` (a typo) -- both are silently ignored, never
@@ -1478,7 +1478,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn a_nested_id_changing_the_ref_base_routes_to_crate_authority() {
-        // issue #498's own orchestrator follow-up, finding F10: this
+        // issue #498's own follow-up, finding F10: this
         // engine's own `resolve_ref` only ever resolves a `"#/..."`
         // pointer against the *document* root, never a nested `$id`
         // subtree's own base -- routed to the crate (which does resolve
@@ -1500,7 +1500,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn multiple_of_a_float_divisor_against_nan_is_a_generic_failure() {
-        // issue #498's own orchestrator follow-up, finding F11: Python's
+        // issue #498's own follow-up, finding F11: Python's
         // own `_keywords.multipleOf` calls `int(instance / dB)` for a
         // `float` divisor -- `int(nan)` is an uncaught `ValueError`, not
         // an ordinary `ValidationError`, so `core/prompt.py` never adds
@@ -1528,7 +1528,7 @@ mod prompt_schema_tests {
 
     #[test]
     fn additional_properties_pattern_filter_joins_pattern_properties_keys() {
-        // issue #498's own orchestrator follow-up, finding F7:
+        // issue #498's own follow-up, finding F7:
         // `_utils.find_additional_properties` is `"|".join(patternProperties)`,
         // one *joined* pattern -- an empty `patternProperties` dict (or
         // one whose only key is the empty string) joins to `""`, which

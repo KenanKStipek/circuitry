@@ -3,7 +3,7 @@
 //! process group (`setpgid`) -- otherwise a child that touches the
 //! inherited controlling terminal (`ffmpeg`'s own startup `tcsetattr`,
 //! or plain `stty`) is stopped by `SIGTTOU` until the step's own
-//! timeout kills it. Reproduced directly (orchestrator ruling, PR #467
+//! timeout kills it. Reproduced directly (PR #467
 //! fix pass): `script -q /dev/null electricity ...` stops `stty sane`
 //! for the whole 6s timeout before the fix, succeeds in well under 1s
 //! after it.

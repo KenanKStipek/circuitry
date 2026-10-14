@@ -1431,7 +1431,7 @@ reaches it, not before the run starts. It carries the `Refusal` found plus
 the child document's own label.
 
 **Fatal for control, like a cancellation; recorded like an ordinary
-failure, unlike one (orchestrator ruling R1 on PR #462).** Every
+failure, unlike one (ruling R1 on PR #462).** Every
 container on the path to a `VmError::Refused` — a named `if`, a `dynamic`
 chain or tree — bypasses `on_error`/retries entirely for it and never
 wraps it with an effect-path prefix, exactly the same as `VmError::

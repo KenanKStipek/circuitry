@@ -12,7 +12,7 @@
 //! before or after the two positionals (`<config.json> <orchestration.yml>`)
 //! -- `--out`/`--pretty`/`--live-state`/`--events` included. A value-taking
 //! long flag also accepts `--flag=value`, not just `--flag value`
-//! (`cof`'s own Click parser accepts both; orchestrator ruling on PR
+//! (`cof`'s own Click parser accepts both; ruling on PR
 //! #432's review) -- `=` on a boolean flag (`--pretty=true`) is a usage
 //! error, never silently accepted or ignored. An unknown flag is a usage
 //! error (exit 2): issue #431's gate lane tightens this from the pre-#431
@@ -911,7 +911,7 @@ mod unit_tests {
 
     /// Ties `USAGE`'s own "runs ... documents only" / "refused" lists
     /// to `Supported::current()`'s own flags, so the next lane that
-    /// flips one (`loop_`/`use_` already did, this PR's own orchestrator
+    /// flips one (`loop_`/`use_` already did, this PR's own
     /// addition) can't leave this text stale the way it found it --
     /// each name in the mapping below must appear in exactly one of the
     /// two lists, matching whichever side its own flag says.

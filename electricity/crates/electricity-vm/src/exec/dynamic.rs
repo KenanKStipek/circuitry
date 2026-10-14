@@ -512,7 +512,7 @@ fn execute_tree<'a>(
                 }
             }
 
-            // Orchestrator finding O1 on PR #462: a `VmError::Refused`
+            // Finding O1 on PR #462: a `VmError::Refused`
             // branch (lane I's own mid-run child refusal, M1 lane I
             // prerequisites, issue #448, item U3) used to fall into the
             // generic `Err(e)` arm below like any ordinary failure --

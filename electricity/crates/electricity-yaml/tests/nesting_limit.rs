@@ -1,4 +1,4 @@
-//! Decision A (the fix-pass orchestrator notes on PR #388): a fixed,
+//! Decision A (the fix-pass notes on PR #388): a fixed,
 //! documented nesting limit (`electricity_yaml::MAX_DEPTH`, 512), its
 //! own error kind, and -- the actual point of the limit -- never a
 //! stack overflow, checked by running the composer on a 2 MiB thread, a
@@ -150,7 +150,7 @@ fn merge_chain_n_100_000_does_not_crash() {
     assert!(matches!(err, YamlError::NestingTooDeep { .. }));
 }
 
-/// Decision B (the fix-pass orchestrator notes on PR #388): a fixed,
+/// Decision B (the fix-pass notes on PR #388): a fixed,
 /// documented budget on the total number of nodes alias expansion may
 /// construct (`electricity_yaml::MAX_NODES`), checked *before* each
 /// clone using the anchored node's own already-known size -- never by

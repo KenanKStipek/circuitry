@@ -1487,7 +1487,7 @@ mod tests {
 
     #[test]
     fn finish_reports_a_real_failure_distinctly_from_a_cancelled_run() {
-        // The orchestrator's own regression: an ended run whose error
+        // A regression: an ended run whose error
         // does *not* start with "Interrupted" must still read
         // "failed", never "cancelled".
         let mut differ = Differ::new();
