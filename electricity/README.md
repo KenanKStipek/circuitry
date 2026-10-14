@@ -28,10 +28,8 @@ plan naming it. `runtime.complexity` scoring, model routing and
 decomposition (splitting an over-threshold prompt into chunks, planned and
 executed as its own isolated child run) all run too, writing
 `meta.complexity`/`meta.decomposition` the same way `cof run` does.
-Everything else (every other cof plugin, persistence, runtime plugins) is
-still refused with a preview message pointing at `cof run`; a tool
-`provider:` that isn't a cof plugin at all instead fails the same
-"Unknown plugin" way `cof run` does, never with the preview message. A document
+Everything else (the other tool providers, persistence, runtime plugins) is
+still refused with a preview message pointing at `cof run`. A document
 and its literal
 `use` children are checked before the run starts; an inline or templated
 `use` child is checked when it is loaded. `electricity --help` lists the
