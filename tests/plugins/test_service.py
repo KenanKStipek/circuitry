@@ -94,6 +94,10 @@ def _group_alive(pgid: int) -> bool:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # EPERM: the id now belongs to another user's process. One this test
+        # started is always signalable by it, so that one is gone (#559).
+        return False
     return True
 
 
@@ -101,6 +105,10 @@ def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
+        return False
+    except PermissionError:
+        # EPERM: the id now belongs to another user's process. One this test
+        # started is always signalable by it, so that one is gone (#559).
         return False
     return True
 

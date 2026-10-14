@@ -102,7 +102,9 @@ def _pid_alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # EPERM: the id now belongs to another user's process. One this test
+        # started is always signalable by it, so that one is gone (#559).
+        return False
     return True
 
 

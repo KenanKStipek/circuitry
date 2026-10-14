@@ -113,7 +113,9 @@ def pid_alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # EPERM: the id now belongs to another user's process. One this test
+        # started is always signalable by it, so that one is gone (#559).
+        return False
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
             state = handle.read().rsplit(")", 1)[1].split()[0]
