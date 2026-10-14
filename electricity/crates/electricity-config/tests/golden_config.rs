@@ -52,6 +52,37 @@ fn string_map(value: Option<&Value>) -> HashMap<String, String> {
         .collect()
 }
 
+/// `py_eq`'s own `Dict` branch ignores key order (an ordinary Python
+/// `==`); the merged `runtime` block electricity's own `--out` writes
+/// is printed in insertion order, so a case's expected key order has to
+/// be checked separately, recursively (issue #536) -- not just at the
+/// top level, since a nested table (`adapters.<name>`, ...) is printed
+/// in its own merged order too.
+fn assert_same_key_order(actual: &Value, expected: &Value, path: &str) {
+    match (actual, expected) {
+        (Value::Dict(a), Value::Dict(b)) => {
+            let actual_keys: Vec<&Value> = a.keys().collect();
+            let expected_keys: Vec<&Value> = b.keys().collect();
+            assert_eq!(actual_keys, expected_keys, "{path}: key order differs");
+            for (key, actual_value) in a {
+                if let Some(expected_value) = b.get(key) {
+                    assert_same_key_order(
+                        actual_value,
+                        expected_value,
+                        &format!("{path}.{}", key.py_repr()),
+                    );
+                }
+            }
+        }
+        (Value::List(a), Value::List(b)) => {
+            for (index, (actual_value, expected_value)) in a.iter().zip(b).enumerate() {
+                assert_same_key_order(actual_value, expected_value, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A fresh scratch directory under the OS temp dir, matching every other
 /// Rust test in this workspace (no `tempfile` dependency).
 struct ScratchRoot(std::path::PathBuf);
@@ -156,6 +187,11 @@ fn run_resolve_config_case(case: &Dict, root: &Path) {
             );
             let expected_runtime = get(expected_config, "runtime").cloned();
             assert_eq!(cfg.runtime, expected_runtime, "case {name}: runtime");
+            if let (Some(actual_runtime), Some(expected_runtime)) =
+                (&cfg.runtime, &expected_runtime)
+            {
+                assert_same_key_order(actual_runtime, expected_runtime, "runtime");
+            }
         }
         (Err(err), false) => {
             let expected_error = s(expect, "error").replace("<root>", &root_str);
@@ -246,6 +282,7 @@ fn run_effective_settings_case(case: &Dict) {
                 actual_runtime.py_eq(&expected_runtime),
                 "case {name}: runtime differs"
             );
+            assert_same_key_order(&actual_runtime, &expected_runtime, "runtime");
 
             let expected_sources: Vec<(String, String)> = get(expect, "sources")
                 .and_then(Value::as_list)
@@ -307,6 +344,31 @@ fn run_complexity_case(case: &Dict) {
     }
 }
 
+/// `complexity_case`'s own JSON corpus round-trips `input.runtime`
+/// through `json.dumps`, which silently stringifies a non-string dict
+/// key -- a case needing a genuine non-string `runtime.complexity` key
+/// (issue #536) carries the YAML source itself instead, parsed here
+/// with electricity's own YAML loader, the same way `validate_
+/// complexity`'s real caller always reaches it.
+fn run_complexity_yaml_case(case: &Dict) {
+    let name = s(case, "name");
+    let input = get(case, "input").and_then(Value::as_dict).unwrap();
+    let expect = get(case, "expect").and_then(Value::as_dict).unwrap();
+    let runtime_yaml = s(input, "runtime_yaml");
+    let runtime =
+        electricity_yaml::load_yaml(&runtime_yaml).expect("case's own runtime_yaml must parse");
+    let document = Value::Dict(Dict::new());
+
+    let result = validate_complexity(&document, Some(&runtime));
+    let expect_ok = get(expect, "ok").and_then(Value::as_bool).unwrap();
+    match (result, expect_ok) {
+        (Ok(()), true) => {}
+        (Err(err), false) => assert_eq!(err.0, s(expect, "error"), "case {name}: error text"),
+        (Ok(()), false) => panic!("case {name}: expected an error, validate_complexity succeeded"),
+        (Err(err), true) => panic!("case {name}: expected success, got error {err:?}"),
+    }
+}
+
 fn run_persistence_case(case: &Dict) {
     let name = s(case, "name");
     let input = get(case, "input").and_then(Value::as_dict).unwrap();
@@ -339,6 +401,7 @@ fn every_case_in_the_corpus_matches_electricity_configs_own_port() {
             "resolve_config" => run_resolve_config_case(dict, &root.0),
             "effective_settings" => run_effective_settings_case(dict),
             "complexity" => run_complexity_case(dict),
+            "complexity_yaml" => run_complexity_yaml_case(dict),
             "persistence" => run_persistence_case(dict),
             other => panic!("unknown case kind {other:?}"),
         }
@@ -349,8 +412,27 @@ fn every_case_in_the_corpus_matches_electricity_configs_own_port() {
             "resolve_config".to_string(),
             "effective_settings".to_string(),
             "complexity".to_string(),
+            "complexity_yaml".to_string(),
             "persistence".to_string(),
         ]),
         "every case kind this test knows how to run should appear at least once"
     );
+}
+
+#[test]
+#[should_panic(expected = "runtime.'y': key order differs")]
+fn assert_same_key_order_catches_a_reordered_nested_dict() {
+    let mut actual_y = Dict::new();
+    actual_y.insert(Value::Str("a".to_string()), Value::from(1i64));
+    actual_y.insert(Value::Str("b".to_string()), Value::from(2i64));
+    let mut actual = Dict::new();
+    actual.insert(Value::Str("y".to_string()), Value::Dict(actual_y));
+
+    let mut expected_y = Dict::new();
+    expected_y.insert(Value::Str("b".to_string()), Value::from(2i64));
+    expected_y.insert(Value::Str("a".to_string()), Value::from(1i64));
+    let mut expected = Dict::new();
+    expected.insert(Value::Str("y".to_string()), Value::Dict(expected_y));
+
+    assert_same_key_order(&Value::Dict(actual), &Value::Dict(expected), "runtime");
 }

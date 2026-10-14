@@ -515,6 +515,51 @@ pub(crate) fn execute_op<'a>(
     })
 }
 
+/// `if self.defn.timeout_ms:` then `max(1, math.ceil(timeout_ms /
+/// 1000))` (`core/tool.py:519-520`) -- a truthy `timeout_ms` (set and
+/// non-zero, negative included) always wins over any other budget,
+/// rounded up to whole seconds and floored at 1 so a negative or
+/// sub-second value still times out quickly rather than falling back
+/// to "no timeout set" (issue #536). Shared by `tool::resolve_timeout_
+/// seconds` and `prompt::attempt_timeout_seconds`, the two sites that
+/// read an effect's own `timeout_ms`.
+pub(crate) fn effect_timeout_seconds(timeout_ms: i64) -> u32 {
+    let quotient = timeout_ms / 1000;
+    let remainder = timeout_ms % 1000;
+    let ceil_seconds = if remainder > 0 {
+        quotient + 1
+    } else {
+        quotient
+    };
+    ceil_seconds.clamp(1, i64::from(u32::MAX)) as u32
+}
+
+#[cfg(test)]
+mod effect_timeout_seconds_tests {
+    use super::effect_timeout_seconds;
+
+    #[test]
+    fn a_negative_timeout_ms_floors_to_one_second() {
+        assert_eq!(effect_timeout_seconds(-5000), 1);
+    }
+
+    #[test]
+    fn a_sub_second_positive_timeout_ms_rounds_up() {
+        assert_eq!(effect_timeout_seconds(500), 1);
+    }
+
+    #[test]
+    fn an_exact_whole_second_timeout_ms_is_unchanged() {
+        assert_eq!(effect_timeout_seconds(5000), 5);
+        assert_eq!(effect_timeout_seconds(5001), 6);
+    }
+
+    #[test]
+    fn a_negative_sub_second_timeout_ms_still_floors_to_one() {
+        assert_eq!(effect_timeout_seconds(-500), 1);
+    }
+}
+
 #[cfg(test)]
 mod wrap_effect_error_tests {
     use super::wrap_effect_error;

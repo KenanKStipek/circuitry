@@ -223,18 +223,19 @@ fn allowed_adapters(runtime_config: &Value) -> Option<Vec<String>> {
 /// `_attempt_timeout_seconds`.
 fn attempt_timeout_seconds(
     adapter_name: &str,
-    timeout_ms: Option<u64>,
+    timeout_ms: Option<i64>,
     run_ctx: &RunContext<'_>,
 ) -> u32 {
     let adapter_budget =
         electricity_config::configured_timeout_seconds(adapter_name, Some(run_ctx.runtime_config))
             .and_then(|n| u32::try_from(n).ok())
             .unwrap_or(run_ctx.adapter_timeout_seconds);
+    // `if timeout_ms:` -- a negative value is still truthy (issue #536):
+    // `crate::exec::effect_timeout_seconds` ports cof's own `max(1,
+    // ceil(ms / 1000))` rule for it, same as `tool::resolve_timeout_
+    // seconds`.
     match timeout_ms {
-        Some(ms) if ms > 0 => {
-            let effect_seconds = ((ms as f64) / 1000.0).ceil().max(1.0) as u32;
-            effect_seconds.min(adapter_budget)
-        }
+        Some(ms) if ms != 0 => crate::exec::effect_timeout_seconds(ms).min(adapter_budget),
         _ => adapter_budget,
     }
 }
@@ -1567,6 +1568,31 @@ mod tests {
         assert_eq!(attempt_timeout_seconds("scripted", Some(1), &run_ctx), 1);
         // 1500ms -> 2s, under the 120s adapter budget.
         assert_eq!(attempt_timeout_seconds("scripted", Some(1500), &run_ctx), 2);
+    }
+
+    #[test]
+    fn attempt_timeout_seconds_with_a_negative_timeout_ms_floors_to_one_second() {
+        let registry = ToolRegistry::new();
+        let limiter = Limiter::new();
+        let runtime_config = Value::None;
+        let complexity = ComplexitySettings::default();
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let adapters = AdapterRegistry::new();
+        let run_ctx = test_run_ctx(
+            &registry,
+            &limiter,
+            &runtime_config,
+            &complexity,
+            &declared_prompts,
+            &effect_names,
+            &adapters,
+        );
+        // A negative `timeout_ms` is still truthy in cof (issue #536).
+        assert_eq!(
+            attempt_timeout_seconds("scripted", Some(-5000), &run_ctx),
+            1
+        );
     }
 
     #[test]

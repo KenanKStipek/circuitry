@@ -62,7 +62,10 @@ pub(crate) fn get_bool_default(dict: &Dict, key: &str, default: bool) -> bool {
 pub(crate) fn py_int(value: &Value) -> i64 {
     match value {
         Value::Bool(b) => i64::from(*b),
-        Value::Int(i) => i.to_bigint().to_i64().unwrap_or(i64::MAX),
+        Value::Int(i) => i
+            .to_bigint()
+            .to_i64()
+            .unwrap_or_else(|| if i.is_negative() { i64::MIN } else { i64::MAX }),
         Value::Float(f) => *f as i64,
         Value::Str(s) => s.trim().parse::<i64>().unwrap_or(0),
         _ => 0,
@@ -185,6 +188,16 @@ mod tests {
     fn py_int_truncates_a_float_toward_zero() {
         assert_eq!(py_int(&Value::Float(4.9)), 4);
         assert_eq!(py_int(&Value::Float(-4.9)), -4);
+    }
+
+    #[test]
+    fn py_int_saturates_a_too_large_bigint_toward_its_own_sign() {
+        let huge_negative =
+            electricity_value::IntValue::parse_decimal("-100000000000000000000").unwrap();
+        let huge_positive =
+            electricity_value::IntValue::parse_decimal("100000000000000000000").unwrap();
+        assert_eq!(py_int(&Value::Int(huge_negative)), i64::MIN);
+        assert_eq!(py_int(&Value::Int(huge_positive)), i64::MAX);
     }
 
     #[test]
