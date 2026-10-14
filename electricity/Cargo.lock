@@ -450,6 +450,7 @@ dependencies = [
  "electricity-adapters",
  "electricity-bytecode",
  "electricity-config",
+ "electricity-json",
  "electricity-value",
  "libc",
  "log",

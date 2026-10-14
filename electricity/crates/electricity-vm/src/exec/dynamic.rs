@@ -446,7 +446,8 @@ fn execute_tree<'a>(
         // an ordinary `dynamic` tree branch's compiled path is already
         // globally unique), so *frame* passes straight through to every
         // branch unchanged, never through `Frame::nested`.
-        observer.dispatch(&frame.effect_path(&op.path), n, concurrency);
+        let container_path = frame.effect_path(&op.path);
+        observer.dispatch(&container_path, n, concurrency);
 
         if n == 0 {
             return Ok(());
@@ -460,6 +461,7 @@ fn execute_tree<'a>(
         // into until the merge below).
         let tree_chain: CtxChain = vec![CtxSource::Frozen(super::live_ctx(ctx_chain, store))];
         let branches = store.parallel_branches(dyn_node, n).map_err(store_err)?;
+        observer.register_tree_branches(&container_path, &branches);
 
         let container_name = op
             .name
@@ -577,9 +579,25 @@ fn execute_tree<'a>(
         };
 
         if interrupted {
+            // PR #549's review, finding 3: a cancelled tree never
+            // merges (cof's own no-state-write cancellation contract,
+            // the comment on `tree_errors`/`refused` above), but the
+            // overlay this call registered must still come down here --
+            // left in place, a `finally:` clause's own still-coalescing
+            // `--live-state` writes would keep showing branch content
+            // that is never going to be merged and never reaches
+            // `--out`, until `close()` finally overwrites it for good.
+            observer.clear_tree_branches(&container_path, &branches);
             return Err(VmError::Cancelled);
         }
 
+        // Cleared *before* the merge below, which takes *branches* by
+        // value -- `clear_tree_branches` only needs a borrow, and no
+        // flush can run between these two calls (both synchronous, no
+        // `.await` in between), so the overlay coming down one
+        // statement earlier than the merge it precedes is never
+        // observable as a gap.
+        observer.clear_tree_branches(&container_path, &branches);
         // A refused branch still merges like any other `stop_on_error`
         // failure -- every in-flight branch has already drained above,
         // so there is nothing left to lose by keeping whatever every

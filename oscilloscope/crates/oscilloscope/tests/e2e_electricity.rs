@@ -586,13 +586,69 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(log_stdout.contains("■ run ok"), "stdout:\n{log_stdout}");
 }
 
+/// Issue #545's own trigger case, now fixed by #465: a named `flow:
+/// tree` `each` loop whose body runs a scripted prompt after a
+/// staggered `sleep` (`0.1s`/`0.1s`/`1.5s`) -- the two fast passes'
+/// own prompts finish and fire their `end` event well before the
+/// loop's own last pass, and so well before the whole tree merges.
+/// Before issue #465, electricity's `--live-state` carried no state
+/// at all for a tree's in-flight branches until the merge, so a fast
+/// pass's own `end` event always arrived more than #547's 1.1s hold
+/// window ahead of any live-state write that could show its tokens,
+/// and the `--log` line fell back to `ok` (the issue's own comment:
+/// "all 9 remaining `ok` lines were tree-loop passes"). With #465's
+/// overlay, the periodic (500ms) live-state flush shows a fast pass's
+/// own finished prompt well inside that window.
+#[test]
+fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSP_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.shots.iter_0.ask:\n  - text: \"pass 0\"\n    tokens_sent: 1\n    tokens_received: 1\nprime.shots.iter_1.ask:\n  - text: \"pass 1\"\n    tokens_sent: 2\n    tokens_received: 2\nprime.shots.iter_2.ask:\n  - text: \"pass 2\"\n    tokens_sent: 3\n    tokens_received: 3\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: seed\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"[0.05, 0.05, 3.0]\"}\n  - name: shots\n    type: loop\n    flow: tree\n    max_concurrency: 3\n    each: {in: \"prime.seed.value\", as: item}\n    body:\n      - name: wait\n        type: tool\n        provider: sleep\n        params: {seconds: {from: item}}\n      - name: ask\n        type: prompt\n        template: \"hi\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &support::scripted_config(&replies),
+    );
+
+    let run_dir = work.path().join("run");
+    let child = osp_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+
+    let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(status.success(), "stdout:\n{stdout}");
+    for line in ["↑1 ↓1", "↑2 ↓2", "↑3 ↓3"] {
+        assert!(stdout.contains(line), "stdout:\n{stdout}");
+    }
+    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+}
+
 /// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
 /// loop, `max_concurrency: 2`, three items, a `json` body. Asserts
-/// only the finished run's own lines -- nothing mid-run, since
-/// issue #465 (electricity's own `--live-state` shows none of a
-/// tree's in-flight branches before the merge, unlike `cof`'s) is out
-/// of scope for this issue and a test that asserted that gap directly
-/// would start failing the moment #465 is fixed.
+/// only the finished run's own lines -- a mid-run assertion belongs to
+/// `a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges`
+/// below, which exercises issue #465's own overlay directly; this
+/// test only needs the run to merge correctly in the end.
 #[test]
 fn a_tree_loop_merges_every_pass() {
     if !e2e_electricity_enabled() {
