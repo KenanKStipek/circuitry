@@ -4,7 +4,9 @@ background processes.
 Every test runs throwaway local HTTP servers (``python -m http.server``) on
 free ports and a per-test state directory; a process a test starts on its
 own (a "foreign" one the plugin must never touch) is killed by the test's
-own teardown, and so is any process group a record still names.
+own teardown, and so is any process group a record still names. Every such
+server also runs through ``_server_guard`` (#412), so one still survives
+even if this pytest process itself is killed before that teardown runs.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import textwrap
 import threading
 import time
 import urllib.request
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -37,6 +40,17 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="service is POSIX onl
 
 HAS_LSOF = shutil.which("lsof") is not None
 
+#: Every test server this module starts carries this in its own argv (via
+#: ``_GUARD_SCRIPT``), so a run that got killed mid-test can be found by it
+#: afterwards without a system-wide `pgrep http.server` (#412) -- other runs
+#: on the same machine start servers too. Sourced from the environment so an
+#: outer acceptance run (see `test_a_killed_pytest_run_leaves_no_server_running`)
+#: can pick a value it already knows, to search for.
+_SERVER_MARKER = os.environ.get("CIRCUITRY_TEST_SERVER_MARKER", uuid.uuid4().hex)
+#: The wrapper every long-lived test server in this module runs through, so
+#: that a killed pytest process never leaves one running (#412).
+_GUARD_SCRIPT = Path(__file__).with_name("_server_guard.py")
+
 
 def _free_port() -> int:
     with socket.socket() as sock:
@@ -44,8 +58,23 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _guarded(command: list[str], *, max_lifetime: float = 300) -> list[str]:
+    """*command*, run through ``_server_guard`` so it never outlives the
+    process that started it (#412), and stays discoverable by marker."""
+    return [
+        sys.executable,
+        str(_GUARD_SCRIPT),
+        "--max-lifetime",
+        str(max_lifetime),
+        "--marker",
+        _SERVER_MARKER,
+        "--",
+        *command,
+    ]
+
+
 def _http_server(port: int) -> list[str]:
-    return [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"]
+    return _guarded([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"])
 
 
 def _group_alive(pgid: int) -> bool:
@@ -423,9 +452,11 @@ _START_AND_STAY = textwrap.dedent(
     import json, sys, time
     from circuitry.plugins.service import ServicePlugin
     port = int(sys.argv[2])
+    guard, marker = sys.argv[3], sys.argv[4]
     result = ServicePlugin(state_dir=sys.argv[1]).execute(params={
         "action": "start", "name": "web", "ports": [port],
-        "command": [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        "command": [sys.executable, guard, "--max-lifetime", "300", "--marker", marker, "--",
+                    sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
         "ready": f"http://127.0.0.1:{port}/", "ready_timeout_ms": 20000,
     })
     print(json.dumps({"ok": result.ok, "stderr": result.stderr,
@@ -452,7 +483,7 @@ def test_stop_of_a_service_another_still_running_run_started(
         if k not in ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
     }
     other_run = subprocess.Popen(
-        [sys.executable, str(script), str(state_dir), str(port)],
+        [sys.executable, str(script), str(state_dir), str(port), str(_GUARD_SCRIPT), _SERVER_MARKER],
         cwd=tmp_path,
         env={**env, "HOME": str(tmp_path / "home")},
         stdin=subprocess.DEVNULL,
@@ -517,7 +548,10 @@ def test_a_malformed_http_response_counts_as_not_ready() -> None:
 
 _STUBBORN_CHILD = textwrap.dedent(
     """
-    import signal, subprocess, sys, time
+    import os, signal, subprocess, sys, time
+    sys.path.insert(0, os.path.dirname(sys.argv[3]))
+    from _server_guard import start_ppid_watchdog
+    start_ppid_watchdog()
     child = subprocess.Popen([sys.executable, "-c",
         "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)"])
     with open(sys.argv[1], "w") as fh:
@@ -541,7 +575,9 @@ def test_stop_takes_down_the_whole_group_including_a_child_that_ignores_sigterm(
         params={
             "action": "start",
             "name": "stubborn",
-            "command": [sys.executable, str(script), str(child_pid_file), str(port)],
+            "command": [
+                sys.executable, str(script), str(child_pid_file), str(port), str(_GUARD_SCRIPT),
+            ],
             "ports": [port],
             "ready": port,
             "ready_timeout_ms": 20000,
@@ -652,7 +688,10 @@ def test_https_readiness_accepts_a_self_signed_local_certificate(
     script.write_text(
         textwrap.dedent(
             """
-            import http.server, ssl, sys
+            import http.server, os, ssl, sys
+            sys.path.insert(0, os.path.dirname(sys.argv[4]))
+            from _server_guard import start_ppid_watchdog
+            start_ppid_watchdog()
             server = http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])),
                                             http.server.SimpleHTTPRequestHandler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -668,7 +707,9 @@ def test_https_readiness_accepts_a_self_signed_local_certificate(
         params={
             "action": "start",
             "name": "tls",
-            "command": [sys.executable, str(script), str(port), str(cert), str(key)],
+            "command": [
+                sys.executable, str(script), str(port), str(cert), str(key), str(_GUARD_SCRIPT),
+            ],
             "ready": f"https://localhost:{port}/",
             "ready_timeout_ms": 20000,
         }
@@ -861,3 +902,83 @@ def test_finally_stop_runs_on_ctrl_c(tmp_path: Path, started_groups: list[int]) 
     # The default state directory is per-user, under the (temporary) HOME.
     assert (home / ".config" / "circuitry" / "services").is_dir()
     assert not (home / ".config" / "circuitry" / "services" / "web.json").exists()
+
+
+# -- a killed pytest run leaves no server running (#412) --------------------
+
+
+def test_a_service_stays_up_for_a_few_seconds_then_stops(
+    plugin: ServicePlugin, state_dir: Path
+) -> None:
+    """A server up long enough for `test_a_killed_pytest_run_leaves_no_server_running`
+    (run as its own pytest process) to catch it before this test, left to run
+    normally, stops it itself."""
+    port = _free_port()
+    started = _start(plugin, "web", port)
+    assert started.ok, started.stderr
+    time.sleep(5)
+    stopped = plugin.execute(params={"action": "stop", "name": "web"})
+    assert stopped.ok and stopped.value["stopped"] is True
+    assert not (state_dir / "web.json").exists()
+
+
+def _pids_with_marker(marker: str) -> list[int]:
+    out = subprocess.run(
+        ["ps", "-eo", "pid,command"], capture_output=True, text=True, check=False
+    )
+    pids: list[int] = []
+    for line in out.stdout.splitlines()[1:]:
+        head, _, rest = line.strip().partition(" ")
+        if head.isdigit() and marker in rest:
+            pids.append(int(head))
+    return pids
+
+
+def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path) -> None:
+    """Acceptance test for #412: SIGKILL a pytest subprocess mid-test, and
+    within a few seconds no test server it started is still running --
+    found by a marker unique to this run (an argv token), never a
+    system-wide `pgrep http.server`: other runs on this machine start test
+    servers of their own at the same time."""
+    marker = f"circuitry-test-server-acceptance-{uuid.uuid4().hex}"
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
+    }
+    env = {**env, "HOME": str(tmp_path / "home"), "CIRCUITRY_TEST_SERVER_MARKER": marker}
+    repo_root = Path(__file__).resolve().parents[2]
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            f"{Path(__file__).resolve()}::test_a_service_stays_up_for_a_few_seconds_then_stops",
+        ],
+        cwd=repo_root,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert _wait_until(lambda: bool(_pids_with_marker(marker)), timeout=30), (
+            "the nested run never started a marked test server"
+        )
+        os.kill(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+
+        assert _wait_until(lambda: not _pids_with_marker(marker), timeout=10), (
+            f"servers still running after the killed run: {_pids_with_marker(marker)}"
+        )
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+        for pid in _pids_with_marker(marker):
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except OSError:
+                pass
