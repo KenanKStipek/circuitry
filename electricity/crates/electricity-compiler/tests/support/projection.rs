@@ -175,6 +175,17 @@ fn project_retries(retries: electricity_bytecode::effects::RetryPolicy) -> Json 
     })
 }
 
+/// `timeout_ms`: an integer literal as a number, a `{from: ...}` as the
+/// Python dataclass's own `TimeoutFrom` dump (`{"path", "default"}`).
+fn project_timeout_ms(timeout_ms: &Option<electricity_bytecode::effects::TimeoutMs>) -> Json {
+    use electricity_bytecode::effects::TimeoutMs;
+    match timeout_ms {
+        None => Json::Null,
+        Some(TimeoutMs::Literal(n)) => Json::Number((*n).into()),
+        Some(TimeoutMs::From(from)) => json!({"path": from.path, "default": from.default}),
+    }
+}
+
 /// `PromptOp::retries` is the one genuinely `Option` field of the three
 /// (issue #498, lane G seam) -- `null` when the document omitted
 /// `retries:` or gave an empty mapping, a concrete object otherwise, so
@@ -369,7 +380,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "provider_fallbacks": if prompt.provider_fallbacks.is_empty() { Json::Null } else { Json::Array(prompt.provider_fallbacks.iter().cloned().map(Json::String).collect()) },
                 "routing_override": Json::Null,
                 "params": prompt.model_params.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
-                "timeout_ms": prompt.timeout_ms.map(|n| Json::Number(n.into())).unwrap_or(Json::Null),
+                "timeout_ms": project_timeout_ms(&prompt.timeout_ms),
                 "deterministic": prompt.deterministic,
                 "inputs": prompt.inputs.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "assets": if prompt.assets.is_empty() { Json::Null } else { Json::Array(prompt.assets.iter().map(|a| json!({"kind": a.kind, "ref": a.reference})).collect()) },
@@ -387,7 +398,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "params_json": tool.params_json.as_ref().map(|t| Json::String(t.source.clone())).unwrap_or(Json::Null),
             "prompt": tool.prompt.as_ref().map(|t| Json::String(t.source.clone())).unwrap_or(Json::Null),
             "model": tool.model,
-            "timeout_ms": tool.timeout_ms.map(|n| Json::Number(n.into())).unwrap_or(Json::Null),
+            "timeout_ms": project_timeout_ms(&tool.timeout_ms),
             "on_error": on_error_str(op.on_error),
             "description": tool.description,
             "retries": project_retries(tool.retries),

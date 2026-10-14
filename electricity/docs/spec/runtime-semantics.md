@@ -883,6 +883,16 @@ timeout for *that* attempt's adapter)` — not the run-default adapter's
 timeout, since a `provider:`/fallback can dispatch to a *different* adapter
 than the run default.
 
+`timeout_ms` may also be `{from: <path>, default: <int>}` (issue #564, `core/
+timeout_ref.py`): read from state at each attempt's dispatch, before the
+adapter is built, and then handled exactly like a literal. It must resolve to a
+positive integer; a path that is missing (or `null`) takes `default`, or fails
+the effect without one, and any other value fails it — a `ValueError` whose
+text names the path (`timeout_ms '{from: <path>}' did not resolve to a value
+and has no default.` / `... resolved to <repr>; expected a positive integer.`).
+A resolution failure is never retried, and a prompt records it with
+`meta.fallback_attempts: []` (no adapter was tried).
+
 **Token accounting**: `tokens_sent`/`tokens_received` = the attempt that
 actually answered. `tokens_sent_total`/`tokens_received_total` = the sum
 across **every** attempt this `execute()` call made — failed, retried, and

@@ -4310,6 +4310,1198 @@
     }
   },
   {
+    "name": "tool_timeout_ms_from_state",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: prime.spec.value.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "provider": "shell",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": {
+            "path": "prime.spec.value.ms",
+            "default": null
+          },
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "cc2f6ad15e20031af38a12e84efec6592e98078a16eb47f4382821daebd49702",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tool_timeout_ms_from_state_trims_the_path_and_keeps_the_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: '  input.ms  ', default: 3600000}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "provider": "shell",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": {
+            "path": "input.ms",
+            "default": 3600000
+          },
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f8fa66125f1fd21d9359e10b69da9648f323b22a4825de113880aaf1df75f3b9",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tool_timeout_ms_from_a_loop_binding",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: each_job\n    each: {in: input.jobs, as: job}\n    body:\n    - type: tool\n      name: x\n      provider: shell\n      timeout_ms: {from: job.ms, default: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "each_job",
+          "body": [
+            {
+              "name": "x",
+              "provider": "shell",
+              "params": {},
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": {
+                "path": "job.ms",
+                "default": 5
+              },
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.jobs",
+            "as_name": "job",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "each_job",
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ecbdcefcd844c421fc8d404528ccc11198c6a69668cfd998d4389c76b2bd561d",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_path_without_a_root",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "e90e730e2e5c874647724b463266ca0fee902698270f46ad9dc7bc7747b31d42",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_state_prefixed_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: state.input.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'.",
+    "digest": "5ca96f6f4476886e9789cd3e27b12495d0e9b39ef9f19c64e72e013f76e580ec",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_an_empty_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: ''}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: '' should be non-empty"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: '' should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' timeout_ms at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
+    "digest": "58950133807c5a465d7590073143e8671e2c7ac4118d992b6760c24df64f7124",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_non_string_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: 5 is not of type 'string'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: 5 is not of type 'string'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'from' must be a path string, got 5.",
+    "digest": "e0549166b7841a42dca7dea377d75af101b569041d226fce62de6fc0e2c6e12d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_no_from",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {default: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: 'from' is a required property"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: 'from' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['default'].",
+    "digest": "3063eb8bd24fb233da64c37bbb1be7fa1e3e540e80fbd947cf2b851550326515",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_an_extra_key",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, other: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['from', 'other'].",
+    "digest": "4f54728f7de5d636b9c2053678e0f779f95be215fc03a89abb5a47c03bd64bbe",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_string_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: '5000'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: '5000' is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: '5000' is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got '5000'.",
+    "digest": "5d100b2decf54c3cc1dc5f92116f3ce68380ee007f204080b33ecb5c763972bd",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_float_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: 1.5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: 1.5 is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: 1.5 is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got 1.5.",
+    "digest": "a471761db4305008c9507207b266873d2acb67025379234703fcb3139fb06a24",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_zero_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: 0}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: 0 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: 0 is less than the minimum of 1",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got 0.",
+    "digest": "b8b1956403000b8466440a2394efffeae5f83bf9246e4e492c24da9267c16176",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_negative_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: -3}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: -3 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: -3 is less than the minimum of 1",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got -3.",
+    "digest": "4182605afd4af748fbfa9ff6fa586a66138fc71c63339f22414b2ed05b1c9436",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_bool_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: true}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: True is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: True is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got True.",
+    "digest": "bb93c32911938e3df114bebf6f79214a48db84cfdcbf999f58c9d4ce050e178f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_a_null_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: input.ms, default: null}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: None is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: None is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got None.",
+    "digest": "fc32b62dc261beb2ef98b46c4eab930c27de4d08e104b260c567513746fe776e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "tool_timeout_ms_binding_outside_its_loop",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    timeout_ms: {from: job.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Tool effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "5e3e04c922dfc65e5d2444c12169a3bc4440488d0fc12168a8fc2a4e9ea9ce94",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_from_state",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: prime.spec.value.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": {
+            "path": "prime.spec.value.ms",
+            "default": null
+          },
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "2d40cdc5031cabdad29be2b793ed0b27e2f886f54340a049c62e12740c655b0a",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_from_state_trims_the_path_and_keeps_the_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: '  input.ms  ', default: 3600000}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "x",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": {
+            "path": "input.ms",
+            "default": 3600000
+          },
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "3759e40da97cab8afccb3e649d245ae56e43e03d69d6268d81ab71308695f4e5",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_from_a_loop_binding",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: each_job\n    each: {in: input.jobs, as: job}\n    body:\n    - type: prompt\n      name: x\n      template: hi\n      timeout_ms: {from: job.ms, default: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "each_job",
+          "body": [
+            {
+              "name": "x",
+              "template": "hi",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": {
+                "path": "job.ms",
+                "default": 5
+              },
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.jobs",
+            "as_name": "job",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "each_job",
+        "x"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f76d97a716647df69d422adb283a990d00516a814752772baac93a99933fe5ba",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_path_without_a_root",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "2b256f8080ed68900629137c19c74e2ee1895fab0328c6d47facee9b731e73db",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_state_prefixed_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: state.input.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.ms' instead of 'state.input.ms'.",
+    "digest": "30730a29bf0d81b594aade06b1030e3868e2157b13ea34efbec9c6cd97092094",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_an_empty_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: ''}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: '' should be non-empty"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: '' should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' timeout_ms at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
+    "digest": "50b472826352d26dedc76ff1a826e4f176f68accc0258531ccc38c2db130f195",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_non_string_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: 5 is not of type 'string'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: 5 is not of type 'string'",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'from' must be a path string, got 5.",
+    "digest": "47632e3d2cfe954dd617445a98a0fa8606a9db38c4a2f64eaa1ba38dd80d4033",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_no_from",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {default: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: 'from' is a required property"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: 'from' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['default'].",
+    "digest": "d98506e7045049c3d38d05f930202351f84497fa839a14f38beea2ced8274452",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_an_extra_key",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, other: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['from', 'other'].",
+    "digest": "73db90f26ed1b879cb2c511656b2a65f9a9b6f271cdd9b84476ca20265219e08",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_string_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: '5000'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: '5000' is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: '5000' is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got '5000'.",
+    "digest": "c1ae57286a4447e25857f89eb4e74c262a277677342045e3913ce96d4eb2555f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_float_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: 1.5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: 1.5 is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: 1.5 is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got 1.5.",
+    "digest": "d1834625fbaffa5f1d28e526a4a6e16f178fa573a558c9b338523166960d7513",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_zero_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: 0}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: 0 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: 0 is less than the minimum of 1",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got 0.",
+    "digest": "ba70d0c4b9ff0a0ac972a355070056042fb35c9d2be8f27490348cefac53cc8f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_negative_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: -3}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: -3 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: -3 is less than the minimum of 1",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got -3.",
+    "digest": "39a5d91d0d98834f5022f25e1958e54114688ea4353e24675e1fdb660c77f76a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_bool_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: true}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: True is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: True is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got True.",
+    "digest": "8afd6c802fc82e91fd98eae5a1fed0d89cae827acaaa4c02b8106782bf6f8cd8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_a_null_default",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: input.ms, default: null}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: None is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: None is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got None.",
+    "digest": "af47f7b2c1dc09a16698108b3528ffdbd747c3921b0fe7ee8d8563da9e6a7e43",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_timeout_ms_binding_outside_its_loop",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: x\n    template: hi\n    timeout_ms: {from: job.ms}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt effect 'x' timeout_ms at 'prime.effects[0]': 'job.ms' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.job.ms' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "c5ce6aa91e93a2bc6d51d4ef50afd629beff9e0901820d53b4e2788cde939a9d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "prompt_template_from_file",
     "files": {
       "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: template.txt}\n",

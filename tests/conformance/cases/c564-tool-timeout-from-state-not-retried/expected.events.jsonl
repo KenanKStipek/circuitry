@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-14T23:11:13.000Z","ev":"run_start","run_id":"36cdc427-dbe2-4467-b20d-0afa10900c66","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":13963}
+{"v":1,"seq":1,"ts":"2026-10-14T23:11:13.008Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-14T23:11:13.008Z","ev":"start","id":1,"path":"prime.result"}
+{"v":1,"seq":3,"ts":"2026-10-14T23:11:13.008Z","ev":"end","id":1,"path":"prime.result","ok":false,"ms":0,"error":"Tool effect 'result': timeout_ms '{from: input.budget_ms}' did not resolve to a value and has no default."}
+{"v":1,"seq":4,"ts":"2026-10-14T23:11:13.008Z","ev":"end","id":0,"path":"prime","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-10-14T23:11:13.008Z","ev":"run_end","ok":true}

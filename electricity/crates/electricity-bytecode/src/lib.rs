@@ -95,7 +95,7 @@ pub mod template;
 
 pub use effects::{
     AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, RetryPolicy, Role,
-    RoutingOverride, ToolOp, UseOp, UseSource, YieldOp,
+    RoutingOverride, TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
 };
 pub use op::{LeafKind, NodeKind, OnError, Op, python_type_name};
 pub use param::ParamNode;

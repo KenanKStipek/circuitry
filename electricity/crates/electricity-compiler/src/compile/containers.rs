@@ -272,6 +272,7 @@ fn compile_effect(
                 &valid_name,
                 effect_path,
                 &ctx.origin,
+                loop_names,
             )
         }
         "dynamic" => {

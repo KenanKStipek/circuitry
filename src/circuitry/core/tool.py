@@ -33,7 +33,7 @@ from .prompt_compose import (
     render_with_composition,
 )
 from .store import Store
-from .timeout_ref import TimeoutFrom, TimeoutResolutionError, resolve_timeout_ms
+from .timeout_ref import TimeoutFrom, resolve_timeout_ms
 from .use import _resolve_reference
 
 logger = logging.getLogger(__name__)
@@ -696,6 +696,7 @@ class ToolRuntime:
             result: ToolResult | None = None
             failure: Exception | None = None
             retryable = False
+            timeout_unresolved = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
@@ -735,8 +736,14 @@ class ToolRuntime:
                 meta["params_rendered"] = redact(rendered)
                 mtag = _model_tag(rendered)
 
-                # Per attempt, from the state this attempt sees (#564).
-                timeout_seconds = self._resolve_timeout_seconds(ctx)
+                # Per attempt, from the state this attempt sees (#564). A
+                # reference that can't resolve is not retried: a retry reads
+                # the same state.
+                try:
+                    timeout_seconds = self._resolve_timeout_seconds(ctx)
+                except ValueError:
+                    timeout_unresolved = True
+                    raise
 
                 # Build plugin early so we can use its target string in the spinner
                 # (require_tool/require_within_ceiling already checked once
@@ -801,8 +808,8 @@ class ToolRuntime:
 
             except Exception as e:
                 failure = e
-                retryable = not isinstance(e, TimeoutResolutionError) and (
-                    self._is_retryable_failure(status_code=None, failure=e)
+                retryable = not timeout_unresolved and self._is_retryable_failure(
+                    status_code=None, failure=e
                 )
 
             if failure is not None:

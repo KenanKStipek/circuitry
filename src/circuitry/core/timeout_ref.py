@@ -21,10 +21,6 @@ REFERENCE_KEY = "from"
 DEFAULT_KEY = "default"
 
 
-class TimeoutResolutionError(ValueError):
-    """A ``timeout_ms`` reference that has no usable value now; retrying reads the same state."""
-
-
 @dataclass(frozen=True)
 class TimeoutFrom:
     """A compiled ``timeout_ms: {from: <path>, default: <int>}``."""
@@ -99,12 +95,12 @@ def resolve_timeout_ms(
     if resolved is None:
         if timeout_ms.default is not None:
             return timeout_ms.default
-        raise TimeoutResolutionError(
+        raise ValueError(
             f"{effect_label}: timeout_ms '{{from: {timeout_ms.path}}}' did not resolve to a "
             "value and has no default."
         )
     if not _is_positive_integer(resolved):
-        raise TimeoutResolutionError(
+        raise ValueError(
             f"{effect_label}: timeout_ms '{{from: {timeout_ms.path}}}' resolved to "
             f"{resolved!r}; expected a positive integer."
         )

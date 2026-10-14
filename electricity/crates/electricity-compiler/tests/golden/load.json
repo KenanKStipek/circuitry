@@ -2475,5 +2475,365 @@
       "validate_errors": [],
       "run_error": null
     }
+  },
+  {
+    "name": "timeout_ms_from_state_is_valid",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: input.ms}\n  - type: prompt\n    name: p\n    template: 'hi'\n    timeout_ms: {from: prime.t.value, default: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": {
+            "path": "input.ms",
+            "default": null
+          },
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        },
+        {
+          "name": "p",
+          "template": "hi",
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": {
+            "path": "prime.t.value",
+            "default": 1
+          },
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "p",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "50b20309d66bc1daec12d14dc73e63939e15e2cea56e1b96dd93c6ce160a21c4",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_a_string_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: '5000'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: '5000' is not of type 'integer', 'object'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: '5000' is not of type 'integer', 'object'",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": 5000,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "049244026257aa8fa70a4a0769012898df3b18688ddc8bfbad98cdaeb083a022",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_an_empty_mapping_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: 'from' is a required property"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: 'from' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys [].",
+    "digest": "c626086eeea7b39f9355c82122ffccf8e9bdb05f96db8506bcb026ec54cd2fd9",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_a_mapping_without_from_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {default: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: 'from' is a required property"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: 'from' is a required property",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['default'].",
+    "digest": "90de1a36dd38aca7f1ff5560a6025f35c2759e1921a60741d3012d033f03d5d3",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_an_empty_from_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: ''}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: '' should be non-empty"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: '' should be non-empty",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' timeout_ms at 'prime.effects[0]': '{from: ...}' needs a non-empty path.",
+    "digest": "46c607cb58edd880025ea3d4606c1613315260d8d5ea7b7f9bbd80b2af9af5c2",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_a_non_string_from_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: 7}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.from: 7 is not of type 'string'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.from: 7 is not of type 'string'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' 'from' must be a path string, got 7.",
+    "digest": "228d9cfaf47ad2a4ab984edd19fccc2b0aa391116d5410e1498cf6f2a28e62bc",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_a_zero_default_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: input.ms, default: 0}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: 0 is less than the minimum of 1"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: 0 is less than the minimum of 1",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got 0.",
+    "digest": "1e8eff36a1fa062427c3ab0eea55f89607ba228c127304cae60e177b33a9e954",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_a_string_default_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: input.ms, default: '5'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms.default: '5' is not of type 'integer'"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms.default: '5' is not of type 'integer'",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' 'default' must be a positive integer, got '5'.",
+    "digest": "a783d5cd49cd4356405f0425deecdef396fcb5c74009b3b55a43aac0ab4872ee",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "timeout_ms_from_state_an_extra_key_is_a_schema_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {mode: stringify, input: 1}\n    timeout_ms: {from: input.ms, other: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)"
+      ],
+      "warnings": []
+    },
+    "lint_warnings": [],
+    "run_error": "Orchestration validation failed:\n  - effects[0].timeout_ms: Additional properties are not allowed ('other' was unexpected)",
+    "definition": null,
+    "definition_error": "ValueError: Tool effect 't' at 'prime.effects[0]': 'timeout_ms' must be an integer, or {from: <path>, default: <positive integer>}; got keys ['from', 'other'].",
+    "digest": "613ad5c10225c78cffa1a40bb46e5222b5f700d321d69acac5ff00f9178acd2c",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
   }
 ]

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A prompt's `timeout_ms: {from: <path>}` whose path is missing, with no default, fails the effect before any model call; `on_error: continue` records the error naming the path.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

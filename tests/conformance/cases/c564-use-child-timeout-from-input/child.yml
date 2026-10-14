@@ -1,0 +1,13 @@
+interface:
+  inputs:
+    budget_ms: {type: integer, required: true}
+  outputs:
+    out: {path: prime.work.value}
+effects:
+  - type: tool
+    name: work
+    provider: json
+    timeout_ms: {from: input.budget_ms}
+    params:
+      mode: stringify
+      input: 1

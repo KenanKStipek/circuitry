@@ -1,0 +1,9 @@
+name: c564-timeout-from-state-bad-default
+effects:
+  - type: tool
+    name: result
+    provider: json
+    timeout_ms: {from: input.budget_ms, default: 0}
+    params:
+      mode: stringify
+      input: 1

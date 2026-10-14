@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A prompt's `timeout_ms: {from: <path>, default: <int>}` resolves from an earlier step's output and the call goes through.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

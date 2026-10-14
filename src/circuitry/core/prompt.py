@@ -704,8 +704,8 @@ class PromptRuntime:
                             _console.print(retry_line)
 
                 # Per attempt, from the state this attempt sees (#564). A
-                # reference that can't resolve fails the effect, not a retry:
-                # a retry reads the same state.
+                # reference that can't resolve fails the effect outright
+                # instead of retrying: a retry reads the same state.
                 timeout_ms = resolve_timeout_ms(
                     self.defn.timeout_ms,
                     effective_ctx,

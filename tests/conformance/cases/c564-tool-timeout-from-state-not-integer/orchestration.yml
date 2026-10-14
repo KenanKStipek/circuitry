@@ -1,0 +1,15 @@
+name: c564-tool-timeout-from-state-not-integer
+effects:
+  - type: tool
+    name: spec
+    provider: json
+    params:
+      mode: parse
+      input: '{"ms": "5000"}'
+  - type: tool
+    name: result
+    provider: json
+    timeout_ms: {from: prime.spec.value.ms, default: 1000}
+    params:
+      mode: stringify
+      input: 1

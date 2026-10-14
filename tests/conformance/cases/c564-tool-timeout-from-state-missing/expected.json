@@ -1,0 +1,3 @@
+{
+  "error": "prime.result: Tool effect 'result': timeout_ms '{from: input.budget_ms}' did not resolve to a value and has no default."
+}

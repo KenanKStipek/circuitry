@@ -860,7 +860,58 @@ CASES: list[dict[str, Any]] = [
         },
         "entry": "doc.yml",
     },
+    {
+        # Issue #564: `timeout_ms` is an integer or `{from, default}`,
+        # on both a tool and a prompt.
+        "name": "timeout_ms_from_state_is_valid",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: tool\n"
+                "    name: t\n"
+                "    provider: json\n"
+                "    params: {mode: stringify, input: 1}\n"
+                "    timeout_ms: {from: input.ms}\n"
+                "  - type: prompt\n"
+                "    name: p\n"
+                "    template: 'hi'\n"
+                "    timeout_ms: {from: prime.t.value, default: 1}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
 ]
+
+for _bad_name, _bad_timeout in (
+    ("a_string", "'5000'"),
+    ("an_empty_mapping", "{}"),
+    ("a_mapping_without_from", "{default: 5}"),
+    ("an_empty_from", "{from: ''}"),
+    ("a_non_string_from", "{from: 7}"),
+    ("a_zero_default", "{from: input.ms, default: 0}"),
+    ("a_string_default", "{from: input.ms, default: '5'}"),
+    ("an_extra_key", "{from: input.ms, other: 1}"),
+):
+    CASES.append(
+        {
+            "name": f"timeout_ms_from_state_{_bad_name}_is_a_schema_error",
+            "files": {
+                "doc.yml": (
+                    "effects:\n"
+                    "  - type: tool\n"
+                    "    name: t\n"
+                    "    provider: json\n"
+                    "    params: {mode: stringify, input: 1}\n"
+                    f"    timeout_ms: {_bad_timeout}\n"
+                ),
+            },
+            "entry": "doc.yml",
+            "error_modes": {
+                "validate_errors": ["location_prefix"],
+                "run_error": "location_prefix",
+            },
+        }
+    )
 
 
 def main() -> int:
