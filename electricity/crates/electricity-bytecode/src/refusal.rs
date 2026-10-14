@@ -3,16 +3,23 @@
 //! front, before any state is written, with the preview marker
 //! (issue #431's "Refused before the run starts" list) instead of
 //! discovering mid-run that nothing implements a `prompt`/`loop`/`use`/
-//! `reflector` effect, a model-mode condition or `expect`, a `tool`
-//! effect naming an unsupported `provider:`, or a document naming a
-//! top-level `adapter:` at all, since `cof run` runs preflight against
-//! it whenever a config is given and M0-H ports none of that check yet
-//! -- replaced once lane R of #448 (M1's run wiring v2) ports preflight
-//! (#451). `yield` and a document's own `prompts:` map are both
-//! supported as of lane P (#448, #487); an unexpanded `{{> name}}`
-//! partial reference is no longer a case this walker ever checks for
-//! at all (`RefusalReason::PartialReference` is gone, per that lane's
-//! own ruling: the run-time half of #406 removes the check from the
+//! `reflector` effect, a model-mode condition or `expect`, or a `tool`
+//! effect naming an unsupported `provider:`. Every M1 lane has landed
+//! (issue #539): [`Supported::current`] sets every flag here `true`,
+//! so this walker's own tool-provider allow-list
+//! ([`Supported::allows_provider`]) is the only check that can still
+//! fire against an ordinary, hand-written document -- a `tool` effect
+//! naming a provider outside the 13 native ones this build builds.
+//! A document's own top-level `adapter:` is no longer refused by this
+//! walker at all: lane R (#448, #495/#497) ported real preflight
+//! instead, which checks it the way `cof run` does
+//! (runtime-semantics.md §8.2); `RefusalReason::DocumentAdapter` only
+//! fires under [`Supported::m0`] now, kept for that golden test alone.
+//! `yield` and a document's own `prompts:` map are both supported as
+//! of lane P (#448, #487); an unexpanded `{{> name}}` partial
+//! reference is no longer a case this walker ever checks for at all
+//! (`RefusalReason::PartialReference` is gone, per that lane's own
+//! ruling: the run-time half of #406 removes the check from the
 //! walker entirely rather than ever gating it behind a flag).
 //!
 //! **Capability-driven (issue #449's gate lane, item 9).** [`Supported`]
@@ -325,7 +332,7 @@ impl<'a> Supported<'a> {
     /// Whether a `tool` effect's own normalized `provider:` is one
     /// this build can actually dispatch: `json` (always), one of
     /// *providers* (the `test-tools` feature's own extras), or a name
-    /// in one of the four native-tool sets whose own capability flag
+    /// in one of the five native-tool sets whose own capability flag
     /// is set.
     fn allows_provider(&self, name: &str) -> bool {
         name == "json"

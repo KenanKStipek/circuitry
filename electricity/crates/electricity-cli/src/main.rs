@@ -41,8 +41,11 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
 only (persistence and runtime plugins are refused with a
 preview marker; use `cof run` for those). A prompt effect's model is
-reached only through the `scripted` adapter so far; a real adapter
-(`openai`, `anthropic`, `ollama`, ...) still refuses with the same marker.
+reached for real through a document's own `adapter:` or a prompt's own
+`provider:`, including `ollama`, the OpenAI-compatible family, `openai`,
+`anthropic`, `replicate`, `watsonx`, `cyberdiner`, `claude_code`, `pi`, and
+the `scripted` adapter; `litellm` has no electricity builder and is
+refused permanently.
 
 Options:
   -V, --version       Print the version and exit

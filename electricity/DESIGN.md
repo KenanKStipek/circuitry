@@ -76,10 +76,16 @@ Decisions" instead of citing an external project file repeatedly:
 - electricity's v1 CLI has no `--dry-run`, `--validate-only`, or `--verbose` flag; the
   `runtime.last_run` fields of the same names (§6.10) are therefore always written `false`.
 - The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `http`,
-  `clock`, `hash`, `env_vars`, `regex`, `uuid`, `mcp`, `surrealdb`, `email_smtp` (§8.1).
-- Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2), and
-  a native `anthropic` adapter (§9.3); a third adapter — named `cyberdiner`, as in Circuitry's own
-  public source (settled 2026-10-06) — is required for v1 by a production document set (§9.4).
+  `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `mcp`, `surrealdb`, `email_smtp`
+  (§8.1).
+- Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2), a
+  native `anthropic` adapter (§9.3), a native `openai` adapter (its own file, reusing the
+  family's message/response helpers and shared transport but registered separately, for its
+  own reasoning-model field names — §9.2), and `replicate` and `watsonx`, each its own adapter
+  with its own wire shape over the shared transport, not the OpenAI-compatible one; an adapter —
+  named `cyberdiner`, as in Circuitry's own public source (settled 2026-10-06) — is required for
+  v1 by a production document set (§9.4); and the two coding-agent CLI adapters, `claude_code`
+  and `pi` (§9.8), and the deterministic `scripted` adapter (§12).
 - The external plugin bridge (§8.5) exists for *tool* plugins only — `python_eval` is its
   primary consumer — not a generic adapter or runtime-plugin bridge.
 - **Repository and releases (settled 2026-10-07).** electricity lives in the Circuitry
@@ -1245,8 +1251,8 @@ these before it ever reaches the orchestration's own state:
   the same node every pass. **`cost_usd` is `null`, never `0`, until at least one effect reports a
   cost** — the reference's own accumulator starts at `None` and only becomes a number once
   something adds to it (an earlier draft of this design said it "sums to 0"; it does not,
-  it stays absent-as-`null` the whole run if nothing ever reports a cost — see the §10.5 note on
-  no adapter populating `meta.cost_usd` yet).
+  it stays absent-as-`null` the whole run if nothing uses an adapter that reports a cost — the
+  only two that do are `claude_code`/`pi`, §9.8, §10.5's own note).
 - **`runtime.effective_settings`**: `{model, adapter, out, plugins, runtime, sources}` plus an
   optional `profile` key, written exactly when `--profile` resolved a file for this run
   (§6.11 has the record's exact shape). `model`/`adapter` are the run's resolved defaults;
@@ -1718,7 +1724,7 @@ still differ from CPython 3.11's for a code point assigned meaning after Unicode
 
 Rust-native implementations of the tools the owner's production documents use: `shell`, `json`,
 `fs`, `awk`, `imagemagick`, `ffmpeg`, `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`,
-`mcp`, `surrealdb`, `email_smtp` (Decisions, §1). Each implements the shared trait mirroring
+`validate_yaml`, `mcp`, `surrealdb`, `email_smtp` (Decisions, §1). Each implements the shared trait mirroring
 `ToolPlugin` (tools-adapters-plugins §1.1):
 
 ```rust
@@ -2214,6 +2220,16 @@ orchestration's own `runtime:` block (the `complexity` key, one of the two an or
   default for a runtime built without one (issue #516, M1-K2; corrects an earlier draft of this
   bullet, which had this backwards).
 
+### 9.8 `claude_code` and `pi`
+
+Two more adapters, neither reached through HTTP at all: each runs a coding-agent CLI
+(`claude`/`pi`) as a subprocess, through its own interactive login, rather than calling a wire
+protocol electricity's own HTTP client speaks. The full behavior — the child's own environment,
+the command lines, `--json-schema` wrapping, reading the reply, retries, and `meta.cost_usd`
+(the first electricity adapters to report one) — is tools-adapters-plugins §3.13's detail,
+cited there from the reference's own `adapters/claude_code.py`/`adapters/pi.py`, not repeated
+here.
+
 ---
 
 ## 10. Runtime plugins for v1
@@ -2320,9 +2336,8 @@ infrastructure configured still gets spans visible somewhere.
 The first and third bullets below landed in M0-H (issue #431), not in M3-B where an earlier
 draft of §15 put every bullet in this section: a `--live-state` mirror and a run-totals
 accumulator need no `loop` support, only the store's own write hook, so both ship with the rest
-of M0-H's run wiring. Only **loop progress** (the second bullet) still waits for M1's own loop
-lane (M1-H, #448), since it
-has nothing to report before `loop` exists.
+of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own loop lane
+(M1-H, #461, merged in #466), since it had nothing to report before `loop` existed.
 
 - **Live state**: a `Store::on_write`-driven mirror (not a `RuntimePlugin`), writing the full
   current state to a path atomically (temp file + rename, never a predictable sibling path),
@@ -2338,13 +2353,13 @@ has nothing to report before `loop` exists.
   `--live-state` consumes — never by walking the finished state tree after the fact, since a
   `use` child in declared-outputs mode never leaves its effects in the final tree, and an unnamed
   loop overwrites the same node every pass; only the live event stream sees every leaf that
-  actually ran. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field no adapter in
-  §9 is specified to actually populate (none of the OpenAI-compatible family, `anthropic`, or
-  `cyberdiner` has a documented per-call cost figure in its response shape); until an adapter
-  computes it from a price table, `cost_usd` **stays `null`, never `0`** (§6.10's correction —
-  the reference's own accumulator starts at `None` and only becomes a number once something adds
-  to it), and this gap is carried to §16 rather than silently assumed solved by §9.6's retry
-  classification work.
+  actually ran. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field none of the
+  OpenAI-compatible family, `anthropic`, `ollama` or `cyberdiner` populates (no documented
+  per-call cost figure in any of their response shapes, and no price table in electricity
+  either); `claude_code`/`pi` (§9.8) are the only two adapters that do, reporting the coding-agent
+  CLI's own cost figure directly rather than computing one. Until at least one such call runs,
+  `cost_usd` **stays `null`, never `0`** (§6.10's correction — the reference's own accumulator
+  starts at `None` and only becomes a number once something adds to it).
 
 ---
 
@@ -2693,8 +2708,9 @@ document sets: one of them turns on complexity scoring/routing and reads `meta.c
 for documents using `provider: ollama` with no explicit model (§9.7's correction — only one of
 the two sets does this, not both, but M1 still has to gate on it); M2 is needed for the third,
 larger document set (it is the one that uses the
-extended protocol surface — `python_eval`, the vendor adapter, SurrealDB); M3 and M4 are v1
-features layered on top of a document set that already runs, not gates on any one document set.
+extended protocol surface — `python_eval` and SurrealDB; the vendor adapter (`cyberdiner`)
+landed in M1, #515); M3 and M4 are v1 features layered on top of a document set that already
+runs, not gates on any one document set.
 
 ### M0 — Foundation
 
@@ -2740,36 +2756,42 @@ half-run.
 
 | Lane | Deliverable | Depends on |
 |---|---|---|
-| **A** (gate, #449) | Final signatures with stubs: `ToolPlugin` v2 (cancellation token, `runtime.plugins.<name>` config slice, typed `ToolError`); a per-attempt plugin builder with Python's unknown-plugin text; the process API; the `Adapter` trait and registry (final in `electricity-vm::adapter`, not a new crate) plus a new `electricity-adapters` crate the gate itself opens with stub providers (M1 gate seam round 2, item S9, following DESIGN §2's own dependency direction: the VM defines the trait boundary, this crate implementing concrete adapters depends on it) -- lane F1's own first PR only ever fills a body in it; a shared retry module; `RunContext` v2; per-instance event pairing; exec stubs for every effect type; the capability-driven refusal walker; Python-compatibility helpers (`py_int`, `py_strip`, `round6`); the vm-lanes.md M1 table. | — |
-| **B** (#450) | Conformance infrastructure: scripted replies in cases, a loopback mock HTTP server, fake binaries on `PATH`, normalizer additions, a documented-divergence case kind. | — |
-| **C** | The process runtime (`run_tracked`, process groups, cancellation, text-mode decoding), then `shell`, `awk`, `imagemagick`, `ffmpeg`. | A |
-| **D1** | `fs`, `env_vars`, `hash`, `uuid`, `clock`. | A |
-| **D2** | `regex`: a `fancy-regex` translation layer to Python `re` semantics, plus a differential corpus. | A |
-| **E** | The shared HTTP client, the `http` tool, `execute_tool`'s HTTP-family retry branch. | A |
-| **F1** | The adapter core, the Rust `scripted` adapter, the `host_claude` stub, a leftover-replies export. | A |
-| **F2** | Providers: `ollama`, the OpenAI-compatible family, `anthropic`. | E, F1 |
-| **P** | Run-time prompt composition and `yield`: no-escape rendering, `{{> name}}` expansion (the run-time half of #406). | A |
-| **G** | The `prompt` effect: meta key order, retries, fallback chains, decode/schema retries, assets, `json_schema`. | F1, P |
-| **G2** | Model-mode `if`, `while` and `expect`. | G, H |
-| **H** | `loop`: each/while, chain/tree, `collect`, `prev`, `last`, `meta.progress` (moved up from M3-B: it's part of every named loop's own `--out`, not a separate observability lane) — includes the per-render context-copy fix (#442). | A |
-| **I** | `use`: path and inline, interface checks, the three output modes, cycle detection, child observability. | A |
-| **J1** | Profile loading and validation, as a library with a golden corpus. | A |
-| **J2** | Applying profiles: precedence, per-effect IR overrides, disabled effects. | H, I, K2, R |
-| **K1** | The complexity scorer, as a library with a differential corpus. | A, G (`electricity-pyre`) |
-| **K2** | Wiring scoring and routing into prompts. | G, K1 |
-| **L1** | `reflector`. | G, I |
-| **L2a** | `validate_yaml`, the synced planner document, decomposition's pure helpers. | A, I |
-| **L2b** | Decomposition in the `prompt` effect. | G, K1, K2, L2a |
-| **R** | Run wiring v2: preflight, adapter resolution, `--profile`, lifting the refusals. | F1, J1 |
-| **M** | The acceptance run, osp's electricity end-to-end suite, docs, closing #406 plus the #442 items the lanes fixed. | all |
+| **A** (gate, #449, merged in #454) | Final signatures with stubs: `ToolPlugin` v2 (cancellation token, `runtime.plugins.<name>` config slice, typed `ToolError`); a per-attempt plugin builder with Python's unknown-plugin text; the process API; the `Adapter` trait and registry (final in `electricity-vm::adapter`, not a new crate) plus a new `electricity-adapters` crate the gate itself opens with stub providers (M1 gate seam round 2, item S9, following DESIGN §2's own dependency direction: the VM defines the trait boundary, this crate implementing concrete adapters depends on it) -- lane F1's own first PR only ever fills a body in it; a shared retry module; `RunContext` v2; per-instance event pairing; exec stubs for every effect type; the capability-driven refusal walker; Python-compatibility helpers (`py_int`, `py_strip`, `round6`); the vm-lanes.md M1 table. | — |
+| **B** (#450, merged in #455) | Conformance infrastructure: scripted replies in cases, a loopback mock HTTP server, fake binaries on `PATH`, normalizer additions, a documented-divergence case kind. | — |
+| **C** (#459, merged in #467) | The process runtime (`run_tracked`, process groups, cancellation, text-mode decoding), then `shell`, `awk`, `imagemagick`, `ffmpeg`. | A |
+| **D1** (#460, merged in #464) | `fs`, `env_vars`, `hash`, `uuid`, `clock`. | A |
+| **D2** (#479, merged in #480) | `regex`: a `fancy-regex` translation layer to Python `re` semantics, plus a differential corpus. | A |
+| **E** (#485, merged in #486) | The shared HTTP client, the `http` tool, `execute_tool`'s HTTP-family retry branch. | A |
+| **F1** (#478, merged in #481) | The adapter core, the Rust `scripted` adapter, the `host_claude` stub, a leftover-replies export. | A |
+| **F2** (#503, merged in #504) | Providers: native `ollama`, the OpenAI-compatible family, `openai`, `anthropic`, `replicate`, `watsonx`. | E, F1 |
+| **P** (#487, merged in #492) | Run-time prompt composition and `yield`: no-escape rendering, `{{> name}}` expansion (the run-time half of #406, closed by this lane's own merge). | A |
+| **G** (#498, merged in #502) | The `prompt` effect: meta key order, retries, fallback chains, decode/schema retries, assets, `json_schema`. | F1, P |
+| **G2** (#513, merged in #514) | Model-mode `if`, `while` and `expect`. | G, H |
+| **H** (#461, merged in #466) | `loop`: each/while, chain/tree, `collect`, `prev`, `last`, `meta.progress` (moved up from M3-B: it's part of every named loop's own `--out`, not a separate observability lane). The per-render context-copy fix (#442's first item) moved to its own issue, #463, merged in #477 and #482; the chain `each` follow-up is #484, merged in #501. | A |
+| **I** (#469, merged in #472; interfaces merged in #462) | `use`: path and inline, interface checks, the three output modes, cycle detection, child observability. | A |
+| **J1** (#488, merged in #490) | Profile loading and validation, as a library with a golden corpus. | A |
+| **J2** (#518, merged in #526) | Applying profiles: precedence, per-effect IR overrides, disabled effects. | H, I, K2, R |
+| **K1** (#505, merged in #508) | The complexity scorer, as a library with a differential corpus. | A, G (`electricity-pyre`) |
+| **K2** (#516, merged in #517) | Wiring scoring and routing into prompts. | G, K1 |
+| **L1** (#506, merged in #510) | `reflector`. | G, I |
+| **L2a** (#521, merged in #524) | `validate_yaml`, the synced planner document, decomposition's pure helpers. | A, I |
+| **L2b** (#522, merged in #530) | Decomposition in the `prompt` effect. | G, K1, K2, L2a |
+| **R** (#495, merged in #497) | Run wiring v2: preflight, adapter resolution, `--profile`, lifting the refusals. | F1, J1 |
+| **M** (part A #537, merged in #544; part B #538, merged in #543; part C #539, merged in #541) | The acceptance run, osp's electricity end-to-end suite, docs and the "what electricity can't run yet" list. | all |
 
-**Acceptance:** conformance cases C1, C4, C5, the `while` half of C7 (C7's `if` half and C27
-already passed in M0), C8 (in full, including a `--profile <path>` fixture for the reference's
-`--profile <name>` half), C9–C20, C24, C25 (re-run with loops and prompts), C26, and C28–C33
-(closing #406) pass, plus tools-adapters-plugins §7 cases 1–6, 7 (the `http` half only — the
-`mcp` half moves to M2), 9, 12, 14, 15, 17 pass against real documents using this tool/adapter set,
-with case 22 (the blanket redaction check) run as a cross-cutting post-check on every one of
-them. Resume (C21, C22) stays in M2-G, with persistence; M1 still records `completed_passes`.
+Parity follow-ups outside the lane table: **#515** (`cyberdiner` and provider-adapter follow-ups,
+merged in #523), **#519** (background processes of a shell step, merged in #532), **#520** (the
+agent-CLI adapters `claude_code` and `pi`, §9.8, merged in #525 and #531; `litellm` stays refused).
+
+**Acceptance: met** — see `tests/conformance/README.md`'s own `## M1 acceptance map` for the
+full case-by-case record. In summary: conformance cases C1, C4, C5, the `while` half of C7 (C7's
+`if` half and C27 already passed in M0), C8 (in full, including a `--profile <path>` fixture for
+the reference's `--profile <name>` half), C9–C20, C24, C25 (re-run with loops and prompts), C26,
+and C28–C33 pass (#406 was already closed by lane P's own merge, #492), plus
+tools-adapters-plugins §7 cases 1–6, 7 (the `http` half only — the `mcp` half moves to M2),
+9, 12, 14, 15, 17 pass against real documents using this tool/adapter set, with case 22 (the
+blanket redaction check) run as a cross-cutting post-check on every one of them. Resume (C21,
+C22) stays in M2-G, with persistence; M1 still records `completed_passes`.
 Case 13 (the native `ollama` adapter's own three hint strings — unreachable, timeout,
 model-not-found) now passes: lane F2 (issue #503) ports `ollama.py` as its own native adapter
 (§9.2), not through the OpenAI-compatible transport, so all three hints have a code path.
@@ -2786,10 +2808,11 @@ model-not-found) now passes: lane F2 (issue #503) ports `ollama.py` as its own n
 | M2-G | `electricity-runtime-plugins`: state-snapshot persistence backends (`jsonl-file`, sqlite/postgres via `sqlx`; mongodb deferred, §10.1), `--resume` by run id (§6.8). | M1 |
 | M2-H | `electricity-runtime-plugins`: observability plugins — SQL-family (sqlite/postgres), `surrealdb` (distinct from M2-B's tool plugin, §10.2), `jsonl-file` event stream, the `store_raw` cascade. | M1 |
 
-**Acceptance:** tools-adapters-plugins §7 cases 7 (the `mcp` half deferred from M1), 8, 10, 11,
-16, 18, 19 pass (19 needs M2-H, added here since no earlier draft's lane built it); a document
-using `python_eval` produces identical
-state to `cof run`.
+**Acceptance:** tools-adapters-plugins §7 cases 7 (the `mcp` half deferred from M1), 10, 11, 18,
+19 pass (19 needs M2-H, added here since no earlier draft's lane built it); a document
+using `python_eval` produces identical state to `cof run`. Cases 8 (`regex-shapes`) and 16 (the
+`cyberdiner-*` cases) moved to M1's own acceptance once D2 and #515 landed, and are no longer
+listed here. C21 and C22 (resume) land here too, with persistence (M2-G).
 
 ### M3 — Observability, embedding, release
 
@@ -2851,12 +2874,13 @@ electricity against a frozen `cof` snapshot.
   (Decisions, §1), but the exact set of keywords the production schema actually uses should be
   checked against known `jsonschema`-crate message gaps before assuming "fails in the same
   place" holds for all of them.
-- **`cost_usd`** (§10.5, §6.10): no adapter in §9 has a documented per-call cost figure to
-  populate `meta.cost_usd` from, so `runtime.last_run.totals.cost_usd` stays `null` for every
-  electricity run until one does — matching the reference's own behavior when nothing reports a
-  cost (it is `null`, not `0`, per §6.10's correction), but still an unclosed gap in the sense
-  that electricity has no adapter that *ever* populates it. Needs a price-table-driven cost
-  calculation in at least one adapter before this field carries real information.
+- **`cost_usd`** (§10.5, §6.10): `claude_code`/`pi` (§9.8) report the coding-agent CLI's own cost
+  figure directly, so `runtime.last_run.totals.cost_usd` is a real number once a run uses either
+  of them — every other adapter (the OpenAI-compatible family, `anthropic`, `ollama`,
+  `cyberdiner`) still has no documented per-call cost figure to populate `meta.cost_usd` from, so
+  `cost_usd` stays `null` for any run that only ever uses one of those, matching the reference's
+  own behavior when nothing reports a cost (it is `null`, not `0`, per §6.10's correction). A
+  price-table-driven cost calculation for the rest is still an open gap.
 - **`--resume last` and stashed `-e` values — a review claim not adopted.** A re-review of an
   earlier draft asserted `--resume last` replays the `-e` values stashed from the run it resumes.
   Reading the reference's own `_resolve_resume_state` shows the opposite for that specific flag:

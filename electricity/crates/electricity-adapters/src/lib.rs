@@ -2,29 +2,27 @@
 //! the crate that implements concrete [`electricity_vm::adapter::Adapter`]s
 //! (DESIGN.md §2's own dependency direction: this crate depends on
 //! `electricity-vm`, which defines the trait boundary, never the
-//! reverse). Not created until lane F1's own first PR per
-//! `electricity/docs/spec/vm-lanes.md`'s M1 table -- this file set is
-//! the gate's own stub (M1 gate seam round 2, item S9), so lane F1's
-//! PR only ever fills a body, never adds a new file or a `pub mod`
-//! line to this list.
+//! reverse).
 //!
-//! - [`scripted`]: the Rust `scripted` adapter (lane F1) --
+//! - [`scripted`]: the Rust `scripted` adapter (lane F1, #478) --
 //!   deterministic replies from a replies file, keyed by call path,
 //!   for the conformance suite (`electricity/DESIGN.md` §12) and for
 //!   running an orchestration with no real model behind it.
-//! - [`host_claude`]: the `host_claude` registration stub (lane F1) --
-//!   a name `build_registry` recognizes, whose builder always fails:
-//!   this adapter needs a *request_handler* injected at run time via
-//!   `RunRequest::adapter` (`circuitry-mcp`'s own use), never built
-//!   from `runtime.adapters.host_claude` config alone.
-//! - [`openai`], [`anthropic`], [`openai_compat`], [`curl_text`]: lane
-//!   F2's own real network-backed providers and the shared curl
-//!   failure-text helper -- stub files created now too (review P2-5
-//!   on PR #454's second review, extending item S9 to these), so F2's
-//!   own PR only ever fills a body here, same as F1's own files
-//!   above; `ollama` has no file of its own in this table yet, so F2
-//!   creates it fresh in its own PR -- a brand new file is never a
-//!   seam conflict the way editing one of these would be.
+//! - [`host_claude`]: the `host_claude` registration stub (lane F1,
+//!   #478) -- a name `build_registry` recognizes, whose builder
+//!   always fails: this adapter needs a *request_handler* injected at
+//!   run time via `RunRequest::adapter` (`circuitry-mcp`'s own use),
+//!   never built from `runtime.adapters.host_claude` config alone.
+//! - [`ollama`], [`openai`], [`anthropic`], [`openai_compat`],
+//!   [`replicate`], [`watsonx`], [`curl_text`]: lane F2's own
+//!   (#503/#504) real network-backed providers and the shared curl
+//!   failure-text helper.
+//! - [`cyberdiner`]: the vendor-broker adapter (issue #515, merged in
+//!   #523).
+//! - [`claude_code`], [`pi`], and their shared `agent_cli` half: the
+//!   two coding-agent-CLI adapters and their shared retry/`check()`/
+//!   result-builder code (issue #520, merged in #525 and #531);
+//!   `litellm` alone stays unbuildable.
 //!
 //! This file also carries the adapter-core helpers every concrete
 //! adapter shares (`adapters/base.py::GenerateOptions.set_fields`/
@@ -76,8 +74,8 @@ pub fn build_registry() -> AdapterRegistry {
     registry.register("pi", Box::new(pi::build_pi));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
-    // `replicate`/`watsonx` last. Issue #515 (N1) ports `cyberdiner`
-    // too, and issue #520 (this lane) registers `claude_code`/`pi`
+    // `replicate`/`watsonx` last. Issue #515 ports `cyberdiner`
+    // too, and issue #520 registers `claude_code`/`pi`
     // above, so the unbuildable set is now `litellm` alone
     // (`host_claude`'s own builder always fails, deliberately -- see
     // this file's own module doc comment -- so it is never part of

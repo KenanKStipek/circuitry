@@ -1071,8 +1071,8 @@ step that failed inside it. `created_at`/`retries_used` follow the same rule
 as a prompt's (§5.1, #421): `created_at` is the start of this pass's first
 attempt, never reset by a later attempt; `retries_used` is set on both a
 successful and a failed outcome, absent (not `0`) when the first attempt is
-also the last. Not yet in `electricity-vm`, which doesn't execute `use` at
-all yet — lane I of #448 ports this effect, the rule included.
+also the last. Ported in `electricity-vm::exec::use_` (M1 lane I, #469,
+merged in #472), the rule included.
 
 **Confirmed live node** (full-namespace mode):
 ```json
@@ -1568,11 +1568,15 @@ blocks a run; printed to **stderr** (`cli/app.py` `_print_run_warnings`) —
 deliberately, so `--json`/`--tail`/a piped stdout stay machine-readable and
 `--quiet` does not silence a warning that might matter.
 
-electricity does not run preflight at all yet (lane R of #448, M1's run
-wiring v2, ports it) — rather than silently skip a check `cof run` would
-have failed a document on, it refuses outright, with the preview marker,
-any document naming a top-level `adapter:` (electricity/DESIGN.md §13,
-`electricity-bytecode::refusal::RefusalReason::DocumentAdapter`).
+electricity runs preflight for real (lane R, #495, merged in #497):
+`electricity::preflight::run_preflight` builds each adapter/tool a raw
+document references from the config's own `runtime:` block and awaits/calls
+its `check()`, the same way `cof run` does. The one adapter still refused
+outright, with the preview marker, before preflight is ever reached: a
+document/prompt naming a Circuitry-known adapter this build has no builder
+for at all (`litellm` alone, as of issue #539) -- `electricity-bytecode::
+refusal::RefusalReason::DocumentAdapter` only fires under `Supported::m0`
+now (electricity/DESIGN.md §13).
 
 ### 8.3 `--out` serialization
 
@@ -1695,8 +1699,8 @@ electricity's own `--live-state` also lands in M0-H (issue #431), alongside
 `--events` — not M3-B as an earlier draft of this section said (#419, #418
 Q2): a live-state mirror needs only the store's own write hook, nothing
 `loop`-specific, so both ship together with the rest of M0-H's run wiring.
-Only loop progress (`meta.progress`, DESIGN.md §10.5's second bullet) still
-waits for `loop` (M1-H).
+Loop progress (`meta.progress`, DESIGN.md §10.5's second bullet) landed
+with `loop` (M1-H, #461, merged in #466).
 
 `cof run --events <file>` (also `run-library`) writes a JSONL stream of
 effect starts and ends: one complete JSON object per line, UTF-8, created
@@ -1728,7 +1732,7 @@ way a bare `json.dumps(payload)` call does.
 | `seq` | Strictly increasing in file order, starting at `0`. |
 | `ts` | Wall-clock UTC, millisecond precision, `isoformat(timespec="milliseconds")` with the `+00:00` suffix replaced by `Z`. |
 | `ev` | `run_start`, `dispatch`, `start`, `end` or `run_end`. |
-| `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. **An `end` whose `start` was not seen carries `id: null`** (and no `ms`) rather than erroring — popping from an empty per-path stack is simply treated as a double-fire or an unseen start, not a bug to raise on. None of the reference's own `fire_effect_complete` call sites double-fire for one instance today, so this cannot actually happen from `cof` itself; it is a defensive invariant for any reader, and for any other engine (or any future composed observer) that might call `on_complete` without a matching `on_start`. |
+| `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. **An `end` whose `start` was not seen carries `id: null`** (and no `ms`) rather than erroring — popping from an empty per-path stack is simply treated as a double-fire or an unseen start, not a bug to raise on. None of the reference's own `fire_effect_complete` call sites double-fire for one instance today, so this cannot actually happen from `cof` itself; it is a defensive invariant for any reader, and for any other engine (or any future composed observer) that might call `on_complete` without a matching `on_start`. electricity's own `EventLog` (`electricity/src/events.rs`) has no per-thread stack — it has no threads to key one by — but gives the same observable pairing: `on_start` returns the instance id it assigned instead of pushing it onto thread-local storage, and the caller hands that same id back to `on_complete`, which removes it from wherever it sits on *path*'s own stack (by id, never by position, so two overlapping instances at the same path — an unnamed `flow: tree` loop's own concurrent passes — still pair correctly even when they finish out of start order). A completion whose id isn't found on that stack gets the same `id: null`/no-`ms` treatment as the reference's own unseen-start case. |
 | `path` | The absolute dotted state path, exactly as in `--live-state` and in scripted-replies keys (`electricity/docs/spec/scripted-replies.md`). |
 | `dispatch` | `path`/`branches`/`concurrency`. Sent once by a tree loop or tree `dynamic` before its branches start — the reference composes this with the pre-existing `Store.concurrent_dispatch` callback (`RunRequest.concurrent_dispatch_observer`) rather than replacing it; both observers fire. `branches` is the true branch count — the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces: every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)` — a 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. MCP's `RunManager` (the one other listener on the underlying `Store.concurrent_dispatch` callback) uses only `concurrency`, unchanged by this split. |
 | `ok` | On `end`: `node["meta"]["error"] is None`. On `run_end`: whether the run succeeded. |

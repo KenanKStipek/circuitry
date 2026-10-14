@@ -450,6 +450,20 @@ fn format_config_refusal(reason: &str) -> String {
     )
 }
 
+/// The preview-marker refusal for a Circuitry-known adapter name this
+/// build has no builder for at all (settled ruling 3, issue #495) --
+/// unlike [`format_config_refusal`]'s own "later milestone" phrasing,
+/// this one never promises electricity will run it eventually: as of
+/// issue #539, `litellm` is the only such name (it embeds the Python
+/// `litellm` package, which electricity neither embeds nor
+/// reimplements), and stays refused for good.
+fn format_permanent_adapter_refusal(name: &str) -> String {
+    format!(
+        "electricity {VERSION} {PREVIEW_MARKER}: adapter '{name}' has no \
+         electricity builder and is refused permanently; use `cof run` instead"
+    )
+}
+
 /// *runtime*'s own `max_concurrency`/`concurrency_groups`, already
 /// validated (the caller only ever reaches this after `electricity_
 /// compiler::pre_state_checks` -- which runs the same parse internally
@@ -1537,7 +1551,7 @@ pub async fn run_orchestration_with_config(
             ok: false,
             out_path: None,
             state: None,
-            error: Some(format_config_refusal(&format!("adapter '{name}'"))),
+            error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
         };
@@ -1580,7 +1594,7 @@ pub async fn run_orchestration_with_config(
             ok: false,
             out_path: None,
             state: None,
-            error: Some(format_config_refusal(&format!("adapter '{name}'"))),
+            error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
         };
@@ -1687,7 +1701,7 @@ pub async fn run_orchestration_with_config(
                         ok: false,
                         out_path: None,
                         state: None,
-                        error: Some(format_config_refusal(&format!("adapter '{normalized}'"))),
+                        error: Some(format_permanent_adapter_refusal(&normalized)),
                         warnings,
                         signal: None,
                     };

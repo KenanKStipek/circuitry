@@ -1,11 +1,14 @@
 //! electricity-tools: the `ToolPlugin` trait, the per-attempt plugin
-//! builder, the process API seam, and the `json` tool (issue #449's
-//! gate lane; DESIGN.md §8.1). Lane A ships this crate's final public
-//! shape -- [`ToolPlugin`] v2, [`ToolCall`], [`ToolError`], [`PyExc`],
-//! [`ErrorCause`], [`ToolResult::validate`], [`registry::build_plugin`]
-//! -- plus the [`process`] module's signature-only stub (lane C fills
-//! the body) and the `json`/`test-tools` modules updated to the new
-//! trait shape.
+//! builder, the process API, and electricity's 13 native tool
+//! providers (DESIGN.md §8.1) -- [`ToolPlugin`] v2, [`ToolCall`],
+//! [`ToolError`], [`PyExc`], [`ErrorCause`], [`ToolResult::validate`],
+//! [`registry::build_plugin`], and one module per provider: [`shell`],
+//! [`awk`], [`imagemagick`], [`ffmpeg`] (lane C, #459/#467); [`fs`],
+//! [`env_vars`], [`hash`], [`uuid`], [`clock`] (lane D1, #460/#464);
+//! [`regex`] (lane D2, #479/#480); [`http`]/[`http_client`] (lane E,
+//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); plus [`json`]
+//! (issue #449's gate lane) and [`agent_cli`], the shared half
+//! `electricity-adapters`' `claude_code`/`pi` build on (issue #520).
 //!
 //! `#[async_trait]` (not a native `async fn` in a public trait) makes
 //! [`ToolPlugin`] object-safe: a provider is looked up by name at run
