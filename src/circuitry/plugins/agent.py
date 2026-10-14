@@ -16,9 +16,20 @@ this module adds the session's contract on top:
 * ``raw``: ``engine``, ``session_id``, ``turns``, ``tool_calls``,
   ``tokens`` (``sent``/``received``), ``cost`` when the CLI reports one,
   ``repair_turn``, and ``transcript`` — the path of a compact log this
-  plugin writes (one line per tool call and per reply). The transcript
-  itself never goes into state. Claude Code adds ``permission_mode``,
-  ``project_settings`` and ``project_instructions``.
+  plugin writes (one line per tool call and per reply; ``params['transcript']``
+  says where, see below). The transcript itself never goes into state.
+  Claude Code adds ``permission_mode``, ``project_settings`` and
+  ``project_instructions``. ``meta.tokens_sent``, ``meta.tokens_received``
+  and ``meta.cost_usd`` hold the same totals as ``raw.tokens``/``raw.cost``
+  (the session's usage over every turn, including a repair turn), so the
+  run's totals and the ``dynamic`` tree's token sums count this effect.
+* A turn that fails (the CLI errors, or times out) after the session has an
+  id or a transcript exists ends the effect as an error (``ok: false``, so
+  ``on_error`` and retries behave as for any other tool failure) whose
+  ``raw`` still carries the keys above — ``session_id`` to resume with
+  ``params['session']``, ``transcript`` to inspect what happened — plus
+  ``timed_out: true`` on a timeout. ``meta.error`` is unchanged. A turn that
+  fails before either exists (nothing yet to carry) raises as it always has.
 
 The agent runs with the user's own permissions and is not sandboxed; the
 engine's tool lists are the way to narrow it. For pi, ``tools`` is an
@@ -50,6 +61,11 @@ Params:
     default ``ANTHROPIC_API_KEY``/``ANTHROPIC_AUTH_TOKEN``).
   - ``result_file`` (optional, str, relative to ``cwd``) and
     ``result_schema`` (optional, JSON Schema object; needs ``result_file``).
+  - ``transcript`` (optional, str, relative to ``cwd`` when not absolute):
+    where the compact transcript is written instead of a temporary
+    directory nothing removes. The parent directory is created; the file
+    is appended to across the session's turns, including a repair turn.
+    Without it, the transcript goes to a temporary directory as before.
 
 Config, ``runtime.plugins.agent``: ``engine`` (the default engine) and a
 block per engine, ``pi`` / ``claude_code``, each with an optional absolute
@@ -73,6 +89,7 @@ import jsonschema
 from ..agent_cli import (
     DEFAULT_UNSET_ENV,
     AgentCliError,
+    AgentCliTimeout,
     child_env,
     claude_command,
     parse_claude_output,
@@ -374,6 +391,32 @@ class _Session:
             raw["cost"] = self.cost_usd
         return raw
 
+    def result(self, *, value: Any, stderr: str | None = None, ok: bool = True) -> ToolResult:
+        """A ``ToolResult`` carrying this session's ``raw`` plus its usage
+        over every turn so far, under the same meta keys a ``prompt``
+        effect uses (#414)."""
+        return ToolResult(
+            value=value,
+            raw=self.raw(),
+            stderr=stderr,
+            ok=ok,
+            tokens_sent=self.tokens_sent,
+            tokens_received=self.tokens_received,
+            cost_usd=self.cost_usd,
+        )
+
+
+class _TurnFailed(Exception):
+    """A turn's ``AgentCliError``/``AgentCliTimeout`` after the session
+    already has an id or a transcript exists — enough context that the
+    effect can end as an ``ok=False`` result instead of raising (#391),
+    carrying it so the caller doesn't have to re-derive ``timed_out`` from
+    the (now-discarded) exception's class."""
+
+    def __init__(self, message: str, *, timed_out: bool) -> None:
+        super().__init__(message)
+        self.timed_out = timed_out
+
 
 def run_agent_session(
     engine: AgentEngine,
@@ -384,36 +427,49 @@ def run_agent_session(
     result_schema: Mapping[str, Any] | None,
     timeout_seconds: float,
     scratch_dir: Path,
+    transcript_path: Path | None = None,
 ) -> ToolResult:
     """Run the session's turn, then — with ``result_file`` — read and
     validate the result and give a missing or invalid one exactly one
     repair turn in the same session. ``timeout_seconds`` bounds both turns
     together. A result still invalid after the repair is an ``ok=False``
     result whose ``stderr`` carries the errors (``raw`` keeps the session
-    id and transcript so the session can be inspected or resumed)."""
+    id and transcript so the session can be inspected or resumed); so is a
+    turn that fails after the session has an id or a transcript exists —
+    ``raw`` carries the same keys, plus ``timed_out`` on a timeout. A turn
+    that fails before either exists raises, as it always has.
+
+    ``transcript_path`` is the compact log's destination, appended to
+    across every turn; ``scratch_dir / TRANSCRIPT_NAME`` when ``None``.
+    """
     deadline = time.monotonic() + timeout_seconds
     session = _Session(
-        engine=engine, session_id=session_id, transcript_path=scratch_dir / TRANSCRIPT_NAME
+        engine=engine,
+        session_id=session_id,
+        transcript_path=transcript_path or (scratch_dir / TRANSCRIPT_NAME),
     )
     first_prompt = prompt if result_file is None else _with_result_contract(
         prompt, result_file, result_schema
     )
-    session.add(
-        _run_turn(
-            session,
-            first_prompt,
-            session_id=session_id,
-            timeout_seconds=timeout_seconds,
-            scratch_dir=scratch_dir,
-        ),
-        label="turn",
-    )
+    try:
+        session.add(
+            _run_turn(
+                session,
+                first_prompt,
+                session_id=session_id,
+                timeout_seconds=timeout_seconds,
+                scratch_dir=scratch_dir,
+            ),
+            label="turn",
+        )
+    except _TurnFailed as exc:
+        return _turn_failure_result(session, exc)
     if result_file is None:
-        return ToolResult(value=session.texts[-1], raw=session.raw())
+        return session.result(value=session.texts[-1])
 
     value, errors = _read_result(result_file, result_schema)
     if not errors:
-        return ToolResult(value=value, raw=session.raw())
+        return session.result(value=value)
     if not session.session_id:
         return _invalid_result(
             session, result_file, errors, why="the CLI reported no session id to resume"
@@ -424,20 +480,30 @@ def run_agent_session(
             session, result_file, errors, why="no time was left for a repair turn"
         )
     session.repair_turn = True
-    session.add(
-        _run_turn(
-            session,
-            _repair_prompt(result_file, errors),
-            session_id=session.session_id,
-            timeout_seconds=remaining,
-            scratch_dir=scratch_dir,
-        ),
-        label="repair turn",
-    )
+    try:
+        session.add(
+            _run_turn(
+                session,
+                _repair_prompt(result_file, errors),
+                session_id=session.session_id,
+                timeout_seconds=remaining,
+                scratch_dir=scratch_dir,
+            ),
+            label="repair turn",
+        )
+    except _TurnFailed as exc:
+        return _turn_failure_result(session, exc)
     value, errors = _read_result(result_file, result_schema)
     if errors:
         return _invalid_result(session, result_file, errors, why="after one repair turn")
-    return ToolResult(value=value, raw=session.raw())
+    return session.result(value=value)
+
+
+def _turn_failure_result(session: _Session, exc: _TurnFailed) -> ToolResult:
+    result = session.result(value=None, stderr=str(exc), ok=False)
+    if exc.timed_out:
+        result = replace(result, raw={**result.raw, "timed_out": True})
+    return result
 
 
 def _run_turn(
@@ -448,9 +514,11 @@ def _run_turn(
     timeout_seconds: float,
     scratch_dir: Path,
 ) -> AgentTurn:
-    """One turn of ``session``'s engine. A CLI failure or timeout is
-    re-raised (same class) naming the session id and the transcript, when
-    there are any, so a long session can still be inspected or resumed."""
+    """One turn of ``session``'s engine. A CLI failure or timeout, once the
+    session has an id or a transcript exists, becomes a ``_TurnFailed``
+    naming the session id and the transcript (so a long session can still
+    be inspected or resumed) for the caller to turn into an ``ok=False``
+    result; with neither to report, it is re-raised unchanged."""
     try:
         return session.engine.run_turn(
             prompt,
@@ -468,7 +536,8 @@ def _run_turn(
             notes.append(f"transcript: {session.transcript_path}")
         if not notes:
             raise
-        raise type(exc)(f"{exc} ({'; '.join(notes)})") from exc
+        message = f"{exc} ({'; '.join(notes)})"
+        raise _TurnFailed(message, timed_out=isinstance(exc, AgentCliTimeout)) from exc
 
 
 def _with_result_contract(
@@ -527,7 +596,7 @@ def _invalid_result(
     session: _Session, result_file: Path, errors: list[str], *, why: str
 ) -> ToolResult:
     message = f"agent: result file {result_file} is still invalid ({why}): " + "; ".join(errors)
-    return ToolResult(value=None, raw=session.raw(), stderr=message, ok=False)
+    return session.result(value=None, stderr=message, ok=False)
 
 
 def _write_prompt_file(scratch_dir: Path, prompt: str) -> Path:
@@ -709,6 +778,16 @@ class AgentPlugin:
                     f"agent: params['result_schema'] is not a valid JSON Schema: {exc.message}"
                 ) from exc
         result_file = (cwd_path / result_file_param).resolve() if result_file_param else None
+        transcript_param = _optional_str(params, "transcript")
+        transcript_path = (cwd_path / transcript_param).resolve() if transcript_param else None
+        if transcript_path is not None:
+            try:
+                transcript_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"agent: params['transcript'] {str(transcript_path)!r}'s directory could not "
+                    f"be created: {exc}"
+                ) from exc
         unset_env = (
             _str_list(params, "unset_env") if params.get("unset_env") is not None
             else DEFAULT_UNSET_ENV
@@ -753,7 +832,8 @@ class AgentPlugin:
                     f"agent: result_file {str(result_file)!r} could not be cleared before the "
                     f"session: {exc}"
                 ) from exc
-        # Holds the prompt files while a turn runs, and the transcript after.
+        # Holds the prompt files while a turn runs, and — without
+        # params['transcript'] — the transcript after.
         scratch_dir = Path(tempfile.mkdtemp(prefix=f"cof-agent-{engine_name}-"))
         try:
             result = run_agent_session(
@@ -764,6 +844,7 @@ class AgentPlugin:
                 result_schema=result_schema,
                 timeout_seconds=float(timeout_seconds),
                 scratch_dir=scratch_dir,
+                transcript_path=transcript_path,
             )
         except AgentCliError:
             # The error names the transcript when there is one (_run_turn).
@@ -775,6 +856,12 @@ class AgentPlugin:
             # could read it.
             shutil.rmtree(scratch_dir, ignore_errors=True)
             raise
+        finally:
+            # With params['transcript'], the transcript never lives under
+            # scratch_dir (it goes straight to transcript_path), so nothing
+            # in it is worth keeping once the session is done (#392).
+            if transcript_path is not None:
+                shutil.rmtree(scratch_dir, ignore_errors=True)
         return replace(result, raw={**result.raw, **claude_raw})
 
     def _resolve_binary(self, engine_name: str) -> str:

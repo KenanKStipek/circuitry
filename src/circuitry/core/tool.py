@@ -459,6 +459,15 @@ class ToolRuntime:
       ``meta.binary`` is also set for binary-wrapping tool plugins
       (the resolved absolute executable path), when the plugin's result
       carries one.
+
+      ``meta.tokens_sent``/``meta.tokens_received``/``meta.cost_usd`` are
+      set, the same fields a ``prompt`` effect uses, when the plugin's
+      ``ToolResult`` reports a value that isn't ``None`` — absent otherwise,
+      so a tool that never spends model usage gains no new meta keys.
+      ``tokens_sent``/``tokens_received`` are the attempt that decided this
+      pass's outcome; ``tokens_sent_total``/``tokens_received_total`` sum
+      every attempt this pass made (retried or not), the same total/
+      non-total split a prompt effect's own retries record.
     """
 
     def __init__(
@@ -624,6 +633,12 @@ class ToolRuntime:
         )
 
         next_delay_ms = backoff_ms
+        # Summed across this pass's attempts (retried or not) the same way
+        # a prompt effect's tokens_sent_total/tokens_received_total do —
+        # usage an earlier, failed attempt spent still counts even when a
+        # later attempt is the one that decides the outcome.
+        total_tokens_sent: int | None = None
+        total_tokens_received: int | None = None
         for attempt_index in range(max_attempts):
             if attempt_index > 0:
                 # Cancellation-aware, not a bare time.sleep — see core.use's
@@ -664,6 +679,11 @@ class ToolRuntime:
             meta.pop("raw", None)
             meta.pop("expect", None)
             meta.pop("retries_used", None)
+            meta.pop("tokens_sent", None)
+            meta.pop("tokens_received", None)
+            meta.pop("tokens_sent_total", None)
+            meta.pop("tokens_received_total", None)
+            meta.pop("cost_usd", None)
             meta["waiting_for"] = None
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
@@ -822,6 +842,14 @@ class ToolRuntime:
             if "binary" in result.raw:
                 meta["binary"] = result.raw["binary"]
             meta["raw"] = _capped_raw(result.raw)
+            # Spent whether this attempt succeeds or not — an earlier, failed
+            # attempt's usage still counts toward this pass's total (#414).
+            if result.tokens_sent is not None:
+                total_tokens_sent = (total_tokens_sent or 0) + result.tokens_sent
+                meta["tokens_sent_total"] = total_tokens_sent
+            if result.tokens_received is not None:
+                total_tokens_received = (total_tokens_received or 0) + result.tokens_received
+                meta["tokens_received_total"] = total_tokens_received
 
             if not result.ok:
                 failure = RuntimeError(
@@ -901,6 +929,12 @@ class ToolRuntime:
 
             if attempt_index > 0:
                 meta["retries_used"] = attempt_index
+            if result.tokens_sent is not None:
+                meta["tokens_sent"] = result.tokens_sent
+            if result.tokens_received is not None:
+                meta["tokens_received"] = result.tokens_received
+            if result.cost_usd is not None:
+                meta["cost_usd"] = result.cost_usd
 
             if self.verbose:
                 elapsed = time.monotonic() - t0

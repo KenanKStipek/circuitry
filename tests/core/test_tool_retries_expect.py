@@ -145,6 +145,140 @@ def test_tool_without_retries_fails_on_first_attempt(
     assert plugin.execute.call_count == 1
 
 
+# ---------------------------------------------------------------------------
+# Runtime — a plugin's ToolResult usage fields (#414)
+# ---------------------------------------------------------------------------
+
+
+def test_a_plugin_reporting_no_usage_writes_no_token_or_cost_meta_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every provider except ``agent`` leaves ``ToolResult.tokens_sent`` /
+    ``tokens_received`` / ``cost_usd`` at their ``None`` default — none of
+    those meta keys should appear at all."""
+    ok_result = ToolResult(value="done", raw={})
+    plugin = MagicMock()
+    plugin.execute.side_effect = [ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(name="x", provider="shell", params={})
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    for key in ("tokens_sent", "tokens_received", "tokens_sent_total", "tokens_received_total", "cost_usd"):
+        assert key not in meta
+
+
+def test_a_plugins_usage_lands_under_the_same_meta_keys_a_prompt_effect_uses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ok_result = ToolResult(
+        value="done", raw={}, tokens_sent=5, tokens_received=2, cost_usd=0.01
+    )
+    plugin = MagicMock()
+    plugin.execute.side_effect = [ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(name="x", provider="shell", params={})
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["tokens_sent"] == 5
+    assert meta["tokens_received"] == 2
+    assert meta["tokens_sent_total"] == 5
+    assert meta["tokens_received_total"] == 2
+    assert meta["cost_usd"] == 0.01
+
+
+def test_usage_sums_across_retries_like_a_prompt_effects_tokens_sent_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed attempt's usage still counts toward this pass's total
+    (``tokens_sent_total``/``tokens_received_total``), the same split a
+    retried/fallen-back-from prompt effect's own tokens record; the
+    non-total fields are the attempt that decided the outcome."""
+    fail_result = ToolResult(
+        value=None, raw={}, ok=False, stderr="transient", tokens_sent=3, tokens_received=1
+    )
+    ok_result = ToolResult(
+        value="done", raw={}, tokens_sent=5, tokens_received=2, cost_usd=0.02
+    )
+    plugin = MagicMock()
+    plugin.execute.side_effect = [fail_result, ok_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+    )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["tokens_sent"] == 5
+    assert meta["tokens_received"] == 2
+    assert meta["tokens_sent_total"] == 3 + 5
+    assert meta["tokens_received_total"] == 1 + 2
+    assert meta["cost_usd"] == 0.02
+
+
+def test_usage_before_an_exhausted_retrys_failure_still_counts_in_the_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Usage an attempt spent before the effect ultimately fails is kept in
+    ``tokens_sent_total``/``tokens_received_total`` — the run's totals
+    (``_TotalsAccumulator``) prefer that field over the plain one, so it is
+    not lost (#391, #414)."""
+    fail_result = ToolResult(
+        value=None, raw={}, ok=False, stderr="still failing", tokens_sent=3, tokens_received=1
+    )
+    plugin = MagicMock()
+    plugin.execute.side_effect = [fail_result, fail_result]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = _make_store()
+    with pytest.raises(RuntimeError, match="still failing"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert "tokens_sent" not in meta
+    assert meta["tokens_sent_total"] == 3 + 3
+    assert meta["tokens_received_total"] == 1 + 1
+
+
+def test_a_reused_nodes_stale_usage_does_not_survive_a_pass_without_any(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unnamed loop's reused node must not keep a prior pass's tokens
+    sitting next to a pass that reported none — the same rule #260 already
+    holds for stdout/stderr/exit_code."""
+    with_usage = ToolResult(value="a", raw={}, tokens_sent=5, tokens_received=2)
+    without_usage = ToolResult(value="b", raw={})
+    plugin = MagicMock()
+    plugin.execute.side_effect = [with_usage, without_usage]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(name="x", provider="shell", params={})
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+    assert store.state["x"]["meta"]["tokens_sent"] == 5
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+    meta = store.state["x"]["meta"]
+    assert "tokens_sent" not in meta
+    assert "tokens_sent_total" not in meta
+
+
 def test_http_family_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     fail_result = ToolResult(
         value=None, raw={"status": 503}, stdout="", stderr="server busy", exit_code=None, ok=False

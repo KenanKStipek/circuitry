@@ -134,6 +134,7 @@ reads the repository's `AGENTS.md` itself, as it does in any session.
 | `unset_env` | list of strings | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` | Variables removed from it; replaces the default list. |
 | `result_file` | string | none | A JSON file the agent must write, relative to `cwd` (an absolute path, or one with `..`, may point anywhere). |
 | `result_schema` | JSON Schema object | none | Validates `result_file`'s contents; needs `result_file`. |
+| `transcript` | string | none | Where the compact transcript is written, relative to `cwd` (an absolute path may point anywhere). The parent directory is created; the file is appended to across the session's turns, including the repair turn. Without it, the transcript goes to a temporary directory nothing removes (see [What lands in state](#what-lands-in-state)). |
 
 The session's environment is yours, minus the variables that would make the
 CLI think it runs inside a parent pi or Claude Code session (`PI_SESSION_ID`,
@@ -212,8 +213,16 @@ branch on.
 | `project_settings` | Claude Code only: `isolated` (the default) or `trusted` (`trust_project_settings: true`) |
 | `project_instructions` | Claude Code only: the path of the repository's `CLAUDE.md` appended to the prompt, or `null` |
 
-The transcript stays a file in the system's temporary directory; it never
-goes into state itself, and nothing removes it.
+Without `params['transcript']`, the transcript stays a file in the system's
+temporary directory; it never goes into state itself, and nothing removes
+it. With it, the transcript is written at that path instead, and no
+temporary directory is left behind.
+
+`meta.tokens_sent`, `meta.tokens_received` and `meta.cost_usd` hold the same
+totals as `raw.tokens`/`raw.cost` — the session's usage over every turn,
+including a repair turn — under the fields a `prompt` effect uses, so
+`runtime.last_run.totals` and the live token counts a running orchestration
+shows count this effect like any other.
 
 ## Timeouts and cancellation
 
@@ -225,9 +234,16 @@ SIGHUP), the whole group is stopped: the CLI and everything the agent
 started.
 
 When a turn times out or the CLI fails after the session has an id (a
-`session` param, or a timed-out repair turn), the error names the session
-id, so a later effect can resume it, and the transcript's path, which is
-kept.
+`session` param, or an earlier successful turn in this same effect) or a
+transcript exists, the effect ends as an error (`ok: false`, so `on_error`
+and retries behave exactly as for any other tool failure) whose `meta.raw`
+still carries the keys a success has — `session_id` so a later effect can
+resume it with `session`, `transcript` so it can be inspected — plus
+`timed_out: true` when it was a timeout. `meta.error`'s text is unchanged: it
+still names the session and the transcript. Usage already spent before the
+failure is still counted (`meta.tokens_sent`/`meta.tokens_received`). A turn
+that fails before either exists (nothing yet worth reporting) raises instead,
+as it always has.
 
 ## Configuration
 
