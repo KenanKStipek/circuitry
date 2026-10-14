@@ -444,9 +444,17 @@ impl LiveStateMirror {
     /// The run's very first write: synchronous and fatal on error
     /// (issue #431's run-wiring step 16) -- an unwritable path fails
     /// the run up front, before any effect, rather than silently never
-    /// mirroring anything.
+    /// mirroring anything. A state [`render_state`] still can't
+    /// serialize even with its own `default=str` fallback (issue #512)
+    /// is skipped silently here, exactly like `cli/live_state.py::
+    /// LiveStateMirror.__call__`'s own first write (`_encode` returning
+    /// `None`): the mirror is for watchers, and this is reached before
+    /// any effect has run, so a document that will never actually make
+    /// it into state can't yet be blamed.
     pub fn write_initial(&self, state: &Value) -> io::Result<()> {
-        write_atomic(&self.path, &render_state(state, false))?;
+        if let Ok(payload) = render_state(state, false) {
+            write_atomic(&self.path, &payload)?;
+        }
         self.next_due.set(Some(Instant::now() + self.interval));
         Ok(())
     }
@@ -482,19 +490,25 @@ impl LiveStateMirror {
         self.pending.set(false);
         self.next_due.set(Some(now + self.interval));
         let state = self.apply_grafts(store, snapshot());
-        if let Err(err) = write_atomic(&self.path, &render_state(&state, false)) {
-            self.had_failure.set(true);
-            // `cli/live_state.py::LiveStateMirror._write`'s own
-            // `logger.warning("Could not write --live-state %s: %s",
-            // self._path, exc)`, once per failed write (issue #442) --
-            // the OS-specific suffix is Rust's own `io::Error::Display`,
-            // not byte-for-byte Python's `OSError.__str__` (same
-            // long-standing divergence as `electricity-compiler`'s own
-            // prompt-file read errors).
-            log::warn!(
-                "Could not write --live-state {}: {err}",
-                self.path.display()
-            );
+        // A state `render_state` still can't serialize even with its own
+        // `default=str` fallback (issue #512) is skipped, same as
+        // `cli/live_state.py::_encode` returning `None` -- not counted as
+        // a failure; only an actual write failure below is.
+        if let Ok(payload) = render_state(&state, false) {
+            if let Err(err) = write_atomic(&self.path, &payload) {
+                self.had_failure.set(true);
+                // `cli/live_state.py::LiveStateMirror._write`'s own
+                // `logger.warning("Could not write --live-state %s: %s",
+                // self._path, exc)`, once per failed write (issue #442) --
+                // the OS-specific suffix is Rust's own `io::Error::Display`,
+                // not byte-for-byte Python's `OSError.__str__` (same
+                // long-standing divergence as `electricity-compiler`'s own
+                // prompt-file read errors).
+                log::warn!(
+                    "Could not write --live-state {}: {err}",
+                    self.path.display()
+                );
+            }
         }
     }
 
@@ -504,12 +518,14 @@ impl LiveStateMirror {
     /// whole lifetime -- mid-run or this one -- failed, so the caller
     /// can fold that into one warning on the run's result.
     pub fn close(&self, state: &Value) -> bool {
-        if let Err(err) = write_atomic(&self.path, &render_state(state, false)) {
-            self.had_failure.set(true);
-            log::warn!(
-                "Could not write --live-state {}: {err}",
-                self.path.display()
-            );
+        if let Ok(payload) = render_state(state, false) {
+            if let Err(err) = write_atomic(&self.path, &payload) {
+                self.had_failure.set(true);
+                log::warn!(
+                    "Could not write --live-state {}: {err}",
+                    self.path.display()
+                );
+            }
         }
         self.had_failure.get()
     }
@@ -585,7 +601,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            render_state(&Value::Dict(expected_root), false)
+            render_state(&Value::Dict(expected_root), false).unwrap()
         );
 
         fs::remove_file(&path).unwrap();
@@ -879,7 +895,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            render_state(&Value::Dict(expected_root), false)
+            render_state(&Value::Dict(expected_root), false).unwrap()
         );
         fs::remove_file(&path).unwrap();
     }
@@ -922,7 +938,7 @@ mod tests {
         expected_root.insert(str_key("prime"), Value::Dict(expected_prime));
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            render_state(&Value::Dict(expected_root), false)
+            render_state(&Value::Dict(expected_root), false).unwrap()
         );
         fs::remove_file(&path).unwrap();
     }
@@ -963,7 +979,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            render_state(&Value::Dict(expected_root), false)
+            render_state(&Value::Dict(expected_root), false).unwrap()
         );
         fs::remove_file(&path).unwrap();
     }
@@ -1034,7 +1050,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            render_state(&Value::Dict(expected_root), false)
+            render_state(&Value::Dict(expected_root), false).unwrap()
         );
         fs::remove_file(&path).unwrap();
     }

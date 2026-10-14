@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #512",
+  "description": "A top-level tool's params carrying an unquoted YAML 1.1 date, a timestamp with a UTC offset, and `!!binary` reach `meta.params_rendered` as the typed `datetime.date`/`datetime.datetime`/`bytes` values they parsed to; `--out` writes them stringified via `default=str` instead of raising `TypeError: Object of type date is not JSON serializable`. The json tool's own `mode: stringify` already handled this independently (its own `default=str`), so `value` was never the bug -- only state's own serialization was.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

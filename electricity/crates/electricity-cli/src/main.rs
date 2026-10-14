@@ -542,7 +542,20 @@ fn install_secret_safe_panic_hook() {
 /// invoke` catches a `ConfigError` *around* the whole CLI command,
 /// before `run()`'s own JSON-output logic is ever reached, so a config
 /// error prints nothing on stdout, not even the failure payload.
-fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bool) {
+///
+/// Returns `Err` when a successful run's own state can't be serialized
+/// for stdout (issue #512 review finding 3) -- a value `json_safe_
+/// default`/`dumps_default_str` still can't encode (a non-string dict
+/// key, ...), distinct from the `Date`/`DateTime`/`Bytes` fallback both
+/// engines already handle. Nothing is written to stdout in that case;
+/// the caller reports it on stderr and exits nonzero instead, the same
+/// as `cof run --json` crashing uncaught on the same document rather
+/// than printing a placeholder and exiting 0.
+fn print_stdout_contract(
+    result: &RunResult,
+    out_path: Option<&Path>,
+    pretty: bool,
+) -> Result<(), String> {
     if !result.ok {
         // `state_out` names *out_path* only when a file was actually
         // written there -- a refusal (or any other `state: None`
@@ -555,14 +568,17 @@ fn print_stdout_contract(result: &RunResult, out_path: Option<&Path>, pretty: bo
             &result.warnings,
             state_out,
         ));
-        return;
+        return Ok(());
     }
     if out_path.is_none() {
         if let Some(state) = &result.state {
-            write_stdout(&electricity::out::render_state_for_stdout(state, pretty));
+            let rendered = electricity::out::render_state_for_stdout(state, pretty)
+                .map_err(|err| err.to_string())?;
+            write_stdout(&rendered);
             write_stdout("\n");
         }
     }
+    Ok(())
 }
 
 /// `Warning: ...` lines, and nothing else -- issue #431's "CLI output"
@@ -733,7 +749,14 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // comment).
     signal_guard.disarm();
 
-    print_stdout_contract(&result, effective_out_path.as_deref(), run_args.pretty);
+    if let Err(err) = print_stdout_contract(&result, effective_out_path.as_deref(), run_args.pretty)
+    {
+        print_stderr_contract(&result);
+        write_stderr(&format!(
+            "electricity: could not serialize run state: {err}\n"
+        ));
+        return ExitCode::from(1);
+    }
     print_stderr_contract(&result);
     exit_code_for(&result)
 }

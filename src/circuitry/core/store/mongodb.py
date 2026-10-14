@@ -19,10 +19,13 @@ module.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from ..saved_state import json_safe_default
 
 _REDACTED = "***REDACTED***"
 
@@ -155,7 +158,10 @@ class MongodbStatePersistence:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "ok": ok,
             "error": error,
-            "state": state,
+            # JSON-native so a run-state date/bytes value (BSON can't encode
+            # either) is stored the same way the other three backends store
+            # it, as `str()`, rather than failing the save.
+            "state": json.loads(json.dumps(state, default=json_safe_default)),
         }
         try:
             client = self._connect()

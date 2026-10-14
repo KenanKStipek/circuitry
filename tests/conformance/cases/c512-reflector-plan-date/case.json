@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #512",
+  "description": "A reflector's scripted planner replies with a plan containing an unquoted YAML 1.1 date. `meta.iterations[0].parsed` keeps the parsed `datetime.date` value; `--out` writes it stringified via `default=str` instead of raising `TypeError: Object of type date is not JSON serializable`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

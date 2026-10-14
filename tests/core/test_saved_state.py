@@ -9,10 +9,13 @@ existed (``last`` as a full copy) keeps loading.
 
 from __future__ import annotations
 
+import datetime
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 import circuitry.cli.runtime_shim as runtime_shim
 from circuitry.adapters.base import GenerateResult
@@ -310,3 +313,108 @@ def test_persistence_save_run_snapshot_writes_ref_form_last(
     # The live state the run returns is untouched -- still real aliases.
     live_outer = result.state["prime"]["outer"]
     assert live_outer["last"] is live_outer["iter_1"]
+
+
+# ----------------------------------------------------------------------
+# Issue #512: an unquoted YAML 1.1 date/timestamp or ``!!binary`` reaching
+# state must not crash serialization the way a plain ``json.dumps`` does.
+# ----------------------------------------------------------------------
+
+
+def test_dumps_saved_state_stringifies_a_date() -> None:
+    assert dumps_saved_state({"d": datetime.date(2024, 1, 2)}) == '{"d": "2024-01-02"}'
+
+
+def test_dumps_saved_state_stringifies_a_naive_datetime_with_microseconds() -> None:
+    value = datetime.datetime(2024, 1, 2, 3, 4, 5, 123456)  # noqa: DTZ001
+    assert dumps_saved_state({"t": value}) == '{"t": "2024-01-02 03:04:05.123456"}'
+
+
+def test_dumps_saved_state_stringifies_a_datetime_with_a_utc_offset() -> None:
+    value = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    assert dumps_saved_state({"t": value}) == '{"t": "2024-01-02 03:04:05+00:00"}'
+
+
+def test_dumps_saved_state_stringifies_bytes_as_its_python_repr() -> None:
+    assert dumps_saved_state({"b": b"hi"}) == '{"b": "b\'hi\'"}'
+
+
+def test_dumps_saved_state_still_raises_for_anything_else_unencodable() -> None:
+    """Only ``date``/``datetime``/``bytes`` get the fallback -- anything else
+    ``json.dumps`` can't encode remains an error, same as a plain
+    ``json.dumps`` with no ``default=`` at all."""
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        dumps_saved_state({"s": {1, 2, 3}})
+
+
+def test_write_state_json_no_longer_crashes_on_a_date(tmp_path: Path) -> None:
+    """``cli/app.py::_write_state_json`` used to crash with ``TypeError:
+    Object of type date is not JSON serializable`` and write no ``--out``
+    file at all (#512) -- it now writes the stringified value."""
+    out_path = tmp_path / "out.json"
+    params_rendered = {"d": datetime.date(2024, 1, 2)}
+    state = {"prime": {"a": {"value": None, "meta": {"params_rendered": params_rendered}}}}
+
+    _write_state_json(out=out_path, state=state, pretty=False)
+
+    loaded = load_state_file(out_path)
+    assert loaded.ok
+    assert loaded.state is not None
+    assert loaded.state["prime"]["a"]["meta"]["params_rendered"] == {"d": "2024-01-02"}
+
+
+def test_resume_from_a_written_out_with_a_date_param_reuses_the_completed_node(
+    tmp_path: Path,
+) -> None:
+    """End to end (#512): a run whose only effect has a YAML date param
+    completes and writes ``--out`` without crashing; ``--resume`` from that
+    file succeeds, skips the already-completed node (its ``completed_at``
+    is unchanged -- never re-dispatched), and the date param it reads back
+    is the string ``--out`` wrote, not the original ``date``."""
+    orch = tmp_path / "orch.yml"
+    orch.write_text(
+        """
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params:
+      mode: stringify
+      input: {d: 2024-01-02}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "out.json"
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=out_path,
+            dry_run=False,
+            validate_only=False,
+        )
+    )
+    assert first.ok, first.error
+    _write_state_json(out=out_path, state=first.state, pretty=False)
+    first_completed_at = first.state["prime"]["a"]["meta"]["completed_at"]
+
+    loaded = load_state_file(out_path)
+    assert loaded.ok
+    assert loaded.state is not None
+
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state=loaded.state,
+            resume=True,
+        )
+    )
+    assert second.ok, second.error
+    node = second.state["prime"]["a"]
+    assert node["meta"]["completed_at"] == first_completed_at
+    assert node["meta"]["params_rendered"]["input"]["d"] == "2024-01-02"

@@ -1663,6 +1663,28 @@ view — so `{{prime.<loop>.last.<step>.value}}` reads through it exactly as it
 does in the run that wrote it. State files written before the reference form
 hold `last` as a full copy of the pass; they still load as they always did.
 
+**A value saved state can't encode as plain JSON** — an unquoted YAML 1.1
+date or timestamp (parsed to a Python `date`/`datetime`), or `!!binary`
+(`bytes`) — is written as its `str()` form instead of failing the write:
+`2024-01-02`, `2024-01-02 03:04:05` (with microseconds or a UTC offset when
+the value has them), `b'...'`. These can reach state several ways a document
+author doesn't always write on purpose — a `reflector`'s own
+`meta.iterations[i].parsed`, any effect's `meta.params_rendered`, a `use`
+effect's literal (non-`{from: ...}`) inputs, or an `interface.inputs`
+default with no declared `type:` (or nested inside an `object`/`array`
+default) — and the rule is the same everywhere saved state is written
+(`--out`, `--print`, the `--live-state` mirror, every `runtime.persistence`
+backend's own snapshot, and the saved state `--resume` reads back) and in
+both engines. A CLI `-e` value never reaches this: it always arrives as a
+string. A `--resume`d run therefore sees that already-completed node's
+recorded value as the string `--out` wrote, not the original date/bytes
+value — the effect itself is not rerun, so this only affects reading the
+saved record back, never what a rerun would produce from the
+orchestration's own YAML. Anything else a value can't be encoded as remains
+an ordinary error, same as `json.dumps` with no fallback at all — including
+a non-string dict key (a date/bytes key is never stringified, in either
+engine) and `!!set`.
+
 ### Iteration Bindings Inside Nested Containers
 
 `{{<each.as>}}` and `{{_loop_index}}` reach every effect in the body, however

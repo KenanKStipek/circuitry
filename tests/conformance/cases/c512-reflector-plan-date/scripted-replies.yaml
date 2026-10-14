@@ -1,0 +1,12 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: check
+          provider: json
+          params:
+            mode: stringify
+            input: {d: 2024-01-02}
+    tokens_sent: 10
+    tokens_received: 20

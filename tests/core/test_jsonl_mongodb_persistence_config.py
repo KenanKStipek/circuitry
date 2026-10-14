@@ -7,6 +7,7 @@ tests use (``tests/runtime_plugins/test_storage_plugins.py``).
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
@@ -153,6 +154,25 @@ def test_jsonl_round_trip_returns_latest_record(tmp_path: Path) -> None:
     assert last["created_at"]
 
 
+def test_jsonl_save_run_snapshot_stringifies_a_date_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """Issue #512: a state a reflector/tool/use/interface-default route put
+    an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
+    persistence write the way a plain `json.dumps` would."""
+    backend = JsonlFileStatePersistence.from_config({"path": str(tmp_path / "runs.jsonl")})
+
+    backend.save_run_snapshot(
+        orchestration_path="orch.yml",
+        run_id="r1",
+        ok=True,
+        error=None,
+        state={"d": datetime.date(2024, 1, 2)},
+    )
+
+    assert backend.load_latest_state(orchestration_path="orch.yml") == {"d": "2024-01-02"}
+
+
 def test_jsonl_skips_malformed_lines(tmp_path: Path) -> None:
     log = tmp_path / "runs.jsonl"
     backend = JsonlFileStatePersistence.from_config({"path": str(log)})
@@ -199,6 +219,29 @@ def test_mongodb_round_trip(fake_pymongo: dict[str, _FakeDatabase]) -> None:
     assert doc["ok"] is True
     # Clients are closed after every operation.
     assert all(c.closed for c in _FakeMongoClient.instances)
+
+
+def test_mongodb_save_run_snapshot_stringifies_a_date_instead_of_raising(
+    fake_pymongo: dict[str, _FakeDatabase],
+) -> None:
+    """Issue #512: BSON can't encode a `datetime.date` either, so the state
+    must go in JSON-native (the same `json_safe_default` the other three
+    persistence backends use), not as the raw Python value."""
+    backend = MongodbStatePersistence.from_config(
+        {"uri": "mongodb://localhost:27017", "database": "db", "collection": "runs"}
+    )
+
+    backend.save_run_snapshot(
+        orchestration_path="orch.yml",
+        run_id="r1",
+        ok=True,
+        error=None,
+        state={"d": datetime.date(2024, 1, 2)},
+    )
+
+    assert backend.load_latest_state(orchestration_path="orch.yml") == {"d": "2024-01-02"}
+    doc = fake_pymongo["db"]["runs"].docs[0]
+    assert doc["state"] == {"d": "2024-01-02"}
 
 
 def test_mongodb_describe_redacts_uri_credentials(

@@ -560,7 +560,8 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     assert!(result.ok, "{:?}", result.error);
     assert!(result.signal.is_none());
 
-    let expected_out_text = electricity::out::render_state(result.state.as_ref().unwrap(), false);
+    let expected_out_text =
+        electricity::out::render_state(result.state.as_ref().unwrap(), false).unwrap();
     let live_state_text = fs::read_to_string(&live_state_path).unwrap();
     assert_eq!(expected_out_text, live_state_text);
 

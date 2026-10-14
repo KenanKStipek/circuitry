@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #512",
+  "description": "A `use` effect's literal (non-`{from: ...}`) input is an unquoted YAML 1.1 date; it reaches both the node's own `meta.inputs` and the child's `input.d` as the parsed `datetime.date`. `--out` writes both stringified via `default=str` instead of raising `TypeError: Object of type date is not JSON serializable`.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

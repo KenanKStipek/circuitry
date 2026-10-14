@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -362,3 +363,61 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         return
 
     raise AssertionError(f"{case_dir.name}: unknown case.json 'expect': {metadata['expect']!r}")
+
+
+def test_a_date_as_a_dict_key_exits_nonzero_on_both_engines_with_no_out(
+    tmp_path: Path, electricity_binary: Path | None
+) -> None:
+    """Issue #512 review finding 3: `default=`/`dumps_default_str` is never
+    consulted for a dict *key* (`json.dumps` doesn't either), so an
+    unquoted YAML 1.1 date used as one still fails state serialization --
+    with no `--out` to redirect to, `cof run --json` crashes uncaught
+    (`dumps_saved_state` raising inside `console.print_json(...)`, exit 1,
+    no stdout), and electricity's own non-TTY stdout summary must exit 1
+    with a stderr message too, never the old `{"error": ...}` placeholder
+    on stdout with exit 0."""
+    if electricity_binary is None:
+        pytest.skip("cargo not available; electricity binary cannot be built")
+
+    doc = tmp_path / "orch.yml"
+    doc.write_text(
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: a\n"
+        "    provider: uuid\n"
+        "    params:\n"
+        "      tag: {2024-01-02: x}\n",
+        encoding="utf-8",
+    )
+
+    cof_home = tmp_path / "cof-home"
+    cof_home.mkdir()
+    cof_proc = subprocess.run(
+        [sys.executable, "-m", "circuitry.cli.app", "run", str(doc), "--json", "--quiet"],
+        cwd=tmp_path,
+        env=harness._sandboxed_env(tmp_path, cof_home),
+        capture_output=True,
+        text=True,
+        timeout=harness.DEFAULT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert cof_proc.returncode == 1, (cof_proc.stdout, cof_proc.stderr)
+    assert cof_proc.stdout == ""
+
+    electricity_home = tmp_path / "electricity-home"
+    electricity_home.mkdir()
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    electricity_proc = subprocess.run(
+        [str(electricity_binary), str(config_path), str(doc)],
+        cwd=tmp_path,
+        env=harness._sandboxed_env(tmp_path, electricity_home),
+        capture_output=True,
+        text=True,
+        timeout=harness.DEFAULT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert electricity_proc.returncode == 1, (electricity_proc.stdout, electricity_proc.stderr)
+    assert electricity_proc.stdout == ""
+    assert "could not serialize run state" in electricity_proc.stderr
+    assert '{"error"' not in electricity_proc.stdout

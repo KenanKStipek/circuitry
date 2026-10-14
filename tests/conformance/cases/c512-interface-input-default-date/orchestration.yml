@@ -1,0 +1,9 @@
+name: c512-interface-input-default-date
+interface:
+  inputs:
+    d: {default: 2024-01-02}
+    o: {type: object, default: {nested: 2024-01-02}}
+effects:
+  - type: yield
+    name: ok
+    template: "ok"

@@ -20,6 +20,7 @@ is the same alias again. A state file written before this form existed holds
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from typing import Any
@@ -115,9 +116,34 @@ def _ref_target(node: dict[str, Any]) -> str | None:
     return ref if isinstance(node.get(ref), dict) else None
 
 
+def json_safe_default(value: Any) -> str:
+    """``json.dumps(..., default=str)``, but only for two of the YAML 1.1
+    types a loaded orchestration document can produce that plain JSON can't
+    encode: an unquoted date or timestamp (``datetime.date``,
+    ``datetime.datetime`` — a subclass of ``date``) and ``!!binary``
+    (``bytes``). These can reach state several ways — a reflector's own
+    ``meta.iterations[i].parsed``, a tool's ``meta.params_rendered``, a
+    ``use`` effect's literal (non-``{from: ...}``) inputs, an
+    ``interface.inputs`` default with no declared ``type:`` (or nested
+    inside an ``object``/``array`` default) — all fixed here, at the
+    serialisation boundary, rather than at each entry point. A CLI ``-e``
+    value never needs this: it's always a string. Every
+    ``json.dumps(..., default=...)`` call writing run state uses this
+    (``--out``/``--print``/``--live-state`` below; the ``core.store``
+    persistence backends ``--resume <run-id>`` reads from). Anything else
+    json.dumps can't encode — including ``!!set`` (``set``), the one other
+    YAML 1.1 type a document can produce that plain JSON can't encode —
+    still raises, same as a plain ``json.dumps`` with no ``default=`` at
+    all.
+    """
+    if isinstance(value, (datetime.date, bytes)):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def dumps_saved_state(state: Any, *, pretty: bool = False) -> str:
     """Serialise run state in its saved form (see the module docstring)."""
     saved = compact_last_aliases(state)
     if pretty:
-        return json.dumps(saved, indent=2, sort_keys=True)
-    return json.dumps(saved)
+        return json.dumps(saved, indent=2, sort_keys=True, default=json_safe_default)
+    return json.dumps(saved, default=json_safe_default)

@@ -294,7 +294,7 @@ async fn run_case(name: &str, orchestration: &str, config: &str) -> Json {
     let state = result
         .state
         .expect("every case in this corpus still writes state");
-    let state_text = electricity::out::render_state(&state, false);
+    let state_text = electricity::out::render_state(&state, false).unwrap();
 
     let root = dir.to_str().unwrap();
     let state_json: Json = serde_json::from_str(&state_text).unwrap();

@@ -51,26 +51,25 @@ pub fn python_path_str(path: &Path) -> String {
 /// dumps_saved_state`'s own `ensure_ascii=True` default, kept for a
 /// file -- never the stdout JSON summary, which goes through Rich's
 /// `console.print_json` instead; see [`render_state_for_stdout`]).
-pub fn render_state(state: &Value, pretty: bool) -> String {
+///
+/// A `Date`/`DateTime`/`Bytes` leaf -- a reflector's own
+/// `meta.iterations[i].parsed`, a tool's `meta.params_rendered`, a `use`
+/// effect's literal inputs, or an `interface.inputs` default with no
+/// declared `type:`, each able to carry an unquoted YAML 1.1 date/`!!binary`
+/// straight from the document -- is stringified via [`Value::py_str`]
+/// instead of failing the whole write, the same as `core/saved_state.py`'s
+/// own `json.dumps(saved, default=...)` (issue #512). Anything else `dumps`
+/// can't encode (a NaN-keyed sort, nesting past [`crate::MAX_DEPTH`], ...)
+/// still returns `Err`; the caller (`write_out`) turns that into a
+/// nonzero exit rather than writing a `{"error": ...}` placeholder and
+/// exiting 0.
+pub fn render_state(state: &Value, pretty: bool) -> Result<String, electricity_json::WriteError> {
     let mode = if pretty {
         electricity_json::WriteMode::PRETTY
     } else {
         electricity_json::WriteMode::COMPACT
     };
-    // `state` is always built by this crate's own `Store::saved` from a
-    // document's own JSON/YAML-sourced values plus this run's own
-    // metadata -- never a `Date`/`DateTime`/`Bytes` leaf nothing earlier
-    // in the pipeline would already have rejected -- so `dumps` never
-    // actually fails in practice. A caller reporting its own run result
-    // must never panic doing so, though, so an encode failure still
-    // falls back to a minimal, always-valid JSON object naming it
-    // rather than unwrapping.
-    match electricity_json::dumps(state, mode) {
-        Ok(body) => format!("{body}\n"),
-        Err(err) => {
-            format!("{{\"error\":\"could not serialize run state: {}\"}}\n", err)
-        }
-    }
+    electricity_json::dumps_default_str(state, mode).map(|body| format!("{body}\n"))
 }
 
 /// The non-TTY stdout JSON summary's own serialization (issue #431's
@@ -97,21 +96,36 @@ fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
 /// terminal gets Rich's `console.print_json` re-dump instead
 /// (`indent=2`, `ensure_ascii=False`, sorted exactly when `--pretty`
 /// was given), never a trailing newline of its own (the caller's
-/// `print!`/`println!` choice, not this function's).
-pub fn render_state_for_stdout(state: &Value, pretty: bool) -> String {
-    electricity_json::dumps(state, stdout_json_mode(pretty))
-        .unwrap_or_else(|err| format!("{{\"error\": \"could not serialize run state: {}\"}}", err))
+/// `print!`/`println!` choice, not this function's). Stringifies a
+/// `Date`/`DateTime`/`Bytes` leaf the same way [`render_state`] does
+/// (issue #512); anything else `dumps` can't encode (a non-string dict
+/// key, nesting past [`crate::MAX_DEPTH`], ...) still returns `Err` --
+/// the caller's job to turn into a nonzero exit with a stderr message,
+/// the same as `cli/app.py::run_cmd`'s own `console.print_json(dumps_
+/// saved_state(...))` crashing uncaught rather than printing a
+/// placeholder and exiting 0.
+pub fn render_state_for_stdout(
+    state: &Value,
+    pretty: bool,
+) -> Result<String, electricity_json::WriteError> {
+    electricity_json::dumps_default_str(state, stdout_json_mode(pretty))
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory
-/// first (`cli/app.py::_write_state_json`).
+/// first (`cli/app.py::_write_state_json`). A state [`render_state`] still
+/// can't serialize (issue #512) fails this call -- the caller
+/// (`electricity-cli`'s `run_action`) reports it on stderr and exits
+/// nonzero, rather than writing a `{"error": ...}` placeholder to *path*
+/// and exiting 0.
 pub fn write_out(path: &Path, state: &Value, pretty: bool) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
-    fs::write(path, render_state(state, pretty))
+    let body = render_state(state, pretty)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    fs::write(path, body)
 }
 
 /// The failure payload electricity's own non-TTY stdout contract prints
@@ -144,6 +158,7 @@ pub fn failure_payload(error: &str, warnings: &[String], state_out: Option<&Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use indexmap::IndexMap;
 
     #[test]
@@ -151,7 +166,7 @@ mod tests {
         let mut dict = IndexMap::new();
         dict.insert(Value::Str("b".to_string()), Value::from(1i64));
         dict.insert(Value::Str("a".to_string()), Value::from(2i64));
-        let rendered = render_state(&Value::Dict(dict), false);
+        let rendered = render_state(&Value::Dict(dict), false).unwrap();
         assert_eq!(rendered, "{\"b\": 1, \"a\": 2}\n");
     }
 
@@ -160,8 +175,48 @@ mod tests {
         let mut dict = IndexMap::new();
         dict.insert(Value::Str("b".to_string()), Value::from(1i64));
         dict.insert(Value::Str("a".to_string()), Value::from(2i64));
-        let rendered = render_state(&Value::Dict(dict), true);
+        let rendered = render_state(&Value::Dict(dict), true).unwrap();
         assert_eq!(rendered, "{\n  \"a\": 2,\n  \"b\": 1\n}\n");
+    }
+
+    #[test]
+    fn render_state_stringifies_a_date_datetime_and_bytes_leaf() {
+        // Issue #512: an unquoted YAML 1.1 date/timestamp or `!!binary` in
+        // a reflector's own `meta.iterations[i].parsed`, a tool's
+        // `meta.params_rendered`, or similar, is written the way
+        // `core/saved_state.py::dumps_saved_state`'s `default=` does it,
+        // not rejected.
+        let mut dict = IndexMap::new();
+        dict.insert(
+            Value::Str("d".to_string()),
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
+        );
+        dict.insert(Value::Str("b".to_string()), Value::Bytes(b"hi".to_vec()));
+        let rendered = render_state(&Value::Dict(dict), false).unwrap();
+        assert_eq!(rendered, "{\"d\": \"2024-01-02\", \"b\": \"b'hi'\"}\n");
+    }
+
+    #[test]
+    fn write_out_fails_on_a_value_default_str_still_cant_encode() {
+        // A `Date` dict key: `default=` is never consulted for keys, in
+        // Python either (`WriteError::KeyNotStrIntFloatBoolNone`) -- this
+        // must still fail the write and the caller's exit code, never a
+        // `{"error": ...}` placeholder written to *path* with a zero exit
+        // (issue #512's electricity decision).
+        let mut dict = IndexMap::new();
+        dict.insert(
+            Value::Date(NaiveDate::from_ymd_opt(2024, 1, 2).unwrap()),
+            Value::from(1i64),
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-out-test-unserializable-{}",
+            std::process::id()
+        ));
+        let path = dir.join("state.json");
+        let err = write_out(&path, &Value::Dict(dict), false).unwrap_err();
+        assert!(!path.exists());
+        assert!(err.to_string().contains("keys must be str"), "{err}");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1,0 +1,12 @@
+name: c512-use-inline-input-date
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: tool
+          name: step
+          provider: json
+          params: {mode: stringify, input: {from: input.d}}
+    inputs:
+      d: 2024-01-02

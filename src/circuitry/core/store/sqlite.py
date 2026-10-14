@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..saved_state import json_safe_default
 from ._identifiers import quote_sqlite_identifier, validate_table_name
 
 
@@ -142,7 +143,7 @@ class SQLiteStatePersistence:
                         orchestration_path,
                         1 if ok else 0,
                         error,
-                        json.dumps(state),
+                        json.dumps(state, default=json_safe_default),
                     ),
                 )
                 conn.commit()
