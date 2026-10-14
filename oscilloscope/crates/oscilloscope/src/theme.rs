@@ -15,12 +15,17 @@
 //! each table below), downgraded for the terminal's own colour depth
 //! by [`resolve`].
 
+use clap::ValueEnum;
 use oscilloscope_core::model::StatusKind;
 use ratatui::style::Color;
 
 /// The eleven themes, in the order `--theme`/`OSP_THEME` accept and
-/// `t` cycles through (issue #535).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// `t` cycles through (issue #535). Derives `ValueEnum` (finding 10)
+/// so `--help` lists every name as clap's own possible-values list,
+/// in this same declaration order -- clap's default kebab-case
+/// rename (`SolarizedDark` -> `solarized-dark`) matches `as_str`'s
+/// own strings exactly, so there is nothing to override per variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 pub enum ThemeName {
     Terminal,
     Dracula,
@@ -235,11 +240,11 @@ impl Theme {
     }
 
     /// Source: the Nord theme's own published palette (nord0-nord15:
-    /// Polar Night, Snow Storm, Frost and Aurora). `status_failed`
-    /// and `dim` are adjusted from nord11/nord3 to clear this crate's
-    /// own contrast floor against nord0 (see `theme::tests::
-    /// every_named_theme_clears_its_own_contrast_floor`); every other
-    /// value is the published palette unchanged.
+    /// Polar Night, Snow Storm, Frost and Aurora). `status_failed`,
+    /// `dim` and `status_cancelled` are adjusted from nord11/nord3/
+    /// nord15 to clear this crate's own contrast floor against nord0
+    /// (see `theme::tests::every_named_theme_clears_its_own_contrast_
+    /// floor`); every other value is the published palette unchanged.
     fn nord() -> Theme {
         let bg = rgb(0x2e, 0x34, 0x40);
         let text = rgb(0xd8, 0xde, 0xe9);
@@ -247,7 +252,7 @@ impl Theme {
         let red = rgb(0xcf, 0x88, 0x8f); // adjusted from nord11 #bf616a
         let green = rgb(0xa3, 0xbe, 0x8c);
         let yellow = rgb(0xeb, 0xcb, 0x8b);
-        let purple = rgb(0xb4, 0x8e, 0xad);
+        let purple = rgb(0xb7, 0x90, 0xaf); // adjusted from nord15 #b48ead
         let cyan = rgb(0x88, 0xc0, 0xd0);
         let border = rgb(0x43, 0x4c, 0x5e);
         Theme {
@@ -279,9 +284,9 @@ impl Theme {
 
     /// Source: the Solarized specification's dark variant (base03
     /// background, base0 default text, the accent column). `text`,
-    /// `red` and the highlight tint are adjusted to clear this
-    /// crate's own contrast floor against base03; every other value
-    /// is the published palette unchanged.
+    /// `red`, `violet` and the highlight tint are adjusted to clear
+    /// this crate's own contrast floor against base03; every other
+    /// value is the published palette unchanged.
     fn solarized_dark() -> Theme {
         let bg = rgb(0x00, 0x2b, 0x36); // base03
         let text = rgb(0x83, 0x94, 0x96); // base0, already clears 4.5:1
@@ -289,7 +294,7 @@ impl Theme {
         let red = rgb(0xe4, 0x64, 0x62); // adjusted from #dc322f
         let green = rgb(0x85, 0x99, 0x00);
         let yellow = rgb(0xb5, 0x89, 0x00);
-        let violet = rgb(0x6c, 0x71, 0xc4);
+        let violet = rgb(0x7e, 0x84, 0xe5); // adjusted from #6c71c4
         let cyan = rgb(0x2a, 0xa1, 0x98);
         let highlight = rgb(0x06, 0x2f, 0x3a); // adjusted from base02 #073642
         Theme {
@@ -321,10 +326,10 @@ impl Theme {
 
     /// Source: the Solarized specification's light variant (base3
     /// background, base00 default text). `text`, `red`, `green`,
-    /// `yellow`, `dim` and the highlight tint are adjusted to clear
-    /// this crate's own contrast floor against base3 — Solarized's
-    /// own accent column is tuned to read against *both* variants at
-    /// once, which this crate's floor is stricter than.
+    /// `yellow`, `dim`, `violet` and the highlight tint are adjusted
+    /// to clear this crate's own contrast floor against base3 —
+    /// Solarized's own accent column is tuned to read against *both*
+    /// variants at once, which this crate's floor is stricter than.
     fn solarized_light() -> Theme {
         let bg = rgb(0xfd, 0xf6, 0xe3); // base3
         let text = rgb(0x60, 0x74, 0x7c); // adjusted from base00 #657b83
@@ -332,7 +337,7 @@ impl Theme {
         let red = rgb(0xda, 0x29, 0x25); // adjusted from #dc322f
         let green = rgb(0x69, 0x78, 0x00); // adjusted from #859900
         let yellow = rgb(0x8f, 0x6c, 0x00); // adjusted from #b58900
-        let violet = rgb(0x6c, 0x71, 0xc4);
+        let violet = rgb(0x65, 0x6a, 0xb7); // adjusted from #6c71c4
         let cyan = rgb(0x2a, 0xa1, 0x98);
         let highlight = rgb(0xf8, 0xf6, 0xee); // adjusted from base2 #eee8d5
         Theme {
@@ -407,10 +412,10 @@ impl Theme {
     /// Source: the Gruvbox specification's light/hard variant (bg0,
     /// fg, and the neutral accent column — the light variant's own
     /// *faint* column is for UI chrome, not text, so the table's
-    /// neutral column is the right comparison). `status_done` and
-    /// `status_running` are adjusted to clear this crate's own
-    /// contrast floor against bg0; every other value is the
-    /// published palette unchanged.
+    /// neutral column is the right comparison). `status_done`,
+    /// `status_running` and `status_cancelled` are adjusted to clear
+    /// this crate's own contrast floor against bg0; every other
+    /// value is the published palette unchanged.
     fn gruvbox_light() -> Theme {
         let bg = rgb(0xfb, 0xf1, 0xc7);
         let text = rgb(0x3c, 0x38, 0x36);
@@ -418,7 +423,7 @@ impl Theme {
         let red = rgb(0x9d, 0x00, 0x06);
         let green = rgb(0x75, 0x70, 0x0e); // adjusted from #79740e
         let yellow = rgb(0x97, 0x63, 0x11); // adjusted from #b57614
-        let purple = rgb(0xb1, 0x62, 0x86);
+        let purple = rgb(0x9d, 0x57, 0x77); // adjusted from #b16286
         let aqua = rgb(0x42, 0x7b, 0x58);
         let border = rgb(0xeb, 0xdb, 0xb2);
         Theme {
@@ -616,13 +621,6 @@ impl Theme {
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
-}
-
-/// `--theme`'s own `clap` value parser (issue #535): the same
-/// [`ThemeName::parse`] error, so a usage error from the flag reads
-/// identically to one from `OSP_THEME`.
-pub fn parse_theme_arg(s: &str) -> Result<ThemeName, String> {
-    ThemeName::parse(s)
 }
 
 /// The colour mode a terminal actually supports (DESIGN.md §535's
@@ -1000,11 +998,33 @@ mod tests {
                 );
             };
             check("text", theme.text, 4.5);
-            check("status_running", theme.status_running, 4.5);
-            check("status_done", theme.status_done, 4.5);
-            check("status_failed", theme.status_failed, 4.5);
             check("error", theme.error, 4.5);
             check("dim", theme.dim, 3.0);
+            // Finding 11: every `StatusKind` through `status_color`,
+            // not just running/done/failed -- `pending`/`skipped`
+            // reuse `dim`'s own 3:1 floor (they already are `dim`
+            // in every theme); every other status kind is a 4.5:1
+            // role like `text`/`error`.
+            for kind in [
+                StatusKind::Pending,
+                StatusKind::Running,
+                StatusKind::Done,
+                StatusKind::Failed,
+                StatusKind::FailedHandled,
+                StatusKind::Skipped,
+                StatusKind::Cancelled,
+                StatusKind::Aborted,
+            ] {
+                let min = match kind {
+                    StatusKind::Pending | StatusKind::Skipped => 3.0,
+                    _ => 4.5,
+                };
+                check(
+                    &format!("status_color({kind:?})"),
+                    theme.status_color(kind),
+                    min,
+                );
+            }
 
             let highlight_ratio = contrast_ratio(theme.text, theme.highlight);
             assert!(
