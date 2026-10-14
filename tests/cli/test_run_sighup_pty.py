@@ -141,7 +141,8 @@ def test_closed_terminal_sighup_does_not_abort_cleanup(tmp_path: Path) -> None:
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
         f"echo $$ > {pidfile}; touch {started}; "
-        f"exec {sys.executable} -c 'import time; time.sleep({_BRANCH_SLEEP_SECONDS})' {tmp_path}"
+        f"exec {shlex.quote(sys.executable)} -c "
+        f"'import time; time.sleep({_BRANCH_SLEEP_SECONDS})' {tmp_path}"
     )
     orch = tmp_path / "pty_sighup.yml"
     orch.write_text(

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -133,15 +134,16 @@ def _port_open(port: int) -> bool:
         return False
 
 
-def _owned(pgid: int) -> bool:
+def _owned(pgid: int, *extra_tokens: str) -> bool:
     """Whether *pgid* still names a live group this module's own
-    ``_SERVER_MARKER`` can be found in (#561): a dead group's id, or one
-    reused since, never does, so a teardown must not killpg it either."""
-    return owned(pgid, (_SERVER_MARKER,), by="pgid")
+    ``_SERVER_MARKER`` (or one of *extra_tokens*) can be found in (#561): a
+    dead group's id, or one reused since, never does, so a teardown must
+    not killpg it either."""
+    return owned(pgid, (_SERVER_MARKER, *extra_tokens), by="pgid")
 
 
-def _kill_owned_group(pgid: int) -> None:
-    if _owned(pgid):
+def _kill_owned_group(pgid: int, *extra_tokens: str) -> None:
+    if _owned(pgid, *extra_tokens):
         try:
             os.killpg(pgid, signal.SIGKILL)
         except OSError:
@@ -153,12 +155,16 @@ def state_dir(tmp_path: Path) -> Iterator[Path]:
     path = tmp_path / "state"
     yield path
     # Safety net: never leave a process group a record still names running.
+    # `tmp_path` is a second token alongside `_SERVER_MARKER` (#561 review):
+    # a test's own script runs from under it, so its argv carries it even
+    # when the command predates the server guard (a group whose leader
+    # already exited, a child a test starts without going through it).
     for record_path in path.glob("*.json"):
         try:
             pgid = int(json.loads(record_path.read_text())["pgid"])
         except (OSError, ValueError, KeyError):
             continue
-        _kill_owned_group(pgid)
+        _kill_owned_group(pgid, str(tmp_path))
 
 
 @pytest.fixture
@@ -456,12 +462,21 @@ def test_a_group_whose_leader_exited_is_still_ours_and_stopped(
     plugin: ServicePlugin, state_dir: Path, tmp_path: Path
 ) -> None:
     member_pid_file = tmp_path / "member.pid"
+    # A plain `sleep 600` carries no token for the `state_dir` teardown's
+    # ownership check to find once the leader (this shell) has exited and
+    # left it as the group's only member (#561): a one-shot Python sleep
+    # with `tmp_path` appended to its own argv does, harmless to it since
+    # it never reads `sys.argv`.
+    member_cmd = (
+        f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(600)' "
+        f"{shlex.quote(str(tmp_path))}"
+    )
     started = plugin.execute(
         params={
             "action": "start",
             "name": "orphans",
             "shell": True,
-            "command": f"sleep 600 & echo $! > '{member_pid_file}'; sleep 0.5; exit 0",
+            "command": f"{member_cmd} & echo $! > '{member_pid_file}'; sleep 0.5; exit 0",
         }
     )
     assert started.ok, started.stderr
@@ -886,6 +901,14 @@ def test_started_groups_teardown_skips_a_group_already_seen_gone(
     _kill_owned_group(gone.pid)
 
     assert killpg_calls == []
+
+    live = subprocess.Popen(["sleep", "5"], start_new_session=True)
+    try:
+        _kill_owned_group(live.pid)
+        assert killpg_calls == []
+    finally:
+        live.kill()
+        live.wait(timeout=10)
 
 
 @pytest.mark.parametrize("middle", ["succeed", "fail"])
