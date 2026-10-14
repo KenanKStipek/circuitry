@@ -398,6 +398,66 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #535: `--no-animation` still gives a real, running TUI (the
+/// same alternate-screen entry/exit and clean exit the plain run
+/// above gets) -- the flag only ever stops the highlight fade and
+/// the scope icon's own trace from moving, never the TUI itself.
+#[test]
+fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: hello\n    type: tool\n    provider: shell\n    params:\n      command: echo\n      args: [\"hi\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osp_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc_arg,
+            config_arg,
+            OsStr::new("--out-dir"),
+            out_dir_arg,
+            OsStr::new("--no-animation"),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osp --no-animation should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let captured = captured_buf.lock().unwrap().clone();
+    let rendered = String::from_utf8_lossy(&captured);
+    assert!(
+        rendered.contains("\u{1b}[?1049h"),
+        "expected an alternate-screen entry sequence; got:\n{rendered:?}"
+    );
+    assert!(
+        rendered.contains("\u{1b}[?1049l"),
+        "expected an alternate-screen exit sequence; got:\n{rendered:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
 /// A SIGTERM must always
 /// be honoured, including on the finished screen (DESIGN.md §6.3: the
 /// run already ended on its own, and the TUI is just showing its
