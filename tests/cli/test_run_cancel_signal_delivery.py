@@ -139,43 +139,6 @@ effects:
     return orch, started, done, marker
 
 
-#: Bound on retrying the *whole scenario* (a fresh subprocess, started
-#: from scratch) for the one specific, narrow signature of a confirmed,
-#: documented race (#385 round 3): sending SIGINT leaves the signal
-#: handler's own flag-set (`CancellationToken.request`) racing the main
-#: thread merely getting *scheduled* at all against this worker thread's
-#: wall-clock sleep elapsing on its own -- CPython only ever runs a
-#: registered signal handler's Python-level callback on the main thread,
-#: and only once that thread's own bytecode eval loop next checks for
-#: one, so there is no in-process polling interval (``as_completed_promptly``'s
-#: 0.2s included) that can shrink a delay caused by the OS simply not
-#: scheduling that thread for long enough -- confirmed empirically under
-#: this suite's own bounded 3-burner load: ~3% of runs (5/165 across three
-#: batches), every one with the exact signature below (exit 130, step1's
-#: own `done` marker present, elapsed within bounds -- cancellation *was*
-#: eventually noticed, just not before this one body effect's own check())
-#: and never the signature of an actual logic bug (wrong exit code, step1
-#: never finishing, or the elapsed bound itself failing). Disabling cyclic
-#: GC in the child (a one-line, zero-added-instrumentation experiment,
-#: deliberately not left in the fixture itself) took it to 0/110 across
-#: two further batches under the same load -- consistent with an
-#: occasional GC pass holding the GIL continuously across the exact
-#: instant the main thread would otherwise have noticed the pending
-#: signal, though this is as far as the investigation could pin it down
-#: without the instrumentation itself perturbing the very scheduling
-#: window it was trying to observe (every attempt at in-process tracing,
-#: however light, reproduced 0 failures across ~190 combined runs under
-#: the same load that otherwise hits it a few percent of the time). A
-#: single SIGINT is the most this scenario can ever send -- unlike every
-#: other test in this suite, a *second* one here would hit
-#: `cli.interrupts`'s own "second signal during cleanup" path
-#: (`os._exit` at once, no further waiting), which would stop step1
-#: itself before it finishes and break this test's own premise -- so
-#: retrying within one signal delivery isn't an option; only retrying the
-#: whole scenario is.
-_RACE_RETRY_ATTEMPTS = 5
-
-
 def _assert_waits_for_the_uncancellable_step_then_never_writes_the_marker(
     start_fresh: Callable[[], subprocess.Popen[str]],
     *,
@@ -183,55 +146,67 @@ def _assert_waits_for_the_uncancellable_step_then_never_writes_the_marker(
     done: Path,
     marker: Path,
 ) -> None:
-    for attempt in range(1, _RACE_RETRY_ATTEMPTS + 1):
-        for p in (started, done, marker):
-            p.unlink(missing_ok=True)
-        proc = start_fresh()
-        try:
-            _wait_for_paths([started])
-        except TimeoutError:
-            _diagnose_and_fail(proc, timeout=20.0, label="waiting for step1 to start")
+    """No retry (#404): this used to retry the whole scenario up to 5
+    times for one specific, narrow race -- sending SIGINT left the
+    signal handler's own flag-set (`CancellationToken.request`) racing
+    the main thread merely getting *scheduled* at all against this
+    worker thread's wall-clock sleep elapsing on its own, confirmed
+    empirically at ~3% of runs under this suite's own bounded load. #404
+    closes that race at the source: `cli.interrupts._SignalWatcher` sets
+    the token's flag off the raw signal itself, from a thread blocked in
+    `os.read()` on a pipe `signal.set_wakeup_fd` writes to directly from
+    the signal's own low-level, async-signal-safe handler -- independent
+    of whether the main thread's own bytecode eval loop ever gets
+    scheduled in time to run the Python-level handler. A single SIGINT
+    is the most this scenario can ever send -- unlike every other test
+    in this suite, a *second* one here would hit `cli.interrupts`'s own
+    "second signal during cleanup" path (`os._exit` at once, no further
+    waiting), which would stop step1 itself before it finishes and break
+    this test's own premise.
+    """
+    for p in (started, done, marker):
+        p.unlink(missing_ok=True)
+    proc = start_fresh()
+    try:
+        _wait_for_paths([started])
+    except TimeoutError:
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for step1 to start")
 
-        t0 = time.monotonic()
-        proc.send_signal(signal.SIGINT)
-        try:
-            stdout, stderr = proc.communicate(timeout=_BLOCK_SECONDS + 20.0)
-        except subprocess.TimeoutExpired:
-            _diagnose_and_fail(
-                proc,
-                timeout=_BLOCK_SECONDS + 20.0,
-                label="waiting for the run to exit after step1 returns",
-                elapsed=time.monotonic() - t0,
-            )
-        elapsed = time.monotonic() - t0
-
-        assert proc.returncode == 130, (stdout, stderr)
-        # The run ends only once step1 actually returns -- not as soon as
-        # the signal landed, and not instantly: the kill genuinely
-        # couldn't reach it, so this is the one place in this whole suite
-        # where "promptly" does NOT mean "much less than the step's own
-        # sleep".
-        assert elapsed >= _BLOCK_SECONDS * 0.8, (
-            f"exited after {elapsed:.1f}s, well before step1's own "
-            f"{_BLOCK_SECONDS}s sleep -- the cancellation reached a step it "
-            "must not be able to"
+    t0 = time.monotonic()
+    proc.send_signal(signal.SIGINT)
+    try:
+        stdout, stderr = proc.communicate(timeout=_BLOCK_SECONDS + 20.0)
+    except subprocess.TimeoutExpired:
+        _diagnose_and_fail(
+            proc,
+            timeout=_BLOCK_SECONDS + 20.0,
+            label="waiting for the run to exit after step1 returns",
+            elapsed=time.monotonic() - t0,
         )
-        assert done.exists(), "step1 itself must have run to completion"
-        assert "Traceback" not in stderr, stderr
+    elapsed = time.monotonic() - t0
 
-        # Give a marker that was merely slow to write every chance to show
-        # up before concluding it never will.
-        time.sleep(_PAST_END_SECONDS)
-        if not marker.exists():
-            return
-        if attempt == _RACE_RETRY_ATTEMPTS:
-            raise AssertionError(
-                "step2 must never start once cancellation was requested, even "
-                "though step1 (which it followed) ignored it entirely -- "
-                f"still true after {_RACE_RETRY_ATTEMPTS} attempts, so this "
-                "is not the known race the retry above exists for (see its "
-                "own comment)"
-            )
+    assert proc.returncode == 130, (stdout, stderr)
+    # The run ends only once step1 actually returns -- not as soon as
+    # the signal landed, and not instantly: the kill genuinely
+    # couldn't reach it, so this is the one place in this whole suite
+    # where "promptly" does NOT mean "much less than the step's own
+    # sleep".
+    assert elapsed >= _BLOCK_SECONDS * 0.8, (
+        f"exited after {elapsed:.1f}s, well before step1's own "
+        f"{_BLOCK_SECONDS}s sleep -- the cancellation reached a step it "
+        "must not be able to"
+    )
+    assert done.exists(), "step1 itself must have run to completion"
+    assert "Traceback" not in stderr, stderr
+
+    # Give a marker that was merely slow to write every chance to show
+    # up before concluding it never will.
+    time.sleep(_PAST_END_SECONDS)
+    if marker.exists():
+        raise AssertionError(
+            "step2 must never start once cancellation was requested, even "
+            "though step1 (which it followed) ignored it entirely"
+        )
 
 
 def test_tree_dynamic_branch_the_kill_cannot_reach_delays_exit_and_blocks_next_step(
