@@ -79,8 +79,9 @@ Decisions" instead of citing an external project file repeatedly:
   `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `mcp`, `surrealdb`, `email_smtp`
   (§8.1).
 - Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2,
-  which also covers `openai`, `replicate` and `watsonx`), and a native `anthropic` adapter
-  (§9.3); a third adapter — named `cyberdiner`, as in Circuitry's own public source (settled
+  which also covers `replicate` and `watsonx`), a native `anthropic` adapter (§9.3), and a
+  native `openai` adapter (hand-rolled with the same shape, not built on the OpenAI-compatible
+  transport); a third adapter — named `cyberdiner`, as in Circuitry's own public source (settled
   2026-10-06) — is required for v1 by a production document set (§9.4); and the two coding-agent
   CLI adapters, `claude_code` and `pi` (§9.8), and the deterministic `scripted` adapter (§12).
 - The external plugin bridge (§8.5) exists for *tool* plugins only — `python_eval` is its
@@ -2339,9 +2340,8 @@ infrastructure configured still gets spans visible somewhere.
 The first and third bullets below landed in M0-H (issue #431), not in M3-B where an earlier
 draft of §15 put every bullet in this section: a `--live-state` mirror and a run-totals
 accumulator need no `loop` support, only the store's own write hook, so both ship with the rest
-of M0-H's run wiring. Only **loop progress** (the second bullet) still waits for M1's own loop
-lane (M1-H, #448), since it
-has nothing to report before `loop` exists.
+of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own loop lane
+(M1-H, #461, merged in #466), since it had nothing to report before `loop` existed.
 
 - **Live state**: a `Store::on_write`-driven mirror (not a `RuntimePlugin`), writing the full
   current state to a path atomically (temp file + rename, never a predictable sibling path),
