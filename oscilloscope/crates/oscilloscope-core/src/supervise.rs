@@ -176,7 +176,7 @@ impl SupervisedChild {
 
 impl Drop for SupervisedChild {
     /// osp must never leave the engine behind, panics included
-    /// (orchestrator decision on issue #424): if this instance is
+    /// (decision on issue #424): if this instance is
     /// dropped while the child is still alive (an unwind, an early
     /// `return`/`?` this code forgot to wait on), kill its whole
     /// process group rather than let it run unsupervised.

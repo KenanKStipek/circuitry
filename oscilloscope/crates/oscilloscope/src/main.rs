@@ -754,7 +754,7 @@ fn cancel_once(
     }
 }
 
-/// The orchestrator's own finding: a pty whose master end is gone,
+/// A pty whose master end is gone,
 /// but which was never osp's own *controlling* terminal (so no
 /// SIGHUP ever arrives for it), keeps answering `poll`/`read` with an
 /// immediate error and `draw` with a failed write, forever -- with no
@@ -790,7 +790,7 @@ fn cancel_for_lost_terminal(
     }
 }
 
-/// The orchestrator's own follow-up finding: a pty slave whose master
+/// A follow-up finding: a pty slave whose master
 /// has closed, but which was never osp's own *controlling* terminal
 /// (no `setsid`-then-`TIOCSCTTY` acquisition, as a driver using
 /// `start_new_session=True` alone never gives it one) raises no
@@ -832,7 +832,7 @@ fn stdin_hung_up() -> bool {
     fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
 }
 
-/// The orchestrator's own third finding, from a real `sample` of a
+/// A third finding, from a real `sample` of a
 /// still-spinning `osp`: `stdin_hung_up`'s own pre-check, run between
 /// crossterm calls, never gets another turn once the main thread is
 /// actually *inside* `event::poll`/`event::read` when the hang-up
@@ -986,7 +986,7 @@ fn run_tui(
         }
     };
 
-    // The orchestrator's own design: crossterm's own blocking
+    // Design: crossterm's own blocking
     // `event::read()` runs on its own thread from here on, never
     // this one -- see `spawn_event_reader`'s own doc comment.
     let event_rx = spawn_event_reader();
@@ -1138,7 +1138,7 @@ fn run_tui(
         let state_visible: Vec<&oscilloscope_core::render::StateRow> =
             render_state.state_rows.iter().collect();
 
-        // The orchestrator's own third finding: never call into
+        // Third finding: never call into
         // crossterm directly here at all any more -- see
         // `spawn_event_reader`'s own doc comment for why a pre-check
         // between crossterm calls, on this same thread, can't work.
@@ -1334,7 +1334,7 @@ fn run_tui(
         exit_status,
         print_run_dir,
     );
-    // The orchestrator's own design: `spawn_event_reader`'s own
+    // Design: `spawn_event_reader`'s own
     // background thread may still be stuck forever inside crossterm
     // if the terminal hung up (its own doc comment) -- a plain
     // `return`/falling off the end here would already exit the
@@ -1818,7 +1818,7 @@ fn run_tui_watch(
         }
     };
 
-    // The orchestrator's own design: crossterm's own blocking
+    // Design: crossterm's own blocking
     // `event::read()` runs on its own thread from here on, never
     // this one -- see `spawn_event_reader`'s own doc comment.
     let event_rx = spawn_event_reader();
@@ -1987,7 +1987,7 @@ fn run_tui_watch(
         let state_visible: Vec<&oscilloscope_core::render::StateRow> =
             render_state.state_rows.iter().collect();
 
-        // The orchestrator's own third finding: never call into
+        // Third finding: never call into
         // crossterm directly here at all any more -- see
         // `spawn_event_reader`'s own doc comment for why a pre-check
         // between crossterm calls, on this same thread, can't work.
@@ -2044,7 +2044,7 @@ fn run_tui_watch(
             }
         }
         if terminal_gone {
-            // The orchestrator's own finding, `osp watch`'s own shape
+            // `osp watch`'s own shape
             // of it: watch owns no engine to cancel, so this is
             // exactly the real-SIGHUP arm above, just detected from a
             // dead terminal instead of a real signal.
@@ -2105,7 +2105,7 @@ fn run_tui_watch(
         detached_while_live,
     );
     let _ = writeln!(out, "exit {code}");
-    // The orchestrator's own design -- see `run_tui`'s own matching
+    // Design -- see `run_tui`'s own matching
     // tail for why this ends the process explicitly rather than just
     // returning.
     let _ = out.flush();

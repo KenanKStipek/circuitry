@@ -172,7 +172,7 @@ pub(crate) async fn execute_loop(
     // `value`/`meta` write and no `effect_complete` at all -- the same
     // convention `exec::conditional`/`exec::dynamic` already use.
     // `VmError::Refused` (#462, lane I) is fatal for *control* only
-    // (`VmError::is_fatal`'s own doc comment, orchestrator ruling R1 on
+    // (`VmError::is_fatal`'s own doc comment, ruling R1 on
     // PR #462): it still falls through to the ordinary write below,
     // recorded on this loop's own node exactly like any other failure.
     if let Err(VmError::Cancelled) = &outcome {
@@ -1270,7 +1270,7 @@ async fn run_each_tree<'a>(
     let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
         Default::default();
     let mut errors: std::collections::BTreeMap<u32, VmError> = Default::default();
-    // `exec::dynamic::execute_tree`'s own split (orchestrator finding O1
+    // `exec::dynamic::execute_tree`'s own split (finding O1
     // on PR #462): `Cancelled` and a fatal-but-not-`Cancelled` result
     // (`VmError::Refused`) both stop dispatching new passes, like
     // `stop_on_error`, regardless of `on_error` -- but only `Cancelled`

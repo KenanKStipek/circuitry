@@ -38,8 +38,8 @@
 //! observed (the inner dynamic or the generated child), balanced only
 //! by this effect's own `effect_complete`. A [`VmError::Refused`]
 //! either the inner planner's own dispatch (an unbuildable `adapter:`)
-//! or a generated child's own fresh compile turns up (orchestrator
-//! ruling R1 on PR #462) *is* recorded on this effect's own node
+//! or a generated child's own fresh compile turns up (ruling
+//! R1 on PR #462) *is* recorded on this effect's own node
 //! either way -- the iteration record, `meta.error`, `completed_at`,
 //! `value: false` and `effect_complete`'s own error text, exactly like
 //! an ordinary failure -- but the bare, unwrapped `Refused` value is
@@ -252,7 +252,7 @@ async fn run_iteration(
         // (an unbuildable `adapter:`, `exec::prompt::execute_prompt`'s
         // own up-front `RefusalReason::UnsupportedAdapter` check) is
         // fatal for *control* only (`VmError::is_fatal`'s own doc
-        // comment, orchestrator ruling R1 on PR #462) -- recorded here
+        // comment, ruling R1 on PR #462) -- recorded here
         // exactly like an ordinary `inner_failed:` (the iteration
         // record, `meta.error`, `completed_at`, `value: false` and
         // `effect_complete`'s own error text, this module's own doc

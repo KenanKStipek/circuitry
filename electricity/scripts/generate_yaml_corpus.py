@@ -726,7 +726,7 @@ def non_ascii_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
-# D1 (the fix-pass orchestrator notes on PR #388): a non-ASCII variant of
+# D1 (the fix-pass notes on PR #388): a non-ASCII variant of
 # *every* case above, mechanically derived -- never handwritten -- so
 # this corpus's non-ASCII coverage isn't limited to the handful of cases
 # that happened to be written with non-ASCII text in mind. Two mechanical
@@ -854,7 +854,7 @@ def reader_edge_cases() -> list[dict]:
 
 
 # ---------------------------------------------------------------------
-# The orchestrator's own verification probes for PR #388's escape-
+# Verification probes for PR #388's escape-
 # position fix: non-ASCII text inside a scalar, ahead of a reported
 # position (a duplicate key, a scanner/parser error), rather than in a
 # leading comment or a key's own name the way `non_ascii_cases()`'s and
@@ -936,7 +936,7 @@ def block_scalar_eof_cases() -> list[dict]:
         "input: |\n  a-b",
         "input: |+\n  --flag",
         "- |\n  1-2",
-        # finding 5 / the orchestrator's ruling: an all-blank body at end
+        # finding 5: an all-blank body at end
         # of input, for clip and keep, with and without one further
         # blank line -- `saphyr-parser`'s empty-body branch substitutes
         # the header's own line break for PyYAML's (which never fires

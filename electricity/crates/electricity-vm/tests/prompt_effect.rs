@@ -1331,7 +1331,7 @@ async fn py_repr_of_the_wrapper_message_includes_a_raw_reply() {
     );
 }
 
-/// Orchestrator follow-up, finding N12: a real HTTP adapter's own
+/// Follow-up, finding N12: a real HTTP adapter's own
 /// `generate()` call must race cancellation too, not just the backoff
 /// sleep/limiter wait around it -- otherwise Ctrl-C/SIGTERM during a
 /// prompt would wait out the whole call (up to its own timeout) and
@@ -1426,7 +1426,7 @@ async fn cancelling_mid_generate_stops_the_run_without_recording_an_attempt() {
 /// A token cancelled *between* two fallback attempts (after the first
 /// one's own ordinary failure, before the second one ever dispatches)
 /// must stop the chain there -- checked at the top of every attempt,
-/// not just the first (orchestrator follow-up, finding N12).
+/// not just the first (follow-up, finding N12).
 #[tokio::test]
 async fn cancelling_between_fallback_attempts_never_dispatches_the_next_one() {
     struct CancelsThenPanics {

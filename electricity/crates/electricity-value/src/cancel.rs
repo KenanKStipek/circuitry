@@ -12,7 +12,7 @@
 //! a branch must not cancel the run, but cancelling the run must cancel
 //! every branch.
 //!
-//! `Send + Sync` (orchestrator ruling on PR #432's review): lane D's
+//! `Send + Sync` (ruling on PR #432's review): lane D's
 //! signal handler cancels a run from a dedicated signal-handling task or
 //! thread, not from inside the single VM task that's blocked on a tool
 //! call or a `finally:` -- the two must be able to share a token across

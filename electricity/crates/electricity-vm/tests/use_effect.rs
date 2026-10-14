@@ -414,7 +414,7 @@ async fn a_refused_path_child_never_runs_its_own_earlier_json_step() {
     assert!(error_text.contains(PREVIEW_MARKER), "got {error_text:?}");
 }
 
-/// Orchestrator ruling R3 on PR #472's review (issue #469's own test
+/// Ruling R3 on PR #472's review (issue #469's own test
 /// plan: "A use inside a tree dynamic ... no false cycle between
 /// sibling passes"). Not a conformance case: a named `dynamic`
 /// container's own `meta.adapter` picks up the same use-triggered
@@ -538,7 +538,7 @@ effects:
     );
 }
 
-/// Orchestrator R4 on PR #472's review: without a `--live-state`
+/// Ruling R4 on PR #472's review: without a `--live-state`
 /// mirror (`RunObserver::wants_child_snapshots` default `false`), a
 /// `use` child's own writes must never trigger a snapshot-and-graft
 /// pair at all -- not even once. A multi-step child (several leaf

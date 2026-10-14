@@ -43,7 +43,7 @@ _FIXTURE = Path(__file__).parent / "_fixtures" / "run_with_uncancellable_step.py
 _BLOCK_SECONDS = 3.0
 
 #: How far past the step's own end this waits before asserting its marker
-#: never appeared (the orchestrator's own "wait a few seconds past the
+#: never appeared ("wait a few seconds past the
 #: step's end" — a marker that was merely slow to write, not one that was
 #: genuinely never started, must not pass this test by accident).
 _PAST_END_SECONDS = 2.0

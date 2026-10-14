@@ -381,7 +381,7 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
 
 #[tokio::test]
 async fn a_refused_branch_inside_a_named_if_still_writes_meta_and_fires_the_end_event() {
-    // Orchestrator ruling R1 on PR #462: `VmError::Refused` is fatal
+    // Ruling R1 on PR #462: `VmError::Refused` is fatal
     // for *control* (never absorbed by `on_error`, never retried) but
     // recorded exactly like an ordinary failure for *recording*
     // purposes -- `value`/`meta.error` (the refusal text, with no name
@@ -1135,7 +1135,7 @@ async fn a_shadowing_steps_bare_name_is_invisible_without_the_branchs_own_names(
 
 #[tokio::test]
 async fn an_ifs_second_branch_step_sees_a_sibling_two_dynamic_levels_under_its_own_sibling() {
-    // Probe E (the orchestrator's own second-review follow-up on PR
+    // Probe E (a second-review follow-up on PR
     // #440's F2 fix, `a4ff2cd`): `process` (a named `dynamic`) runs an
     // unnamed `if` whose branch is `[prep, pipeline]`. `pipeline`'s own
     // `outline` step writes two `dynamic` levels under `process` --

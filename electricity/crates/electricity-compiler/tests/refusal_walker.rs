@@ -1,5 +1,5 @@
 //! Proves `electricity_bytecode::first_unsupported`'s own tool-provider
-//! refusal (issue #431's gate lane, orchestrator ruling on PR #432's
+//! refusal (issue #431's gate lane, ruling on PR #432's
 //! review: "`first_unsupported` MUST also refuse any `tool` effect
 //! whose provider ... is not `json`") works end to end against a real
 //! `check_for_run` compile -- not just the unit-level `Program`

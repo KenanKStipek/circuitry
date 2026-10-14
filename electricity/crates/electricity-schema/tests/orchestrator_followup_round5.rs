@@ -1,5 +1,5 @@
 //! Regression tests for PR #502's round-5 fix (issue #498's own
-//! orchestrator follow-up, findings C1/C2/V1-V7) -- each pinned against
+//! follow-up, findings C1/C2/V1-V7) -- each pinned against
 //! the exact schema/instance shape `probe-schema9`/`probe-pct` record
 //! against real `cof run`. Parsed through [`electricity_json::loads`],
 //! not `serde_json::Value` (a `BTreeMap`-backed `Map`, alphabetical

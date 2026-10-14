@@ -243,7 +243,7 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     // N3: a run directory from a bare `cof run --live-state ... --out
     // ...` (no `--events`) gives `osp watch` no pid to probe, and an
     // aborted run never writes a completed state either — the
-    // orchestrator's decision here is no staleness timeout (a quiet
+    // decision here is no staleness timeout (a quiet
     // run can be quiet for a long time), just a once-only stderr
     // notice of what watch is relying on instead (Ctrl-C), so a user
     // attached to a run that goes on to abort isn't left looking at a

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate electricity-schema's `validate_prompt_schema` golden corpus from
 Python's own ``jsonschema.validate`` (issue #498 ruling 6, tightened by PR
-#502's review finding 2/orchestrator ruling 2).
+#502's review finding 2, ruling 2).
 
 ``core/prompt.py::PromptRuntime._validate_schema`` calls
 ``jsonschema.validate(value, schema)``, which raises
@@ -148,7 +148,7 @@ def cases() -> list[dict]:
             {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
             {"a": "ok"},
         ),
-        # Multi-error tie-break shapes (orchestrator follow-up to PR #502's
+        # Multi-error tie-break shapes (follow-up to PR #502's
         # review, finding 2): Python's own `jsonschema.exceptions.
         # by_relevance` compares the error's own *path* element-by-element
         # as a real, second tie-break component -- not just path *length*
@@ -192,7 +192,7 @@ def cases() -> list[dict]:
             {"oneOf": [{"type": "number"}, {"minimum": 0}]},
             5,
         ),
-        # Every schema/instance pair the orchestrator's own
+        # Every schema/instance pair the
         # probe-schema/probe-schema2/probe-schema3 scripts exercised,
         # transcribed verbatim (including the ones that already matched at
         # review time, for regression coverage against a future change --
@@ -253,7 +253,7 @@ def cases() -> list[dict]:
         _case('probe_schema3_c9', {'enum': [{'b': 1, 'a': 2}]}, {'c': 3}),
         _case('probe_schema3_c10', {'type': 'integer'}, 1180591620717411303424),
         _case('probe_schema3_c11', {'type': 'array', 'items': {'type': 'object', 'properties': {'n': {'type': 'integer'}, 'm': {'type': 'string'}}, 'required': ['n']}}, [{'m': 1}, {'n': 'x'}]),
-        # Orchestrator follow-up (round 2): valid-side cases where the
+        # Follow-up (round 2): valid-side cases where the
         # `jsonschema` Rust crate and real Python disagree -- the engine
         # must be the one deciding "valid" here, never the crate (ruling
         # R6): an integral, finite float satisfies `type: integer`
@@ -458,7 +458,7 @@ def cases() -> list[dict]:
         _case('probe_schema5_c0', {'$defs': {'name': {'type': 'string'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'type': 'object', 'properties': {'n': {'$ref': '#/$defs/name'}}}, {'type': 'null'}]}}}, {'a': 1, 'z': {'n': 'ok'}}),
         _case('probe_schema5_c1', {'$defs': {'obj': {'type': 'object'}}, 'properties': {'a': {'type': 'string'}, 'z': {'anyOf': [{'$ref': '#/$defs/obj', 'required': ['k']}, {'type': 'null'}]}}}, {'a': 1, 'z': {}}),
         # Not pinned here (`unevaluatedProperties`, issue #498's own
-        # orchestrator follow-up, finding N2): not implemented by the
+        # follow-up, finding N2): not implemented by the
         # engine, so the `jsonschema` crate decides and renders this
         # one -- and the crate's own `unevaluatedProperties` keyword
         # has a *second*, independent bug beyond this crate's own
@@ -612,7 +612,7 @@ def cases() -> list[dict]:
             # only to retry via `Fraction(1e308) / Fraction(0.5)`, exact
             # and never overflowing -- `1e308`'s own exact binary value
             # really is a multiple of `0.5` (issue #498's own
-            # orchestrator follow-up, finding V5, probe-schema9 c6).
+            # follow-up, finding V5, probe-schema9 c6).
             "multiple_of_a_large_float_instance_overflows_to_the_fraction_fallback",
             {"multipleOf": 0.5},
             1e308,

@@ -37,13 +37,13 @@ fancy-regex = "0.14"
 electricity-pyre = { path = "../electricity-pyre" }
 # `validate_prompt_schema`'s own Python-`jsonschema`-style message text
 # (issue #498 ruling 6, tightened by PR #502's review and its own
-# orchestrator follow-up) -- `py_repr`/`py_float_repr` for rendering a
+# follow-up) -- `py_repr`/`py_float_repr` for rendering a
 # failing instance/limit/schema value the same way Python's `%r`/`repr()`
 # would, from the original, order-preserving tree rather than a lossy
 # `serde_json::Value`.
 electricity-value = { path = "../electricity-value" }
 # `engine.rs`'s own exact big-int arithmetic for `multipleOf`/`minimum`/
-# `maximum`/etc. (issue #498 ruling 6's own orchestrator follow-up) --
+# `maximum`/etc. (issue #498 ruling 6's own follow-up) --
 # the same version `electricity-value`'s own `IntValue::Big` already
 # pulls in, so this unifies rather than duplicating it.
 num-bigint = "0.5"

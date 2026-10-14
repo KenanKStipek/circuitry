@@ -231,7 +231,7 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
 /// `sleep` provider, long enough for every signal test below to send
 /// a signal mid-flight and still have time left to observe its
 /// effect (the same shape `electricity-cli`'s own `signals.rs` uses).
-/// The `finally: json` step is the orchestrator's own duplicate-✗
+/// The `finally: json` step is a duplicate-✗
 /// repro shape: electricity's final `end` event for `prime` and its
 /// final `state.live.json` write land within the same sub-millisecond
 /// window, which used to make osp's own polling loop observe both in

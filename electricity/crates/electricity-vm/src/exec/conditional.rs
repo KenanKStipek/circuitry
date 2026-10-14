@@ -417,7 +417,7 @@ async fn decide_and_run<'a>(
         // with no `value`/`meta.error` write at all. `VmError::Refused`
         // (M1 lane I, new: no Python equivalent) is fatal the same way
         // -- never absorbed, never retried -- but is *not* Cancelled:
-        // orchestrator ruling R1 on PR #462 treats a refusal as a
+        // ruling R1 on PR #462 treats a refusal as a
         // failure for recording purposes, same as an ordinary one
         // (`value`/`meta.error`/`completed_at` all written, the `end`
         // event's own error text read off `meta.error` by the caller's

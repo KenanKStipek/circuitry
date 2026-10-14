@@ -514,7 +514,7 @@ async fn finally_also_runs_after_a_successful_body() {
 
 #[tokio::test]
 async fn a_signal_during_an_otherwise_successful_finally_is_reported_as_interrupted() {
-    // issue #431 review finding on PR #440 (P2, orchestrator ruling:
+    // issue #431 review finding on PR #440 (P2, ruling:
     // take the suggested fix): `finally:` runs on a fresh, never-
     // cancelled token, so a signal that lands *during* it (after a
     // successful body) would otherwise go unnoticed by this dynamic's
@@ -833,7 +833,7 @@ async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_
 
 #[tokio::test]
 async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
-    // Orchestrator ruling (cross-lane cancellation seam): lane C's own
+    // Ruling (cross-lane cancellation seam): lane C's own
     // `execute_tool` returns `VmError::Cancelled` -- the *same* variant
     // this crate's own containers use -- when the token cancels it
     // mid-attempt (blocked on a concurrency slot or a retry backoff),
@@ -980,7 +980,7 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
 
 #[tokio::test]
 async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finally_still_runs() {
-    // Orchestrator finding O1 on PR #462: a refused branch used to be
+    // Finding O1 on PR #462: a refused branch used to be
     // foldable into `combine_tree_errors`'s own `VmError::Message`
     // summary once a *second* branch also failed, and `on_error:
     // continue` then absorbed that `Message` -- a capability refusal

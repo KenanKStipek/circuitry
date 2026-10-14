@@ -241,7 +241,7 @@ fn persistence_is_configured(runtime: Option<&Value>) -> bool {
 
 /// `cli/runtime_shim.py::_has_prompt_effects`, ported over a compiled
 /// [`electricity_bytecode::Program`]'s own root [`electricity_bytecode::Op`]
-/// instead of a raw `*Definition` tree -- orchestrator P1 (reachable
+/// instead of a raw `*Definition` tree -- P1 (reachable
 /// now that `use` runs): a document containing one of these needs the
 /// *real* `effective.adapter`/`effective.model` names (`runtime.
 /// effective_settings` and every container's own `meta.adapter`), not

@@ -38,7 +38,7 @@ ratatui = { version = "=0.30.0", default-features = false, features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = "0.29"
-# The orchestrator's own finding: a raw, non-blocking `libc::poll` on
+# A raw, non-blocking `libc::poll` on
 # the tty fd itself (`terminal_fd_hung_up`, main.rs) is the only thing
 # that catches a hung-up pty with no controlling terminal to raise a
 # real SIGHUP over it -- crossterm's own event source (`event::source::

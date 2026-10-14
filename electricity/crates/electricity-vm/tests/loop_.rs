@@ -1593,7 +1593,7 @@ async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() 
 /// and still leaves the loop's own node recorded exactly like an
 /// ordinary failure -- `value`/`meta.error`/`completed_at` all
 /// written, unlike a real cancellation (`VmError::is_fatal`'s own doc
-/// comment, orchestrator ruling R1 on PR #462).
+/// comment, ruling R1 on PR #462).
 #[tokio::test]
 async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_node() {
     let store = Store::new();

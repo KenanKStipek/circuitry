@@ -217,7 +217,7 @@ fn send_bytes(master: &mut File, bytes: &[u8]) {
 }
 
 fn open_slave(path: &std::path::Path) -> OwnedFd {
-    // The orchestrator's own finding: on Linux, a process that has
+    // On Linux, a process that has
     // called `setsid()` (no controlling terminal of its own yet) and
     // then opens a tty device *by path* auto-acquires it as its
     // controlling terminal, same as a bare `open()` + no `O_NOCTTY`
@@ -294,10 +294,10 @@ fn spawn_osp_on_pty_with_env(
     cmd.stdin(stdio_from_slave(slave_path));
     cmd.stdout(stdio_from_slave(slave_path));
     cmd.stderr(stdio_from_slave(slave_path));
-    // The orchestrator's own finding: `setsid()`, not merely
+    // `setsid()`, not merely
     // `setpgid(0, 0)` -- matching how a real terminal-launching
     // driver spawns its own child (Python's own `start_new_session=
-    // True`, which this orchestrator's own repro used), and the only
+    // True`), and the only
     // way osp ends up with *no controlling terminal at all* rather
     // than merely its own process group within the test harness's
     // own session. A `setsid` call from a `pre_exec` closure was once
@@ -398,7 +398,7 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
-/// The orchestrator's own acceptance criterion: a SIGTERM must always
+/// A SIGTERM must always
 /// be honoured, including on the finished screen (DESIGN.md §6.3: the
 /// run already ended on its own, and the TUI is just showing its
 /// final state until the user leaves it) -- not only while the engine
@@ -662,13 +662,13 @@ fn a_forwarded_sighup_in_the_tui_exits_129() {
     assert_no_leftover_process(work.path());
 }
 
-/// The orchestrator's own finding: a driver that merely closes its
+/// A driver that merely closes its
 /// end of the pty and exits, with no signal sent at all, leaves osp
 /// without even a SIGHUP -- the slave was never its own *controlling*
 /// terminal (`spawn_osp_on_pty`'s own `setsid`, with no `TIOCSCTTY`
 /// and, on top, `open_slave`'s own `O_NOCTTY`), so nothing tells the
 /// kernel to send one. Before the fix, `event::poll`/`read` never
-/// actually errored at all (the orchestrator's own second finding):
+/// actually errored at all:
 /// crossterm's own event source checks only `POLLIN` on the tty fd,
 /// never `POLLHUP`, and a hung-up pty slave sets both at once (EOF
 /// counts as "readable") -- so crossterm just kept calling a 0-byte
@@ -717,7 +717,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
         Duration::from_secs(20),
     );
 
-    // The orchestrator's own repro, exactly: close the master without
+    // Close the master without
     // ever sending osp a signal of any kind -- no clone of this fd
     // survives anywhere else (`wait_for_pattern_on_master` read
     // straight off this same `File`, never a `drain_continuously`
@@ -742,7 +742,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
         Some(101),
         "osp panicked on its way out of a lost terminal"
     );
-    // The orchestrator's own acceptance bound ("within 3s"), with a
+    // The acceptance bound ("within 3s"), with a
     // little slack for a loaded CI runner.
     assert!(
         elapsed < Duration::from_secs(4),
@@ -758,7 +758,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
 /// own (DESIGN.md §6.3's "the engine exiting does not, on its own,
 /// end this loop"), so there is no engine left to cancel at all, only
 /// the TUI's own loop still polling a long-gone terminal for a `q`
-/// that will now never come. The orchestrator's own second
+/// that will now never come. The second
 /// combination (`mid`/`finished`), and the one case `cancel_for_lost_
 /// terminal`'s own `exit_status.is_none()` check has nothing to do.
 #[test]

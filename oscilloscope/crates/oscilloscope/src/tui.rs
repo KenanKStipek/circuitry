@@ -739,7 +739,7 @@ fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &To
         } else {
             "s"
         };
-        // The orchestrator's own finding: a tree-loop pass's prompt,
+        // A tree-loop pass's prompt,
         // and a `use: path:` child's, are counted as running even
         // with no `prompt_sent` in state to estimate from at all
         // (DESIGN.md §1.4), so the estimate is a lower bound, same as
@@ -1047,7 +1047,7 @@ mod golden_tests {
     }
 
     /// A named tree loop (`fan`) whose body is a single prompt leaf
-    /// (`ask`) -- the orchestrator's own finding: a tree-loop pass's
+    /// (`ask`) -- a tree-loop pass's
     /// prompt is confirmed `Running` by events while never once
     /// appearing in live state at all (DESIGN.md §1.4), which
     /// `full_layout_with_a_running_tree_loop_prompt` below exercises.
@@ -1247,7 +1247,7 @@ mod golden_tests {
         let details = render::details_for(selected, plan, state);
         let mut app = App::new(engine == "watch");
         app.selected_path = Some(selected.to_string());
-        // The orchestrator's own regression: setting `selected_path`
+        // A regression: setting `selected_path`
         // directly (as every golden here does, to pin a specific row's
         // details) bypasses the key handling that would otherwise have
         // turned follow off for a manual selection -- left at its
@@ -1540,7 +1540,7 @@ mod golden_tests {
         // row still reads cancelled (DESIGN.md §2.1 rule 2), but the
         // header, which has no sign this run specifically failed, now
         // correctly reads "aborted" rather than reusing the row's own
-        // `interrupted` flag (the bug the orchestrator measured: see
+        // `interrupted` flag (see
         // `header_reads_cancelled_once_the_final_state_lands` below for
         // the real cancelled-header case).
         let plan = sample_plan();
@@ -1561,7 +1561,7 @@ mod golden_tests {
 
     #[test]
     fn header_reads_cancelled_once_the_final_state_lands() {
-        // The orchestrator's own regression: a run the user cancelled
+        // A regression: a run the user cancelled
         // (first SIGINT) always gets a final write before cof exits
         // (DESIGN.md §4.1) -- `runtime.last_run.completed_at` set and
         // `prime.meta.error` starting with "Interrupted". The header
@@ -1603,7 +1603,7 @@ mod golden_tests {
 
     #[test]
     fn header_reads_failed_for_an_invalid_document_with_no_final_state() {
-        // The orchestrator's own regression: an invalid document
+        // A regression: an invalid document
         // (cof exits 1 before execution, with no state file and its
         // own `{"ok": false, "error": ...}` JSON on stdout) must read
         // "failed", not "aborted" (DESIGN.md §2.1 rule 7's "no ended
@@ -1727,7 +1727,7 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
-    /// The orchestrator's own regression: the existing goldens above
+    /// A regression: the existing goldens above
     /// all hard-code `selected_path` directly, which (correctly, see
     /// `snapshot_at`'s own comment) now also turns follow off, so none
     /// of them actually show follow choosing anything. This one builds
@@ -1965,7 +1965,7 @@ mod golden_tests {
         );
     }
 
-    /// The orchestrator's own finding: a tree-loop pass's prompt never
+    /// A tree-loop pass's prompt never
     /// appears in live state at all while it runs (DESIGN.md §1.4), on
     /// either engine -- `fan.iter_0.ask` here has no node of its own in
     /// `state`, confirmed running only by its own `start` event. The
@@ -2016,7 +2016,7 @@ mod golden_tests {
             !text.contains("nothing in flight"),
             "a running tree-loop prompt must show in the token bar:\n{text}"
         );
-        // The orchestrator's own finding: with no running prompt's
+        // With no running prompt's
         // `prompt_sent` known at all, the estimate isn't merely low,
         // it's unknown -- `now in ≈0+` reads as a broken number (zero
         // tokens, running?); this shows a plain `?` instead.

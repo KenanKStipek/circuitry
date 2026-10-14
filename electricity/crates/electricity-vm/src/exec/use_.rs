@@ -1429,7 +1429,7 @@ impl RunObserver for ChildObserver<'_> {
     }
 
     fn write(&self) {
-        // Orchestrator R4 on PR #472's review: without a `--live-state`
+        // Ruling R4 on PR #472's review: without a `--live-state`
         // mirror (or any other caller that actually reads a graft),
         // `graft_child_write` is a no-op, so the `Store::saved` snapshot
         // below -- an `O(size of the child tree so far)` recursive
@@ -1535,7 +1535,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
-    /// Review finding 8 on PR #472 (orchestrator ruling R5): a
+    /// Review finding 8 on PR #472 (ruling R5): a
     /// retryable child-run failure must *collect* its own
     /// `record_children` record, never apply it -- only [`execute_use`]
     /// applies it, and only once it knows this attempt is the last one.

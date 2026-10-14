@@ -328,7 +328,7 @@ async fn an_inner_refusal_is_recorded_on_the_reflector_node_and_returned_unwrapp
     // take the same no-record branch as `VmError::Cancelled` --
     // skipping the iteration record, `meta.error`, `completed_at`,
     // `value: false` and `effect_complete`'s own error text entirely.
-    // Orchestrator ruling R1 on PR #462 requires it recorded like an
+    // Ruling R1 on PR #462 requires it recorded like an
     // ordinary failure, with the bare `Refused` value still returned
     // unwrapped so no enclosing `on_error: continue` ever absorbs it.
     let mut inner_prompt = plan_prompt("propose_steps");
@@ -428,7 +428,7 @@ async fn a_generated_prompt_with_an_unbuildable_provider_is_refused_and_never_ab
     // adapters::build_registry()`, issue #498 ruling 4's own
     // `is_unbuildable` check) is a mid-run `VmError::Refused`,
     // recorded on both the generated `use` node and this reflector's
-    // own node (orchestrator ruling R1 on PR #462), and returned
+    // own node (ruling R1 on PR #462), and returned
     // unwrapped so an enclosing `on_error: continue` never absorbs it
     // (this test's own chain `dynamic` -- built by `run_reflector`'s
     // own `chain_dynamic` helper with `OnError::Fail` -- fails the

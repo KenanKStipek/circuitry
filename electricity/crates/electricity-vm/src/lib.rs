@@ -308,7 +308,7 @@ impl VmError {
     /// VmError::Refused { .. })` by hand calls this instead, so a future
     /// third fatal variant only needs to be added here.
     ///
-    /// **Fatal for control, not for recording** (orchestrator ruling R1
+    /// **Fatal for control, not for recording** (ruling R1
     /// on PR #462): `is_fatal` alone governs *control* -- absorption,
     /// retries, tree dispatch. *Recording* -- whether a container writes
     /// `value`/`meta.error`/`completed_at` for its own node, and reports

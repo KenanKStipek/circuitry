@@ -460,7 +460,7 @@ async fn generate_with_fallbacks(
         // `run_tracked`'s own `RunCancelledBySignal` (a `BaseException`)
         // fires at once and is never recorded as an attempt nor
         // absorbed by `on_error` -- the same contract `exec/tool.rs`'s
-        // own cancellation check already has (orchestrator follow-up,
+        // own cancellation check already has (follow-up,
         // finding N12). Checked before *every* fallback attempt, not
         // just the first, so a token cancelled between two attempts
         // (e.g. while an earlier one was still building/dispatching)
@@ -537,7 +537,7 @@ async fn generate_with_fallbacks(
         // dispatch itself didn't -- a real HTTP adapter would
         // otherwise wait out Ctrl-C/SIGTERM for the whole call, up to
         // its own timeout, and then record it as a failed attempt
-        // (orchestrator follow-up, finding N12). Dropping the
+        // (follow-up, finding N12). Dropping the
         // `generate` future (what `select!` does to the losing branch)
         // is what actually aborts an in-flight HTTP connection.
         let generate_outcome = tokio::select! {
