@@ -5,8 +5,8 @@ Every test runs throwaway local HTTP servers (``python -m http.server``) on
 free ports and a per-test state directory; a process a test starts on its
 own (a "foreign" one the plugin must never touch) is killed by the test's
 own teardown, and so is any process group a record still names. Every such
-server also runs through ``_server_guard`` (#412), so one still survives
-even if this pytest process itself is killed before that teardown runs.
+server also runs through ``_server_guard`` (#412), so none survives even if
+this pytest process itself is killed before that teardown runs.
 """
 
 from __future__ import annotations
@@ -40,11 +40,14 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="service is POSIX onl
 
 HAS_LSOF = shutil.which("lsof") is not None
 
-#: Every test server this module starts carries this in its own argv (via
-#: ``_GUARD_SCRIPT``), so a run that got killed mid-test can be found by it
-#: afterwards without a system-wide `pgrep http.server` (#412) -- other runs
-#: on the same machine start servers too. Sourced from the environment so an
-#: outer acceptance run (see `test_a_killed_pytest_run_leaves_no_server_running`)
+#: Every long-lived test server in this module runs through ``_GUARD_SCRIPT``,
+#: whose watchdog -- forked before the guard execs into the real command, so
+#: it shares the server's process group and pgid -- keeps this in its own
+#: argv even once the guard process's own argv has become the real command's
+#: and lost it (#412): a run that got killed mid-test can be found by it
+#: afterwards without a system-wide `pgrep http.server` -- other runs on the
+#: same machine start servers too. Sourced from the environment so an outer
+#: acceptance run (see `test_a_killed_pytest_run_leaves_no_server_running`)
 #: can pick a value it already knows, to search for.
 _SERVER_MARKER = os.environ.get("CIRCUITRY_TEST_SERVER_MARKER", uuid.uuid4().hex)
 #: The wrapper every long-lived test server in this module runs through, so
@@ -449,7 +452,10 @@ def test_a_group_whose_leader_exited_is_still_ours_and_stopped(
 
 _START_AND_STAY = textwrap.dedent(
     """
-    import json, sys, time
+    import json, os, sys, time
+    sys.path.insert(0, os.path.dirname(sys.argv[3]))
+    from _server_guard import start_ppid_watchdog
+    start_ppid_watchdog()
     from circuitry.plugins.service import ServicePlugin
     port = int(sys.argv[2])
     guard, marker = sys.argv[3], sys.argv[4]
@@ -907,6 +913,10 @@ def test_finally_stop_runs_on_ctrl_c(tmp_path: Path, started_groups: list[int]) 
 # -- a killed pytest run leaves no server running (#412) --------------------
 
 
+@pytest.mark.skipif(
+    "CIRCUITRY_TEST_SERVER_MARKER" not in os.environ,
+    reason="only meant to run nested, from test_a_killed_pytest_run_leaves_no_server_running",
+)
 def test_a_service_stays_up_for_a_few_seconds_then_stops(
     plugin: ServicePlugin, state_dir: Path
 ) -> None:
@@ -934,12 +944,26 @@ def _pids_with_marker(marker: str) -> list[int]:
     return pids
 
 
-def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path) -> None:
-    """Acceptance test for #412: SIGKILL a pytest subprocess mid-test, and
-    within a few seconds no test server it started is still running --
-    found by a marker unique to this run (an argv token), never a
+@pytest.mark.parametrize(
+    "target",
+    [
+        "test_a_service_stays_up_for_a_few_seconds_then_stops",
+        "test_stop_of_a_service_another_still_running_run_started",
+    ],
+)
+def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path, target: str) -> None:
+    """Acceptance test for #412: SIGKILL a pytest subprocess mid *target*, and
+    within a few seconds no process in any process group it started is still
+    alive -- found by a marker unique to this run (an argv token), never a
     system-wide `pgrep http.server`: other runs on this machine start test
-    servers of their own at the same time."""
+    servers of their own at the same time.
+
+    Once a guarded server has exec'd, the marker survives only in its
+    watchdog's argv, not the server's own -- so `_pids_with_marker` finds the
+    watchdog, not the server it guards. Recording each matching pid's process
+    group *before* the kill and checking those groups afterwards (the
+    watchdog shares its guarded server's group) confirms the server died
+    too, not just the watchdog that outlives its own exec."""
     marker = f"circuitry-test-server-acceptance-{uuid.uuid4().hex}"
     env = {
         k: v
@@ -956,7 +980,7 @@ def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path) -> None:
             "-q",
             "-p",
             "no:cacheprovider",
-            f"{Path(__file__).resolve()}::test_a_service_stays_up_for_a_few_seconds_then_stops",
+            f"{Path(__file__).resolve()}::{target}",
         ],
         cwd=repo_root,
         env=env,
@@ -965,13 +989,19 @@ def test_a_killed_pytest_run_leaves_no_server_running(tmp_path: Path) -> None:
     )
     try:
         assert _wait_until(lambda: bool(_pids_with_marker(marker)), timeout=30), (
-            "the nested run never started a marked test server"
+            "the nested run never started a marked server or watchdog"
         )
+        pgids: set[int] = set()
+        for pid in _pids_with_marker(marker):
+            try:
+                pgids.add(os.getpgid(pid))
+            except ProcessLookupError:
+                pass
         os.kill(proc.pid, signal.SIGKILL)
         proc.wait(timeout=10)
 
-        assert _wait_until(lambda: not _pids_with_marker(marker), timeout=10), (
-            f"servers still running after the killed run: {_pids_with_marker(marker)}"
+        assert _wait_until(lambda: not any(_group_alive(pgid) for pgid in pgids), timeout=10), (
+            f"a process group is still alive after the killed run: {sorted(pgids)}"
         )
     finally:
         if proc.poll() is None:

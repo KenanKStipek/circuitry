@@ -37,6 +37,8 @@ def _watch(*, server_pid: int, expected_parent: int, max_lifetime: float) -> Non
     deadline = time.monotonic() + max_lifetime
     while True:
         time.sleep(_POLL_SECONDS)
+        if os.getppid() != server_pid:
+            return  # the server (our own forking parent) already exited
         parent = _current_parent_of(server_pid)
         if parent is None:
             return  # the server already exited on its own
@@ -55,8 +57,10 @@ def start_ppid_watchdog(max_lifetime: float = _DEFAULT_MAX_LIFETIME_SECONDS) -> 
     expected_parent = os.getppid()
     server_pid = os.getpid()
     if os.fork() == 0:
-        _watch(server_pid=server_pid, expected_parent=expected_parent, max_lifetime=max_lifetime)
-        os._exit(0)
+        try:
+            _watch(server_pid=server_pid, expected_parent=expected_parent, max_lifetime=max_lifetime)
+        finally:
+            os._exit(0)
 
 
 def main(argv: list[str]) -> int:
@@ -67,7 +71,9 @@ def main(argv: list[str]) -> int:
             max_lifetime = float(argv[i + 1])
             i += 2
         elif argv[i] == "--marker":
-            i += 2  # kept only so `ps`/`lsof` can find this invocation by it
+            i += 2  # unused here: kept so `ps`/`lsof` can find the watchdog forked
+            # below by it, since exec replaces this process's own argv with the
+            # real command's but the watchdog, sharing its process group, keeps it
         elif argv[i] == "--":
             i += 1
             break
