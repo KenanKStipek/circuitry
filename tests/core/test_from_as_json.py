@@ -223,6 +223,15 @@ def test_compile_rejects_an_unknown_as_value(bad: Any) -> None:
         compile_orchestration(orch=_tool_orch({"from": "input.x", "as": bad}))
 
 
+def test_compile_treats_a_null_as_like_no_as(monkeypatch: pytest.MonkeyPatch) -> None:
+    compile_orchestration(orch=_tool_orch({"from": "input.x", "as": None}))
+    captured = _capture_params(monkeypatch)
+
+    _execute({"v": {"from": "input.v", "as": None}}, {"input": {"v": [1]}})
+
+    assert captured["v"] == [1]
+
+
 def test_compile_unknown_as_names_the_param_path_inside_a_list() -> None:
     with pytest.raises(ValueError, match=r"Tool effect 'call' param 'params\.got\[1\]'"):
         compile_orchestration(orch=_tool_orch(["a", {"from": "input.x", "as": "yaml"}]))
