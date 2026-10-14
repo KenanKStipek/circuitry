@@ -143,10 +143,21 @@ fn bold_only_style(progress: f64) -> Option<Style> {
 
 /// `terminal`'s own fixed step colours (issue #535): since `terminal`
 /// paints no background of its own, there is no destination colour
-/// to fade *toward* — each step is instead a dimmer shade of the
-/// same warm tint, with the final step being "no override at all"
-/// (the RGB ramp's own "ending in no override").
-const TERMINAL_RAMP_TINT: (u8, u8, u8) = (224, 196, 44);
+/// to fade *toward* -- a low-chroma slate blue (HSV ~sat 0.25, close
+/// to `theme::Theme::dracula`'s own `dim`), subtle enough to read as
+/// a highlight rather than an alert on a dark terminal and still
+/// legible under dark text on a light one. Each step desaturates
+/// this tint toward [`TERMINAL_RAMP_NEUTRAL`] -- a mid grey at
+/// roughly the same perceived lightness, never black -- with the
+/// final step being "no override at all" (the RGB ramp's own "ending
+/// in no override"). An earlier version of this ramp mixed toward
+/// black and used a saturated yellow tint, which read as a bright
+/// flash rather than a subtle one and lost contrast at both ends.
+const TERMINAL_RAMP_TINT: (u8, u8, u8) = (92, 108, 122);
+/// The ramp's own fade target (see [`TERMINAL_RAMP_TINT`]): a neutral
+/// grey at approximately the tint's own lightness, so the fade only
+/// desaturates rather than darkening toward black.
+const TERMINAL_RAMP_NEUTRAL: (u8, u8, u8) = (107, 107, 107);
 
 fn step_fraction(progress: f64, steps: usize) -> Option<f64> {
     let eased = ease_out(progress);
@@ -169,7 +180,7 @@ fn style_for_progress(progress: f64, theme: &Theme, mode: ColorMode) -> Option<S
                 Some(Style::default().bg(Color::Rgb(r, g, b)))
             } else {
                 let fraction = step_fraction(progress, 6)?;
-                let (r, g, b) = mix((0, 0, 0), TERMINAL_RAMP_TINT, fraction);
+                let (r, g, b) = mix(TERMINAL_RAMP_NEUTRAL, TERMINAL_RAMP_TINT, fraction);
                 Some(Style::default().bg(Color::Rgb(r, g, b)))
             }
         }
@@ -180,7 +191,7 @@ fn style_for_progress(progress: f64, theme: &Theme, mode: ColorMode) -> Option<S
                 Some(Style::default().bg(Color::Indexed(nearest_xterm256(r, g, b))))
             } else {
                 let fraction = step_fraction(progress, 3)?;
-                let (r, g, b) = mix((0, 0, 0), TERMINAL_RAMP_TINT, fraction);
+                let (r, g, b) = mix(TERMINAL_RAMP_NEUTRAL, TERMINAL_RAMP_TINT, fraction);
                 Some(Style::default().bg(Color::Indexed(nearest_xterm256(r, g, b))))
             }
         }
@@ -279,6 +290,48 @@ mod tests {
             }
             other => panic!("expected an RGB background override, got {other:?}"),
         }
+    }
+
+    /// Finding 15: an explicit mid-fade point for truecolour, not
+    /// just t=0 and near the end -- the tint's own own red channel
+    /// (0x44) and the background's (0x28) bracket a real midpoint,
+    /// never equal to either endpoint.
+    #[test]
+    fn truecolor_named_theme_is_between_tint_and_background_mid_fade() {
+        let base = at(0);
+        let mut tracker = Tracker::new();
+        let theme = resolve(ThemeName::Dracula, ColorMode::TrueColor).theme;
+        tracker.mark("row:a", base);
+        let mid = base + FADE_DURATION / 2;
+        let style = tracker
+            .style_for("row:a", mid, &theme, ColorMode::TrueColor)
+            .unwrap();
+        match style.bg {
+            Some(Color::Rgb(r, _, _)) => {
+                assert!(
+                    (0x28..=0x44).contains(&r),
+                    "{r:#x} should sit between the background and the tint"
+                );
+                assert_ne!(r, 0x44, "mid-fade must not still read as t=0");
+                assert_ne!(r, 0x28, "mid-fade must not already read as the end");
+            }
+            other => panic!("expected an RGB background override, got {other:?}"),
+        }
+    }
+
+    /// Finding 15: an explicit mid-fade point for the 256-colour
+    /// ramp's own named-theme path.
+    #[test]
+    fn indexed_256_named_theme_gives_an_indexed_color_mid_fade() {
+        let base = at(0);
+        let mut tracker = Tracker::new();
+        let theme = resolve(ThemeName::Dracula, ColorMode::Indexed256).theme;
+        tracker.mark("row:a", base);
+        let mid = base + FADE_DURATION / 2;
+        let style = tracker
+            .style_for("row:a", mid, &theme, ColorMode::Indexed256)
+            .unwrap();
+        assert!(matches!(style.bg, Some(Color::Indexed(_))), "{style:?}");
     }
 
     #[test]
