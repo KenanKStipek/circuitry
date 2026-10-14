@@ -61,7 +61,9 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _guarded(command: list[str], *, max_lifetime: float = 300) -> list[str]:
+def _guarded(
+    command: list[str], *, max_lifetime: float = 300, started_here: bool = True
+) -> list[str]:
     """*command*, run through ``_server_guard`` so it never outlives the
     process that started it (#412), and stays discoverable by marker."""
     return [
@@ -69,6 +71,10 @@ def _guarded(command: list[str], *, max_lifetime: float = 300) -> list[str]:
         str(_GUARD_SCRIPT),
         "--max-lifetime",
         str(max_lifetime),
+        # When this process starts the server itself, a guard that finds
+        # itself already reparented by the time it runs knows its starter is
+        # gone (see `start_ppid_watchdog`).
+        *(["--expected-parent", str(os.getpid())] if started_here else []),
         "--marker",
         _SERVER_MARKER,
         "--",
@@ -76,8 +82,11 @@ def _guarded(command: list[str], *, max_lifetime: float = 300) -> list[str]:
     ]
 
 
-def _http_server(port: int) -> list[str]:
-    return _guarded([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"])
+def _http_server(port: int, *, started_here: bool = True) -> list[str]:
+    return _guarded(
+        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        started_here=started_here,
+    )
 
 
 def _group_alive(pgid: int) -> bool:
@@ -455,13 +464,14 @@ _START_AND_STAY = textwrap.dedent(
     import json, os, sys, time
     sys.path.insert(0, os.path.dirname(sys.argv[3]))
     from _server_guard import start_ppid_watchdog
-    start_ppid_watchdog()
+    start_ppid_watchdog(expected_parent=int(sys.argv[-1]))
     from circuitry.plugins.service import ServicePlugin
     port = int(sys.argv[2])
     guard, marker = sys.argv[3], sys.argv[4]
     result = ServicePlugin(state_dir=sys.argv[1]).execute(params={
         "action": "start", "name": "web", "ports": [port],
-        "command": [sys.executable, guard, "--max-lifetime", "300", "--marker", marker, "--",
+        "command": [sys.executable, guard, "--max-lifetime", "300",
+                    "--expected-parent", str(os.getpid()), "--marker", marker, "--",
                     sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
         "ready": f"http://127.0.0.1:{port}/", "ready_timeout_ms": 20000,
     })
@@ -489,7 +499,10 @@ def test_stop_of_a_service_another_still_running_run_started(
         if k not in ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
     }
     other_run = subprocess.Popen(
-        [sys.executable, str(script), str(state_dir), str(port), str(_GUARD_SCRIPT), _SERVER_MARKER],
+        [
+            sys.executable, str(script), str(state_dir), str(port), str(_GUARD_SCRIPT),
+            _SERVER_MARKER, str(os.getpid()),
+        ],
         cwd=tmp_path,
         env={**env, "HOME": str(tmp_path / "home")},
         stdin=subprocess.DEVNULL,
@@ -557,7 +570,7 @@ _STUBBORN_CHILD = textwrap.dedent(
     import os, signal, subprocess, sys, time
     sys.path.insert(0, os.path.dirname(sys.argv[3]))
     from _server_guard import start_ppid_watchdog
-    start_ppid_watchdog()
+    start_ppid_watchdog(expected_parent=int(sys.argv[-1]))
     child = subprocess.Popen([sys.executable, "-c",
         "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)"])
     with open(sys.argv[1], "w") as fh:
@@ -583,6 +596,7 @@ def test_stop_takes_down_the_whole_group_including_a_child_that_ignores_sigterm(
             "name": "stubborn",
             "command": [
                 sys.executable, str(script), str(child_pid_file), str(port), str(_GUARD_SCRIPT),
+                str(os.getpid()),
             ],
             "ports": [port],
             "ready": port,
@@ -697,7 +711,7 @@ def test_https_readiness_accepts_a_self_signed_local_certificate(
             import http.server, os, ssl, sys
             sys.path.insert(0, os.path.dirname(sys.argv[4]))
             from _server_guard import start_ppid_watchdog
-            start_ppid_watchdog()
+            start_ppid_watchdog(expected_parent=int(sys.argv[-1]))
             server = http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])),
                                             http.server.SimpleHTTPRequestHandler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -715,6 +729,7 @@ def test_https_readiness_accepts_a_self_signed_local_certificate(
             "name": "tls",
             "command": [
                 sys.executable, str(script), str(port), str(cert), str(key), str(_GUARD_SCRIPT),
+                str(os.getpid()),
             ],
             "ready": f"https://localhost:{port}/",
             "ready_timeout_ms": 20000,
@@ -803,7 +818,9 @@ def _finally_orchestration(tmp_path: Path, port: int, middle: str) -> Path:
         "        params:\n"
         "          action: start\n"
         "          name: web\n"
-        f"          command: {json.dumps(_http_server(port))}\n"
+        # An orchestration may run in a `cof run` subprocess, so the server's
+        # starter isn't necessarily this process.
+        f"          command: {json.dumps(_http_server(port, started_here=False))}\n"
         f"          ports: [{port}]\n"
         f"          ready: 'http://127.0.0.1:{port}/'\n"
         + middle_steps
@@ -930,6 +947,29 @@ def test_a_service_stays_up_for_a_few_seconds_then_stops(
     stopped = plugin.execute(params={"action": "stop", "name": "web"})
     assert stopped.ok and stopped.value["stopped"] is True
     assert not (state_dir / "web.json").exists()
+
+
+def test_a_guard_whose_starter_is_already_gone_starts_nothing(tmp_path: Path) -> None:
+    """A guard that finds itself already reparented when it starts up (its
+    starter died first) exits before running its command, so a run killed
+    while one of its servers is still starting leaves nothing behind."""
+    ran = tmp_path / "ran"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_GUARD_SCRIPT),
+            "--expected-parent",
+            str(os.getpid() + 1),  # any pid but this process's: not the guard's parent
+            "--",
+            sys.executable,
+            "-c",
+            f"open({str(ran)!r}, 'w').close()",
+        ],
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert not ran.exists()
 
 
 def _pids_with_marker(marker: str) -> list[int]:

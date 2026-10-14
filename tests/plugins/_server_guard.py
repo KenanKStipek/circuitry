@@ -50,11 +50,23 @@ def _watch(*, server_pid: int, expected_parent: int, max_lifetime: float) -> Non
             return
 
 
-def start_ppid_watchdog(max_lifetime: float = _DEFAULT_MAX_LIFETIME_SECONDS) -> None:
+def start_ppid_watchdog(
+    max_lifetime: float = _DEFAULT_MAX_LIFETIME_SECONDS, *, expected_parent: int | None = None
+) -> None:
     """Fork a background watchdog that kills this process's whole process
     group once this process is reparented (its original parent died) or
-    *max_lifetime* seconds pass, whichever comes first."""
-    expected_parent = os.getppid()
+    *max_lifetime* seconds pass, whichever comes first.
+
+    Pass *expected_parent* (the pid of the process that started this one)
+    whenever the caller knows it: without it this falls back to whatever
+    ``os.getppid()`` says now, and if that starter died while this process
+    was still starting up, that is already the process it was reparented
+    to, so the watchdog would never see a change. With it, a starter that
+    is already gone ends this process at once, before it serves anything."""
+    if expected_parent is None:
+        expected_parent = os.getppid()
+    elif os.getppid() != expected_parent:
+        os._exit(1)
     server_pid = os.getpid()
     if os.fork() == 0:
         try:
@@ -65,10 +77,14 @@ def start_ppid_watchdog(max_lifetime: float = _DEFAULT_MAX_LIFETIME_SECONDS) -> 
 
 def main(argv: list[str]) -> int:
     max_lifetime = _DEFAULT_MAX_LIFETIME_SECONDS
+    expected_parent: int | None = None
     i = 0
     while i < len(argv):
         if argv[i] == "--max-lifetime":
             max_lifetime = float(argv[i + 1])
+            i += 2
+        elif argv[i] == "--expected-parent":
+            expected_parent = int(argv[i + 1])
             i += 2
         elif argv[i] == "--marker":
             i += 2  # unused here: kept so `ps`/`lsof` can find the watchdog forked
@@ -83,7 +99,7 @@ def main(argv: list[str]) -> int:
     if not command:
         print("_server_guard: no command given after '--'", file=sys.stderr)
         return 2
-    start_ppid_watchdog(max_lifetime)
+    start_ppid_watchdog(max_lifetime, expected_parent=expected_parent)
     os.execvp(command[0], command)
     return 1  # unreachable: execvp only returns by raising
 
