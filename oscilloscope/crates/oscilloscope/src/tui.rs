@@ -2315,3 +2315,197 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 }
+
+/// Issue #535's own "buffer test" acceptance item: pins a highlighted
+/// cell's style, and that a named theme paints the background of an
+/// empty cell -- both read straight from a `ratatui::buffer::Buffer`,
+/// not a `row_line`/`Line` style, since that's what the acceptance
+/// item actually asks for.
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+    use oscilloscope_core::model::{RowStatus, StatusKind};
+    use oscilloscope_core::render::{Header, RenderState, Row, RowKind};
+    use oscilloscope_core::treemap::TreemapNode;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::time::Duration;
+
+    use crate::highlight::{FADE_DURATION, Tracker};
+    use crate::theme::{ColorMode, Theme, ThemeName};
+
+    fn minimal_render_state() -> RenderState {
+        RenderState {
+            header: Header {
+                document: "do-thing.yml".to_string(),
+                engine: "cof".to_string(),
+                run_id: None,
+                status: oscilloscope_core::model::RunStatus::Running,
+                elapsed_s: 1.0,
+                effects_done: 1,
+                effects_planned: Some(1),
+                effects_planned_is_lower_bound: false,
+                tokens_sent: 0,
+                tokens_received: 0,
+                innermost_loop_eta_s: None,
+            },
+            rows: vec![Row {
+                path: "prime.a".to_string(),
+                depth: 1,
+                label: "a".to_string(),
+                kind: RowKind::Tool,
+                status: RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            }],
+            state_rows: Vec::new(),
+            treemap: Vec::<TreemapNode>::new(),
+            token_bar: Default::default(),
+            log: Vec::new(),
+        }
+    }
+
+    /// Pins a highlighted row's own background at the instant it was
+    /// marked (`t = 0`), and that nothing overrides it any more once
+    /// the fade has fully ended -- both read from the real `Buffer`
+    /// the orchestration pane's row actually lands in, at its own
+    /// known position (one row below the header/body top border, one
+    /// column in from the pane's own left border).
+    #[test]
+    fn a_highlighted_row_pins_its_cell_background_at_t0_and_has_none_after_the_fade() {
+        let rendered = minimal_render_state();
+        let theme = Theme::for_name(ThemeName::Dracula);
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a".to_string());
+        app.follow = false;
+
+        // The orchestration pane sits below the header (3 rows) and
+        // the details pane (golden_section of the body's own height);
+        // its first row, "a", is the pane's own first interior line.
+        // Finding the exact cell by scanning for the row's own label
+        // keeps this test correct even if an unrelated layout tweak
+        // shifts it by a row or column -- the point under test is the
+        // *style* once found, not the coordinates themselves.
+        // Searches for the exact sequence `"✓ a"` -- the status glyph,
+        // a space, then the row's own label -- rather than a bare
+        // `"a"`, which also occurs inside the orchestration pane's own
+        // title ("orchestration"), found first since titles sit on an
+        // earlier row than the content below them. Returns the `a`
+        // cell itself, two columns past the match's own start.
+        fn find_row_cell(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
+            let needle: Vec<char> = "✓ a".chars().collect();
+            for y in 0..buffer.area.height {
+                for x in 0..buffer.area.width {
+                    let matches = needle.iter().enumerate().all(|(i, &c)| {
+                        x + (i as u16) < buffer.area.width
+                            && buffer[(x + i as u16, y)].symbol() == c.to_string()
+                    });
+                    if matches {
+                        return (x + needle.len() as u16 - 1, y);
+                    }
+                }
+            }
+            panic!("row \"a\" not found in the buffer");
+        }
+
+        let mut tracker = Tracker::new();
+        let now = std::time::Instant::now();
+        tracker.mark("row:prime.a", now);
+
+        let ctx_t0 = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now,
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app_t0 = app.clone();
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, None, &[], &mut app_t0, None, &ctx_t0, 0))
+            .unwrap();
+        let buffer_t0 = terminal.backend().buffer().clone();
+        let (x, y) = find_row_cell(&buffer_t0);
+        assert_eq!(
+            buffer_t0[(x, y)].bg,
+            Color::Rgb(0x44, 0x47, 0x5a),
+            "t=0 must show the theme's own highlight tint"
+        );
+
+        let ctx_after = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: now + FADE_DURATION + Duration::from_millis(1),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app_after = app.clone();
+        let backend2 = TestBackend::new(100, 24);
+        let mut terminal2 = Terminal::new(backend2).unwrap();
+        terminal2
+            .draw(|f| draw(f, &rendered, None, &[], &mut app_after, None, &ctx_after, 0))
+            .unwrap();
+        let buffer_after = terminal2.backend().buffer().clone();
+        assert_eq!(
+            buffer_after[(x, y)].bg,
+            theme.background.unwrap(),
+            "once the fade has ended, the cell reads the painted background, not the tint"
+        );
+    }
+
+    /// Issue #535's own theme acceptance item: a named theme paints
+    /// the whole screen's background, so an otherwise-untouched cell
+    /// (the frame's own top-left corner, drawn over by nothing but
+    /// the header block's border, which sets no background of its
+    /// own) still reads the theme's background colour.
+    #[test]
+    fn a_named_theme_paints_the_background_of_an_empty_cell() {
+        let rendered = minimal_render_state();
+        let theme = Theme::for_name(ThemeName::Nord);
+        let tracker = Tracker::new();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app = App::new(false);
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, None, &[], &mut app, None, &ctx, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].bg, theme.background.unwrap());
+    }
+
+    #[test]
+    fn the_terminal_theme_paints_no_background_at_all() {
+        let rendered = minimal_render_state();
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let tracker = Tracker::new();
+        let ctx = DrawCtx {
+            theme: &theme,
+            highlights: &tracker,
+            now: std::time::Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
+        let mut app = App::new(false);
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw(f, &rendered, None, &[], &mut app, None, &ctx, 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+    }
+}
