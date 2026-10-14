@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use oscilloscope_core::diff::{Differ, sort_log_lines};
 use oscilloscope_core::model::{ProcessState, RowStatus, RunModel};
@@ -237,9 +238,12 @@ fn replay_events(name: &str) -> String {
     // order, which is "every drained line after every line emitted
     // immediately" -- a later `▶` can print before an earlier, held
     // `✓` the same way in a real run whose own state poll never
-    // catches up either.
-    while differ.has_pending_ends() {
-        lines.extend(differ.settle_pending_ends());
+    // catches up either. A single already-expired `now`, not a real
+    // wait: nothing will ever arrive to resolve these early, so there
+    // is nothing to gain from actually waiting out the bound.
+    let past_the_wait_bound = Instant::now() + Duration::from_millis(1_200);
+    if differ.has_pending_ends() {
+        lines.extend(differ.settle_pending_ends(past_the_wait_bound));
     }
     sort_log_lines(&mut lines);
 

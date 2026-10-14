@@ -1813,9 +1813,9 @@ fn observe_tick(
     }
     // Ages every held `End` line one tick, whether or not this tick's
     // own poll/events had anything new (#545) — a leaf whose state
-    // never catches up within `END_SUMMARY_MAX_WAIT_POLLS` still gets
-    // a line, rather than staying silent for the rest of the run.
-    lines.extend(differ.settle_pending_ends());
+    // never catches up within the wait bound still gets a line,
+    // rather than staying silent for the rest of the run.
+    lines.extend(differ.settle_pending_ends(Instant::now()));
     oscilloscope_core::diff::sort_log_lines(&mut lines);
     (lines, state)
 }
@@ -1890,12 +1890,7 @@ fn drain_until_ended(
             last_live = live_state;
         }
         lines.extend(tick_lines);
-        // A held `End` line (#545) must not be abandoned here: this
-        // loop's own "nothing new" check would otherwise stop before
-        // `settle_pending_ends` ever gets the extra ticks it still
-        // owes it, dropping the line for good once the final read
-        // below moves on.
-        if done && !differ.has_pending_ends() {
+        if done {
             break;
         }
     }
@@ -1905,6 +1900,12 @@ fn drain_until_ended(
     if let Some(state) = &final_state {
         lines.extend(differ.diff(state, plan));
     }
+    // A held `End` line (#545) still waiting on its node's state must
+    // not be abandoned here: there is no further tick coming once
+    // this loop has stopped and the authoritative final state has
+    // already been diffed above, so this resolves each one now,
+    // against that same final state, with no more ageing.
+    lines.extend(differ.flush_pending_ends());
     (lines, final_state, last_live)
 }
 
@@ -3596,6 +3597,66 @@ mod tests {
 
         let details = oscilloscope_core::render::details_for("prime.boom", &plan, Some(&state));
         assert_eq!(details.error.as_deref(), Some("boom failed"));
+    }
+
+    #[test]
+    fn drain_until_ended_never_drops_a_held_end_line() {
+        // #545's review finding 3: a held `End` line must not be
+        // abandoned just because the drain loop itself reached a
+        // quiet pass before the token counts ever showed up over
+        // `--live-state` -- the run's authoritative final `--out`
+        // read, taken right after this loop stops, has them, and
+        // `flush_pending_ends` must resolve the line from that read
+        // rather than letting it fall back to `ok` or vanish.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = PlanTree::empty();
+        let mut live_poller = LiveStatePoller::new(dir.path().join("state.live.json"));
+        let mut events_tailer = EventsTailer::new(dir.path().join("events.jsonl"));
+        let mut differ = Differ::new();
+        let mut model = RunModel::new();
+
+        // The engine's `end` event for `prime.ask` lands with no
+        // `--live-state` ever written for it at all: `known_node`
+        // has nothing, so `diff_event` holds the line.
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"seq\":0,\"ts\":\"t\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n\
+             {\"v\":1,\"seq\":1,\"ts\":\"t\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.ask\"}\n\
+             {\"v\":1,\"seq\":2,\"ts\":\"t\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.ask\",\"ok\":true,\"ms\":100}\n\
+             {\"v\":1,\"seq\":3,\"ts\":\"t\",\"ev\":\"run_end\",\"ok\":true}\n",
+        )
+        .unwrap();
+        // Only the final `--out` ever carries `prime.ask`'s tokens --
+        // no `state.live.json` is written at all in this fixture, the
+        // sharpest form of the gap: the drain loop's own poll never
+        // sees the path either.
+        std::fs::write(
+            dir.path().join("state.json"),
+            r#"{"runtime":{"last_run":{"completed_at":"t","totals":{"wall_time_s":0.1}}},"prime":{"value":true,"meta":{"completed_at":"t","error":null},"ask":{"value":"hello back","meta":{"created_at":"t","completed_at":"t","error":null,"tokens_sent":3,"tokens_received":5}}}}"#,
+        )
+        .unwrap();
+
+        let spec = RunSpec {
+            orchestration: dir.path().join("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: dir.path().to_path_buf(),
+        };
+
+        let (lines, final_state, _) = drain_until_ended(
+            &spec.out_path(),
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+        );
+        assert!(final_state.is_some());
+        assert!(!differ.has_pending_ends());
+        assert!(
+            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 ↓5"),
+            "held line must resolve with its real tokens, not ok or nothing: {lines:?}"
+        );
     }
 
     #[test]
