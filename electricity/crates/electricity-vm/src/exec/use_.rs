@@ -496,30 +496,33 @@ async fn load_child<R: ParamsCtx>(
                 // validation failed:" wrapper, no `errors` list, just
                 // the message alone, matched *before* any other parse
                 // error is turned into an ordinary error-list entry.
-                if let Err(e @ electricity_yaml::YamlError::InvalidTimestampValue { .. }) =
-                    electricity_yaml::load_yaml(&cleaned)
-                {
-                    return Err(e.cof_message());
+                //
+                // Parsed once: the inline text's own cost of parsing
+                // doesn't need paying three times over to tell these
+                // three outcomes apart.
+                match electricity_yaml::load_yaml(&cleaned) {
+                    Err(e @ electricity_yaml::YamlError::InvalidTimestampValue { .. }) => {
+                        return Err(e.cof_message());
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Inline orchestration validation failed:\n  - YAML parse error: {e}"
+                        ));
+                    }
+                    Ok(parsed) => {
+                        if let Err(errors) = validate_inline_yaml(&parsed) {
+                            return Err(format!(
+                                "Inline orchestration validation failed:\n{}",
+                                errors
+                                    .iter()
+                                    .map(|e| format!("  - {e}"))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            ));
+                        }
+                        parsed
+                    }
                 }
-                let errors: Vec<String> = match electricity_yaml::load_yaml(&cleaned) {
-                    Err(e) => vec![format!("YAML parse error: {e}")],
-                    Ok(parsed) => match validate_inline_yaml(&parsed) {
-                        Ok(()) => Vec::new(),
-                        Err(errors) => errors,
-                    },
-                };
-                if !errors.is_empty() {
-                    return Err(format!(
-                        "Inline orchestration validation failed:\n{}",
-                        errors
-                            .iter()
-                            .map(|e| format!("  - {e}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    ));
-                }
-                electricity_yaml::load_yaml(&cleaned)
-                    .map_err(|e| format!("YAML parse error: {e}"))?
             } else {
                 let parsed = electricity_yaml::load_yaml(&cleaned).map_err(|e| e.cof_message())?;
                 if parsed.as_dict().is_none() {
