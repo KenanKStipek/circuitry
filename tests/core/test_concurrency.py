@@ -2,18 +2,58 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from typing import Any
 
 import pytest
 
+from circuitry.core import cancellation
 from circuitry.core.concurrency import (
     RunConcurrencyLimiter,
     UnknownConcurrencyGroupError,
     parse_concurrency_groups,
     parse_max_concurrency,
 )
+
+
+@contextmanager
+def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
+    """Mirrors `test_cancellation.py`'s identical helper: arms `sys.
+    settrace` to simulate a first signal's handler running the instant
+    the *next* `threading.Condition.__exit__` frame anywhere in this
+    process is entered -- parking the exception (as the real handler
+    would) if a `deferred_signal_region` is active there, raising it
+    immediately otherwise. Saves and restores `sys.gettrace()` rather
+    than clobbering it with `None` -- pytest-cov runs on CI.
+    """
+    exit_code = threading.Condition.__exit__.__code__
+    previous_trace = sys.gettrace()
+
+    def _tracer(frame: Any, event: str, arg: Any) -> Any:
+        if event == "call" and frame.f_code is exit_code:
+            sys.settrace(previous_trace)
+            if cancellation.is_deferring_first_signal():
+                cancellation.defer_first_signal_exception(
+                    KeyboardInterrupt(
+                        "simulated: deferred while a region was active"
+                    )
+                )
+                return None
+            raise KeyboardInterrupt(
+                "simulated: a signal's handler ran at Condition.__exit__'s entry"
+            )
+        return None
+
+    sys.settrace(_tracer)
+    try:
+        yield
+    finally:
+        sys.settrace(previous_trace)
 
 
 class _Tracker:
@@ -283,3 +323,41 @@ def test_parse_concurrency_groups_rejects_malformed_entries() -> None:
 
     groups, errors = parse_concurrency_groups(None)
     assert groups == {} and errors == []
+
+
+def test_a_signal_deferred_mid_acquire_still_releases_the_slot_via_finally() -> None:
+    """A first signal landing during `sem.acquire(...)` is deferred
+    (parked, not raised) while
+    `_acquire_one`'s own `deferred_signal_region` is active -- but the
+    acquire still *succeeds* underneath it, taking the one slot this
+    limiter has. If `held.append(sem)` ran only after that region had
+    already closed, the signal's parked exception -- raised at the
+    region's own exit -- would escape before the append ever happened,
+    and `acquire()`'s own `finally` would then have nothing to release:
+    a slot taken but never freed, with a limit of 1 wedging every later
+    acquire forever. `held.append` now runs *inside* the same region as
+    the successful acquire, so `acquire()`'s already-active `finally`
+    (it wraps the call to `_acquire_one` that raises) still sees it.
+    """
+    limiter = RunConcurrencyLimiter(max_concurrency=1)
+
+    with _raise_keyboard_interrupt_at_condition_exit():
+        with pytest.raises(KeyboardInterrupt):
+            with limiter.acquire():
+                raise AssertionError("never reached -- acquire() itself raises")
+
+    # If the slot leaked, this blocks forever; bounded so the test fails
+    # instead of hanging.
+    acquired_again = threading.Event()
+
+    def _try_again() -> None:
+        with limiter.acquire():
+            acquired_again.set()
+
+    thread = threading.Thread(target=_try_again, daemon=True)
+    thread.start()
+    thread.join(timeout=2.0)
+    assert acquired_again.is_set(), (
+        "the slot taken by the interrupted acquire() was never released -- "
+        "a later acquire() for the same (single) slot is stuck forever"
+    )
