@@ -19,7 +19,6 @@ than silently dropped.
 
 from __future__ import annotations
 
-import os
 import signal
 import threading
 import time
@@ -263,7 +262,7 @@ def _submit_then_self_sigint_once(
     handler's own immediate `os._exit` path instead of the cancellation
     this test means to drive.
 
-    Waits for *started* before calling `os.kill` (delta review of PR
+    Waits for *started* before delivering the signal (delta review of PR
     #553, P2-3), rather than firing it unconditionally right after
     `submit()` returns: the branch's own worker thread must already have
     passed its own pre-step1 `get_token().check()` (`loop.py`/
@@ -283,13 +282,27 @@ def _submit_then_self_sigint_once(
         if not signalled.is_set():
             signalled.set()
             assert started.wait(timeout=5.0), "branch's step1 never started"
-            os.kill(os.getpid(), signal.SIGINT)
+            # `pthread_kill` targeting the main thread's own tid, not
+            # `os.kill` on the whole process (delta review of PR #553,
+            # round 4, P2-4): POSIX is free to deliver a process-directed
+            # signal to *any* thread that doesn't have it blocked -- if
+            # the kernel picked a different one, the handler could run
+            # after this dispatch region has already exited, and this
+            # test would then also pass against the pre-fix code it
+            # means to catch. Targeting the main thread directly makes
+            # the handler run before this function returns, every time.
+            main_tid = threading.main_thread().ident
+            assert main_tid is not None
+            signal.pthread_kill(main_tid, signal.SIGINT)
         return future
 
     monkeypatch.setattr(ThreadPoolExecutor, "submit", _patched)
     return signalled
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
 def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -360,6 +373,9 @@ def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     )
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_kill"), reason="signal.pthread_kill is POSIX-only"
+)
 def test_dynamic_tree_future_not_lost_when_signal_lands_inside_executor_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -492,6 +508,13 @@ def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_i
             if prompt == "step1":
                 block_started.set()
                 assert block_release.wait(timeout=5.0), "never released"
+                # Recorded only *after* the release (delta review of PR
+                # #553, round 4, P1-1): proves step1 was still blocked,
+                # waited out, and only then completed -- not that it
+                # happened to run and finish before the signal ever did
+                # anything, which is all the pre-fix recipe below would
+                # have shown otherwise.
+                ran.append("step1")
                 return GenerateResult(text=prompt, raw={})
             if prompt == "step2":
                 ran.append("step2")
@@ -549,6 +572,22 @@ def test_dynamic_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_i
                 store=store
             )
 
+    # Proves the wait actually outlasted the release, instead of the
+    # signal cutting it short and letting execute() return well before
+    # step1 ever got to run at all (delta review of PR #553, round 4,
+    # P1-1) -- on the pre-fix code, the `with` block above exits the
+    # instant the signal lands, long before `deliver_then_release`'s own
+    # `block_release.set()` runs 0.5s later, so step1 is still blocked
+    # right here and this assertion would fail.
+    assert "step1" in ran, (
+        "the with sigterm_as_interrupt() block exited before step1 ever "
+        "finished -- the cancel path's own wait was cut short instead of "
+        "actually waiting for the still-running branch"
+    )
+
+    # Lets the branch's own worker thread, now past step1, reach step2
+    # if it's going to -- same margin the lost-future tests use.
+    time.sleep(1.0)
     assert "step2" not in ran, (
         "step2 ran after a first signal landed during the cancel path's "
         "own wait -- the wait was cut short instead of waiting for the "
@@ -581,6 +620,9 @@ def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_s
             if prompt == "step1":
                 block_started.set()
                 assert block_release.wait(timeout=5.0), "never released"
+                # Recorded only *after* the release -- see the dynamic
+                # test above (delta review of PR #553, round 4, P1-1).
+                ran.append("step1")
                 return GenerateResult(text=prompt, raw={})
             if prompt == "step2":
                 ran.append("step2")
@@ -622,6 +664,15 @@ def test_loop_tree_a_first_signal_during_the_cancel_paths_wait_does_not_cut_it_s
                 store=store
             )
 
+    # See the dynamic test above: proves the wait outlasted the release
+    # (delta review of PR #553, round 4, P1-1).
+    assert "step1" in ran, (
+        "the with sigterm_as_interrupt() block exited before step1 ever "
+        "finished -- the cancel path's own wait was cut short instead of "
+        "actually waiting for the still-running pass"
+    )
+
+    time.sleep(1.0)
     assert "step2" not in ran, (
         "step2 ran after a first signal landed during the cancel path's "
         "own wait -- the wait was cut short instead of waiting for the "

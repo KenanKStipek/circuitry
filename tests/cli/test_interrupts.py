@@ -316,6 +316,57 @@ def test_second_signal_inside_a_deferred_region_still_exits_at_once(
     assert exit_codes == [130]
 
 
+def test_second_signal_reaches_os_exit_without_calling_request_again(
+    monkeypatch,
+) -> None:
+    """P1-2 tests (delta review of PR #553, round 4): a second SIGINT/
+    SIGTERM must reach `os._exit` without calling `CancellationToken.
+    request()` a second time -- that call touches the token's own
+    `Event`, a `Condition`-backed lock a first signal's own handler
+    raising mid-release of could leave stuck (the #555-style exposure
+    P1-2 closes). A repeated SIGHUP is the no-op case: it must return
+    quietly too, without calling `request()` or `os._exit` either.
+    """
+    exit_codes: list[int] = []
+
+    def _fake_exit(code: int) -> None:
+        exit_codes.append(code)
+        raise _FakeExit
+
+    monkeypatch.setattr(os, "_exit", _fake_exit)
+
+    with sigterm_as_interrupt():
+        token = get_token()
+        request_calls: list[int | None] = []
+        real_request = token.request
+
+        def _spy_request(signum: int | None = None) -> bool:
+            request_calls.append(signum)
+            return real_request(signum=signum)
+
+        monkeypatch.setattr(token, "request", _spy_request)
+
+        handler = signal.getsignal(signal.SIGINT)
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGINT, None)
+        assert request_calls == [signal.SIGINT]
+
+        with pytest.raises(_FakeExit):
+            handler(signal.SIGINT, None)
+        assert request_calls == [signal.SIGINT], (
+            "a second SIGINT must not call request() again"
+        )
+        assert exit_codes == [130]
+
+        if hasattr(signal, "SIGHUP"):
+            sighup_handler = signal.getsignal(signal.SIGHUP)
+            assert sighup_handler(signal.SIGHUP, None) is None
+            assert request_calls == [signal.SIGINT], (
+                "a repeated SIGHUP must not call request() either"
+            )
+            assert exit_codes == [130]
+
+
 def test_wakeup_fd_unaffected_by_asyncio_run_with_no_signal_handlers_registered() -> (
     None
 ):
