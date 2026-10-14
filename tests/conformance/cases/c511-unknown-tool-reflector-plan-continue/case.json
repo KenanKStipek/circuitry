@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #511",
+  "description": "A reflector-generated plan names a tool provider that is not a cof plugin at all -- a model inventing a bad tool name. The error is generated_exec_failed with the real Unknown plugin text, never absorbed by the reflector's own on_error: continue (DESIGN Sec13's own 'never absorbed' rule for a generated plan's own fatal failure).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

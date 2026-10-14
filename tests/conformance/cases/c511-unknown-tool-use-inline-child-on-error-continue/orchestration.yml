@@ -1,0 +1,11 @@
+name: c511-unknown-tool-use-inline-child-on-error-continue
+effects:
+  - type: use
+    name: u
+    on_error: continue
+    inline: |
+      effects:
+        - type: tool
+          name: x
+          provider: nonexistent_tool
+          params: {}

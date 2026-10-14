@@ -1,0 +1,10 @@
+name: c511-unknown-tool-use-inline-child
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - type: tool
+          name: x
+          provider: nonexistent_tool
+          params: {}
