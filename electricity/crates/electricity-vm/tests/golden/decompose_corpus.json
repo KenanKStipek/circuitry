@@ -3526,6 +3526,7 @@
       ],
       "max_chunks": 5,
       "name": "blank_yaml_absent",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3546,6 +3547,7 @@
       ],
       "max_chunks": 5,
       "name": "blank_yaml_whitespace",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3577,6 +3579,7 @@
       ],
       "max_chunks": 5,
       "name": "done_false_and_too_few_chunks",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3608,6 +3611,7 @@
       "expected": [],
       "max_chunks": 5,
       "name": "done_none_is_not_rejected",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3640,6 +3644,7 @@
       "expected": [],
       "max_chunks": 5,
       "name": "done_zero_is_not_rejected",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3664,6 +3669,7 @@
       ],
       "max_chunks": 5,
       "name": "no_chunk_list_at_all",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3689,6 +3695,7 @@
       ],
       "max_chunks": 5,
       "name": "chunks_not_a_list",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3714,6 +3721,7 @@
       ],
       "max_chunks": 5,
       "name": "chunks_empty_list",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3744,6 +3752,7 @@
       ],
       "max_chunks": 5,
       "name": "one_chunk_too_few",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3794,6 +3803,7 @@
       ],
       "max_chunks": 5,
       "name": "six_chunks_over_budget_of_five",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3828,6 +3838,7 @@
       ],
       "max_chunks": 5,
       "name": "result_path_not_under_prime",
+      "raises": null,
       "result_path": "input.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3862,6 +3873,7 @@
       ],
       "max_chunks": 5,
       "name": "result_path_single_segment",
+      "raises": null,
       "result_path": "prime",
       "runtime_config": {
         "t": "dict",
@@ -3896,6 +3908,7 @@
       ],
       "max_chunks": 5,
       "name": "no_top_level_effect_for_result_path",
+      "raises": null,
       "result_path": "prime.nope.value",
       "runtime_config": {
         "t": "dict",
@@ -3928,6 +3941,7 @@
       "expected": [],
       "max_chunks": 5,
       "name": "sound_plan",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -3962,6 +3976,7 @@
       ],
       "max_chunks": 5,
       "name": "allowlist_denies_the_tool",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4021,6 +4036,7 @@
       "expected": [],
       "max_chunks": 5,
       "name": "allowlist_open_by_default",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4055,6 +4071,7 @@
       ],
       "max_chunks": 5,
       "name": "inline_check_yaml_scan_error",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4084,11 +4101,45 @@
         "t": "bool",
         "v": true
       },
+      "expected": [],
+      "max_chunks": 5,
+      "name": "inline_check_calendar_invalid_timestamp",
+      "raises": "day is out of range for month",
+      "result_path": "prime.merge.value",
+      "runtime_config": {
+        "t": "dict",
+        "v": []
+      },
+      "third_party_prefix": null,
+      "yaml": {
+        "t": "str",
+        "v": "effects: []\nwhen: 2024-02-30\n"
+      }
+    },
+    {
+      "chunks": {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      },
+      "done": {
+        "t": "bool",
+        "v": true
+      },
       "expected": [
         "Inline orchestration must be a YAML mapping with an 'effects' key."
       ],
       "max_chunks": 5,
       "name": "inline_check_non_mapping",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4123,6 +4174,7 @@
       ],
       "max_chunks": 5,
       "name": "inline_check_missing_effects_key",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4157,6 +4209,7 @@
       ],
       "max_chunks": 5,
       "name": "inline_check_near_miss_structural_error",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",
@@ -4191,6 +4244,7 @@
       ],
       "max_chunks": 5,
       "name": "inline_check_duplicate_key",
+      "raises": null,
       "result_path": "prime.merge.value",
       "runtime_config": {
         "t": "dict",

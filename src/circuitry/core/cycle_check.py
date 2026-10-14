@@ -166,7 +166,11 @@ def iter_use_children(
             seen.add(text)
             try:
                 child = yaml.safe_load(text)
-            except yaml.YAMLError:
+            except (yaml.YAMLError, ValueError):
+                # A calendar-invalid timestamp (`2024-02-30`) raises a bare
+                # `ValueError`, never a `yaml.YAMLError` (`core/yaml_load.py`'s
+                # own module doc) — just as unwalkable as a real parse error
+                # for this scanner's own purposes, so it's skipped the same way.
                 continue
             if not isinstance(child, dict):
                 continue

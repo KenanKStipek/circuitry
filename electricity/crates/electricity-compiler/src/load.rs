@@ -33,11 +33,11 @@ pub fn load_document(path: &Path) -> Result<Value, CompileError> {
         ".yml" | ".yaml" => {
             let text = read_universal_newlines(path)?;
             let value = electricity_yaml::load_yaml(&text).map_err(|err| {
-                CompileError(match err {
+                CompileError(match &err {
                     electricity_yaml::YamlError::DuplicateKey { message } => {
                         format!("{}: {message}", pathlib_str(path))
                     }
-                    other => other.to_string(),
+                    _ => err.cof_message(),
                 })
             })?;
             let value = if is_truthy(&value) {

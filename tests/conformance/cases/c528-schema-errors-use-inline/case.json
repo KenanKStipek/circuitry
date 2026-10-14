@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/use.py, issue #528",
+  "description": "An inline `use` child failing the same two-mistake document as c528-schema-errors-top-level (a bad `NamePattern` and an unrecognized `type` enum value), wrapped in the `use` effect's own inline-validation-failure text. Pins Circuitry's own wording and order exactly, not just the location.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

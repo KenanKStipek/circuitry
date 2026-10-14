@@ -654,6 +654,16 @@ fn extract_done_flag(plan_text: &str) -> Result<(bool, String), String> {
         return Ok((true, String::new()));
     }
     let parsed = match electricity_yaml::load_yaml_last_key_wins(&cleaned) {
+        // `_extract_done_flag`'s own `except _yaml.YAMLError:` -- a
+        // calendar-invalid timestamp's bare `ValueError` (issue #528's
+        // own comment) is never one, so it escapes uncaught, past
+        // `_extract_done_flag` entirely, to its one caller's own outer
+        // `except Exception as e: rec["error"] = f"parse_failed: {e}"`
+        // -- never this function's own "let use(inline) handle it"
+        // swallow, which only an *ordinary* `yaml.YAMLError` gets.
+        Err(electricity_yaml::YamlError::InvalidTimestampValue { message, .. }) => {
+            return Err(message);
+        }
         Err(_) => return Ok((false, cleaned)),
         Ok(v) => v,
     };

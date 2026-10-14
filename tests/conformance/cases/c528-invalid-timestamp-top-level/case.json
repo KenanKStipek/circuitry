@@ -1,0 +1,7 @@
+{
+  "spec_case": "cli/orchestration_loader.py::load_orchestration_file, issue #528's own comment",
+  "description": "A calendar-invalid YAML timestamp at the top level: PyYAML's own bare `ValueError` (`day is out of range for month`) escapes uncaught, with no location and no wrapper around it.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

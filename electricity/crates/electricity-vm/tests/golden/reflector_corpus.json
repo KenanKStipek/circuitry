@@ -208,6 +208,12 @@
     "plan_yaml": "done: false\nplan: not-a-dict-or-list"
   },
   {
+    "kind": "extract_done",
+    "input": "done: false\neffects: []\nwhen: 2024-02-30\n",
+    "ok": false,
+    "error": "day is out of range for month"
+  },
+  {
     "kind": "prime",
     "template": "Goal: {goal}\nContext: {context}\nMax: {max_effects}",
     "max_effects": 8,

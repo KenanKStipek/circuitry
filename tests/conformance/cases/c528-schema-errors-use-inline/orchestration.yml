@@ -1,0 +1,11 @@
+name: c528-schema-errors-use-inline
+effects:
+  - type: use
+    name: u
+    inline: |
+      effects:
+        - name: iter_0
+          type: tool
+          provider: json
+          params: {}
+        - type: bogus
