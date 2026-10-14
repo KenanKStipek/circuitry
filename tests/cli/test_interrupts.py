@@ -29,7 +29,7 @@ from circuitry.cli.interrupts import (
     SigTermInterrupt,
     sigterm_as_interrupt,
 )
-from circuitry.core.cancellation import get_token
+from circuitry.core.cancellation import deferred_signal_region, get_token
 
 requires_sighup = pytest.mark.skipif(
     not hasattr(signal, "SIGHUP"), reason="SIGHUP does not exist on this platform"
@@ -266,6 +266,56 @@ def test_a_signal_the_watcher_already_flagged_is_still_the_handler_s_first_signa
             handler(signal.SIGINT, None)
 
 
+def test_first_signal_inside_a_deferred_region_is_parked_not_raised(
+) -> None:
+    """#555: while the main thread is inside a `deferred_signal_region`
+    (`core.dynamic`/`core.loop`'s own `Future`/`executor` call sites),
+    the handler must not raise a *first* signal's own exception straight
+    into whatever lock-touching bytecode is running -- it parks it
+    (`defer_first_signal_exception`) and returns instead, leaving the
+    region to raise it once every lock it could have been holding is
+    released.
+    """
+    with sigterm_as_interrupt():
+        handler = signal.getsignal(signal.SIGINT)
+        with pytest.raises(KeyboardInterrupt):
+            with deferred_signal_region():
+                assert handler(signal.SIGINT, None) is None, (
+                    "a first signal inside a deferred region must return "
+                    "quietly, not raise"
+                )
+
+
+def test_second_signal_inside_a_deferred_region_still_exits_at_once(
+    monkeypatch,
+) -> None:
+    """#555: deferring a *first* signal's exception must never delay a
+    *second* one's `os._exit` -- that decision (`_SignalCount`) is
+    independent of whether a `deferred_signal_region` happens to be
+    active, exactly as it is independent of everything else about where
+    the main thread happens to be.
+    """
+    exit_codes: list[int] = []
+
+    def _fake_exit(code: int) -> None:
+        exit_codes.append(code)
+        raise _FakeExit
+
+    monkeypatch.setattr(os, "_exit", _fake_exit)
+
+    with sigterm_as_interrupt():
+        handler = signal.getsignal(signal.SIGINT)
+        with pytest.raises(KeyboardInterrupt):
+            with deferred_signal_region():
+                assert handler(signal.SIGINT, None) is None
+                with pytest.raises(_FakeExit):
+                    handler(signal.SIGINT, None)
+            # The region's own exit raises the first signal's parked
+            # exception -- caught by the outer `pytest.raises` above.
+
+    assert exit_codes == [130]
+
+
 def test_wakeup_fd_unaffected_by_asyncio_run_with_no_signal_handlers_registered() -> (
     None
 ):
@@ -284,10 +334,17 @@ def test_wakeup_fd_unaffected_by_asyncio_run_with_no_signal_handlers_registered(
         signal.set_wakeup_fd(registered_fd)
         assert registered_fd != -1, "the watcher's own wakeup fd must be set"
 
-        async def _trivial() -> None:
-            await asyncio.sleep(0.01)
+        async def _run_a_subprocess() -> None:
+            # Like `plugins.mcp_client`'s own stdio transport, which
+            # launches the MCP server itself as a subprocess from inside
+            # `asyncio.run()` -- a plain `asyncio.sleep` doesn't touch
+            # the event loop's subprocess machinery at all, so it can't
+            # tell this test apart from a coroutine that never exercises
+            # that path.
+            proc = await asyncio.create_subprocess_exec("true")
+            await proc.wait()
 
-        asyncio.run(_trivial())
+        asyncio.run(_run_a_subprocess())
 
         after_fd = signal.set_wakeup_fd(-1)
         signal.set_wakeup_fd(after_fd)
@@ -296,3 +353,93 @@ def test_wakeup_fd_unaffected_by_asyncio_run_with_no_signal_handlers_registered(
             "_SignalWatcher would stop seeing real signals during an "
             "MCP call"
         )
+
+
+requires_fork = pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "fork"),
+    reason="fork is POSIX-only",
+)
+
+
+@requires_fork
+def test_forked_child_sigterm_does_not_cancel_the_parent() -> None:
+    """#404 review (a): a forked child -- `plugins.python_eval`'s own
+    sandboxed child is the real-world case -- inherits CPython's
+    process-global wakeup-fd arming across the fork (fork, unlike exec,
+    never closes or resets anything). A SIGTERM delivered to such a
+    child before it resets its own handlers writes into the *parent*'s
+    wakeup pipe just as surely as one delivered to the parent itself --
+    the write happens inside the signal's own C-level trampoline, which
+    does this for every signal with a registered handler, regardless of
+    which process receives it, as long as that process's own copy of
+    `signal.set_wakeup_fd` is still armed. Without
+    `_reset_signal_state_in_fork_child` disarming it in the child, the
+    real parent process's own `_SignalWatcher` thread -- still blocked
+    reading the *same* pipe, shared with the child via the fd table
+    `fork()` duplicated -- would see that write and cancel the parent's
+    run over a signal the child sent only to itself.
+    """
+    with sigterm_as_interrupt():
+        token = get_token()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+                time.sleep(0.2)
+            except BaseException:
+                pass
+            finally:
+                os._exit(0)
+        os.waitpid(pid, 0)
+        # No in-process synchronization point to wait on here: the real
+        # bug this guards is the parent's own watcher thread reacting to
+        # a write on a pipe shared with the child via fork, not anything
+        # this test process's own memory would show directly.
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and not token.is_set():
+            time.sleep(0.01)
+        assert not token.is_set(), (
+            "a SIGTERM the forked child sent itself, inherited wakeup fd "
+            "and all, cancelled the parent's own run"
+        )
+
+
+@requires_fork
+def test_watcher_close_returns_promptly_while_a_forked_child_sleeps() -> None:
+    """#404 review (b): a forked child also inherits both of
+    `_SignalWatcher`'s own pipe fds -- a pipe only reports EOF to a
+    reader once *every* copy of its write end, across every process, is
+    closed. Without `_reset_signal_state_in_fork_child` closing the
+    child's own inherited copies right after the fork,
+    `_SignalWatcher.close` closing just the parent's own copy would
+    leave its watcher thread blocked in `os.read()` for as long as this
+    sleeping child lives, and its own `join(timeout=5.0)` would wait out
+    the full five seconds on every run cancelled while a step's forked
+    child is still alive.
+    """
+    child_pid: int | None = None
+    try:
+        before = time.monotonic()
+        with sigterm_as_interrupt():
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    time.sleep(10.0)
+                finally:
+                    os._exit(0)
+            child_pid = pid
+        elapsed = time.monotonic() - before
+    finally:
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except OSError:
+                pass
+            os.waitpid(child_pid, 0)
+
+    assert elapsed < 1.0, (
+        f"sigterm_as_interrupt's own exit (which calls _SignalWatcher.close) "
+        f"took {elapsed:.2f}s with a sleeping forked child still alive -- its "
+        "own copies of the watcher's pipe fds must be closed in the child, "
+        "not just the parent"
+    )

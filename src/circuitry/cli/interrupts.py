@@ -30,6 +30,16 @@ duration of one run:
     ``signal.set_wakeup_fd`` (#404) — see :class:`_SignalWatcher`'s own
     docstring for why the main-thread handler above cannot be the only
     thing that does this.
+  - A first signal's own exception is not always raised the instant the
+    handler below runs: while the main thread is inside one of
+    ``core.cancellation``'s own ``deferred_signal_region`` scopes (#555
+    -- a handful of ``concurrent.futures`` call sites in ``core.dynamic``/
+    ``core.loop`` that briefly touch a lock a worker thread also takes),
+    it is parked instead and raised once that region exits, by which
+    point the main thread holds none of those locks. ``request()`` still
+    runs immediately either way -- only the exception that unwinds the
+    call stack is delayed, never the token's own flag or the kill of
+    every tracked process.
   - SIGHUP (a terminal hangup: the terminal window closing, an SSH
     disconnect) is handled exactly like SIGTERM — a hangup kills the
     terminal, not this process's session, and with every tracked child
@@ -78,7 +88,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from types import FrameType
 
-from ..core.cancellation import get_token
+from ..core.cancellation import (
+    defer_first_signal_exception,
+    get_token,
+    is_deferring_first_signal,
+)
 
 #: Conventional POSIX exit code for each signal (128 + signal number) —
 #: what a second SIGINT/SIGTERM during cleanup exits with, matching the
@@ -130,11 +144,12 @@ class _SignalCount:
 def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
     def _handler(signum: int, frame: FrameType | None) -> None:
         del frame
-        # Idempotent, and needed regardless of whether `_SignalWatcher`
-        # already did this off the raw signal itself (#404): a unit test
-        # that calls this handler directly (no real signal, no watcher
-        # involved) still relies on it to set the token's flag, kill
-        # every tracked process, and record `signum`.
+        # Idempotent, and still the only thing that sets the token's flag
+        # and kills tracked processes on a platform with no `_SignalWatcher`
+        # at all (Windows -- `signal.set_wakeup_fd` there requires a
+        # socket, not a plain `os.pipe()` fd, see `sigterm_as_interrupt`)
+        # -- never delete this call, even though on POSIX `_SignalWatcher`
+        # now ordinarily beats it to the same `request()`.
         get_token().request(signum=signum)
         if not signal_count.note():
             if signum == getattr(signal, "SIGHUP", None):
@@ -148,6 +163,20 @@ def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
             # running ends the run at once, same exit code, no traceback
             # (#356) — the first signal's own cleanup gets no further say.
             os._exit(_EXIT_CODES.get(signum, 128 + signum))
+        if is_deferring_first_signal():
+            # The main thread is inside a `core.cancellation.
+            # deferred_signal_region` -- ordinarily touching a lock a
+            # worker thread also takes (#555). Raising `exc` here, into
+            # whatever bytecode that is, risks leaking that lock forever
+            # if it lands between the region's own `__exit__` being
+            # entered and the line inside it that actually releases the
+            # lock -- a real, confirmed deadlock, not a theoretical one.
+            # `request()` above already set the token's flag and killed
+            # every tracked process regardless; only *raising this
+            # exception* -- unwinding the call stack -- waits for the
+            # region to exit and do it instead.
+            defer_first_signal_exception(exc())
+            return
         raise exc
 
     return _handler
@@ -176,9 +205,9 @@ class _SignalWatcher:
     Python bytecode on the main thread, and only the next time that
     thread's own eval loop checks for one — ordinarily within a fraction
     of a second, but with no actual bound: a long call that holds the
-    GIL continuously (observed: a cyclic GC pass) or the OS simply not
-    scheduling that thread for a while can delay it past the point where
-    a tree-flow branch's own next step has already started (#399).
+    GIL continuously or the OS simply not scheduling that thread for a
+    while can delay it past the point where a tree-flow branch's own
+    next step has already started (#399).
     ``core.cancellation.CancellationToken.request`` — the thing that
     actually matters for correctness, not the exit-code bookkeeping the
     handler above still owns — does not need to wait for that: this
@@ -187,10 +216,14 @@ class _SignalWatcher:
     Writing to that fd happens inside the signal's own low-level,
     async-signal-safe C trampoline — on whichever thread the signal
     actually reached, with no dependency on the GIL or on any thread's
-    own bytecode eval loop — so this watcher's ``os.read()`` unblocks the
-    instant the signal is delivered, exactly like any other reader of a
-    pipe that just received data, regardless of what the main thread (or
-    any other thread) happens to be doing at that moment.
+    own bytecode eval loop for that write alone — so this watcher's
+    ``os.read()`` unblocks the instant the signal is delivered, exactly
+    like any other reader of a pipe that just received data, regardless
+    of what the main thread (or any other thread) happens to be doing at
+    that moment. The watcher thread's own subsequent call to ``request``
+    is ordinary Python bytecode, though, and does need the GIL like any
+    other thread's — it only ever waits for it, briefly, never for the
+    main thread's own handler.
 
     Confirmed with a real test before relying on this (not just
     asyncio's own docs): a plain ``asyncio.run()`` with no signal handler
@@ -217,6 +250,11 @@ class _SignalWatcher:
             target=self._run, name="circuitry-signal-watcher", daemon=True
         )
         self._thread.start()
+        # Read by `_reset_signal_state_in_fork_child`, below, in every
+        # child this process forks from here on -- see that function's
+        # own docstring for why a forked child needs to know this.
+        global _active_watcher
+        _active_watcher = self
 
     def _run(self) -> None:
         while True:
@@ -241,12 +279,80 @@ class _SignalWatcher:
         (or nowhere, if it was -1) rather than to an fd this is about to
         close. Closing the write end afterwards is what actually unblocks
         the watcher thread's own ``os.read()`` -- a closed write end on a
-        pipe delivers EOF to the reader at once.
+        pipe delivers EOF to the reader at once, *provided every copy of
+        it is closed* -- a forked child inherits its own copy of both
+        pipe fds (see ``_reset_signal_state_in_fork_child``), and a pipe
+        reports EOF only once every writer has closed its own copy, not
+        just this process's.
         """
+        global _active_watcher
         signal.set_wakeup_fd(self._previous_wakeup_fd)
+        _active_watcher = None
         os.close(self._write_fd)
         self._thread.join(timeout=5.0)
-        os.close(self._read_fd)
+        if not self._thread.is_alive():
+            os.close(self._read_fd)
+        # else: something else still holds a copy of the write end open
+        # (ordinarily `_reset_signal_state_in_fork_child` failing to run,
+        # or running before this watcher was registered as active) and
+        # the thread is still blocked in `os.read()` on `_read_fd` --
+        # closing it out from under that blocked read is unsafe (another
+        # thread could reopen the same fd number in between), so this
+        # leaves it open rather than risk that; it is reclaimed when the
+        # process exits either way.
+
+
+#: The one `_SignalWatcher` currently armed in this process, or `None` --
+#: read by `_reset_signal_state_in_fork_child` in every child this
+#: process ever forks (see that function's own docstring). Set by
+#: `_SignalWatcher.__init__`, cleared by its own `close()`.
+_active_watcher: _SignalWatcher | None = None
+
+
+def _reset_signal_state_in_fork_child() -> None:
+    """Undo a forked child's inherited wakeup-fd arming (#404 review).
+
+    A forked child -- ``plugins.python_eval``'s sandboxed-code child is
+    the one example in this codebase -- inherits both CPython's own
+    process-global ``signal.set_wakeup_fd`` setting and the watcher's two
+    pipe fds: ``fork``, unlike ``exec``, duplicates the whole fd table,
+    and close-on-exec only takes effect on an actual ``exec``, which a
+    plugin that never execs (python_eval runs Python in the child, not a
+    new program) never reaches. Left alone, while a watcher is armed,
+    that has two consequences for a signal landing in the child before
+    its own code gets a chance to reset its handlers (``python_eval``
+    does, but only after this hook has already run):
+
+      (a) the child's own low-level signal trampoline would still write
+          into the *parent*'s wakeup pipe -- a SIGTERM delivered to the
+          child (the same process group as the parent) would cancel the
+          parent's run, not just end the child.
+      (b) the child keeps its own copy of both pipe fds open for as long
+          as it lives. A pipe only reports EOF once every copy of its
+          write end, across every process, is closed -- so
+          :meth:`_SignalWatcher.close` closing the parent's own write end
+          is not enough while such a child survives, and its
+          ``join(timeout=5.0)`` would wait out the full five seconds
+          every time.
+
+    Registered once, at module import time, via
+    ``os.register_at_fork(after_in_child=...)`` -- it runs in *every*
+    child this process ever forks, armed watcher or not, but is a no-op
+    (``_active_watcher`` is ``None``) whenever none is.
+    """
+    watcher = _active_watcher
+    if watcher is None:
+        return
+    signal.set_wakeup_fd(-1)
+    for fd in (watcher._read_fd, watcher._write_fd):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+if os.name == "posix" and hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_signal_state_in_fork_child)
 
 
 @contextmanager
