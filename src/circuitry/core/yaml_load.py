@@ -26,10 +26,29 @@ class DuplicateKeyError(yaml.YAMLError):
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
+    """Checks each mapping's own keys for duplicates before ``<<`` merging flattens them.
+
+    ``flatten_mapping`` mutates a merged-from node's ``value`` in place, and
+    breadth-first construction can run that mutation on a mapping before the
+    mapping's own ``construct_mapping`` call ever sees it. Caching each node's
+    pristine pairs the first time ``flatten_mapping`` touches it lets the
+    duplicate check always look at the mapping's own, unmerged keys.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._own_pairs: dict[Any, list[Any]] = {}
+
+    def flatten_mapping(self, node: Any) -> None:
+        if isinstance(node, yaml.MappingNode) and node not in self._own_pairs:
+            self._own_pairs[node] = list(node.value)
+        super().flatten_mapping(node)
+
     def construct_mapping(self, node: Any, deep: bool = False) -> Any:
         if isinstance(node, yaml.MappingNode):
+            own_pairs = self._own_pairs.get(node, node.value)
             first_seen: dict[Any, str] = {}
-            for key_node, _ in node.value:
+            for key_node, _ in own_pairs:
                 if key_node.tag == _MERGE_TAG:
                     continue
                 key = self.construct_object(key_node, deep=deep)
