@@ -901,15 +901,25 @@ nearest xterm-256 index on a 256-colour terminal); `terminal` has no
 fixed background to fade toward, so it keeps a stepped ramp instead (6
 truecolour steps, 3 indexed steps, or bold for about the first half-
 second on 16 colours/`NO_COLOR`), always ending in no override at all.
+The ramp's own tint is a low-chroma slate blue, `rgb(92, 108, 122)`
+(HSV saturation ~0.25), chosen to read as subtle rather than an alert
+on a dark terminal while staying legible under dark text on a light
+one; each step desaturates it toward a neutral mid grey at roughly
+the same lightness, `rgb(107, 107, 107)`, never toward black — mixing
+toward black was tried first and either clashed with light default
+text (near full strength, on a dark terminal) or buried dark default
+text (near the ramp's dark end, on a light one).
 `--no-animation` (both `osp <doc>` and `osp watch`) skips marking
 entirely, so `Tracker::has_active` never reports anything after it.
 
 **The oscilloscope icon** (`oscilloscope_core::icon` for the trace's own
 dot math, `oscilloscope`'s own `icon.rs` for the braille/bezel drawing,
 issue #535). Sits left of the header, 3 rows high (the header's own
-height) and 16 columns wide: a rounded bezel around a 12-column braille
-screen (24×4 dots, `icon::trace_dots`), with a narrow knob strip
-(`◉`/`◎`) on the right. While the run is live, a sine-like wave scrolls
+height) and 17 columns wide: one rounded bezel, split by a `┬`/`┴`
+divider into a 12-column braille screen (24×4 dots, `icon::
+trace_dots`) and a 2-column knob strip holding a single `◉` on the
+middle row — one device, not two boxes side by side. While the run is
+live, a sine-like wave scrolls
 one dot column per frame, a frame being the same `REDRAW_INTERVAL` tick
 the redraw rule above forces while live; once the run has ended (or
 with `--no-animation`, which freezes the frame at 0 while live), the
@@ -977,7 +987,7 @@ still reads from glyphs and modifiers, never colour alone.
 
   Live tests are never run.
 - **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSP_E2E_ELECTRICITY=1`.
-- **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x16 shape, that it differs frame to frame while running, run-state colour, and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/treemap/log/token-bar/header change each, a treemap shrink staying silent, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSP_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
+- **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/treemap/log/token-bar/header change each, a treemap shrink staying silent, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSP_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents built only from electricity's M0-H scope (`tool`/`json`, `dynamic`, a CEL `if`, `finally:`), recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 
 ---
