@@ -256,6 +256,94 @@ def test_usage_before_an_exhausted_retrys_failure_still_counts_in_the_total(
     assert meta["tokens_received_total"] == 1 + 1
 
 
+def test_usage_before_a_later_attempt_that_raises_still_counts_in_the_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same as the previous test, but the exhausted attempt raises
+    outright instead of returning an ``ok=False`` ``ToolResult`` — the
+    agent tool's own failure shape when a fresh session's first turn fails
+    before it has an id to report (#391, #414). The running total written
+    back by the ok=False attempt must not be lost just because no
+    ``ToolResult`` reaches ``meta`` on the attempt that ends the retry
+    loop."""
+    fail_result = ToolResult(
+        value=None, raw={}, ok=False, stderr="still failing", tokens_sent=3, tokens_received=1
+    )
+    plugin = MagicMock()
+    plugin.execute.side_effect = [fail_result, RuntimeError("boom")]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=2, backoff_ms=10),
+    )
+    store = _make_store()
+    with pytest.raises(RuntimeError, match="boom"):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert "tokens_sent" not in meta
+    assert meta["tokens_sent_total"] == 3
+    assert meta["tokens_received_total"] == 1
+
+
+def test_usage_before_a_later_attempt_that_raises_still_reaches_the_run_totals(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same scenario as the previous test, driven through a real run
+    (#391, #414): the running total an earlier ok=False attempt wrote
+    must still reach ``state.runtime.last_run.totals`` even though the
+    attempt that ends the retry loop never produces a ``ToolResult`` at
+    all."""
+    import yaml
+
+    from circuitry.cli.config import CircuitryConfig
+    from circuitry.cli.runtime_shim import RunRequest, run
+
+    fail_result = ToolResult(
+        value=None, raw={}, ok=False, stderr="still failing", tokens_sent=3, tokens_received=1
+    )
+    plugin = MagicMock()
+    plugin.execute.side_effect = [fail_result, RuntimeError("boom")]
+    _patch_plugin(monkeypatch, plugin)
+
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(
+        yaml.safe_dump(
+            {
+                "effects": [
+                    {
+                        "type": "tool",
+                        "name": "x",
+                        "provider": "shell",
+                        "params": {},
+                        "retries": {"max_attempts": 2, "backoff_ms": 10},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=None,
+            config=CircuitryConfig(),
+            skip_preflight=True,
+        )
+    )
+    assert result.ok is False
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_sent"] == 3
+    assert totals["tokens_received"] == 1
+
+
 def test_a_reused_nodes_stale_usage_does_not_survive_a_pass_without_any(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

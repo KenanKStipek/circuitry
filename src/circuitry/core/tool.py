@@ -797,6 +797,14 @@ class ToolRuntime:
             if failure is not None:
                 meta["error"] = str(failure)
                 meta["completed_at"] = _now_iso()
+                # An earlier attempt's usage was popped at the top of this
+                # attempt's loop, and this attempt never reached a
+                # ToolResult to write it back on its own — without this, it
+                # would never reach meta at all (#391, #414).
+                if total_tokens_sent is not None:
+                    meta["tokens_sent_total"] = total_tokens_sent
+                if total_tokens_received is not None:
+                    meta["tokens_received_total"] = total_tokens_received
                 is_last_attempt = attempt_index >= max_attempts - 1
                 if self.verbose:
                     elapsed = time.monotonic() - t0

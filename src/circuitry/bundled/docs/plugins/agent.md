@@ -208,7 +208,7 @@ branch on.
 | `tokens` | `{sent, received}`: input tokens (cache reads and writes included) and output tokens; `null` when the CLI reported none |
 | `cost` | The CLI's own cost figure in USD — present only when it reports one |
 | `repair_turn` | Whether the repair turn ran |
-| `transcript` | Path of a compact log: one line per tool call and per reply, a header per turn |
+| `transcript` | Path of a compact log: one line per tool call and per reply, a header per turn; `null` when no turn has completed yet to write one |
 | `permission_mode` | Claude Code only: the `--permission-mode` passed (`dontAsk` by default when `tools` is set), or `null` when none was passed |
 | `project_settings` | Claude Code only: `isolated` (the default) or `trusted` (`trust_project_settings: true`) |
 | `project_instructions` | Claude Code only: the path of the repository's `CLAUDE.md` appended to the prompt, or `null` |
@@ -241,9 +241,12 @@ still carries the keys a success has — `session_id` so a later effect can
 resume it with `session`, `transcript` so it can be inspected — plus
 `timed_out: true` when it was a timeout. `meta.error`'s text is unchanged: it
 still names the session and the transcript. Usage already spent before the
-failure is still counted (`meta.tokens_sent`/`meta.tokens_received`). A turn
-that fails before either exists (nothing yet worth reporting) raises instead,
-as it always has.
+failure is still counted, the same split a retried `prompt` effect's own
+tokens record uses: under `meta.tokens_sent_total`/`meta.tokens_received_total`,
+not `meta.tokens_sent`/`meta.tokens_received` (those hold the attempt that
+decided the outcome, so they are absent on a failure); `meta.cost_usd` isn't
+set on a failure either. A turn that fails before either exists (nothing yet
+worth reporting) raises instead, as it always has.
 
 ## Configuration
 

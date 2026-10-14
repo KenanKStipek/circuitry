@@ -1236,7 +1236,13 @@ def _sum_tokens(d: dict) -> tuple[int, int]:
         if isinstance(expect, dict):
             sent += expect.get("tokens_sent") or 0
             recv += expect.get("tokens_received") or 0
-    for v in d.values():
+    for key, v in d.items():
+        if key == "last":
+            # A named loop's `last` is an alias of its final completed
+            # pass's own node (`node["last"] is node["iter_<N>"]`, see
+            # LoopRuntime._link_last) — the same dict, not a copy — so
+            # walking it too would double-count that pass's tokens.
+            continue
         if isinstance(v, dict):
             s, r = _sum_tokens(v)
             sent += s

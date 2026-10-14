@@ -717,10 +717,11 @@ def test_no_repair_turn_when_no_time_is_left(tmp_path: Path) -> None:
 # ---------- the transcript param (#392) ----------
 
 
+@pytest.mark.parametrize("engine", ["pi", "claude_code"])
 def test_transcript_param_is_written_at_the_given_path_including_the_repair_turn(
-    tmp_path: Path, workdir: Path
+    tmp_path: Path, workdir: Path, engine: str
 ) -> None:
-    plugin = _plugin(tmp_path, "pi")
+    plugin = _plugin(tmp_path, engine)
     transcript = workdir / "logs" / "session.log"
     result = plugin.execute(
         params={
@@ -738,8 +739,8 @@ def test_transcript_param_is_written_at_the_given_path_including_the_repair_turn
     assert result.ok, result.stderr
     assert result.raw["transcript"] == str(transcript.resolve())
     text = transcript.read_text(encoding="utf-8")
-    assert "== turn: pi session sess-abc" in text
-    assert "== repair turn: pi session sess-abc" in text
+    assert f"== turn: {engine} session sess-abc" in text
+    assert f"== repair turn: {engine} session sess-abc" in text
     assert "reply all done" in text
     assert "reply repaired" in text
     # Nothing is left in the scratch dir used for prompt files (#392).
@@ -803,10 +804,14 @@ def test_transcript_param_appends_to_an_already_existing_file(
     assert "reply all done" in text
 
 
-def test_transcript_param_still_points_at_the_file_when_a_turn_fails(
-    tmp_path: Path, workdir: Path
+@pytest.mark.parametrize("engine", ["pi", "claude_code"])
+def test_transcript_param_is_none_when_the_first_turn_fails_before_writing_it(
+    tmp_path: Path, workdir: Path, engine: str
 ) -> None:
-    plugin = _plugin(tmp_path, "pi", body="sys.exit(3)")
+    """The resumed session's first turn fails before any turn reaches
+    ``_Session.add`` (which is what actually creates the file), so there is
+    nothing at ``params['transcript']`` to point at (#391, #392)."""
+    plugin = _plugin(tmp_path, engine, body="sys.exit(3)")
     result = plugin.execute(
         params={
             "prompt": "x",
@@ -817,7 +822,37 @@ def test_transcript_param_still_points_at_the_file_when_a_turn_fails(
         timeout_seconds=30,
     )
     assert not result.ok
-    assert result.raw["transcript"] == str((workdir / "t.log").resolve())
+    assert result.raw["transcript"] is None
+    assert not (workdir / "t.log").exists()
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("engine", "sent", "received"), [("pi", 220, 10), ("claude_code", 7, 3)]
+)
+def test_transcript_param_still_points_at_the_file_when_a_later_turn_fails(
+    tmp_path: Path, workdir: Path, engine: str, sent: int, received: int
+) -> None:
+    """Once the first turn has written params['transcript'], a repair turn
+    that times out still leaves raw['transcript'] pointing at it (#391,
+    #392)."""
+    plugin = _plugin(tmp_path, engine)
+    transcript = workdir / "t.log"
+    result = plugin.execute(
+        params={
+            "prompt": "do it",
+            "cwd": str(workdir),
+            "transcript": "t.log",
+            "env": _env(tmp_path, workdir, FAKE_HANG_ON_RESUME="1"),
+            "result_file": "result.json",
+        },
+        timeout_seconds=4,
+    )
+    assert not result.ok
+    assert result.raw["transcript"] == str(transcript.resolve())
+    assert result.tokens_sent == sent
+    assert result.tokens_received == received
+    assert "reply all done" in transcript.read_text(encoding="utf-8")
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
@@ -908,14 +943,16 @@ def test_cli_error_with_nothing_to_resume_leaves_no_scratch_dir(
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
+@pytest.mark.parametrize("engine", ["pi", "claude_code"])
 def test_cli_error_on_a_resumed_session_ends_as_an_error_with_the_session_id(
-    tmp_path: Path, workdir: Path
+    tmp_path: Path, workdir: Path, engine: str
 ) -> None:
     """A non-timeout CLI failure, once the session already has an id (here:
     from ``params['session']``, before any turn even ran), also ends the
     effect as ``ok=False`` with that id in ``raw`` — not just a timeout
-    (#391). No ``timed_out`` key: this failure wasn't one."""
-    plugin = _plugin(tmp_path, "pi", body="sys.exit(3)")
+    (#391). No ``timed_out`` key: this failure wasn't one. No turn ever
+    completed, so there is no transcript to carry or to leave behind."""
+    plugin = _plugin(tmp_path, engine, body="sys.exit(3)")
     result = plugin.execute(
         params={"prompt": "x", "cwd": str(workdir), "session": "earlier-id"},
         timeout_seconds=30,
@@ -924,8 +961,10 @@ def test_cli_error_on_a_resumed_session_ends_as_an_error_with_the_session_id(
     assert result.stderr is not None
     assert "session earlier-id can be resumed with params['session']" in result.stderr
     assert result.raw["session_id"] == "earlier-id"
+    assert result.raw["transcript"] is None
     assert "timed_out" not in result.raw
     assert result.tokens_sent is None
+    assert list((tmp_path / "scratch").iterdir()) == []
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
@@ -1026,6 +1065,99 @@ def test_on_error_fail_still_raises_for_a_turn_failure_with_context(
     with pytest.raises(RuntimeError, match="can be resumed"):
         ToolRuntime(defn).execute(store=store, ctx={})
     assert store.state["x"]["meta"]["raw"]["session_id"] == "earlier-id"
+
+
+def test_a_timed_out_turn_through_toolruntime_carries_timed_out_in_meta_raw(
+    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repair turn that times out ends the effect as ``ok=False`` the
+    same way through ``ToolRuntime`` as at the plugin level (#391):
+    ``meta.raw`` carries ``timed_out``, and ``ToolRuntime``'s own failure
+    handling (``meta.error``, the ``on_error`` branch) applies exactly as
+    for any other tool failure."""
+    from circuitry.core.store import Store
+    from circuitry.core.tool import ToolDefinition, ToolRuntime
+
+    plugin = _plugin(tmp_path, "pi")
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="agent",
+        params={
+            "prompt": "do it",
+            "cwd": str(workdir),
+            "env": _env(tmp_path, workdir, FAKE_HANG_ON_RESUME="1"),
+            "result_file": "result.json",
+        },
+        timeout_ms=4000,
+        on_error="continue",
+    )
+    store = Store({})
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["raw"]["timed_out"] is True
+    assert meta["raw"]["session_id"] == "sess-abc"
+    assert meta["error"] is not None
+    assert store.state["x"]["value"] is None
+
+
+def test_run_exit_status_is_unaffected_by_a_turn_failure_with_context(
+    tmp_path: Path, workdir: Path
+) -> None:
+    """The run's own exit status (``RunResult.ok``) for an agent effect that
+    fails after the session has an id is the same ``ok=False`` any other
+    tool failure gives — #391 carves out no special case (default
+    ``on_error: fail``)."""
+    import yaml
+
+    from circuitry.cli.config import CircuitryConfig
+    from circuitry.cli.runtime_shim import RunRequest, run
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pi = write_fake_cli(bin_dir, "pi", body="sys.exit(3)")
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(
+        yaml.safe_dump(
+            {
+                "effects": [
+                    {
+                        "type": "tool",
+                        "name": "x",
+                        "provider": "agent",
+                        "timeout_ms": 30000,
+                        "params": {
+                            "prompt": "x",
+                            "cwd": str(workdir),
+                            "session": "earlier-id",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=None,
+            config=CircuitryConfig(
+                runtime={"plugins": {"agent": {"pi": {"binary": str(fake_pi)}}}}
+            ),
+            skip_preflight=True,
+        )
+    )
+    assert result.ok is False
+    assert result.error is not None
+    assert "session earlier-id can be resumed with params['session']" in result.error
 
 
 # ---------- params, config, preflight, capabilities ----------

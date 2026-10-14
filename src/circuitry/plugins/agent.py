@@ -385,7 +385,13 @@ class _Session:
             "tool_calls": self.tool_calls,
             "tokens": {"sent": self.tokens_sent, "received": self.tokens_received},
             "repair_turn": self.repair_turn,
-            "transcript": str(self.transcript_path),
+            # None when no turn has completed yet to write one (a turn
+            # that fails before the session has an id or a transcript
+            # exists raises instead of reaching here; one that fails after
+            # either exists can still get here before any turn finished).
+            "transcript": (
+                str(self.transcript_path) if self.transcript_path.exists() else None
+            ),
         }
         if self.cost_usd is not None:
             raw["cost"] = self.cost_usd
@@ -788,6 +794,10 @@ class AgentPlugin:
                     f"agent: params['transcript'] {str(transcript_path)!r}'s directory could not "
                     f"be created: {exc}"
                 ) from exc
+            if transcript_path.is_dir():
+                raise ValueError(
+                    f"agent: params['transcript'] {str(transcript_path)!r} is a directory."
+                )
         unset_env = (
             _str_list(params, "unset_env") if params.get("unset_env") is not None
             else DEFAULT_UNSET_ENV
@@ -835,6 +845,10 @@ class AgentPlugin:
         # Holds the prompt files while a turn runs, and — without
         # params['transcript'] — the transcript after.
         scratch_dir = Path(tempfile.mkdtemp(prefix=f"cof-agent-{engine_name}-"))
+        # Only set once run_agent_session has returned (not raised) — every
+        # exception path (nothing yet to resume or inspect; a genuinely
+        # unexpected error) removes scratch_dir unconditionally.
+        keep_scratch_dir = False
         try:
             result = run_agent_session(
                 engine,
@@ -846,21 +860,16 @@ class AgentPlugin:
                 scratch_dir=scratch_dir,
                 transcript_path=transcript_path,
             )
-        except AgentCliError:
-            # The error names the transcript when there is one (_run_turn).
-            if not (scratch_dir / TRANSCRIPT_NAME).exists():
-                shutil.rmtree(scratch_dir, ignore_errors=True)
-            raise
-        except BaseException:
-            # No result or error carries the transcript's path, so nothing
-            # could read it.
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-            raise
-        finally:
             # With params['transcript'], the transcript never lives under
             # scratch_dir (it goes straight to transcript_path), so nothing
-            # in it is worth keeping once the session is done (#392).
-            if transcript_path is not None:
+            # in it is worth keeping (#392). Without it, a turn that failed
+            # before any turn completed never wrote scratch_dir/TRANSCRIPT_NAME
+            # either, so there is nothing in it worth keeping (#391).
+            keep_scratch_dir = transcript_path is None and (
+                scratch_dir / TRANSCRIPT_NAME
+            ).exists()
+        finally:
+            if not keep_scratch_dir:
                 shutil.rmtree(scratch_dir, ignore_errors=True)
         return replace(result, raw={**result.raw, **claude_raw})
 
