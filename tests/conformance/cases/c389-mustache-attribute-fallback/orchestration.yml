@@ -1,0 +1,17 @@
+name: c389-mustache-attribute-fallback
+effects:
+  - type: yield
+    name: shapes
+    template: |-
+      title=[{{#title}}{{title}}{{/title}}]
+      list=[{{#tags}}{{count}}/{{index}} {{/tags}}]
+      year=[{{d.year}}]
+      method=[{{d.isoformat}}]
+      fallthrough=[{{#d}}{{isoformat}}{{/d}}]
+    inputs:
+      title: Intro
+      tags: [a, b]
+      count: C
+      index: I
+      d: 2026-10-14
+      isoformat: OUTER

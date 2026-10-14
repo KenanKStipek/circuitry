@@ -12,6 +12,7 @@ template that still fails at run time goes through the effect's
 from __future__ import annotations
 
 import contextvars
+import datetime
 from typing import Any
 
 import chevron  # type: ignore[import-untyped]
@@ -46,6 +47,80 @@ def _escape_aware(string: str) -> str:
 # see the module docstring of this file for why ``render_template`` is the
 # only place chevron is ever invoked.
 chevron.renderer._html_escape = _escape_aware
+
+
+#: The only ``getattr`` fallback :func:`_get_key` resolves — a
+#: ``datetime.date``/``datetime.datetime``'s own data fields — keyed by
+#: the narrowest type each applies to. Everything else a ``getattr`` call
+#: could reach (a method, ``int``/``float``'s ``real``/``imag``/
+#: ``numerator``/``denominator``, ``tzinfo``/``fold``/``min``/``max``/
+#: ``resolution``, any dunder) is a miss, exactly like an
+#: ``AttributeError`` would be.
+_DATE_ATTRS = frozenset({"year", "month", "day"})
+_DATETIME_ATTRS = _DATE_ATTRS | frozenset({"hour", "minute", "second", "microsecond"})
+
+
+def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
+    """chevron's own ``_get_key`` (``renderer.py``), with one change: a
+    ``getattr`` hit resolves only a ``datetime.date``/``datetime.datetime``
+    value's own ``year``/``month``/``day``/``hour``/``minute``/``second``/
+    ``microsecond`` fields; every other attribute — a method, a dunder, any
+    other type's own attributes — is treated as a miss, exactly like an
+    ``AttributeError`` would be, instead of being returned.
+
+    Mustache has no concept of a method call; a tag whose name happens to
+    match one of its scope's methods (``title`` inside ``{{#title}}``,
+    ``count``/``format``/... on any string) means the value in scope, not
+    a description of that method. Vendored rather than patched upstream
+    (#389) so a miss still falls through to the next scope the same way
+    any other missing key does, and the one named exception — a date or
+    datetime's own calendar fields, ``{{d.year}}`` — keeps resolving
+    exactly as before.
+    """
+    if key == ".":
+        return scopes[0]
+
+    for outer_scope in scopes:
+        current = outer_scope
+        try:
+            for child in key.split("."):
+                try:
+                    current = current[child]
+                except (TypeError, AttributeError):
+                    try:
+                        attr = getattr(current, child)
+                    except (TypeError, AttributeError):
+                        current = current[int(child)]
+                    else:
+                        if isinstance(current, datetime.datetime):
+                            allowed = child in _DATETIME_ATTRS
+                        elif isinstance(current, datetime.date):
+                            allowed = child in _DATE_ATTRS
+                        else:
+                            allowed = False
+                        current = attr if allowed else current[int(child)]
+
+            if current in (0, False):
+                return current
+
+            try:
+                if current._CHEVRON_return_scope_when_falsy:
+                    return current
+            except AttributeError:
+                return current or ""
+        except (AttributeError, KeyError, IndexError, ValueError):
+            pass
+
+    if warn:
+        import sys
+        from os import linesep
+
+        sys.stderr.write(f"Could not find key '{key}'{linesep}")
+
+    return ""
+
+
+chevron.renderer._get_key = _get_key
 
 
 class TemplateError(ValueError):

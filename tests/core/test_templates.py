@@ -12,6 +12,7 @@ import io
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,58 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
     assert render_template("hi {{a}}", {"a": 1}) == "hi 1"
     with pytest.raises(TemplateError, match=r"^params\.input: malformed Mustache template"):
         render_template(BROKEN, {}, label="params.input")
+
+
+def test_section_tag_matching_the_section_name_renders_the_value_not_a_method() -> None:
+    """``{{#title}}{{title}}{{/title}}`` means the string, never ``str.title`` (#389)."""
+    assert render_template("{{#title}}# {{title}}{{/title}}", {"title": "Intro"}) == "# Intro"
+
+
+def test_list_section_of_strings_falls_through_to_an_outer_scope_for_a_str_method_name() -> None:
+    out = render_template(
+        "{{#tags}}{{.}} ({{title}}) {{/tags}}", {"tags": ["a", "b"], "title": "Outer"}
+    )
+    assert out == "a (Outer) b (Outer) "
+
+
+def test_date_data_attribute_still_renders() -> None:
+    assert render_template("{{d.year}}", {"d": date(2026, 10, 14)}) == "2026"
+
+
+def test_date_method_name_falls_through_instead_of_rendering_a_bound_method() -> None:
+    d = date(2026, 10, 14)
+    assert render_template("{{d.isoformat}}", {"d": d}) == ""
+    # "d.isoformat" and "isoformat" are different dotted keys, so an outer
+    # "isoformat" key doesn't satisfy this one either.
+    assert render_template("{{d.isoformat}}", {"d": d, "isoformat": "OUTER"}) == ""
+
+
+def test_date_method_name_falls_through_to_an_outer_scope_inside_a_section() -> None:
+    """``{{#d}}{{isoformat}}{{/d}}`` pushes the date as the current scope; a
+    miss there falls through to the enclosing scope's own ``isoformat`` key,
+    unlike the dotted form above, which never crosses a scope boundary."""
+    d = date(2026, 10, 14)
+    assert (
+        render_template("{{#d}}{{isoformat}}{{/d}}", {"d": d, "isoformat": "OUTER"}) == "OUTER"
+    )
+
+
+def test_non_date_attribute_fallback_is_a_miss() -> None:
+    """The ``getattr`` fallback resolves only a date/datetime's own calendar
+    fields (#389); every other attribute — an int/float's own numeric
+    attributes, a dunder — is a miss, like any other missing key."""
+    assert render_template("{{#n}}{{real}}{{/n}}", {"n": 5}) == ""
+    assert render_template("{{__doc__}}", {"__doc__": "OUTER"}) == "OUTER"
+
+
+def test_datetime_attribute_fallback_is_restricted_to_its_own_fields() -> None:
+    """``tzinfo`` is a real attribute of ``datetime.datetime`` but not one of
+    the named calendar fields, so it is a miss, not the timezone."""
+    from datetime import datetime, timezone
+
+    dt = datetime(2026, 10, 14, 9, 30, tzinfo=timezone.utc)
+    assert render_template("{{dt.hour}}", {"dt": dt}) == "9"
+    assert render_template("{{#dt}}{{tzinfo}}{{/dt}}", {"dt": dt, "tzinfo": "OUTER"}) == "OUTER"
 
 
 def test_render_template_refuses_a_partial_and_never_reads_the_file(
