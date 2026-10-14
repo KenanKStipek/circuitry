@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod keys;
 mod terminal;
+mod theme;
 mod tui;
 
 use clap::{Parser, ValueEnum};
