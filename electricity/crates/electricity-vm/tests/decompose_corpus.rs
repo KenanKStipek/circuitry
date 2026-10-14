@@ -264,6 +264,14 @@ struct ValidatePlanCase {
     /// Python's own (different) scanner.
     #[serde(default)]
     third_party_prefix: Option<String>,
+    /// Set for the one inline-check case that is a calendar-invalid
+    /// timestamp (issue #528's own comment): `_validate_plan`'s own
+    /// uncaught-`ValueError` escape, so there is no `expected` problems
+    /// list at all on the Python side -- `validate_plan`'s own `Err`
+    /// arm, compared exactly (never third-party: PyYAML's own message
+    /// for this is shared verbatim, `electricity-yaml`'s own `error.rs`).
+    #[serde(default)]
+    raises: Option<String>,
 }
 
 #[test]
@@ -286,6 +294,11 @@ fn golden_corpus_validate_plan() {
         };
         let runtime_config = Value::from(case.runtime_config);
         let got = decompose::validate_plan(&plan, case.max_chunks, &runtime_config);
+        if let Some(message) = &case.raises {
+            assert_eq!(got, Err(message.clone()), "case {}", case.name);
+            continue;
+        }
+        let got = got.unwrap_or_else(|e| panic!("case {}: unexpected Err({e:?})", case.name));
         match &case.third_party_prefix {
             Some(prefix) => {
                 assert_eq!(got.len(), 1, "case {}: {got:?}", case.name);

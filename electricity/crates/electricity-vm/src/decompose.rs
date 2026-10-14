@@ -314,14 +314,27 @@ fn check_allowlists(plan: &Plan, runtime_config: &Value) -> Vec<String> {
 /// `core/decompose.py::_validate_plan`. `_check_capability_ceiling`
 /// is not ported (this module's own doc comment); nothing stands in
 /// for it here.
-pub fn validate_plan(plan: &Plan, max_chunks: i64, runtime_config: &Value) -> Vec<String> {
+///
+/// `Err` is `_validate_plan`'s own uncaught-`ValueError` escape (a
+/// calendar-invalid timestamp in the plan's own YAML, issue #528's own
+/// comment): a bare message, discarding every problem already
+/// collected, for the caller to raise the same way Python's own escape
+/// reaches `exec.prompt`'s `except Exception as e:` and its `on_error`
+/// -- never folded into the ordinary `Ok` problems list, which is
+/// `dset.on_failure`'s own (invalid-plan) gate, a different, later
+/// decision this exception bypasses entirely in Python too.
+pub fn validate_plan(
+    plan: &Plan,
+    max_chunks: i64,
+    runtime_config: &Value,
+) -> Result<Vec<String>, String> {
     let mut problems = Vec::new();
 
     let yaml = match &plan.yaml {
         Some(text) if !py_strip(text).is_empty() => text.clone(),
         _ => {
             problems.push("the planner returned no orchestration YAML".to_string());
-            return problems;
+            return Ok(problems);
         }
     };
 
@@ -356,30 +369,27 @@ pub fn validate_plan(plan: &Plan, max_chunks: i64, runtime_config: &Value) -> Ve
         // discarding every `problems` entry gathered so far and
         // propagating past `_validate_plan`/`maybe_decompose` entirely,
         // to the same generic, retryable-attempt path any other uncaught
-        // dispatch exception reaches. This stays inside the `"invalid_
-        // plan"` shape instead (a narrower, documented divergence,
-        // `DESIGN.md` §13) -- matching that control flow needs routing
-        // through `exec::prompt`'s own retry machinery, not just this
-        // function's own text. Only the message itself is matched
-        // exactly: no location, no "YAML parse error:" prefix.
+        // dispatch exception reaches: `exec.prompt`'s own `on_error`
+        // (default `"fail"`), not `dset.on_failure`'s invalid-plan gate.
+        // Only the message itself is matched exactly: no location, no
+        // "YAML parse error:" prefix.
         Err(electricity_yaml::YamlError::InvalidTimestampValue { message, .. }) => {
-            problems.push(message);
-            return problems;
+            return Err(message);
         }
         Err(err) => {
             problems.push(format!("YAML parse error: {err}"));
-            return problems;
+            return Ok(problems);
         }
         Ok(value) => value,
     };
     if let Err(errors) = validate_inline_yaml(&parsed) {
         problems.extend(errors);
-        return problems;
+        return Ok(problems);
     }
 
     problems.extend(check_merge_contract(plan));
     problems.extend(check_allowlists(plan, runtime_config));
-    problems
+    Ok(problems)
 }
 
 /// `core/decompose.py::maybe_decompose`'s own `base` dict (`:171-180`).
@@ -687,10 +697,16 @@ fn child_run_ctx<'a>(
 /// this module's own doc comment for *why* there, and issue #522's own
 /// Scope section 2 for the step-by-step this function follows. `Ok(None)`
 /// means decomposition did not trigger at all (the caller dispatches
-/// unchanged); `Err` only ever carries a fatal [`VmError`]
-/// (`VmError::is_fatal`) -- a cancellation, or Settled question 6's own
+/// unchanged). `Err` carries either a fatal [`VmError`] (`VmError::
+/// is_fatal`) -- a cancellation, or Settled question 6's own
 /// refused-plan case -- which the caller returns unchanged, writing
-/// nothing more.
+/// nothing more; or a plain [`VmError::Raised`] standing in for
+/// [`validate_plan`]'s own uncaught-`ValueError` escape (that
+/// function's own doc comment), which the caller routes through
+/// [`super::exec::prompt`]'s ordinary `on_error` handling instead --
+/// in both `Err` cases, unlike `Ok`, no `meta.decomposition` is ever
+/// written at all, matching Python's own `maybe_decompose` raising
+/// before it ever returns a value its caller could record.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn maybe_decompose(
     op: &Op,
@@ -811,7 +827,21 @@ pub(crate) async fn maybe_decompose(
     with_plan(&mut base, &plan);
 
     // -- Validate. --
-    let problems = validate_plan(&plan, dset.max_chunks, run_ctx.runtime_config);
+    // `Err` is `_validate_plan`'s own uncaught-`ValueError` escape
+    // (`validate_plan`'s own doc comment) -- raised here the same way,
+    // bypassing `dset.on_failure`/`failure_result` entirely, for
+    // `exec::prompt`'s `?` to propagate to its own `on_error` handling.
+    let problems = match validate_plan(&plan, dset.max_chunks, run_ctx.runtime_config) {
+        Ok(problems) => problems,
+        Err(message) => {
+            return Err(VmError::Raised {
+                py_class: electricity_tools::PyExc::ValueError,
+                message,
+                cause: electricity_tools::ErrorCause::None,
+                cause_class: None,
+            });
+        }
+    };
     if !problems.is_empty() {
         return Ok(Some(failure_result(
             base,
@@ -1221,7 +1251,7 @@ mod tests {
             DEFAULT_RESULT_PATH,
         );
         assert_eq!(
-            validate_plan(&p, 5, &Value::None),
+            validate_plan(&p, 5, &Value::None).unwrap(),
             vec!["the planner returned no orchestration YAML".to_string()]
         );
         let blank = plan(
@@ -1232,7 +1262,7 @@ mod tests {
             DEFAULT_RESULT_PATH,
         );
         assert_eq!(
-            validate_plan(&blank, 5, &Value::None),
+            validate_plan(&blank, 5, &Value::None).unwrap(),
             vec!["the planner returned no orchestration YAML".to_string()]
         );
     }
@@ -1252,7 +1282,7 @@ mod tests {
                 done.clone(),
                 "prime.merge.value",
             );
-            let problems = validate_plan(&p, 5, &Value::None);
+            let problems = validate_plan(&p, 5, &Value::None).unwrap();
             let has_done_problem = problems.iter().any(|p| p.contains("done gate is false"));
             assert_eq!(has_done_problem, rejected, "done={done:?}");
         }
@@ -1270,6 +1300,7 @@ mod tests {
         );
         assert!(
             validate_plan(&one_chunk, 5, &Value::None)
+                .unwrap()
                 .iter()
                 .any(|p| p.contains("needs at least 2"))
         );
@@ -1283,6 +1314,7 @@ mod tests {
         );
         assert!(
             validate_plan(&many, 5, &Value::None)
+                .unwrap()
                 .iter()
                 .any(|p| p.contains("the budget is 5"))
         );
@@ -1295,15 +1327,15 @@ mod tests {
         // every other `YamlError`, whose own `Display` text does.
         let yaml = "effects: []\nwhen: 2024-02-30\n";
         let p = ok_plan(yaml, "prime.merge.value");
-        let problems = validate_plan(&p, 5, &Value::None);
-        assert_eq!(problems, vec!["day is out of range for month".to_string()]);
+        let err = validate_plan(&p, 5, &Value::None).unwrap_err();
+        assert_eq!(err, "day is out of range for month");
     }
 
     #[test]
     fn validate_plan_rejects_a_result_path_not_under_prime() {
         let yaml = "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "input.merge.value");
-        let problems = validate_plan(&p, 5, &Value::None);
+        let problems = validate_plan(&p, 5, &Value::None).unwrap();
         assert!(
             problems.iter().any(|e| e.contains("does not point into")),
             "{problems:?}"
@@ -1314,7 +1346,7 @@ mod tests {
     fn validate_plan_rejects_a_result_path_with_no_matching_top_level_effect() {
         let yaml = "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "prime.nope.value");
-        let problems = validate_plan(&p, 5, &Value::None);
+        let problems = validate_plan(&p, 5, &Value::None).unwrap();
         assert!(
             problems
                 .iter()
@@ -1327,7 +1359,10 @@ mod tests {
     fn validate_plan_accepts_a_sound_plan() {
         let yaml = "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: '1'}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "prime.merge.value");
-        assert_eq!(validate_plan(&p, 5, &Value::None), Vec::<String>::new());
+        assert_eq!(
+            validate_plan(&p, 5, &Value::None).unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1341,7 +1376,7 @@ mod tests {
             Value::List(vec![Value::Str("json".to_string())]),
         );
         let runtime_config = dict(vec![("_allowlists", Value::Dict(allowlists))]);
-        let problems = validate_plan(&p, 5, &runtime_config);
+        let problems = validate_plan(&p, 5, &runtime_config).unwrap();
         assert!(problems.iter().any(|e| e.contains("shell")), "{problems:?}");
     }
 

@@ -398,8 +398,36 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
         max_chunks: int = 5,
         runtime_config: dict[str, Any] | None = None,
         third_party_prefix: str | None = None,
+        raises: bool = False,
     ) -> None:
         plan = _Plan(say=None, chunks=chunks, yaml=yaml_text, done=done, result_path=result_path)
+        if raises:
+            # `_validate_plan`'s own uncaught-`ValueError` escape (issue
+            # #528's own comment): discards every problem already
+            # collected and propagates past this function entirely, so
+            # there is no `problems` list to record here at all -- just
+            # the bare message, for the Rust side's own `Err` arm.
+            try:
+                _validate_plan(plan, max_chunks=max_chunks, runtime_config=runtime_config or {})
+            except ValueError as exc:
+                error = str(exc)
+            else:
+                raise AssertionError(f"{name}: expected a ValueError, _validate_plan returned")
+            cases.append(
+                {
+                    "name": name,
+                    "chunks": encode(chunks),
+                    "yaml": encode_opt_str(yaml_text),
+                    "done": encode(done),
+                    "result_path": result_path,
+                    "max_chunks": max_chunks,
+                    "runtime_config": encode(runtime_config or {}),
+                    "expected": [],
+                    "third_party_prefix": None,
+                    "raises": error,
+                }
+            )
+            return
         problems = _validate_plan(plan, max_chunks=max_chunks, runtime_config=runtime_config or {})
         if third_party_prefix is not None:
             # A PyYAML scan error (DESIGN.md §1, §12): compared by prefix and
@@ -420,6 +448,7 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
                 "runtime_config": encode(runtime_config or {}),
                 "expected": problems,
                 "third_party_prefix": third_party_prefix,
+                "raises": None,
             }
         )
 
@@ -477,6 +506,13 @@ def build_validate_plan_cases() -> list[dict[str, Any]]:
         yaml_text=_YAML_SCAN_ERROR,
         done=True,
         third_party_prefix="YAML parse error: ",
+    )
+    case(
+        "inline_check_calendar_invalid_timestamp",
+        chunks=[1, 2],
+        yaml_text="effects: []\nwhen: 2024-02-30\n",
+        done=True,
+        raises=True,
     )
     case("inline_check_non_mapping", chunks=[1, 2], yaml_text=_YAML_NON_MAPPING, done=True)
     case(
