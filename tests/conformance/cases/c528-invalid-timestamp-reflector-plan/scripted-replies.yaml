@@ -1,0 +1,7 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects: []
+      when: 2024-02-30
+    tokens_sent: 10
+    tokens_received: 20

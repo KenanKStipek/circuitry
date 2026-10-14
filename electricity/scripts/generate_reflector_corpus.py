@@ -124,6 +124,14 @@ def extract_done_cases() -> list[dict]:
         "```yaml\ndone: false\neffects:\n  - type: tool\n    name: x\n    provider: json\n```\n",
         "done: false\nsteps: not-a-list\neffects: []\n",
         "done: false\nplan: not-a-dict-or-list\n",
+        # Issue #528's own comment: a calendar-invalid timestamp
+        # (`when: 2024-02-30`) is PyYAML's own bare, uncaught
+        # `ValueError` -- never a `yaml.YAMLError` `_extract_done_flag`'s
+        # own `except _yaml.YAMLError:` could catch, so it escapes past
+        # this function entirely (`ok: False` here), unlike every other
+        # unparseable-YAML case above (`ok: True`, `done: False`, the
+        # raw text handed to `use(inline)` instead).
+        "done: false\neffects: []\nwhen: 2024-02-30\n",
     ]
     return [extract_done_case(t) for t in texts]
 
