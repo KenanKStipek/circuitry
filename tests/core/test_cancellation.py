@@ -18,12 +18,14 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from process_ownership_support import owned
 
 from circuitry.core import cancellation
 from circuitry.core.cancellation import (
@@ -765,12 +767,16 @@ def test_communicate_promptly_stdin_wrapper_finalizer_does_not_block_the_main_th
     Measured at ~6s before the fix (`stdin.detach()` instead of a plain
     `.buffer` read), ~0.03s after.
     """
+    # A token unique to this test run, carried in the grandchild's own
+    # argv (#561): its pid is captured well before the kill below, long
+    # enough after that an unrelated process could since have reused it.
+    token = uuid.uuid4().hex
     grandchild_pid: int | None = None
     try:
         direct_child_script = (
             "import subprocess, sys\n"
             "gc = subprocess.Popen(\n"
-            "    [sys.executable, '-c', 'import time; time.sleep(3)'],\n"
+            f"    [sys.executable, '-c', 'import time; time.sleep(3)', {token!r}],\n"
             "    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n"
             ")\n"
             "print(gc.pid)\n"
@@ -795,7 +801,7 @@ def test_communicate_promptly_stdin_wrapper_finalizer_does_not_block_the_main_th
             "flushing/closing a buffer the writer thread still owned"
         )
     finally:
-        if grandchild_pid is not None:
+        if grandchild_pid is not None and owned(grandchild_pid, (token,), by="pid"):
             try:
                 os.kill(grandchild_pid, signal.SIGKILL)
             except OSError:

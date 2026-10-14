@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 
 import pytest
+from process_ownership_support import owned
 
 try:
     import pty
@@ -131,10 +132,17 @@ def test_closed_terminal_sighup_does_not_abort_cleanup(tmp_path: Path) -> None:
     # `test_run_cancel_parallel.py`'s own `_branch_tool` for why a plain
     # `sleep N` as the last of several `;`-separated commands can leave a
     # cancellation's `killpg` racing the kernel's own registration of the
-    # child macOS's /bin/bash (3.2) forks to run it.
+    # child macOS's /bin/bash (3.2) forks to run it. A plain `sleep` takes
+    # no extra argument to carry a token for `owned` below (#561), so the
+    # tail command is a python one-shot instead, with this test's own
+    # `tmp_path` appended -- harmless to `time.sleep`, which never reads
+    # `sys.argv`, and it stays in this exec'd process's own argv for as
+    # long as it runs.
     script = (
         f"if [ -f {started} ]; then exit 0; fi; "
-        f"echo $$ > {pidfile}; touch {started}; exec sleep {_BRANCH_SLEEP_SECONDS}"
+        f"echo $$ > {pidfile}; touch {started}; "
+        f"exec {shlex.quote(sys.executable)} -c "
+        f"'import time; time.sleep({_BRANCH_SLEEP_SECONDS})' {tmp_path}"
     )
     orch = tmp_path / "pty_sighup.yml"
     orch.write_text(
@@ -242,7 +250,9 @@ def test_closed_terminal_sighup_does_not_abort_cleanup(tmp_path: Path) -> None:
             pass
         if pidfile.exists():
             leftover_pid = int(pidfile.read_text(encoding="utf-8").strip())
-            if _pid_alive(leftover_pid):
+            # Owned, not just alive (#561): that pid may since have been
+            # reused by an unrelated process this test never started.
+            if _pid_alive(leftover_pid) and owned(leftover_pid, (str(tmp_path),), by="pid"):
                 try:
                     os.kill(leftover_pid, signal.SIGKILL)
                 except OSError:
