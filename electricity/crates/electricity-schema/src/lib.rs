@@ -636,15 +636,25 @@ fn orchestration_errors_engine(document: &electricity_value::Value) -> Option<Ve
     // can disagree (a `{}`/`[]`-repr message sorts differently from its
     // own "value"-substituted spelling), so this keeps them separate
     // rather than sorting by the displayed `SchemaError.message`.
-    let mut errors: Vec<(SchemaError, String, String, String, &str)> = violations
-        .iter()
-        .map(|violation| {
-            let raw_message = engine::render(violation);
-            let (error, schema_path_text, path_text, keyword) =
-                describe_schema_error_engine(violation, &raw_message);
-            (error, raw_message, schema_path_text, path_text, keyword)
-        })
-        .collect();
+    //
+    // Still under `with_draft7_mode`: [`engine::render`] (a `contains`
+    // violation's own message) and [`engine::keyword_name`]/[`engine::
+    // best_match`] read [`engine::draft7_mode_active`] too, so leaving
+    // this scope before they run would silently render every message
+    // as if the schema were 2020-12 again (caught directly: a draft-07
+    // `contains` failure rendered 2020-12's text until this moved).
+    let mut errors: Vec<(SchemaError, String, String, String, &str)> =
+        engine::with_draft7_mode(|| {
+            violations
+                .iter()
+                .map(|violation| {
+                    let raw_message = engine::render(violation);
+                    let (error, schema_path_text, path_text, keyword) =
+                        describe_schema_error_engine(violation, &raw_message);
+                    (error, raw_message, schema_path_text, path_text, keyword)
+                })
+                .collect()
+        });
     errors.sort_by(|a, b| (&a.1, a.4, &a.2, &a.3).cmp(&(&b.1, b.4, &b.2, &b.3)));
     Some(errors.into_iter().map(|(error, ..)| error).collect())
 }
@@ -682,11 +692,49 @@ fn describe_schema_error_engine<'a>(
     }
     let location = location_from_path(&violation.path);
     let keyword = engine::keyword_name(&violation.kind).unwrap_or("");
-    let mut schema_path = violation.schema_path.clone();
-    if let Some(name) = engine::keyword_name(&violation.kind) {
-        schema_path.push(engine::PathSegment::Key(name.to_string()));
-    }
-    let schema_path_text = engine::format_as_index(&schema_path);
+    // Python's sort key is `str(err)`, whose `schema_path` component is
+    // `list(err.relative_schema_path)[:-1]` -- the *keyword itself* is
+    // the dropped last element (`jsonschema/exceptions.py`'s `_Error.
+    // __str__`). `violation.schema_path` is already that: the path to
+    // the node the firing keyword lives on, built by every `evaluate`
+    // call *before* that keyword runs, never including the keyword's
+    // own name -- so it must be used as-is here, not with the keyword
+    // pushed back onto it (that produced the *full* `relative_schema_
+    // path`, one segment too long, and reversed any tie between a
+    // shorter schema_path and a longer one that starts with it: `":"`
+    // sorts before `"["`, so Python's shorter, truncated path always
+    // comes first).
+    //
+    // `Kind::FalseSchema` is the one exception: a literal `false`
+    // sub-schema short-circuits `Validator.descend` before it appends
+    // the descent's own path/schema_path segment (`jsonschema.
+    // validators.create.descend`'s `elif schema is False: yield ...;
+    // return`, ahead of the loop that would otherwise do it) -- so
+    // Python's `relative_schema_path` for it never gets that last
+    // segment at all, not just its own firing keyword's. The call
+    // sites that can recurse into a literal `false` child match this
+    // by omitting that segment themselves when they do (`"properties"`'s
+    // own handling in `engine::evaluate`, `engine.rs`'s own comment at
+    // that site) -- so by the time a `FalseSchema` violation reaches
+    // here, `violation.schema_path` is one segment *short* of every
+    // other kind's own convention, and dropping one more (there's
+    // never a keyword name to append for it either -- `engine::
+    // keyword_name` returns `None`) reaches the same `[:-1]` result.
+    // `"patternProperties"`/`"prefixItems"`/`"dependentSchemas"`/
+    // `"dependencies"` don't yet get this same treatment at their own
+    // recursion sites -- a `FalseSchema` violation reached through one
+    // of those still carries its own extra segment, so a same-message,
+    // same-(absent-)keyword tie against another error could sort one
+    // place off from Python's. None of the bundled schema's own `$defs`
+    // give any property, pattern, prefix-item or dependency a literal
+    // `false` sub-schema, so this never fires today (`DESIGN.md` §13).
+    let schema_path_text = if matches!(violation.kind, engine::Kind::FalseSchema) {
+        let mut schema_path = violation.schema_path.clone();
+        schema_path.pop();
+        engine::format_as_index(&schema_path)
+    } else {
+        engine::format_as_index(&violation.schema_path)
+    };
     let path_text = engine::format_as_index(&violation.path);
     (
         SchemaError { location, message },
@@ -732,6 +780,16 @@ fn location_from_path(path: &[engine::PathSegment]) -> String {
                 out.push_str("['");
                 out.push_str(&name.replace('\\', "\\\\").replace('\'', "\\'"));
                 out.push_str("']");
+            }
+            // `_Error.json_path`: `isinstance(elem, int)` is `True` for a
+            // Python `bool` too (it's an `int` subclass), so a YAML `on:`/
+            // `yes:`/`1:` key (a `Bool`/`Int` once PyYAML's implicit
+            // resolver reads it) renders `[True]`/`[1]`, not the quoted,
+            // escaped text a string key gets.
+            engine::PathSegment::NonStringKey(v) => {
+                out.push('[');
+                out.push_str(&v.py_str());
+                out.push(']');
             }
         }
     }
@@ -1842,6 +1900,30 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.location == "interface.inputs['1'].type"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn nested_missing_name_errors_sort_the_shorter_schema_path_first() {
+        // Issue #528, review finding 1's repro: a container missing its own
+        // `name` that holds a child also missing its own `name` -- Python's
+        // sort key drops the firing keyword (`relative_schema_path[:-1]`),
+        // so the two `'name' is a required property` messages tie and the
+        // *shorter* schema_path (the outer effect's) sorts first (`":"` <
+        // `"["`). Pushing the keyword onto the full schema_path before
+        // comparing (as this module once did) made the longer path's extra
+        // `['required']` segment decide the tie instead, reversing the pair.
+        let doc = json!({
+            "effects": [
+                {"type": "dynamic", "effects": [{"type": "tool", "provider": "ffmpeg"}]}
+            ]
+        });
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
+        let locations: Vec<&str> = errors.iter().map(|e| e.location.as_str()).collect();
+        assert_eq!(
+            locations,
+            vec!["effects[0]", "effects[0].effects[0]"],
             "{errors:?}"
         );
     }

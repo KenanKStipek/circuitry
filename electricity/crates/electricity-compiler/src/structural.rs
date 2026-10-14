@@ -580,6 +580,113 @@ mod tests {
     }
 
     #[test]
+    fn a_yaml_bool_like_key_under_additional_properties_false_is_reported() {
+        // Issue #528, review finding 5: `on:`/`yes:`/`off:`/`no:`/`y:`/
+        // `n:` parse to a Python `bool`, not a string, under PyYAML's
+        // implicit resolver -- `additionalProperties: false`'s own
+        // property-name scan (`_utils.find_additional_properties`) never
+        // filters by key type, so Python reports it with a bare
+        // (unquoted) `repr()`, same as any other unexpected key.
+        let mut yield_effect = Dict::new();
+        yield_effect.insert(
+            Value::Str("type".to_string()),
+            Value::Str("yield".to_string()),
+        );
+        yield_effect.insert(Value::Str("name".to_string()), Value::Str("y".to_string()));
+        yield_effect.insert(
+            Value::Str("template".to_string()),
+            Value::Str("hi".to_string()),
+        );
+        yield_effect.insert(Value::Bool(true), Value::Int(1i64.into()));
+        let doc = doc_with_effects(vec![Value::Dict(yield_effect)]);
+
+        let errors = schema_errors(&doc);
+
+        assert_eq!(
+            errors,
+            vec!["effects[0]: Additional properties are not allowed (True was unexpected)"],
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_yaml_int_like_key_under_a_condition_def_is_reported() {
+        let mut condition = Dict::new();
+        condition.insert(
+            Value::Str("mode".to_string()),
+            Value::Str("cel".to_string()),
+        );
+        condition.insert(
+            Value::Str("expr".to_string()),
+            Value::Str("true".to_string()),
+        );
+        condition.insert(Value::Int(1i64.into()), Value::Int(1i64.into()));
+        let if_effect = effect(vec![
+            ("type", Value::Str("if".to_string())),
+            ("if", Value::Dict(condition)),
+            ("then", Value::List(vec![])),
+        ]);
+        let doc = doc_with_effects(vec![if_effect]);
+
+        let errors = schema_errors(&doc);
+
+        assert_eq!(
+            errors,
+            vec!["effects[0].if: Additional properties are not allowed (1 was unexpected)"],
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_yaml_bool_like_key_next_to_another_schema_error_reports_both() {
+        let mut yield_effect = Dict::new();
+        yield_effect.insert(
+            Value::Str("type".to_string()),
+            Value::Str("yield".to_string()),
+        );
+        yield_effect.insert(Value::Bool(false), Value::Int(1i64.into()));
+        // Missing both `name` and `template`, on top of the stray key.
+        let doc = doc_with_effects(vec![Value::Dict(yield_effect)]);
+
+        let errors = schema_errors(&doc);
+
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(
+            errors.iter().any(|e| {
+                e == "effects[0]: Additional properties are not allowed (False was unexpected)"
+            }),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_yaml_int_like_key_under_interface_inputs_descends_into_its_value() {
+        // Issue #528, review finding 5: `interface.inputs`'s own
+        // `additionalProperties` is a subschema, not `false`, so a
+        // non-string key (`1:`, read as a Python `int`) doesn't just need
+        // *reporting* -- Python still validates its value against that
+        // subschema and descends, exactly as it would under a string key.
+        let mut input_spec = Dict::new();
+        input_spec.insert(Value::Str("type".to_string()), Value::Int(123i64.into()));
+        let mut inputs = Dict::new();
+        inputs.insert(Value::Int(1i64.into()), Value::Dict(input_spec));
+        let mut interface = Dict::new();
+        interface.insert(Value::Str("inputs".to_string()), Value::Dict(inputs));
+        let mut doc = Dict::new();
+        doc.insert(Value::Str("interface".to_string()), Value::Dict(interface));
+        doc.insert(Value::Str("effects".to_string()), Value::List(vec![]));
+        let doc = Value::Dict(doc);
+
+        let errors = schema_errors(&doc);
+
+        assert_eq!(
+            errors,
+            vec!["interface.inputs[1].type: 123 is not of type 'string'"],
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn a_date_at_an_object_typed_position_is_exactly_one_error() {
         // F2 (second-round review): `retries` is `{"type": "object",
         // "additionalProperties": false}` -- a marker object there used to

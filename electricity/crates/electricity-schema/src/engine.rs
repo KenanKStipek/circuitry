@@ -104,19 +104,24 @@ pub(crate) struct Violation<'a> {
 pub(crate) enum PathSegment {
     Key(String),
     Index(usize),
+    /// An instance `Dict` key that isn't a string -- `additionalProperties`
+    /// as a subschema descends into one exactly as it does a string-keyed
+    /// property (`_keywords.additionalProperties`'s own `validator.descend
+    /// (instance[extra], aP, path=extra)` never checks `extra`'s type), so
+    /// `err.path` can carry one. The engine's own key order is `Value`'s
+    /// own `Eq`/`Hash` (Python's), so this stores the key itself rather
+    /// than re-deriving a string form at every use.
+    // Boxed, not inline: every other segment shape is small (a `String`
+    // or a `usize`), and `PathSegment` is pushed by value into `Vec`s
+    // scattered through every arm of `evaluate`'s own giant match --
+    // `Value` inline here more than doubled `PathSegment`'s own size
+    // (confirmed: 72 bytes vs. 32), which cost *every* `evaluate` stack
+    // frame that headroom whether or not it ever builds one, and tipped
+    // a `tests/depth_safety.rs` case over its 2 MiB thread stack before
+    // this was boxed.
+    NonStringKey(Box<Value>),
 }
 
-/// `error.path`/`error.relative_path`'s own comparison (a `deque`, compared
-/// element-by-element the way Python tuples/sequences are) -- the second
-/// component of [`jsonschema.exceptions.by_relevance`]'s relevance key,
-/// which this module's own earlier revision missed entirely (every
-/// same-depth tie silently fell through to insertion order instead, which
-/// only coincidentally matched Python whenever the lexicographically
-/// greatest path segment also happened to be the one `iter_errors` yielded
-/// last). A `Key`-vs-`Index` comparison (heterogeneous path shapes at the
-/// same depth) has no Python analogue at all -- comparing a `str` to an
-/// `int` raises `TypeError` there -- so this picks an arbitrary, documented
-/// order (`Index` before `Key`) rather than mirroring a crash.
 /// `jsonschema._utils.format_as_index`'s own index text (the part after
 /// the container name): `"".join(f"[{index!r}]" for index in indices)`.
 ///
@@ -143,19 +148,47 @@ pub(crate) fn format_as_index(segments: &[PathSegment]) -> String {
         match segment {
             PathSegment::Key(s) => out.push_str(&Value::Str(s.clone()).py_repr()),
             PathSegment::Index(i) => out.push_str(&i.to_string()),
+            PathSegment::NonStringKey(v) => out.push_str(&v.py_repr()),
         }
         out.push(']');
     }
     out
 }
 
+/// `error.path`/`error.relative_path`'s own comparison (a `deque`, compared
+/// element-by-element the way Python tuples/sequences are) -- the second
+/// component of [`jsonschema.exceptions.by_relevance`]'s relevance key,
+/// which this module's own earlier revision missed entirely (every
+/// same-depth tie silently fell through to insertion order instead, which
+/// only coincidentally matched Python whenever the lexicographically
+/// greatest path segment also happened to be the one `iter_errors` yielded
+/// last). A comparison between heterogeneous path shapes at the same
+/// depth (`Key` vs `Index`, either vs `NonStringKey`) has no Python
+/// analogue at all -- comparing a `str` to an `int` (or to a `bool`, which
+/// Python's own `int`/`str` comparison also rejects) raises `TypeError`
+/// there -- so this picks an arbitrary, documented order (`Index` <
+/// `NonStringKey` < `Key`) rather than mirroring a crash. Two
+/// `NonStringKey`s compare by their own `str()` text -- `Value`'s own
+/// `Ord` isn't implemented (Python values of different types, e.g. `1`
+/// and `"a"`, don't order at all), and `str()` is what the one real
+/// caller of this comparison ([`relevance`]) would reach for ties among
+/// same-shape keys too.
 fn compare_paths(a: &[PathSegment], b: &[PathSegment]) -> std::cmp::Ordering {
+    fn rank(segment: &PathSegment) -> u8 {
+        match segment {
+            PathSegment::Index(_) => 0,
+            PathSegment::NonStringKey(_) => 1,
+            PathSegment::Key(_) => 2,
+        }
+    }
     for (x, y) in a.iter().zip(b.iter()) {
         let ordering = match (x, y) {
             (PathSegment::Key(ka), PathSegment::Key(kb)) => ka.cmp(kb),
             (PathSegment::Index(ia), PathSegment::Index(ib)) => ia.cmp(ib),
-            (PathSegment::Index(_), PathSegment::Key(_)) => std::cmp::Ordering::Less,
-            (PathSegment::Key(_), PathSegment::Index(_)) => std::cmp::Ordering::Greater,
+            (PathSegment::NonStringKey(va), PathSegment::NonStringKey(vb)) => {
+                va.py_str().cmp(&vb.py_str())
+            }
+            _ => rank(x).cmp(&rank(y)),
         };
         if ordering != std::cmp::Ordering::Equal {
             return ordering;
@@ -172,10 +205,10 @@ pub(crate) enum Kind<'a> {
     Enum,
     Const,
     AdditionalPropertiesPlain {
-        unexpected: Vec<&'a str>,
+        unexpected: Vec<&'a Value>,
     },
     AdditionalPropertiesPatterned {
-        unexpected: Vec<&'a str>,
+        unexpected: Vec<&'a Value>,
     },
     MinItems {
         is_one: bool,
@@ -1028,6 +1061,22 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// `_utils.find_additional_properties` calling `re.search(patterns,
+/// property)` on a non-`str` `property` whenever `patternProperties` is
+/// present -- out of line (`#[inline(never)]`) for the same reason
+/// [`evaluate_false_property`] is: never reachable through the bundled
+/// schema (no property/pattern/prefix/dependency name in it is a
+/// non-string key), so its own locals shouldn't cost every ordinary
+/// `"additionalProperties"` match arm a byte of `evaluate`'s own stack
+/// frame.
+#[inline(never)]
+fn raise_non_string_property_type_error(prop_key: &Value) {
+    raise_python_exception(format!(
+        "expected string or bytes-like object, got '{}'",
+        prop_key.type_name()
+    ));
+}
+
 fn raise_python_exception(message: impl Into<String>) {
     PENDING_PY_EXCEPTION.with(|e| {
         let mut slot = e.borrow_mut();
@@ -1060,14 +1109,96 @@ pub(crate) fn draft7_mode_active() -> bool {
     DRAFT7_MODE.with(std::cell::Cell::get)
 }
 
+struct Draft7ModeGuard(bool);
+
+impl Drop for Draft7ModeGuard {
+    fn drop(&mut self) {
+        DRAFT7_MODE.with(|m| m.set(self.0));
+    }
+}
+
 /// Sets [`DRAFT7_MODE`] for the duration of *f*, restoring the prior
 /// value afterward (so a draft-07 top-level call can never leak its own
-/// mode into a later, unrelated 2020-12 one on the same thread).
+/// mode into a later, unrelated 2020-12 one on the same thread) --
+/// including if *f* panics: the restore runs in [`Draft7ModeGuard`]'s
+/// own `Drop`, the same reason [`LazyModeGuard`] restores [`LAZY_MODE`]
+/// that way, rather than in an unwind-skipped statement after a plain
+/// call.
 pub(crate) fn with_draft7_mode<T>(f: impl FnOnce() -> T) -> T {
-    let prior = DRAFT7_MODE.with(|m| m.replace(true));
-    let result = f();
-    DRAFT7_MODE.with(|m| m.set(prior));
-    result
+    let _guard = Draft7ModeGuard(DRAFT7_MODE.with(|m| m.replace(true)));
+    f()
+}
+
+/// A literal `false` value for a `"properties"` entry, evaluated for
+/// *prop_instance* -- `"properties"`'s own match arm in [`evaluate`]
+/// calls this instead of recursing into [`evaluate`] itself inline, so
+/// this branch's own locals (rare: the bundled schema never has a
+/// literal `false` anywhere) live in *this* call's own stack frame, not
+/// unconditionally in every ordinary [`evaluate`] frame's -- a deeply
+/// nested document (`tests/depth_safety.rs`'s own 2 MiB-thread cases)
+/// recurses through [`evaluate`] hundreds of levels deep, so a few extra
+/// bytes in *its* frame for a branch almost every call never takes costs
+/// real, measured headroom, where the same bytes in a function only
+/// entered on the rare branch cost nothing until that branch is actually
+/// taken.
+///
+/// `validators.create.descend`'s own `elif schema is False: yield ...;
+/// return` fires *before* the `path=`/`schema_path=` it was called with
+/// (`property`, both times) ever gets appended -- so a literal `false`
+/// property schema's own violation never carries the property's own name
+/// at all, on either path, not even once it bubbles up through the
+/// `"properties"` keyword's own (unskipped) append of `"properties"`
+/// itself. See [`Kind::FalseSchema`]'s own doc for why
+/// [`describe_schema_error_engine`]'s sort key needs this exactness and
+/// not just the display text (which never reads `path` for a `false`
+/// schema either way, so this would be invisible without that key).
+#[inline(never)]
+fn evaluate_false_property<'a>(
+    false_schema: &'a Value,
+    prop_instance: &'a Value,
+    root: &'a Value,
+    path: &[PathSegment],
+    schema_path: &[PathSegment],
+    out: &mut Vec<Violation<'a>>,
+) {
+    let mut child_schema_path = schema_path.to_vec();
+    child_schema_path.push(PathSegment::Key("properties".to_string()));
+    evaluate(
+        false_schema,
+        prop_instance,
+        root,
+        path,
+        &child_schema_path,
+        out,
+    );
+}
+
+/// Draft 7's `items` as a literal `false` schema (this arm's own rare
+/// branch, out of line for the same stack-budget reason as
+/// [`evaluate_false_property`]): an ordinary schema position, not a
+/// dedicated "no extra items" keyword the way 2020-12's is once
+/// `prefixItems` exists -- a literal `false` there is simply a false
+/// *schema*, so each element fails it individually (`_validators.
+/// items`'s own `validator.descend(instance=inst[idx], schema=items,
+/// path=idx)`, which short-circuits inside `descend` before `path=idx`
+/// is ever applied -- the same quirk [`evaluate_false_property`]
+/// documents for `"properties"`). So every one of these violations
+/// reports the *same* (enclosing) location, not its own index, exactly
+/// like Python.
+#[inline(never)]
+fn evaluate_false_items_draft7<'a>(
+    elements: &'a [Value],
+    false_schema: &'a Value,
+    root: &'a Value,
+    path: &[PathSegment],
+    schema_path: &[PathSegment],
+    out: &mut Vec<Violation<'a>>,
+) {
+    let mut child_schema_path = schema_path.to_vec();
+    child_schema_path.push(PathSegment::Key("items".to_string()));
+    for element in elements {
+        evaluate(false_schema, element, root, path, &child_schema_path, out);
+    }
 }
 
 /// Collects every violation *schema* has against *instance*, in Python's
@@ -1189,6 +1320,17 @@ pub(crate) fn evaluate<'a>(
                         continue;
                     };
                     if let Some(prop_instance) = obj.get(&key(name)) {
+                        if matches!(subschema, Value::Bool(false)) {
+                            evaluate_false_property(
+                                subschema,
+                                prop_instance,
+                                root,
+                                path,
+                                schema_path,
+                                out,
+                            );
+                            continue;
+                        }
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Key(name.to_string()));
                         let mut child_schema_path = schema_path.to_vec();
@@ -1289,9 +1431,26 @@ pub(crate) fn evaluate<'a>(
                 let has_joined_pattern = !joined_pattern.is_empty();
                 let joined_translation =
                     has_joined_pattern.then(|| translated_pattern(&joined_pattern));
-                let mut extras: Vec<&str> = Vec::new();
+                let mut extras: Vec<&Value> = Vec::new();
                 for (prop_key, _) in obj.iter() {
                     let Some(name) = prop_key.as_str() else {
+                        // `_utils.find_additional_properties`'s own
+                        // `property not in properties` is always true for
+                        // a non-string key (`properties` is string-keyed),
+                        // and `patterns and re.search(patterns, property)`
+                        // short-circuits on an *empty* `patterns` string
+                        // without ever calling `re.search` -- so a
+                        // non-string key is unconditionally an extra
+                        // whenever there's no `patternProperties` to test
+                        // it against. When there is, Python's `re.search`
+                        // raises `TypeError` on a non-`str` `property` --
+                        // matched here the same way the joined-pattern
+                        // translation failure above is.
+                        if has_joined_pattern {
+                            raise_non_string_property_type_error(prop_key);
+                            return;
+                        }
+                        extras.push(prop_key);
                         continue;
                     };
                     if properties.is_some_and(|p| p.contains_key(&key(name))) {
@@ -1312,7 +1471,7 @@ pub(crate) fn evaluate<'a>(
                     if has_joined_pattern && pattern_is_match(&joined_pattern, name) {
                         continue;
                     }
-                    extras.push(name);
+                    extras.push(prop_key);
                 }
                 if extras.is_empty() {
                     continue;
@@ -1329,10 +1488,13 @@ pub(crate) fn evaluate<'a>(
                         let mut child_schema_path = schema_path.to_vec();
                         child_schema_path
                             .push(PathSegment::Key("additionalProperties".to_string()));
-                        for name in &extras {
-                            let prop_instance = obj.get(&key(name)).expect("just found above");
+                        for extra_key in &extras {
+                            let prop_instance = obj.get(*extra_key).expect("just found above");
                             let mut child_path = path.to_vec();
-                            child_path.push(PathSegment::Key(name.to_string()));
+                            child_path.push(match extra_key.as_str() {
+                                Some(name) => PathSegment::Key(name.to_string()),
+                                None => PathSegment::NonStringKey(Box::new((*extra_key).clone())),
+                            });
                             evaluate(
                                 value,
                                 prop_instance,
@@ -1344,7 +1506,8 @@ pub(crate) fn evaluate<'a>(
                         }
                     }
                     Value::Bool(false) => {
-                        extras.sort_unstable();
+                        // `sorted(extras, key=str)`.
+                        extras.sort_by_key(|v| v.py_str());
                         let kind = if has_pattern_properties {
                             Kind::AdditionalPropertiesPatterned { unexpected: extras }
                         } else {
@@ -1438,17 +1601,36 @@ pub(crate) fn evaluate<'a>(
                 let Value::List(elements) = instance else {
                     continue;
                 };
-                let prefix = schema
-                    .as_dict()
-                    .and_then(|d| get(d, "prefixItems"))
-                    .and_then(Value::as_list)
-                    .map(<[Value]>::len)
-                    .unwrap_or(0);
+                // Draft 7 has no `prefixItems` keyword at all -- a
+                // single-schema `items` (this arm; the tuple form is the
+                // separate arm above) always applies to every element,
+                // never just the ones past some prefix, even if the
+                // schema happens to carry an inert `prefixItems` key of
+                // its own.
+                let prefix = if draft7_mode_active() {
+                    0
+                } else {
+                    schema
+                        .as_dict()
+                        .and_then(|d| get(d, "prefixItems"))
+                        .and_then(Value::as_list)
+                        .map(<[Value]>::len)
+                        .unwrap_or(0)
+                };
                 let total = elements.len();
                 if total <= prefix {
                     continue;
                 }
-                if matches!(value, Value::Bool(false)) {
+                if matches!(value, Value::Bool(false)) && draft7_mode_active() {
+                    evaluate_false_items_draft7(
+                        &elements[prefix..],
+                        value,
+                        root,
+                        path,
+                        schema_path,
+                        out,
+                    );
+                } else if matches!(value, Value::Bool(false)) {
                     let extra = total - prefix;
                     let rest: Vec<Value> = elements[prefix..].to_vec();
                     let rest_repr = if extra == 1 {
@@ -2972,11 +3154,11 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
             format!("{expected} was expected")
         }
         Kind::AdditionalPropertiesPlain { unexpected } => {
-            let (joined, verb) = extras_msg(unexpected);
+            let (joined, verb) = extras_msg_values(unexpected);
             format!("Additional properties are not allowed ({joined} {verb} unexpected)")
         }
         Kind::AdditionalPropertiesPatterned { unexpected } => {
-            let (joined, verb) = extras_msg(unexpected);
+            let (joined, verb) = extras_msg_values(unexpected);
             let verb = if verb == "was" { "does" } else { "do" };
             let mut pattern_keys: Vec<&str> = schema_dict
                 .and_then(|d| get(d, "patternProperties"))
@@ -3119,10 +3301,26 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
             Value::Str(each.to_string()).py_repr(),
             Value::Str(property.to_string()).py_repr()
         ),
-        Kind::ContainsNone => format!(
-            "{} does not contain items matching the given schema",
-            instance.py_repr()
-        ),
+        Kind::ContainsNone => {
+            // `_legacy_keywords.contains_draft6_draft7`'s own message --
+            // draft 7's `contains` (unlike 2020-12's) never has a
+            // `minContains`/`maxContains` reading to report instead, so
+            // this is the *only* message draft 7 ever gives the keyword
+            // (`draft7_mode_active()` is exactly when `Kind::ContainsNone`
+            // can even arise at all, since `below_min` under draft 7 is
+            // always `matches < 1`, never a real `minContains` reading).
+            if draft7_mode_active() {
+                format!(
+                    "None of {} are valid under the given schema",
+                    instance.py_repr()
+                )
+            } else {
+                format!(
+                    "{} does not contain items matching the given schema",
+                    instance.py_repr()
+                )
+            }
+        }
         Kind::MinContains {
             min_contains,
             matches,
@@ -3158,21 +3356,12 @@ pub(crate) fn render(violation: &Violation<'_>) -> String {
 }
 
 /// `jsonschema._utils.extras_msg`: the comma-joined `repr()` of *extras*
-/// (already sorted by the caller) plus the right `was`/`were` verb.
-fn extras_msg(extras: &[&str]) -> (String, &'static str) {
-    let joined = extras
-        .iter()
-        .map(|s| Value::Str(s.to_string()).py_repr())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let verb = if extras.len() == 1 { "was" } else { "were" };
-    (joined, verb)
-}
-
-/// [`extras_msg`]'s own shape for `additionalItems: false`'s extra
-/// *values* rather than extra property *names* -- each rendered through
-/// [`Value::py_repr`] directly, never quoted as a bare string the way a
-/// property name is.
+/// (already sorted by the caller) plus the right `was`/`were` verb --
+/// shared by `additionalProperties: false`'s unexpected property *names*
+/// (each one the dict key itself, string or not: Python's own
+/// `extras_msg` takes whatever `find_additional_properties` yielded,
+/// `repr()`-ing it unconditionally rather than assuming a string) and
+/// `additionalItems: false`'s extra *values*.
 fn extras_msg_values(extras: &[&Value]) -> (String, &'static str) {
     let joined = extras
         .iter()
