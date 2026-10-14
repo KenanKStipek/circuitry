@@ -16,6 +16,7 @@ from ..output import console as _console
 from ..output import live_region as _live_region
 from .cancellation import (
     as_completed_promptly,
+    deferred_signal_region,
     get_token,
     submit_with_context,
     wait_for_cancelled_branches,
@@ -474,6 +475,15 @@ class DynamicRuntime:
                     # branch already submitted before that happens is still
                     # waited for below, not silently dropped.
                     futures: dict = {}
+                    # Second line of defense (#555 follow-up, F2): every
+                    # future the pool actually accepted, appended inside
+                    # the same `deferred_signal_region` as the submit
+                    # call that returned it below -- independent of
+                    # `futures` itself ever recording it, so the
+                    # cancellation path still waits for (and can cancel)
+                    # a branch even if some other bug kept it out of
+                    # `futures`.
+                    all_submitted: list = []
                     try:
                         # Each branch's own ``isolated_stores[idx]`` resets
                         # its path prefix (Store.parallel_branches), so a
@@ -486,8 +496,17 @@ class DynamicRuntime:
                         # dispatch for why (#370 review F2).
                         with nested_container(child_store, None):
                             for idx, effect in enumerate(self.defn.effects):
-                                futures[
-                                    submit_with_context(
+                                # One `deferred_signal_region` around both
+                                # the submit and recording its future
+                                # (#555 follow-up, F1): `submit_with_
+                                # context` itself asserts the caller
+                                # already holds one rather than opening
+                                # its own narrower one that would raise
+                                # before `future` -- let alone `futures`
+                                # -- is ever bound, silently losing a
+                                # branch the pool already started running.
+                                with deferred_signal_region():
+                                    future = submit_with_context(
                                         executor,
                                         self._execute_branch,
                                         effect,
@@ -496,7 +515,8 @@ class DynamicRuntime:
                                         stop_event=stop_event,
                                         tracker=tree_tracker,
                                     )
-                                ] = idx
+                                    all_submitted.append(future)
+                                    futures[future] = idx
                         self._await_tree_branches(
                             futures, tree_errors=tree_errors, store=store
                         )
@@ -511,7 +531,12 @@ class DynamicRuntime:
                         # instead of escaping past the ``else`` clause's
                         # own unbounded ``executor.shutdown(wait=True)``,
                         # which the matching ``except`` doesn't cover.
-                        wait_for_cancelled_branches(futures.keys())
+                        #
+                        # `all_submitted`, not `futures.keys()` (#555
+                        # follow-up, F2): a strict superset, so this
+                        # still waits for a branch even if some other bug
+                        # kept it out of `futures` itself.
+                        wait_for_cancelled_branches(all_submitted)
                     except BaseException:
                         # Cancellation (SIGINT/SIGTERM): a future the
                         # pool has not yet dequeued must never start
@@ -525,8 +550,18 @@ class DynamicRuntime:
                         # every already-running branch's worker thread to
                         # actually notice its just-killed subprocess and
                         # return before this re-raises.
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        wait_for_cancelled_branches(futures.keys())
+                        #
+                        # Wrapped in `deferred_signal_region` (#555):
+                        # `cancel_futures=True` calls `Future.cancel()` on
+                        # every not-yet-dequeued one, which a worker
+                        # racing to dequeue the same one also touches
+                        # (`set_running_or_notify_cancel`) -- a second
+                        # signal arriving here would otherwise risk
+                        # leaking that future's own lock and wedging that
+                        # worker forever.
+                        with deferred_signal_region():
+                            executor.shutdown(wait=False, cancel_futures=True)
+                        wait_for_cancelled_branches(all_submitted)
                         raise
                     else:
                         # No cancellation: every future is already done —
@@ -698,7 +733,13 @@ class DynamicRuntime:
                     # isolated stores are merged.
                     for pending in futures:
                         if pending is not future:
-                            pending.cancel()
+                            # Wrapped in `deferred_signal_region` (#555):
+                            # see the identical `executor.shutdown(...,
+                            # cancel_futures=True)` call above for why a
+                            # not-yet-started future's own `cancel()` is
+                            # just as exposed.
+                            with deferred_signal_region():
+                                pending.cancel()
             finally:
                 # This branch is done, whether or not it ever registered a
                 # prompt — one fewer settle point a listener still needs to

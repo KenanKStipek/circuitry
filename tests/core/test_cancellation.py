@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 
@@ -31,6 +31,7 @@ from circuitry.core.cancellation import (
     RunCancelledBySignal,
     acquire_promptly,
     as_completed_promptly,
+    deferred_signal_region,
     kill_process_group,
     kill_tracked_process,
     poll_promptly,
@@ -136,7 +137,11 @@ def test_cleanup_suppression_propagates_into_a_worker_thread_via_submit_with_con
 
     with token.cleanup():
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = submit_with_context(executor, poll)
+            # `submit_with_context` asserts its caller already holds a
+            # `deferred_signal_region` (#555 follow-up) -- see that
+            # function's own docstring for why.
+            with deferred_signal_region():
+                future = submit_with_context(executor, poll)
             assert future.result() == "ran"
 
 
@@ -1008,3 +1013,217 @@ def test_communicate_promptly_stops_repeating_the_group_kill_once_the_group_is_g
     assert result == ("out", "err")
     assert proc.calls == 4
     assert killpg_calls == [(777, signal.SIGKILL)]
+
+
+def test_run_tracked_does_not_repeat_the_group_kill_when_communicate_promptly_already_saw_it_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#411 follow-up: `_communicate_promptly`'s own `pgid_gone` is a
+    plain local, lost the instant an exception unwinds through it --
+    simulated here by having it record the pgid already gone (via the
+    `pgid_seen_gone` out-param) and then raise, the same way a real
+    `BaseException` (a second signal, say) could interrupt it right
+    after its own repeat-kill loop confirmed the group empty.
+    `run_tracked`'s `except BaseException` path must see that and skip
+    its own trailing `_repeat_group_kill` -- sending one more `killpg`
+    to a pgid already confirmed empty risks reaching an unrelated
+    process that reused it in the meantime.
+    """
+
+    def _fake_communicate_promptly(
+        proc: Any,
+        *,
+        input: Any,
+        timeout: Any,
+        pgid: int | None,
+        pgid_seen_gone: list[bool] | None = None,
+    ) -> tuple[str, str]:
+        if pgid_seen_gone is not None:
+            pgid_seen_gone.append(True)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        cancellation, "_communicate_promptly", _fake_communicate_promptly
+    )
+    monkeypatch.setattr(cancellation, "kill_process_group", lambda proc: None)
+    repeat_kill_calls: list[int | None] = []
+
+    def _fake_repeat_group_kill(pgid: int | None) -> None:
+        repeat_kill_calls.append(pgid)
+
+    monkeypatch.setattr(cancellation, "_repeat_group_kill", _fake_repeat_group_kill)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_tracked([sys.executable, "-c", "pass"])
+
+    assert repeat_kill_calls == []
+
+
+@contextmanager
+def _raise_keyboard_interrupt_at_condition_exit() -> Iterator[None]:
+    """Arms `sys.settrace` to simulate a first signal's handler running
+    the instant the *next* `threading.Condition.__exit__` frame anywhere
+    in this process is entered -- the deterministic technique #555's own
+    repro uses, with no real signal and no timing-dependent race.
+    Disarms itself the moment it fires (at most one `Condition.__exit__`
+    call is affected per use).
+
+    Mirrors `cli.interrupts`'s own handler, not just an unconditional
+    raise: outside any `deferred_signal_region`, it raises
+    `KeyboardInterrupt` right there (the pre-#555 shape, and still
+    today's behaviour everywhere except the audited call sites) --
+    *inside* one, it parks the exception and returns normally instead,
+    the same as the real handler finding `is_deferring_first_signal()`
+    true, letting `Condition.__exit__`'s own bytecode run to completion
+    and actually release the lock.
+    """
+    exit_code = threading.Condition.__exit__.__code__
+
+    def _tracer(frame: Any, event: str, arg: Any) -> Any:
+        if event == "call" and frame.f_code is exit_code:
+            sys.settrace(None)
+            if cancellation.is_deferring_first_signal():
+                cancellation.defer_first_signal_exception(
+                    KeyboardInterrupt(
+                        "simulated: deferred while a region was active"
+                    )
+                )
+                return None
+            raise KeyboardInterrupt(
+                "simulated: a signal's handler ran at Condition.__exit__'s entry"
+            )
+        return None
+
+    sys.settrace(_tracer)
+    try:
+        yield
+    finally:
+        sys.settrace(None)
+
+
+def test_bare_add_done_callback_under_a_signal_at_condition_exit_leaks_the_lock(
+) -> None:
+    """#555: confirms the hazard this fix closes is real on this Python
+    version, not just a theoretical concern -- a *bare* `add_done_
+    callback` call, with no `deferred_signal_region` around it (the
+    pre-#555 shape every call site in `core.cancellation`/`core.dynamic`/
+    `core.loop` used to have). A first signal's handler raising at
+    exactly `threading.Condition.__exit__`'s entry leaves the future's
+    own lock held forever -- a worker thread that later calls
+    `set_exception`/`set_result` on the same future blocks forever
+    behind it.
+    """
+    f: Future[None] = Future()
+
+    with _raise_keyboard_interrupt_at_condition_exit():
+        with pytest.raises(KeyboardInterrupt):
+            f.add_done_callback(lambda fut: None)
+
+    assert f._condition._is_owned(), (
+        "expected the bare call to leak the future's lock -- if it "
+        "didn't, the hazard this fix exists for doesn't reproduce on "
+        "this Python version"
+    )
+
+    worker = threading.Thread(
+        target=lambda: f.set_exception(RuntimeError("branch failed")), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=1.0)
+    assert worker.is_alive(), "expected the worker to be wedged behind the leaked lock"
+
+    # Clean up: release the leaked lock from the thread that leaked it
+    # (an RLock can only be released by its own owner) so this test
+    # doesn't actually leave a thread hanging forever.
+    f._condition.release()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+
+
+def test_as_completed_promptly_registration_defers_the_signal_and_leaves_no_lock_owned(
+) -> None:
+    """D4 (#555): the fix for the hazard shown above.
+    `as_completed_promptly` wraps its own `add_done_callback` loop in
+    `deferred_signal_region` -- confirm, with the identical technique,
+    that a signal landing there is parked (not raised while any lock
+    could still be held), the future's own lock is never left owned, and
+    a worker racing to resolve it afterward is never stuck.
+    """
+    f: Future[None] = Future()
+
+    with _raise_keyboard_interrupt_at_condition_exit():
+        gen = as_completed_promptly([f])
+        with pytest.raises(KeyboardInterrupt):
+            # `deferred_signal_region`'s own `__exit__` raises the parked
+            # exception the moment the registration loop's `with` block
+            # exits -- before this generator ever reaches its own `while`
+            # loop below.
+            next(gen)
+
+    assert not f._condition._is_owned(), (
+        "as_completed_promptly's own callback registration leaked the "
+        "future's lock under a signal landing at Condition.__exit__'s "
+        "entry"
+    )
+
+    worker = threading.Thread(
+        target=lambda: f.set_exception(RuntimeError("branch failed")), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive(), (
+        "a worker thread calling set_exception on the same future was "
+        "stuck behind a lock as_completed_promptly's registration left owned"
+    )
+
+
+def test_future_cancel_dispatch_site_defers_the_signal_and_leaves_no_lock_owned(
+) -> None:
+    """D4, 'one dispatch site': `Future.cancel()` on a not-yet-started
+    future is exactly what `core.dynamic`'s `_await_tree_branches` calls
+    (`pending.cancel()`) and what `executor.shutdown(cancel_futures=
+    True)` calls internally on every future still queued -- both wrapped
+    in `deferred_signal_region` (#555). Same technique and the same two
+    checks as the registration test above, this time against a worker
+    racing to dequeue the same future (`set_running_or_notify_cancel`,
+    what `concurrent.futures.thread._WorkItem.run` calls first).
+    """
+    f: Future[None] = Future()
+
+    with _raise_keyboard_interrupt_at_condition_exit():
+        with pytest.raises(KeyboardInterrupt):
+            with deferred_signal_region():
+                f.cancel()
+
+    assert not f._condition._is_owned()
+    assert f.cancelled()
+
+    worker = threading.Thread(target=f.set_running_or_notify_cancel, daemon=True)
+    worker.start()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive(), (
+        "a worker racing to dequeue the same future was stuck behind a "
+        "lock the cancel() dispatch site left owned"
+    )
+
+
+def test_as_completed_promptly_no_longer_uses_a_private_threading_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D4: #555 replaced the private `threading.Event` `as_completed_
+    promptly` used to poll on with `queue.SimpleQueue` -- `Event.wait`/
+    `.set()` are themselves built on a `threading.Condition`, so that
+    private lock had exactly the same exposure as a `Future`'s own.
+    Confirms the exposure is actually gone, not just unlikely to matter:
+    constructing a `threading.Event` while draining the generator now
+    fails this test instead of quietly succeeding.
+    """
+
+    def _no_event(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("as_completed_promptly must not construct a threading.Event")
+
+    monkeypatch.setattr(threading, "Event", _no_event)
+
+    f: Future[None] = Future()
+    f.set_result(None)
+    assert list(as_completed_promptly([f])) == [f]

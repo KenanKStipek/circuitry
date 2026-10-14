@@ -10,10 +10,13 @@ could exit (#356's "leaving the `with` block waits for every submitted
 branch").
 
 :class:`CancellationToken` is the shared, run-wide answer: one instance per
-`cof run`/`run-library` invocation (installed by
-``cli.interrupts.sigterm_as_interrupt``, which calls :meth:`request` from
-its signal handler — in the main thread, but synchronously, before the
-handler raises). Worker-thread code that would otherwise block
+`cof run`/`run-library` invocation, installed by
+``cli.interrupts.sigterm_as_interrupt``. Its ``_SignalWatcher`` thread
+calls :meth:`request` first, directly off the raw SIGINT/SIGTERM/SIGHUP
+itself (#404) — the main-thread handler also calls it, idempotently, but
+no longer relies on its return value to tell a first signal from a
+second (``cli.interrupts._SignalCount`` does that instead). Worker-thread
+code that would otherwise block
 indefinitely without ever checking back in with the main thread — a retry
 backoff sleep, a concurrency-slot wait, the next loop iteration — polls it
 instead:
@@ -45,6 +48,7 @@ from __future__ import annotations
 
 import contextvars
 import os
+import queue
 import signal
 import subprocess
 import threading
@@ -291,8 +295,13 @@ class CancellationToken:
 
         Returns ``True`` the first time this is called (this call is the
         one that triggered cancellation); ``False`` if a prior call already
-        did — the caller (the signal handler) uses that to end the process
-        immediately, with no further cleanup, on a second signal.
+        did. Nothing uses that return value for the first/second-signal
+        decision any more (#404): ``cli.interrupts``' watcher thread
+        ordinarily calls this before the main-thread handler gets a
+        chance to, so by the time the handler's own call happens, even
+        for a genuinely first signal, it would already read ``False`` --
+        ``cli.interrupts._SignalCount`` tracks that instead, independent
+        of this call's own return value.
         """
         first = not self._event.is_set()
         if first and signum is not None:
@@ -486,6 +495,107 @@ def get_token() -> CancellationToken:
     return _token
 
 
+#: Main-thread-only (never touched off it, and never locked -- see
+#: `deferred_signal_region`'s own docstring): how many nested deferral
+#: regions are currently active.
+_defer_depth = 0
+
+#: Main-thread-only: a first signal's own exception, parked here instead
+#: of raised immediately, for as long as `_defer_depth` is nonzero. At
+#: most one at a time -- a second signal still ends the process at once
+#: (`cli.interrupts`'s own handler), region or not, so there is never a
+#: second one to park.
+_deferred_signal_exception: BaseException | None = None
+
+
+def is_deferring_first_signal() -> bool:
+    """Whether the main thread is currently inside a
+    :func:`deferred_signal_region` (#555) -- read only by
+    ``cli.interrupts``'s own signal handler, to decide whether a first
+    signal's exception can be raised immediately (as before #555) or must
+    be parked with :func:`defer_first_signal_exception` until every
+    region the main thread is nested in has exited.
+    """
+    return _defer_depth > 0
+
+
+def defer_first_signal_exception(exc: BaseException) -> None:
+    """Park *exc* instead of letting the signal handler raise it now
+    (#555). Called only by ``cli.interrupts``'s own handler, only for a
+    first signal, only while :func:`is_deferring_first_signal` is true.
+    """
+    global _deferred_signal_exception
+    _deferred_signal_exception = exc
+
+
+def _take_deferred_signal_exception() -> BaseException | None:
+    global _deferred_signal_exception
+    exc = _deferred_signal_exception
+    _deferred_signal_exception = None
+    return exc
+
+
+def check_deferred_signal() -> None:
+    """Raise a signal's exception parked by
+    :func:`defer_first_signal_exception`, if one is waiting (#555).
+
+    Call this from a coordination loop's own poll, outside any lock --
+    the whole point of parking the exception in the first place was to
+    never raise it while the main thread owns a lock a worker thread also
+    needs, so a call site that isn't sure it qualifies should rely on
+    :func:`deferred_signal_region` exiting instead, which raises
+    automatically (below), rather than call this itself from inside one.
+    """
+    exc = _take_deferred_signal_exception()
+    if exc is not None:
+        raise exc
+
+
+@contextmanager
+def deferred_signal_region() -> Iterator[None]:
+    """Mark a region where the main thread is about to touch a lock a
+    worker thread also takes -- an ``add_done_callback``/``cancel`` call
+    on a :class:`concurrent.futures.Future` that isn't finished yet,
+    ``executor.submit`` (which can call ``Thread.start``, itself a wait on
+    an ``Event``), or ``executor.shutdown(cancel_futures=True)`` (which
+    calls ``Future.cancel()`` on every not-yet-started one) (#555).
+
+    A first SIGINT/SIGTERM/SIGHUP's own handler ordinarily raises
+    straight into whatever bytecode the main thread happens to be running
+    (that's the entire point of #404's watcher closing the window before
+    it). Unlike a C-level ``threading.Lock``, whose ``__enter__``/
+    ``__exit__`` are single, uninterruptible C calls, a
+    ``threading.Condition`` (what every ``Future``'s own ``_condition``
+    is, and what ``Event``/``Semaphore`` are built on) has a *pure-Python*
+    ``__exit__`` -- a signal's registered handler can run, and raise,
+    between that frame being entered and the line inside it that actually
+    releases the lock, leaking it held forever. A worker thread that then
+    tries to take the same lock (``set_result``/``set_exception`` on the
+    same future, another ``executor.submit``, ...) blocks forever on it:
+    the exact deadlock #555 found (confirmed deterministically with
+    ``sys.settrace`` raising ``KeyboardInterrupt`` from a 'call' event on
+    ``Condition.__exit__``).
+
+    Nesting composes via the depth counter: entering again while already
+    inside one more region just counts; the exception (if a first signal
+    arrives at all while any region is active) is only actually raised
+    once the outermost one exits, by which point the main thread holds
+    none of these locks. A second signal is unaffected -- ``cli.
+    interrupts``'s own handler still takes the immediate ``os._exit``
+    path for one (or the SIGHUP no-op), region or not; there would be
+    nothing to defer a second time regardless, since only ever one
+    exception is parked.
+    """
+    global _defer_depth
+    _defer_depth += 1
+    try:
+        yield
+    finally:
+        _defer_depth -= 1
+        if _defer_depth == 0:
+            check_deferred_signal()
+
+
 def submit_with_context(
     executor: Executor, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
 ) -> Future[_T]:
@@ -500,7 +610,31 @@ def submit_with_context(
     ``RunCancelledBySignal`` instead of running (#356). Every tree-flow /
     parallel-loop submit site in this package goes through this instead of
     calling ``executor.submit`` directly.
+
+    The *caller* must already be inside its own :func:`deferred_signal_region`
+    that also covers recording the future this returns somewhere the
+    cancellation path will see it (e.g. ``futures[future] = idx`` right
+    after this call, in the same region) (#555 follow-up). ``submit`` can
+    call ``Thread.start`` the first time the pool grows a worker, which
+    waits on that thread's own startup ``Event`` -- a lock a first
+    signal's handler raising mid-release would leak, wedging the new
+    thread before it even starts -- so this call itself needs the same
+    protection :func:`deferred_signal_region` gives any other call in
+    #555's audit. It does not open one of its own, though: nesting a
+    region here that closes before returning would raise the moment *this*
+    call's own region exits, before the future it just got back is ever
+    recorded by the caller -- silently losing track of a branch the pool
+    already started running, with nothing left to wait for it, cancel it,
+    or even notice it exists (confirmed: this exact bug, #555 follow-up).
+    Asserting the caller already holds one, rather than silently reusing
+    its own narrower one, is what makes forgetting that loud instead of a
+    rare, signal-timing-dependent lost branch.
     """
+    assert is_deferring_first_signal(), (
+        "submit_with_context must be called inside the caller's own "
+        "deferred_signal_region, covering both this call and recording "
+        "its returned future -- see this function's own docstring"
+    )
     ctx = contextvars.copy_context()
     return executor.submit(ctx.run, fn, *args, **kwargs)
 
@@ -544,7 +678,7 @@ def as_completed_promptly(
     free when the signal *does* land on the main thread: never wait
     unboundedly. ``add_done_callback`` (not ``concurrent.futures.wait``,
     which this deliberately avoids calling in a loop — see below) plus a
-    private, bounded ``threading.Event.wait(poll_seconds)`` means the main
+    bounded ``queue.SimpleQueue.get(timeout=poll_seconds)`` means the main
     thread returns from its own blocking call every *poll_seconds*
     regardless of which thread the signal landed on, executes a few
     bytecodes, and so picks up a pending signal within *poll_seconds*
@@ -565,31 +699,51 @@ def as_completed_promptly(
     time. Registering a callback up front instead touches each future's
     own lock at most once (the same single-lock exposure any ordinary
     ``Future.result()``/``add_done_callback`` call already has, signal or
-    not), and the repeating part of this loop — waiting on a private
-    ``threading.Event`` nothing else ever locks — carries none of that
-    multi-future risk no matter how many times it polls.
+    not) -- wrapped in :func:`deferred_signal_region` (#555), since that
+    one touch is still a main-thread ``with future._condition:`` a worker
+    thread's own ``set_result``/``set_exception`` also takes, and a first
+    signal's handler raising mid-release of it would leak the lock and
+    deadlock that worker (confirmed deterministically, not just in
+    theory — see that function's own docstring).
+
+    The repeating part of this loop used a private ``threading.Event``
+    before #555: ``Event.wait``/``.set()`` are themselves built on a
+    ``threading.Condition``, so a signal landing on the main thread
+    *inside* ``wake.wait(poll_seconds)`` -- not registering the
+    callback, the wait itself -- had exactly the same lock-leak exposure,
+    just against this loop's own private lock instead of a future's.
+    ``queue.SimpleQueue`` is a plain ``get``/``put`` with no Python-level
+    ``Condition`` anywhere in either: the worker's callback calling
+    ``put`` and this loop's own ``get(timeout=poll_seconds)`` are both
+    single, uninterruptible C calls, the same way a bare ``threading.
+    Lock`` is -- removing the lock entirely removes the exposure, rather
+    than needing its own ``deferred_signal_region``.
     """
     fs = list(futures)
-    ready: list[Future[Any]] = []
-    ready_lock = threading.Lock()
-    wake = threading.Event()
+    done: queue.SimpleQueue[Future[Any]] = queue.SimpleQueue()
 
     def _on_done(f: Future[Any]) -> None:
-        with ready_lock:
-            ready.append(f)
-        wake.set()
+        done.put(f)
 
-    for f in fs:
-        f.add_done_callback(_on_done)
+    with deferred_signal_region():
+        for f in fs:
+            f.add_done_callback(_on_done)
 
     remaining = len(fs)
     while remaining:
-        wake.wait(poll_seconds)
-        wake.clear()
-        with ready_lock:
-            batch, ready[:] = ready[:], []
-        remaining -= len(batch)
-        yield from batch
+        # Outside any lock -- see `check_deferred_signal`'s own
+        # docstring -- so a signal parked by a nested
+        # `deferred_signal_region` elsewhere (not this function's own,
+        # which already raised at its exit above if it had one) still
+        # surfaces within one `poll_seconds` rather than only once this
+        # whole wait finally ends.
+        check_deferred_signal()
+        try:
+            f = done.get(timeout=poll_seconds)
+        except queue.Empty:
+            continue
+        remaining -= 1
+        yield f
 
 
 def wait_for_cancelled_branches(futures: Iterable[Future[Any]]) -> None:
@@ -615,6 +769,11 @@ def wait_for_cancelled_branches(futures: Iterable[Future[Any]]) -> None:
     main loop — the only further cost a branch the kill cannot reach adds
     here is delaying process exit until it returns, same as it already
     does on an uncancelled run.
+
+    No :func:`deferred_signal_region` of its own (#555 audit): every lock
+    this function's own body could touch is already inside
+    :func:`as_completed_promptly`'s -- this is a thin ``for _ in ...:
+    pass`` over it and touches nothing else.
     """
     for _ in as_completed_promptly(futures):
         pass
@@ -696,6 +855,7 @@ def _communicate_promptly(
     timeout: float | None,
     pgid: int | None = None,
     poll_seconds: float = _SIGNAL_POLL_SECONDS,
+    pgid_seen_gone: list[bool] | None = None,
 ) -> tuple[Any, Any]:
     """``proc.communicate()``, but never in one single wait as long as
     *timeout* itself (#385 follow-up).
@@ -757,6 +917,13 @@ def _communicate_promptly(
     pgid is free for the kernel to reuse, and a further ``killpg`` here
     could then reach an unrelated process that happened to get it,
     rather than this one's own already-gone group.
+
+    *pgid_seen_gone*, when given, records that same outcome for
+    ``run_tracked`` to see even when this call raises instead of
+    returning: a plain local variable here would be lost the moment an
+    exception unwinds through this function, and ``run_tracked``'s own
+    ``except`` blocks need to know not to send one more ``killpg`` to a
+    pgid this call already confirmed empty (#411 follow-up).
     """
     # getattr, not proc.stdin: a Popen-like test double that never
     # models a `stdin` attribute at all (most of this catalog's own
@@ -833,6 +1000,8 @@ def _communicate_promptly(
             token = get_token()
             if pgid is not None and not pgid_gone and token.is_set() and not token.in_cleanup():
                 pgid_gone = _repeat_group_kill(pgid)
+                if pgid_gone and pgid_seen_gone is not None:
+                    pgid_seen_gone.append(True)
 
 
 def run_tracked(
@@ -896,10 +1065,16 @@ def run_tracked(
     # needed because of a process this same pgid's own leader forked
     # after this (#385 round 3, see _repeat_group_kill's own docstring).
     pgid = _isolated_pgid(proc)
+    # A plain local in `_communicate_promptly` itself would be lost the
+    # moment an exception unwinds through it -- this list is how it
+    # tells the `except` blocks below not to repeat a `killpg` against a
+    # pgid it already confirmed empty (#411 follow-up).
+    pgid_seen_gone: list[bool] = []
     with proc, token.track(proc):
         try:
             stdout, stderr = _communicate_promptly(
-                proc, input=input, timeout=timeout, pgid=pgid
+                proc, input=input, timeout=timeout, pgid=pgid,
+                pgid_seen_gone=pgid_seen_gone,
             )
         except subprocess.TimeoutExpired:
             kill_process_group(proc)
@@ -907,8 +1082,12 @@ def run_tracked(
             # One more, after the process we were tracking has actually
             # exited: a child it forked at the exact instant of the kill
             # above must not be left running past a timed-out step
-            # either.
-            _repeat_group_kill(pgid)
+            # either -- unless `_communicate_promptly` already confirmed
+            # the group empty, in which case the pgid may already be
+            # free for the kernel to reuse, and this would risk reaching
+            # an unrelated process instead of this one's own.
+            if not pgid_seen_gone:
+                _repeat_group_kill(pgid)
             raise
         except BaseException:
             # Cancellation already killed this process's group from the
@@ -916,6 +1095,7 @@ def run_tracked(
             # that unwinds through here, the same as ``run_binary``.
             kill_process_group(proc)
             proc.wait()
-            _repeat_group_kill(pgid)
+            if not pgid_seen_gone:
+                _repeat_group_kill(pgid)
             raise
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

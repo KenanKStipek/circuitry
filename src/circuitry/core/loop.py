@@ -16,6 +16,7 @@ from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .cancellation import (
     as_completed_promptly,
+    deferred_signal_region,
     get_token,
     submit_with_context,
     wait_for_cancelled_branches,
@@ -611,6 +612,14 @@ class LoopRuntime:
                         # submitted before that happens is still waited for
                         # below, not silently dropped.
                         future_to_idx: dict = {}
+                        # Second line of defense (#555 follow-up, F2):
+                        # every future the pool actually accepted,
+                        # appended inside the same `deferred_signal_
+                        # region` as the submit call that returned it
+                        # below -- independent of `future_to_idx` itself
+                        # ever recording it, mirrors dynamic.py's own
+                        # tree-flow fix.
+                        all_submitted: list = []
                         try:
                             # Each branch's own ``isolated_stores[idx]`` resets
                             # its path prefix (Store.parallel_branches), so a
@@ -625,8 +634,15 @@ class LoopRuntime:
                             # ``None`` name into the path (#370 review F2).
                             with nested_container(child_store, None):
                                 for idx, iter_ctx in iter_ctxs:
-                                    future_to_idx[
-                                        submit_with_context(
+                                    # One `deferred_signal_region` around
+                                    # both the submit and recording its
+                                    # future (#555 follow-up, F1) --
+                                    # mirrors dynamic.py's own tree-flow
+                                    # fix; see `submit_with_context`'s own
+                                    # docstring for why it asserts rather
+                                    # than opening its own narrower region.
+                                    with deferred_signal_region():
+                                        future = submit_with_context(
                                             executor,
                                             self._execute_body,
                                             store=isolated_stores[idx],
@@ -637,7 +653,8 @@ class LoopRuntime:
                                             tracker=tree_tracker,
                                             iter_label=f"[{idx}]",
                                         )
-                                    ] = idx
+                                        all_submitted.append(future)
+                                        future_to_idx[future] = idx
                             _tree_done = 0
                             # as_completed_promptly, not stdlib
                             # as_completed: a signal landing on a
@@ -692,8 +709,18 @@ class LoopRuntime:
                             # unbounded, polled wait (not ``wait=True``,
                             # not no-wait-at-all) for an already-running
                             # pass's worker thread.
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            wait_for_cancelled_branches(future_to_idx.keys())
+                            #
+                            # Wrapped in `deferred_signal_region` (#555),
+                            # same reasoning as dynamic.py's own identical
+                            # call: `cancel_futures=True` calls
+                            # `Future.cancel()` on every not-yet-dequeued
+                            # one, which a worker racing to dequeue the
+                            # same one also touches.
+                            with deferred_signal_region():
+                                executor.shutdown(wait=False, cancel_futures=True)
+                            # `all_submitted`, not `future_to_idx.keys()`
+                            # (#555 follow-up, F2): a strict superset.
+                            wait_for_cancelled_branches(all_submitted)
                             raise
                         else:
                             # No cancellation: every future is already done

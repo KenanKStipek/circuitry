@@ -19,9 +19,11 @@ than silently dropped.
 
 from __future__ import annotations
 
+import os
 import signal
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -223,3 +225,157 @@ def test_loop_tree_signal_during_submission_is_a_cancellation_not_unboundlocaler
         )
 
     assert len(calls) == 2, "the second submit_with_context call must be the one that raises"
+
+
+def _submit_then_self_sigint_once(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
+    """Patches `ThreadPoolExecutor.submit` itself (not `submit_with_
+    context`) to call the real `submit`, then deliver a real SIGINT to
+    this very process, right before returning -- the installed
+    `sigterm_as_interrupt` handler then runs synchronously on the main
+    thread *inside* `submit`, exactly where the 60-run stress batch's
+    own failure put it (#555 follow-up, F3). Only the first call fires
+    it: a second signal inside the same dispatch loop would take the
+    handler's own immediate `os._exit` path instead of the cancellation
+    this test means to drive.
+    """
+    real_submit = ThreadPoolExecutor.submit
+    signalled = threading.Event()
+
+    def _patched(self: ThreadPoolExecutor, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        future = real_submit(self, fn, *args, **kwargs)
+        if not signalled.is_set():
+            signalled.set()
+            os.kill(os.getpid(), signal.SIGINT)
+        return future
+
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", _patched)
+    return signalled
+
+
+def test_loop_tree_future_not_lost_when_signal_lands_inside_executor_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 (#555 follow-up): reproduces the 60-run stress batch's own
+    failure -- a signal landing on the main thread *while
+    `ThreadPoolExecutor.submit` itself is still running*, not merely
+    between submits (the test above). On the pre-F1 code, the future
+    `submit` was about to return was discarded the moment
+    `submit_with_context`'s own region raised, before this loop's own
+    `future_to_idx[future] = idx` line ever ran -- so nothing ever
+    waited for that branch; `sigterm_as_interrupt` reset the token on
+    its way out while the branch was still mid-step1, and step2 ran once
+    its own (now-cleared) `get_token().check()` found nothing set.
+    """
+    ran: list[str] = []
+    _submit_then_self_sigint_once(monkeypatch)
+
+    @dataclass
+    class BranchAdapter:
+        name: str = "branch"
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if prompt == "step1":
+                time.sleep(0.3)
+                return GenerateResult(text=prompt, raw={})
+            if prompt == "step2":
+                ran.append("step2")
+                return GenerateResult(text=prompt, raw={})
+            raise AssertionError(f"unexpected prompt {prompt!r}")
+
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "lp",
+                "flow": "tree",
+                "each": {"in": "input.items", "as": "x"},
+                "body": [
+                    {"type": "prompt", "name": "step1", "template": "step1"},
+                    {"type": "prompt", "name": "step2", "template": "step2"},
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({"input": {"items": [1]}})
+
+    with sigterm_as_interrupt():
+        with pytest.raises(KeyboardInterrupt):
+            DynamicRuntime(root, adapter=BranchAdapter(), model="unit-test").execute(
+                store=store
+            )
+
+    # Lets the branch's own worker thread, still running in the
+    # background after the main thread's exception already unwound
+    # (`executor.shutdown(wait=False, ...)` never interrupts work
+    # already running), reach step2 if it's going to -- well past
+    # step1's own 0.3s sleep.
+    time.sleep(1.0)
+    assert "step2" not in ran, (
+        "step2 ran even though the signal landed inside "
+        "ThreadPoolExecutor.submit -- the future submit() was about to "
+        "return was lost"
+    )
+
+
+def test_dynamic_tree_future_not_lost_when_signal_lands_inside_executor_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 (#555 follow-up): the same reproduction as the `loop` test
+    above, against `dynamic.py`'s own tree-flow dispatch instead.
+    """
+    ran: list[str] = []
+    _submit_then_self_sigint_once(monkeypatch)
+
+    @dataclass
+    class BranchAdapter:
+        name: str = "branch"
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if prompt == "step1":
+                time.sleep(0.3)
+                return GenerateResult(text=prompt, raw={})
+            if prompt == "step2":
+                ran.append("step2")
+                return GenerateResult(text=prompt, raw={})
+            raise AssertionError(f"unexpected prompt {prompt!r}")
+
+    orch = {
+        "effects": [
+            {
+                "type": "dynamic",
+                "name": "d1",
+                "flow": "tree",
+                "effects": [
+                    {
+                        "type": "dynamic",
+                        "name": "b0",
+                        "flow": "chain",
+                        "effects": [
+                            {"type": "prompt", "name": "step1", "template": "step1"},
+                            {"type": "prompt", "name": "step2", "template": "step2"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+
+    with sigterm_as_interrupt():
+        with pytest.raises(KeyboardInterrupt):
+            DynamicRuntime(root, adapter=BranchAdapter(), model="unit-test").execute(
+                store=store
+            )
+
+    time.sleep(1.0)
+    assert "step2" not in ran, (
+        "step2 ran even though the signal landed inside "
+        "ThreadPoolExecutor.submit -- the future submit() was about to "
+        "return was lost"
+    )
