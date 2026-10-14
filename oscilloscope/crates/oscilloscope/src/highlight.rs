@@ -85,7 +85,13 @@ impl Tracker {
     /// — `None` means "draw this cell with no highlight at all",
     /// which every caller must treat as leaving its own normal style
     /// untouched (never resetting it to a blank one).
-    pub fn style_for(&self, key: &str, now: Instant, theme: &Theme, mode: ColorMode) -> Option<Style> {
+    pub fn style_for(
+        &self,
+        key: &str,
+        now: Instant,
+        theme: &Theme,
+        mode: ColorMode,
+    ) -> Option<Style> {
         let progress = self.linear_progress(key, now)?;
         style_for_progress(progress, theme, mode)
     }
@@ -236,11 +242,20 @@ mod tests {
         let base = at(0);
         let mut tracker = Tracker::new();
         let theme = resolve(ThemeName::Dracula, ColorMode::TrueColor).theme;
-        assert!(tracker.style_for("row:a", base, &theme, ColorMode::TrueColor).is_none());
+        assert!(
+            tracker
+                .style_for("row:a", base, &theme, ColorMode::TrueColor)
+                .is_none()
+        );
         tracker.mark("row:a", base);
         assert!(
             tracker
-                .style_for("row:a", base + FADE_DURATION + Duration::from_millis(1), &theme, ColorMode::TrueColor)
+                .style_for(
+                    "row:a",
+                    base + FADE_DURATION + Duration::from_millis(1),
+                    &theme,
+                    ColorMode::TrueColor
+                )
                 .is_none()
         );
     }
@@ -315,13 +330,23 @@ mod tests {
         let theme = resolve(ThemeName::Terminal, ColorMode::Basic16).theme;
         tracker.mark("row:a", base);
         let style = tracker
-            .style_for("row:a", base + Duration::from_millis(100), &theme, ColorMode::Basic16)
+            .style_for(
+                "row:a",
+                base + Duration::from_millis(100),
+                &theme,
+                ColorMode::Basic16,
+            )
             .unwrap();
         assert_eq!(style.bg, None);
         assert!(style.add_modifier.contains(Modifier::BOLD));
         assert!(
             tracker
-                .style_for("row:a", base + Duration::from_millis(600), &theme, ColorMode::Basic16)
+                .style_for(
+                    "row:a",
+                    base + Duration::from_millis(600),
+                    &theme,
+                    ColorMode::Basic16
+                )
                 .is_none()
         );
     }
@@ -333,7 +358,12 @@ mod tests {
         let theme = resolve(ThemeName::Dracula, ColorMode::NoColor).theme;
         tracker.mark("row:a", base);
         for ms in [0, 100, 400, 800, 1100] {
-            if let Some(style) = tracker.style_for("row:a", base + Duration::from_millis(ms), &theme, ColorMode::NoColor) {
+            if let Some(style) = tracker.style_for(
+                "row:a",
+                base + Duration::from_millis(ms),
+                &theme,
+                ColorMode::NoColor,
+            ) {
                 assert_eq!(style.bg, None);
                 assert_eq!(style.fg, None);
             }

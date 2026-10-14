@@ -363,19 +363,66 @@ fn details_lines(details: &Details, kind: RowKind) -> Vec<Line<'static>> {
             Style::default().fg(Color::Red),
         ));
     }
-    if let Some(prompt_sent) = &details.prompt_sent {
+    // Issue #535: a node with `prompt_sent` gets these two blocks
+    // instead of the plain `prompt_sent`/`value` ones below.
+    if let Some(sent) = &details.sent {
         lines.push(Line::from(""));
-        lines.push(Line::from("prompt_sent (v for full):"));
-        lines.push(Line::from(prompt_sent.clone()));
+        lines.push(token_block_header("sent", '↑', sent));
+        if let Some(snippet) = &sent.snippet {
+            lines.push(Line::from(snippet.clone()));
+        }
     }
-    if let Some(value) = &details.value {
-        if !value.is_empty() {
+    if let Some(received) = &details.received {
+        lines.push(Line::from(""));
+        lines.push(token_block_header("received", '↓', received));
+        if received.waiting {
+            lines.push(Line::styled(
+                "waiting for the reply",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else if let Some(snippet) = &received.snippet {
+            lines.push(Line::from(snippet.clone()));
+        }
+    }
+    if details.sent.is_none() {
+        if let Some(prompt_sent) = &details.prompt_sent {
             lines.push(Line::from(""));
-            lines.push(Line::from("value (v for full):"));
-            lines.push(Line::from(value.clone()));
+            lines.push(Line::from("prompt_sent (v for full):"));
+            lines.push(Line::from(prompt_sent.clone()));
+        }
+        if let Some(value) = &details.value {
+            if !value.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from("value (v for full):"));
+                lines.push(Line::from(value.clone()));
+            }
         }
     }
     lines
+}
+
+/// One `sent`/`received` block's own header line (issue #535):
+/// `sent  ↑ 1,234 tokens` or `received  ↓ ≈567 tokens` (an estimate),
+/// formatted the same way the token bar formats its own counts.
+fn token_block_header(
+    label: &str,
+    arrow: char,
+    block: &oscilloscope_core::render::TokenBlock,
+) -> Line<'static> {
+    let text = match block.tokens {
+        Some(tokens) if block.estimated => {
+            format!(
+                "{label}  {arrow} ≈{} tokens",
+                with_thousands_separators(tokens)
+            )
+        }
+        Some(tokens) => format!(
+            "{label}  {arrow} {} tokens",
+            with_thousands_separators(tokens)
+        ),
+        None => format!("{label}  {arrow}"),
+    };
+    Line::from(text)
 }
 
 /// The details pane (issue #527): scrolls when it has focus
@@ -449,32 +496,6 @@ fn truncate_label(label: &str, max: usize) -> String {
     }
 }
 
-/// A label too long for `max`, truncated from the *left*, leading
-/// `…` (finding F9: the state pane's own path labels) — two entries
-/// sharing a long common prefix (`loop.iter_2.step`/`loop.iter_2.
-/// other`) stay distinct this way, where a right-truncated `loop.
-/// iter_2…` would show the same text for both.
-fn truncate_label_left(label: &str, max: usize) -> String {
-    let count = label.chars().count();
-    if count <= max {
-        label.to_string()
-    } else {
-        let skip = count - max.saturating_sub(1);
-        format!("…{}", label.chars().skip(skip).collect::<String>())
-    }
-}
-
-/// The state pane's own share of its interior width given to the
-/// path label, the rest to the value/error/glyph (finding F9): a
-/// fixed 12-column label left no room to tell two long, similarly
-/// prefixed paths apart even with [`truncate_label_left`]'s own left
-/// truncation, so this scales with the pane's real width instead,
-/// within a band that keeps a narrow pane from losing its value
-/// column entirely to the label.
-fn state_pane_label_width(inner_width: usize) -> usize {
-    (inner_width / 3).clamp(10, 24)
-}
-
 /// [`clamp_scroll`]'s own job, but counting *lines* rather than
 /// entries (finding F3): a state-pane entry with a token line takes
 /// two of the pane's interior lines, not one, so clamping by entry
@@ -530,11 +551,8 @@ fn clamp_state_scroll(
 /// pane's. Finding F3: scrolling is clamped and sliced by *lines*,
 /// not by entry count, since a token line makes most entries two
 /// lines tall rather than one.
-fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[StateRow], app: &mut App) {
+fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[&StateRow], app: &mut App) {
     let viewport = area.height.saturating_sub(2) as usize;
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let label_width = state_pane_label_width(inner_width);
-    let value_width = inner_width.saturating_sub(label_width + 1).max(1);
     let total = state_rows.len();
     let line_counts: Vec<usize> = state_rows
         .iter()
@@ -564,31 +582,40 @@ fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[StateRow], app: &mut 
     let mut lines: Vec<Line> = Vec::new();
     for row in visible_slice {
         let selected = app.state_selected_path.as_deref() == Some(row.path.as_str());
-        let (text, color) = if let Some(error) = &row.error_preview {
-            (error.clone(), Color::Red)
-        } else if let Some(value) = &row.value_preview {
-            (value.clone(), Color::Reset)
+        let indent = "  ".repeat(row.depth);
+        let collapse_marker = if row.has_children {
+            if app.state_collapsed.contains(&row.path) {
+                "+ "
+            } else {
+                ""
+            }
         } else {
-            (
-                status_glyph(row.status.kind).to_string(),
-                status_color(row.status.kind),
-            )
+            ""
         };
-        let text = truncate_label(&text, value_width);
-        let label = truncate_label_left(&row.path, label_width);
-        let mut line = Line::from(vec![
-            Span::raw(format!("{label:label_width$} ")),
-            Span::styled(text, Style::default().fg(color)),
-        ]);
+        let mut spans = vec![
+            Span::styled(
+                format!(
+                    "{indent}{collapse_marker}{} ",
+                    status_glyph(row.status.kind)
+                ),
+                status_style(row.status.kind),
+            ),
+            Span::raw(row.key.clone()),
+        ];
+        if let Some(dim) = &row.dim {
+            spans.push(Span::styled(
+                format!("  {dim}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        let mut line = Line::from(spans);
         if selected {
             line = line.style(Style::default().add_modifier(Modifier::REVERSED));
         }
         lines.push(line);
         if let Some((sent, received)) = row.tokens {
-            // Finding F12: the same indent as the value column above
-            // (`label_width` plus the one space before it starts).
             lines.push(Line::styled(
-                format!("{:label_width$} ↑{sent} ↓{received}", ""),
+                format!("{indent}  ↑{sent} ↓{received}"),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -826,17 +853,19 @@ const HELP_TEXT: &[&str] = &[
 /// margin plus the 2-column border leaves room to spare.
 const HELP_OVERLAY_WIDTH: u16 = 57;
 
-/// One redraw's whole layout (DESIGN.md §6.3, issue #527): the
-/// header; a left column of the orchestration pane over details; a
-/// right column of the state pane, the `tokens by key` treemap and
-/// the log pane; and the token bar across the full bottom width. On
-/// a small terminal, panes drop in the order `thresholds` documents
-/// until a one-column layout (orchestration, details, log) is all
-/// that's left — the header and the token bar never disappear.
-/// `raw_state` is the engine's own last snapshot, untruncated —
-/// `details`' own `prompt_sent`/`value` are already cut to
-/// `DETAILS_PREVIEW_CHARS` for the details pane, which `v`'s own
-/// full-value overlay (finding 5) must not be.
+/// One redraw's whole layout (DESIGN.md §6.3, issue #535): the
+/// header; a left column of the details pane over the orchestration
+/// pane, split at the golden section both ways (the column split
+/// itself, and the left column's own row split); a right column of
+/// the `tokens by key` treemap, the state pane and the log pane; and
+/// the token bar across the full bottom width. On a small terminal,
+/// panes drop in the order `thresholds` documents until a one-column
+/// layout (details, orchestration, log) is all that's left — the
+/// header and the token bar never disappear. `raw_state` is the
+/// engine's own last snapshot, untruncated — `details`' own
+/// `prompt_sent`/`value` are already cut to `DETAILS_PREVIEW_CHARS`
+/// for the details pane, which `v`'s own full-value overlay (finding
+/// 5) must not be.
 pub fn draw(
     frame: &mut Frame,
     state: &oscilloscope_core::render::RenderState,
@@ -860,6 +889,7 @@ pub fn draw(
 
     let body = sections[1];
     let visible = visible_rows(&state.rows, app);
+    let state_visible = crate::keys::visible_state_rows(&state.state_rows, app);
     let selected_kind = app
         .selected_path
         .as_deref()
@@ -875,26 +905,34 @@ pub fn draw(
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(45),
                 Constraint::Percentage(25),
+                Constraint::Percentage(45),
                 Constraint::Min(5),
             ])
             .split(body);
-        draw_tree(frame, parts[0], &visible, app, &state.header.document);
-        draw_details(frame, parts[1], details, selected_kind, app);
+        draw_details(frame, parts[0], details, selected_kind, app);
+        draw_tree(frame, parts[1], &visible, app, &state.header.document);
         draw_log(frame, parts[2], log_lines);
     } else {
+        let left_width = oscilloscope_core::layout::left_column_width(body.width);
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .constraints([
+                Constraint::Length(left_width),
+                Constraint::Length(body.width - left_width),
+            ])
             .split(body);
 
+        let details_rows = oscilloscope_core::layout::golden_section(columns[0].height);
         let left = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([
+                Constraint::Length(details_rows),
+                Constraint::Length(columns[0].height - details_rows),
+            ])
             .split(columns[0]);
-        draw_tree(frame, left[0], &visible, app, &state.header.document);
-        draw_details(frame, left[1], details, selected_kind, app);
+        draw_details(frame, left[0], details, selected_kind, app);
+        draw_tree(frame, left[1], &visible, app, &state.header.document);
 
         let show_treemap = area.width >= thresholds::TREEMAP_MIN_WIDTH
             && area.height >= thresholds::TREEMAP_MIN_HEIGHT;
@@ -905,25 +943,25 @@ pub fn draw(
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(30),
                     Constraint::Percentage(35),
+                    Constraint::Percentage(30),
                     Constraint::Min(5),
                 ])
                 .split(columns[1]);
-            draw_state(frame, right[0], &state.state_rows, app);
             draw_treemap(
                 frame,
-                right[1],
+                right[0],
                 &state.treemap,
                 app.selected_path.as_deref(),
             );
+            draw_state(frame, right[1], &state_visible, app);
             draw_log(frame, right[2], log_lines);
         } else if show_state {
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(40), Constraint::Min(5)])
                 .split(columns[1]);
-            draw_state(frame, right[0], &state.state_rows, app);
+            draw_state(frame, right[0], &state_visible, app);
             draw_log(frame, right[1], log_lines);
         } else {
             app.state_viewport = 0;

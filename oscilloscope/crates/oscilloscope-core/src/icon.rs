@@ -33,6 +33,9 @@ pub fn trace_dots(width: usize, height: usize, frame: u64, running: bool) -> Vec
         return rows;
     }
     let amplitude = ((height as f64) / 2.0 - 1.0).max(0.0);
+    // Each column picks its own row, so this isn't a plain
+    // index-into-`rows` loop `enumerate()` could replace.
+    #[allow(clippy::needless_range_loop)]
     for x in 0..width {
         let phase = (x as f64 + frame as f64) / CYCLE_DOTS * std::f64::consts::TAU;
         let y = (center - amplitude * phase.sin()).round();
@@ -90,7 +93,12 @@ mod tests {
         for x in 0..W - 1 {
             let col0: Vec<bool> = (0..H).map(|y| frame1[y][x]).collect();
             let col1: Vec<bool> = (0..H).map(|y| frame0[y][x + 1]).collect();
-            assert_eq!(col0, col1, "column {x} at frame 1 should be column {} at frame 0", x + 1);
+            assert_eq!(
+                col0,
+                col1,
+                "column {x} at frame 1 should be column {} at frame 0",
+                x + 1
+            );
         }
     }
 
@@ -113,6 +121,7 @@ mod tests {
     #[test]
     fn every_column_lights_exactly_one_dot_while_running() {
         let dots = trace_dots(W, H, 5, true);
+        #[allow(clippy::needless_range_loop)]
         for x in 0..W {
             let lit: usize = (0..H).filter(|&y| dots[y][x]).count();
             assert_eq!(lit, 1);

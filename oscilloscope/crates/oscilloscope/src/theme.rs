@@ -632,7 +632,11 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
-    pub fn detect(no_color: Option<&str>, colorterm: Option<&str>, term: Option<&str>) -> ColorMode {
+    pub fn detect(
+        no_color: Option<&str>,
+        colorterm: Option<&str>,
+        term: Option<&str>,
+    ) -> ColorMode {
         if no_color.is_some_and(|v| !v.is_empty()) {
             return ColorMode::NoColor;
         }
@@ -881,7 +885,10 @@ mod tests {
             ColorMode::detect(None, None, Some("xterm-256color")),
             ColorMode::Indexed256
         );
-        assert_eq!(ColorMode::detect(None, None, Some("xterm")), ColorMode::Basic16);
+        assert_eq!(
+            ColorMode::detect(None, None, Some("xterm")),
+            ColorMode::Basic16
+        );
         assert_eq!(ColorMode::detect(None, None, None), ColorMode::Basic16);
         // An empty NO_COLOR (unset in spirit) does not count (the
         // convention is "set to anything", but an explicitly empty
@@ -917,7 +924,10 @@ mod tests {
     #[test]
     fn true_color_keeps_a_named_themes_rgb_as_is() {
         let resolved = resolve(ThemeName::Dracula, ColorMode::TrueColor);
-        assert_eq!(resolved.theme.background, Some(Color::Rgb(0x28, 0x2a, 0x36)));
+        assert_eq!(
+            resolved.theme.background,
+            Some(Color::Rgb(0x28, 0x2a, 0x36))
+        );
     }
 
     #[test]

@@ -143,8 +143,14 @@ mod tests {
         let theme = resolve(ThemeName::Terminal, ColorMode::TrueColor).theme;
         assert_eq!(trace_color(RunStatus::Running, &theme), theme.icon_trace_ok);
         assert_eq!(trace_color(RunStatus::Ok, &theme), theme.icon_trace_ok);
-        assert_eq!(trace_color(RunStatus::Failed, &theme), theme.icon_trace_failed);
-        assert_eq!(trace_color(RunStatus::Aborted, &theme), theme.icon_trace_failed);
+        assert_eq!(
+            trace_color(RunStatus::Failed, &theme),
+            theme.icon_trace_failed
+        );
+        assert_eq!(
+            trace_color(RunStatus::Aborted, &theme),
+            theme.icon_trace_failed
+        );
         assert_eq!(
             trace_color(RunStatus::Cancelled, &theme),
             theme.icon_trace_cancelled
