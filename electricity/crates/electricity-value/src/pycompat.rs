@@ -121,14 +121,24 @@ pub enum PyExc {
     /// `on_failure: fail` when a decomposition attempt ends in
     /// `planner_failed`/`invalid_plan`/`execution_failed`.
     DecompositionError,
-    /// `core/dynamic.py::TreeExecutionError` (issue #442's first item,
-    /// closed by #537) -- a `RuntimeError` subclass, raised when two or
-    /// more branches of a `flow: tree` dynamic fail together
-    /// (`TreeExecutionError._format`'s own numbered summary). A nested
+    /// `core/dynamic.py::TreeExecutionError` (issue #442's first item)
+    /// -- a `RuntimeError` subclass, raised whenever one or more
+    /// branches of a `flow: tree` dynamic fail, not only when two or
+    /// more do: a single failing branch keeps that branch's own text
+    /// (`TreeExecutionError._format`'s single-error case) but still
+    /// carries this class, not the failing branch's own. A nested
     /// tree's own combined failure is wrapped by its enclosing
     /// container exactly like any other branch failure, so its class
     /// shows up one level up the same way `use`'s own wrap does.
     TreeExecutionError,
+    /// `core/cel_eval.py::CelEvaluationError` (a `RuntimeError` subclass,
+    /// also `CelError`) -- a malformed CEL expression, an unknown
+    /// function, or a type error, evaluating an `if`/`while` condition
+    /// in `mode: cel`. Propagated bare (`except Exception as e: ...;
+    /// raise`, `core/conditional.py`/`core/loop.py`), never wrapped, so
+    /// this is the class an enclosing chain/tree wrap's own one-level
+    /// unwrap shows.
+    CelEvaluationError,
 }
 
 impl PyExc {
@@ -165,6 +175,7 @@ impl PyExc {
             PyExc::AttributeError => "AttributeError",
             PyExc::DecompositionError => "DecompositionError",
             PyExc::TreeExecutionError => "TreeExecutionError",
+            PyExc::CelEvaluationError => "CelEvaluationError",
         }
     }
 }

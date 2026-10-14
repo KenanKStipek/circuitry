@@ -749,9 +749,9 @@ def test_assert_no_leaked_credentials_passes_on_clean_text() -> None:
 
 def test_assert_no_leaked_credentials_catches_a_planted_live_looking_key() -> None:
     """Case 22's own blanket check (issue #448's acceptance criterion,
-    closed by #537): a real-looking credential planted in a run's own
-    stdout fails the case, proving the check actually catches a leak
-    rather than merely never firing on today's committed fixtures."""
+    #537): a real-looking credential planted in a run's own stdout fails
+    the case, proving the check actually catches a leak rather than
+    merely never firing on today's committed fixtures."""
     with pytest.raises(AssertionError, match=r"sk-live-"):
         harness.assert_no_leaked_credentials(
             {"stdout": "Authorization: Bearer sk-live-FAKEKEY1234567890abcdef"},

@@ -203,9 +203,9 @@ whatever the *reference* client actually sent, not just the request a
 tool/adapter's own config describes. Python's `urllib` (the Python engine's
 own HTTP client) sends `Accept-Encoding: identity` and `Connection: close`
 on every request, neither of which any case's own fixture or document sets
-explicitly; electricity's own client (`reqwest`, lane E, issue #485) sends
-the same headers the committed fixture already has, not merely the ones
-the orchestration document itself names.
+explicitly; electricity's own client (`hyper`/`hyper-util`, lane E, issue
+#485) sends the same headers the committed fixture already has, not
+merely the ones the orchestration document itself names.
 
 ## Fake binaries
 
@@ -215,11 +215,11 @@ the `shell` tool's own `params.args`. Each case keeps its own copy of the
 file (the suite's `fakes/` contract is per-case, not a shared library —
 `harness._sandboxed_env` only ever puts one case's own directory on
 `PATH`), but it isn't one script "copied verbatim" everywhere: most cases
-carry the original seven-flag version (issue #450, item 4, plus `--cat`/
-`--print-env` for a `stdin`/`runtime.plugins.<name>.env` check);
-`c-shell-background-survives-normal-exit` carries a second, extended copy
-(issue #519) that adds the pidfile flags below for a backgrounded-process
-case.
+carry the base fake (issue #450, item 4; later extended with `--cat`/
+`--print-env` for a `stdin`/`runtime.plugins.<name>.env` check -- eight
+flags total, listed below); `c-shell-background-survives-normal-exit`
+carries a second, further-extended copy (issue #519) that adds the
+pidfile flags below for a backgrounded-process case.
 
 | flag | behaviour |
 |---|---|
@@ -238,8 +238,9 @@ case.
 `c-shell-path-fake` uses `--stdout`/`--exit`; `c-shell-crlf` and
 `c-shell-invalid-utf8` use `--crlf`/`--invalid-utf8`; `c-shell-timeout`
 uses `--sleep`; `c-shell-background-survives-normal-exit` uses the
-pidfile flags. `tests/conformance/test_fakes.py` covers every flag
-directly too, including `--cat`/`--print-env`.
+pidfile flags. `tests/conformance/test_fakes.py` covers every base-fake
+flag directly too, including `--cat`/`--print-env`, but not the pidfile
+flags (only the extended copy has those).
 
 ## Known divergence
 
@@ -459,7 +460,7 @@ name predates the item it turned out to cover).
 | C9–C11, C13, C14, C16–C18, C24, C28–C33 | the `cNN-*` case of the same number |
 | C12 | (a) `c-shell-path-fake`; (b) `c-shell-templated-allowed-commands`; (c) `c12-allowed-commands-from`; (d) `c12-allowed-commands-params-json` |
 | C15 | `c15-expect-cel-missing-key` |
-| C19 | `tree-stop-on-error`. The running-branch variant (a tree `stop_on_error` that must let an already-dispatched, still-running branch finish rather than cancelling it) was not added: on this machine the two branches' relative timing never reliably favors the slower one actually starting before the fast one fails, so the case cannot be made deterministic without changing what it exercises (making the "fast" branch artificially slow defeats the point). Left out rather than committed flaky. |
+| C19 | `tree-stop-on-error`. The running-branch variant (a tree `stop_on_error` that must let an already-dispatched, still-running branch finish rather than cancelling it) was not added: a `shell` `sleep` branch's actual start can't be made to race the fast branch's failure deterministically -- CI scheduling has no guarantee the slow branch has actually started (not merely been queued) before the fast one fails, so the case cannot be made deterministic without changing what it exercises (making the "fast" branch artificially slow defeats the point). Left out rather than committed flaky. |
 | C20 | `concurrency-group`, `prompt-tree-group`; `c20-group-in-tree-loop` |
 | C25 | `electricity-cli/tests/signals.rs`, `signals_loop.rs` and `process_tool_signals.rs` (lane M part B adds the prompt re-run and `signals_prompt.rs`) |
 | C26 | `complexity-scoring-off`, `complexity-scoring-on-routing-off`; `c26-scoring-absent`, `c26-scoring-enabled` |
@@ -472,6 +473,7 @@ name predates the item it turned out to cover).
 | §7 case 7 (the `http` half; the `mcp` half is M2) | `c-http-fail-on-error` |
 | §7 case 9 | `uuid-v5-and-errors` (v5, bad version, bad namespace); `c-uuid-v1-shape` (v1 shape only -- monotonic ordering stays a Rust unit test, `electricity-tools/src/uuid.rs`) |
 | §7 case 12 | `env-vars-get-and-list` |
+| §7 case 13 | `ollama-unreachable-soft-warning` (the connection-refused hint, `meta.error` verbatim); `ollama-model-not-found-mock` (the 404 "pull `<model>`" hint, `meta.error` verbatim). The third hint (`--max-time` exceeded) is exercised only as a *retryable* classification, not as final text: `ollama-timeout-then-success-mock`'s own first attempt hits it, but the second attempt succeeds, so no committed case pins that hint's own wording. |
 | §7 case 14 | `anthropic-messages-mock`, `openai-compatible-roles-images-params-mock` |
 | §7 case 15 | `openai-compatible-429-retry-after-mock`, `openai-compatible-401-mock`, `adapter-connection-refused-retried`, `c-http-retry-classification` |
 | §7 case 17 | `use-host-claude-document-adapter` |

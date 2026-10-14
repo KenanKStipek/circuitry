@@ -16,6 +16,19 @@ effects:
             name: body
             provider: json
             params: {mode: parse, input: "not valid json body"}
+      - type: dynamic
+        name: inner_one
+        flow: tree
+        max_concurrency: 1
+        effects:
+          - type: tool
+            name: ok
+            provider: json
+            params: {mode: parse, input: "{}"}
+          - type: tool
+            name: bad
+            provider: json
+            params: {mode: parse, input: "not valid json inner_one bad"}
       - type: reflector
         name: plan_it
         prime_template: "Plan it."

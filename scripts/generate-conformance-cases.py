@@ -56,6 +56,7 @@ from tests.conformance.normalize import (  # noqa: E402
     redact_events_text,
     redact_leaked_paths,
     redact_runtime_strings,
+    redact_third_party_text_lines,
 )
 
 
@@ -91,6 +92,7 @@ def _warnings_text(stderr: str, metadata: dict[str, Any]) -> bytes:
     file silently uncompared.
     """
     lines = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    lines = redact_third_party_text_lines(lines, metadata.get("third_party_text", []))
     text = "".join(f"{line}\n" for line in lines)
     return text.encode("utf-8")
 

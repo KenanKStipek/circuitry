@@ -1,6 +1,6 @@
 """Case 22's own static twin (tools-adapters-plugins.md §7 case 22, the
-redaction blanket; issue #448's acceptance criterion, closed by #537):
-every committed `expected.*` file across the whole suite -- not just
+redaction blanket; issue #448's acceptance criterion, #537): every
+committed `expected.*` file across the whole suite -- not just
 `c-http-redaction-blanket`'s own -- must never contain a real-looking
 credential, `harness.FAKE_CREDENTIAL_MARKER`, or one of its own case's
 `fake_credentials` values. `test_no_leaked_paths.py` is the equivalent
@@ -8,11 +8,12 @@ check for a leaked local filesystem path; this is the same idea for a
 leaked credential.
 
 `expected.http_requests.json` is deliberately excluded: nine cases record
-a real-looking credential there on purpose (`tests/conformance/README.md`'s
-own case-22 section) -- what the mock server actually received is the
-point of the header/URL redaction those cases check (display-only, never
-a what-gets-sent change), so that one file is the one declared exemption,
-exactly as `assert_no_leaked_credentials` never scans it either.
+a real-looking credential there on purpose (see the acceptance map's own
+case-22 row in `tests/conformance/README.md`) -- what the mock server
+actually received is the point of the header/URL redaction those cases
+check (display-only, never a what-gets-sent change), so that one file is
+the one declared exemption, exactly as `assert_no_leaked_credentials`
+never scans it either.
 """
 
 from __future__ import annotations

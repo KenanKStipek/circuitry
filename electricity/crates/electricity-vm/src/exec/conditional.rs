@@ -238,7 +238,17 @@ async fn decide_and_run<'a>(
                         store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
                     }
                     match op.on_error {
-                        OnError::Fail => return Err(VmError::Message(text)),
+                        // `core/cel_eval.py::CelEvaluationError` propagates
+                        // bare (never wrapped in anything else), so this
+                        // keeps that class, not a bare `VmError::Message`.
+                        OnError::Fail => {
+                            return Err(VmError::Raised {
+                                py_class: electricity_tools::PyExc::CelEvaluationError,
+                                message: text,
+                                cause: electricity_tools::ErrorCause::None,
+                                cause_class: None,
+                            });
+                        }
                         OnError::Skip => {
                             if let Some((node, _)) = named {
                                 let mut v = IndexMap::new();
@@ -292,7 +302,8 @@ async fn decide_and_run<'a>(
                     model_reply_after = Some(outcome.generated);
                     passed
                 }
-                Err(text) => {
+                Err(failure) => {
+                    let text = failure.message;
                     if let Some((_, meta)) = named {
                         store.set_leaf(meta, key("error"), Value::Str(text.clone()));
                         store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
@@ -304,7 +315,19 @@ async fn decide_and_run<'a>(
                         );
                     }
                     match op.on_error {
-                        OnError::Fail => return Err(VmError::Message(text)),
+                        // The failure's own class (`TemplateError` for a
+                        // render failure, the adapter's own class for a
+                        // dispatch failure, `AnswerParseError` for an
+                        // unparseable reply) survives here, never a bare
+                        // `VmError::Message`.
+                        OnError::Fail => {
+                            return Err(VmError::Raised {
+                                py_class: failure.py_class,
+                                message: text,
+                                cause: electricity_tools::ErrorCause::None,
+                                cause_class: None,
+                            });
+                        }
                         OnError::Skip => {
                             if let Some((node, _)) = named {
                                 let mut v = IndexMap::new();
@@ -412,8 +435,8 @@ async fn decide_and_run<'a>(
                         // chain/tree dispatch uses, so a `Raised` branch
                         // failure keeps its own class through an `if`'s
                         // wrap too (issue #442's tree-failure-class-names
-                        // item, closed by #537 -- this one surfaced as a
-                        // bare `VmError::Message` losing the class outright,
+                        // item, #537 -- this one surfaced as a bare
+                        // `VmError::Message` losing the class outright,
                         // not merely a one-level cause-class mismatch).
                         Some(name) => wrap_effect_error(name, e),
                         None => e,

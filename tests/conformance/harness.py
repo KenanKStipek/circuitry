@@ -128,8 +128,8 @@ def assert_no_leaked_credentials(
     received) is deliberately never one of *texts* -- nine cases record a
     real-looking credential there on purpose (the point of the header/URL
     redaction those cases check: display-only, never a what-gets-sent
-    change), so it is the one exempt file, per `tests/conformance/
-    README.md`'s own case-22 section."""
+    change), so it is the one exempt file (see the acceptance map's own
+    case-22 row in `tests/conformance/README.md`)."""
     patterns = [_LEAKED_CREDENTIAL_PREFIX, FAKE_CREDENTIAL_MARKER]
     if fake_credentials:
         patterns.extend(fake_credentials.values())

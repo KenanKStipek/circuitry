@@ -630,9 +630,9 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
     else {
         panic!("expected a Raised error, got {err:?}");
     };
-    // Issue #442's first item, closed by #537: the combined error is
-    // itself a `Raised` of `TreeExecutionError`, not a bare `Message` --
-    // so a further-nested tree's own combine can show this class too.
+    // Issue #442's first item (#537): the combined error is itself a
+    // `Raised` of `TreeExecutionError`, not a bare `Message` -- so a
+    // further-nested tree's own combine can show this class too.
     assert_eq!(*py_class, electricity_tools::PyExc::TreeExecutionError);
     assert!(
         text.starts_with("2 effects failed in parallel:\n"),

@@ -22,6 +22,7 @@ from .normalize import (
     prepare_for_comparison,
     redact_events_text,
     redact_runtime_strings,
+    redact_third_party_text_lines,
 )
 
 CASE_DIRS = harness.list_case_dirs()
@@ -36,6 +37,7 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     item): compared regardless of `expect` -- a case can log a warning
     on its way to either a success or a failure."""
     actual = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
+    actual = redact_third_party_text_lines(actual, metadata.get("third_party_text", []))
     expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
     expected = [line for line in expected_text.splitlines() if line]
     assert actual == expected, (
