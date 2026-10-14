@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #511",
+  "description": "The same decomposition plan naming a provider that is not a cof plugin at all, under on_failure: fail, but with on_error: continue on the prompt effect itself: the prompt's own on_error absorbs the decomposition of 'big' failed (execution_failed) error (with the real Unknown plugin text inside it), so the run succeeds, unlike the plain on_failure: fail case.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

@@ -1,0 +1,15 @@
+name: c511-unknown-tool-reflector-plan-continue
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: plan_it
+    on_error: continue
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

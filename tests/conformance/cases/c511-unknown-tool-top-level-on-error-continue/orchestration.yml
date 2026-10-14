@@ -1,0 +1,7 @@
+name: c511-unknown-tool-top-level-on-error-continue
+effects:
+  - type: tool
+    name: x
+    provider: nonexistent_tool
+    params: {}
+    on_error: continue
