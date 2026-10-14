@@ -1734,3 +1734,36 @@ mod last_key_wins_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod merge_key_inside_merged_mapping_tests {
+    use super::load_yaml;
+    use electricity_value::Value;
+
+    /// circuitry#390: a mapping reached through a `<<:` merge can itself
+    /// use `<<:` and override one of its own merged-in keys. This crate's
+    /// `flatten_pairs` never mutates a node's own pairs in place (unlike
+    /// `SafeConstructor.flatten_mapping`'s shared, mutable `MappingNode`),
+    /// so the duplicate-key pre-pass always sees that mapping's own,
+    /// unflattened keys regardless of construction order -- this never
+    /// had the false-positive `DuplicateKeyError` Circuitry's own loader
+    /// had before the matching fix there.
+    #[test]
+    fn merge_source_overriding_its_own_merged_key_is_not_a_duplicate() {
+        let text = "base: &base\n  retries: 1\n  timeout: 5\ntemplates:\n  defaults: &defaults\n    <<: *base\n    retries: 2\neffect:\n  <<: *defaults\n";
+        let value = load_yaml(text).expect("a merge source overriding its own merged key loads");
+        let dict = value.as_dict().expect("a mapping");
+        let effect = dict
+            .get(&Value::Str("effect".to_string()))
+            .and_then(Value::as_dict)
+            .expect("effect is a mapping");
+        assert_eq!(
+            effect.get(&Value::Str("retries".to_string())),
+            Some(&Value::from(2_i64))
+        );
+        assert_eq!(
+            effect.get(&Value::Str("timeout".to_string())),
+            Some(&Value::from(5_i64))
+        );
+    }
+}

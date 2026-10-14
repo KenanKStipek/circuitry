@@ -45,12 +45,12 @@ orchestration file.
 
 ### 1.1 YAML — PyYAML `safe_load`, minus silent duplicate keys
 
-`core/yaml_load.py:52` `load_yaml()` runs `yaml.load()` with a custom
+`core/yaml_load.py:71` `load_yaml()` runs `yaml.load()` with a custom
 `_UniqueKeyLoader(yaml.SafeLoader)` (`core/yaml_load.py:28`) that overrides
 `construct_mapping` to raise `DuplicateKeyError` (`core/yaml_load.py:24`,
 subclass of `yaml.YAMLError`) the moment the *same* mapping defines a key
 twice — citing both line/column locations. A `<<:` merge key is explicitly
-exempted (`core/yaml_load.py:34`, checks `key_node.tag == "tag:yaml.org,2002:merge"`):
+exempted (`core/yaml_load.py:52`, checks `key_node.tag == "tag:yaml.org,2002:merge"`):
 merging is not duplication, and the merged-in keys are overridden by the
 mapping's own keys, exactly as YAML merge-key semantics define (confirmed:
 `base: {x:1,y:2}` merged with `{<<: *base, y: 3}` yields `{x: 1, y: 3}`).

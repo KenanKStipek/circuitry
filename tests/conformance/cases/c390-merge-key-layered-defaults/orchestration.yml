@@ -1,0 +1,18 @@
+name: c390-merge-key-layered-defaults
+base: &base
+  retries: 1
+  timeout: 5
+templates:
+  layer: &layer
+    <<: *base
+    retries: 2
+resolved: &resolved
+  <<: *layer
+effects:
+  - type: tool
+    name: a
+    provider: json
+    params:
+      mode: stringify
+      input:
+        <<: *resolved
