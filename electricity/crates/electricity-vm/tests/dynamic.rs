@@ -262,6 +262,72 @@ async fn tree_dispatch_fires_before_any_branch_and_merges_every_child_in_order()
 }
 
 #[tokio::test]
+async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
+    // Issue #465: `register_tree_branches` fires once, before any
+    // branch starts, carrying every branch; `clear_tree_branches`
+    // fires only once every branch has completed and `Store::merge`
+    // has folded them all back in.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = ToolRegistry::new();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = RecordingObserver::new();
+
+    let root = tree_dynamic(
+        root_path(),
+        "prime",
+        OnError::Fail,
+        None,
+        false,
+        vec![
+            chain_dynamic(root_path().push_name("x0"), "x0", OnError::Fail, vec![]),
+            chain_dynamic(root_path().push_name("x1"), "x1", OnError::Fail, vec![]),
+        ],
+    );
+
+    electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap();
+
+    let events = observer.events();
+    let register_index = events
+        .iter()
+        .position(
+            |e| matches!(e, Event::RegisterTreeBranches(path, n) if path == "prime" && *n == 2),
+        )
+        .expect("register_tree_branches must fire with both branches");
+    let first_branch_start = events
+        .iter()
+        .position(|e| matches!(e, Event::Start(path) if path == "prime.x0"))
+        .expect("a branch must start");
+    assert!(
+        register_index < first_branch_start,
+        "registration must happen before any branch starts, got {events:?}"
+    );
+
+    let clear_index = events
+        .iter()
+        .position(|e| matches!(e, Event::ClearTreeBranches(path) if path == "prime"))
+        .expect("clear_tree_branches must fire");
+    let last_branch_complete = events
+        .iter()
+        .rposition(|e| matches!(e, Event::Complete(path, None) if path == "prime.x0" || path == "prime.x1"))
+        .expect("every branch must complete");
+    assert!(
+        clear_index > last_branch_complete,
+        "clear must happen only once every branch (and so the merge) is done, got {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn tree_stop_on_error_never_starts_a_queued_branch() {
     let store = Store::new();
     let token = CancellationToken::new();

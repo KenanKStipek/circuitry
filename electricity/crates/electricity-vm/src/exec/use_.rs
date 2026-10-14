@@ -1465,6 +1465,23 @@ impl RunObserver for ChildObserver<'_> {
     fn clear_graft(&self, node_path: &EffectPath) {
         self.parent.clear_graft(node_path);
     }
+
+    // Issue #465: a tree nested inside this `use` child registers its
+    // own branches at its own, already-namespaced path (same reasoning
+    // as `dispatch`, above) -- the branch `NodeRef`s themselves belong
+    // to `self.child_store`, not the parent run's store, but
+    // `RunObserver::register_tree_branches`'s own contract only ever
+    // reads one lazily, through whichever `Store` the caller happens
+    // to resolve it with (`Store::saved` doesn't depend on `self`),
+    // so forwarding the `NodeRef`s unchanged is correct regardless of
+    // which store they came from.
+    fn register_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
+        self.parent.register_tree_branches(node_path, branches);
+    }
+
+    fn clear_tree_branches(&self, node_path: &EffectPath) {
+        self.parent.clear_tree_branches(node_path);
+    }
 }
 
 /// [`run_isolated`]'s own private body -- see this module's own doc

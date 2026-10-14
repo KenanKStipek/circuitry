@@ -3,6 +3,7 @@
 //! run-time plugin's `on_effect_start`/`on_effect_complete` (out of
 //! scope for M0-H) both hang off of.
 
+use crate::store::NodeRef;
 use electricity_bytecode::EffectPath;
 use electricity_value::Value;
 
@@ -124,6 +125,29 @@ pub trait RunObserver {
         false
     }
 
+    /// A `flow: tree` dynamic/loop is about to dispatch *branches* --
+    /// every branch's own [`NodeRef`], in index order, at *node_path*
+    /// (issue #465, the overlay design #462's `graft_child_write`
+    /// already established for a `use` child). Unlike a `use` child
+    /// (its own separate [`crate::Store`], reachable only by taking a
+    /// snapshot and pushing it through [`RunObserver::graft_child_write`]
+    /// on every write), a tree branch's own node lives in *this* run's
+    /// single store -- holding the [`NodeRef`] costs nothing per write,
+    /// so there is no push call here at all; a live-state mirror reads
+    /// each branch's own current snapshot straight off the live tree,
+    /// lazily, only when it actually publishes. [`RunObserver::
+    /// clear_tree_branches`] is this call's own undo, once
+    /// [`crate::Store::merge`] has folded every branch back into
+    /// *node_path* for good. Default no-op, like every other hook here;
+    /// only `electricity` (lib)'s own `Observer` implements it for real.
+    fn register_tree_branches(&self, _node_path: &EffectPath, _branches: &[NodeRef]) {}
+
+    /// *node_path* no longer needs [`RunObserver::register_tree_branches`]'s
+    /// own overlay -- its tree has merged. A no-op for a path that was
+    /// never registered (or already cleared), same as every other
+    /// hook's own tolerant default here.
+    fn clear_tree_branches(&self, _node_path: &EffectPath) {}
+
     /// Hands a completing effect's own `meta` snapshot to the run's
     /// totals (issue #498 ruling 7) -- `cli/runtime_shim.py::
     /// _TotalsAccumulator.observe`'s own `tokens_sent`/`tokens_received`/
@@ -165,5 +189,7 @@ mod tests {
         observer.graft_child_write(&path, &Value::None);
         observer.clear_graft(&path);
         observer.record_totals(&Value::None);
+        observer.register_tree_branches(&path, &[]);
+        observer.clear_tree_branches(&path);
     }
 }

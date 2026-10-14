@@ -1266,6 +1266,7 @@ async fn run_each_tree<'a>(
     let branches = store
         .parallel_branches(write_parent, total as usize)
         .map_err(store_err)?;
+    observer.register_tree_branches(&dispatch_path, &branches);
 
     let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
         Default::default();
@@ -1379,6 +1380,7 @@ async fn run_each_tree<'a>(
     // there is nothing left to lose by keeping whatever every branch
     // (refused or not) already wrote.
     store.merge(write_parent, branches).map_err(store_err)?;
+    observer.clear_tree_branches(&dispatch_path);
     observer.write();
 
     for idx in 0..total {

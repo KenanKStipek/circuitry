@@ -29,6 +29,7 @@
 use crate::out::render_state;
 use electricity_bytecode::EffectPath;
 use electricity_value::{Dict, Value};
+use electricity_vm::{NodeRef, Store};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fs;
@@ -188,6 +189,55 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
     Value::Dict(dict)
 }
 
+/// Issue #465's own overlay: *root* with *node_path*'s own existing
+/// node (a tree `dynamic`/loop's own container, still holding whatever
+/// skeleton `value`/`meta` it wrote before dispatching) overlaid by
+/// every branch in *branches*, in index order -- `core/store/
+/// store.py::Store.parallel_branches`'s own publisher, `node =
+/// dict(self.state); for snapshot in latest: if snapshot is not None:
+/// node.update(snapshot)`. Each branch's own current content is read
+/// straight off its live [`NodeRef`] via [`Store::saved`] -- lazily,
+/// right here, never pushed on every write (this function is only
+/// ever called from [`LiveStateMirror::apply_grafts`], itself only
+/// called from [`LiveStateMirror::flush_if_due`], the one place that
+/// enforces the whole mirror's own coalescing). A branch that hasn't
+/// written anything yet resolves to an empty dict, contributing
+/// nothing -- the same as cof's own `latest[index] is None` check
+/// skipping it, since merging an empty dict is a no-op either way.
+/// A branch index earlier in *branches* whose keys a later branch
+/// also wrote loses that key, exactly as cof's own ascending-index
+/// `node.update` loop does.
+fn tree_overlay_snapshot(
+    root: &Value,
+    node_path: &str,
+    store: &Store,
+    branches: &[NodeRef],
+) -> Value {
+    let mut merged = Dict::new();
+    for branch in branches {
+        if let Some(d) = store.saved(branch).as_dict() {
+            for (k, v) in d.iter() {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    if merged.is_empty() {
+        return root.clone();
+    }
+    let segments: Vec<&str> = node_path.split('.').collect();
+    overlay_at_path(root, &segments, &merged)
+}
+
+/// One [`LiveStateMirror::grafts`] entry: either a `use` child's own
+/// latest pushed snapshot ([`LiveStateMirror::graft_child_write`]), or
+/// a tree's own still-live branch [`NodeRef`]s, read lazily
+/// ([`LiveStateMirror::register_tree_branches`]) -- see each
+/// variant's own constructor for which.
+enum GraftEntry {
+    Child(Value),
+    Tree(Vec<NodeRef>),
+}
+
 /// The `--live-state` writer -- see this module's own doc comment.
 pub struct LiveStateMirror {
     path: PathBuf,
@@ -198,20 +248,21 @@ pub struct LiveStateMirror {
     /// this entirely -- its own write is unconditional.
     pending: Cell<bool>,
     had_failure: Cell<bool>,
-    /// Every currently in-flight child write grafted onto the next
-    /// mid-run snapshot ([`Self::graft_child_write`]/[`Self::
-    /// clear_graft`], issue #448 item U6), keyed by the grafted node's
-    /// own absolute dotted path -- a `BTreeMap`, not a `HashMap`, so
-    /// [`Self::apply_grafts`] walks shallower paths before any deeper
-    /// one nested under them (a dotted path that is a strict prefix of
-    /// another always sorts first), composing a nested `use`'s own
-    /// graft correctly on top of its own parent's. A plain map, not a
-    /// stack: a write for a path already present simply replaces that
-    /// path's own entry (the child's latest snapshot, same as Python's
-    /// own closure re-running `_grafted_snapshot` fresh on every call),
-    /// and a tree's own simultaneous sibling `use` branches each keep
-    /// their own independent entry.
-    grafts: RefCell<BTreeMap<String, Value>>,
+    /// Every currently in-flight overlay -- a `use` child's own latest
+    /// pushed write ([`Self::graft_child_write`]/[`Self::clear_graft`],
+    /// issue #448 item U6) or a tree's own still-live branches
+    /// ([`Self::register_tree_branches`]/[`Self::clear_tree_branches`],
+    /// issue #465) -- keyed by the overlaid node's own absolute dotted
+    /// path. A `BTreeMap`, not a `HashMap`, so [`Self::apply_grafts`]
+    /// walks shallower paths before any deeper one nested under them (a
+    /// dotted path that is a strict prefix of another always sorts
+    /// first), composing a nested `use`/tree correctly on top of its
+    /// own parent's, in whichever order the two kinds actually nest. A
+    /// plain map, not a stack: a call for a path already present simply
+    /// replaces that path's own entry, and a tree's own simultaneous
+    /// sibling `use` branches (or a `use` child's own nested tree) each
+    /// keep their own independent entry.
+    grafts: RefCell<BTreeMap<String, GraftEntry>>,
 }
 
 impl LiveStateMirror {
@@ -240,7 +291,7 @@ impl LiveStateMirror {
     pub fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
         self.grafts
             .borrow_mut()
-            .insert(node_path.to_string(), snapshot.clone());
+            .insert(node_path.to_string(), GraftEntry::Child(snapshot.clone()));
         self.mark_pending();
     }
 
@@ -252,19 +303,45 @@ impl LiveStateMirror {
         self.grafts.borrow_mut().remove(&node_path.to_string());
     }
 
-    /// *snapshot* with every currently active graft applied, shallowest
-    /// path first ([`BTreeMap`]'s own sorted iteration order over a
-    /// dotted path -- this struct's own `grafts` field doc comment).
-    /// Only [`Self::flush_if_due`] ever calls this: [`Self::
-    /// write_initial`] runs before anything could have grafted, and
-    /// [`Self::close`] writes the final, already-really-merged state,
-    /// where no graft should ever still apply.
-    fn apply_grafts(&self, snapshot: Value) -> Value {
+    /// [`electricity_vm::RunObserver::register_tree_branches`]'s own
+    /// implementation: records *branches* (cloned `Rc`s, cheap) as
+    /// *node_path*'s own tree overlay, replacing whatever was there
+    /// from an earlier registration at the same path. Unlike
+    /// [`Self::graft_child_write`] this never marks a write pending on
+    /// its own -- it runs once, before any branch has written anything
+    /// at all, so there would be nothing new to publish yet; every
+    /// branch's own first effect write already calls [`Self::
+    /// mark_pending`] through the ordinary [`electricity_vm::
+    /// RunObserver::write`] hook.
+    pub fn register_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
+        self.grafts
+            .borrow_mut()
+            .insert(node_path.to_string(), GraftEntry::Tree(branches.to_vec()));
+    }
+
+    /// [`electricity_vm::RunObserver::clear_tree_branches`]'s own
+    /// implementation: *node_path*'s own tree has merged -- a no-op if
+    /// nothing was registered there (or it was already cleared).
+    pub fn clear_tree_branches(&self, node_path: &EffectPath) {
+        self.grafts.borrow_mut().remove(&node_path.to_string());
+    }
+
+    /// *snapshot* with every currently active overlay applied,
+    /// shallowest path first ([`BTreeMap`]'s own sorted iteration order
+    /// over a dotted path -- this struct's own `grafts` field doc
+    /// comment). *store* resolves a [`GraftEntry::Tree`] entry's own
+    /// branch [`NodeRef`]s lazily, right here -- the only place any of
+    /// them is ever read. Only [`Self::flush_if_due`] ever calls this:
+    /// [`Self::write_initial`] runs before anything could have
+    /// grafted, and [`Self::close`] writes the final, already-really-
+    /// merged state, where no overlay should ever still apply.
+    fn apply_grafts(&self, store: &Store, snapshot: Value) -> Value {
         self.grafts
             .borrow()
             .iter()
-            .fold(snapshot, |acc, (path, child)| {
-                grafted_snapshot(&acc, path, child)
+            .fold(snapshot, |acc, (path, entry)| match entry {
+                GraftEntry::Child(child) => grafted_snapshot(&acc, path, child),
+                GraftEntry::Tree(branches) => tree_overlay_snapshot(&acc, path, store, branches),
             })
     }
 
@@ -297,7 +374,7 @@ impl LiveStateMirror {
     /// never pays for a snapshot it then discards. A failure here is
     /// recorded (see [`Self::close`]), never propagated: the mirror is
     /// for watchers, not the run's own result.
-    pub fn flush_if_due(&self, snapshot: impl FnOnce() -> Value) {
+    pub fn flush_if_due(&self, store: &Store, snapshot: impl FnOnce() -> Value) {
         if !self.pending.get() {
             return;
         }
@@ -308,7 +385,7 @@ impl LiveStateMirror {
         }
         self.pending.set(false);
         self.next_due.set(Some(now + self.interval));
-        let state = self.apply_grafts(snapshot());
+        let state = self.apply_grafts(store, snapshot());
         if let Err(err) = write_atomic(&self.path, &render_state(&state, false)) {
             self.had_failure.set(true);
             // `cli/live_state.py::LiveStateMirror._write`'s own
@@ -398,7 +475,8 @@ mod tests {
 
         let node_path = EffectPath::root().push_name("fetch");
         mirror.graft_child_write(&node_path, &child_snapshot);
-        mirror.flush_if_due(|| root.clone());
+        let store = Store::new();
+        mirror.flush_if_due(&store, || root.clone());
 
         // The expected published state: the use node's own `value`/
         // `meta` untouched, with `inner` mirrored in alongside them.
@@ -436,7 +514,8 @@ mod tests {
         mirror.clear_graft(&node_path);
 
         mirror.mark_pending();
-        mirror.flush_if_due(|| Value::Dict(Dict::new()));
+        let store = Store::new();
+        mirror.flush_if_due(&store, || Value::Dict(Dict::new()));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
 
         fs::remove_file(&path).unwrap();
@@ -508,7 +587,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         // Due, but nothing marked pending -- the closure below must
         // never even be called.
-        mirror.flush_if_due(|| panic!("snapshot taken with nothing pending"));
+        let store = Store::new();
+        mirror.flush_if_due(&store, || panic!("snapshot taken with nothing pending"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
         fs::remove_file(&path).unwrap();
     }
@@ -521,7 +601,8 @@ mod tests {
         mirror.mark_pending();
         let mut dict = Dict::new();
         dict.insert(Value::Str("x".to_string()), Value::from(1i64));
-        mirror.flush_if_due(|| Value::Dict(dict));
+        let store = Store::new();
+        mirror.flush_if_due(&store, || Value::Dict(dict));
         // Still the initial (empty) snapshot: the pending write landed
         // well inside the interval and was skipped.
         assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
@@ -537,7 +618,8 @@ mod tests {
         mirror.mark_pending();
         let mut dict = Dict::new();
         dict.insert(Value::Str("x".to_string()), Value::from(1i64));
-        mirror.flush_if_due(|| Value::Dict(dict));
+        let store = Store::new();
+        mirror.flush_if_due(&store, || Value::Dict(dict));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
         fs::remove_file(&path).unwrap();
     }
@@ -551,12 +633,13 @@ mod tests {
         mirror.mark_pending();
         let mut first = Dict::new();
         first.insert(Value::Str("x".to_string()), Value::from(1i64));
-        mirror.flush_if_due(|| Value::Dict(first));
+        let store = Store::new();
+        mirror.flush_if_due(&store, || Value::Dict(first));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
         // Nothing pending right after a flush -- a poll landing before
         // the next change is marked must be a no-op, proving the flag
         // (not just the timer) gates every write.
-        mirror.flush_if_due(|| panic!("snapshot taken with nothing pending"));
+        mirror.flush_if_due(&store, || panic!("snapshot taken with nothing pending"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"x\": 1}\n");
         fs::remove_file(&path).unwrap();
     }
@@ -641,5 +724,186 @@ mod tests {
         let had_failure = mirror.close(&Value::Dict(dict));
         assert!(had_failure);
         fs::remove_file(&blocker).unwrap();
+    }
+
+    fn str_key(s: &str) -> Value {
+        Value::Str(s.to_string())
+    }
+
+    /// Issue #465's own acceptance list, first bullet: a two-branch
+    /// `flow: tree` dynamic, mid-run -- `fast` has already finished,
+    /// `slow` hasn't written anything yet. The published shape matches
+    /// cof's own (established against a real `cof run --live-state`
+    /// mid-run snapshot, issue #465's own PR body): the container's
+    /// own skeleton `value`/`meta` stay first, `fast`'s own finished
+    /// node is appended after them, and `slow` doesn't appear at all
+    /// yet -- the same as cof's `latest[index] is None` branches being
+    /// skipped by its own publisher.
+    #[test]
+    fn a_two_branch_tree_overlays_only_the_branch_that_has_written_so_far() {
+        let path = temp_path("two-branch-tree");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let lp = store.ensure_dict(&prime, str_key("lp")).unwrap();
+        store.set_leaf(&lp, str_key("value"), Value::None);
+        store.set_leaf(&lp, str_key("meta"), Value::Dict(Dict::new()));
+
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let branches = store.parallel_branches(&lp, 2).unwrap();
+        let node_path = EffectPath::root().push_name("lp");
+        mirror.register_tree_branches(&node_path, &branches);
+
+        // Branch 0 ("fast") finishes; branch 1 ("slow") never writes
+        // anything during this flush.
+        store.set_leaf(&branches[0], str_key("fast"), Value::from("fast done"));
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let mut expected_lp = Dict::new();
+        expected_lp.insert(str_key("value"), Value::None);
+        expected_lp.insert(str_key("meta"), Value::Dict(Dict::new()));
+        expected_lp.insert(str_key("fast"), Value::from("fast done"));
+        let mut expected_prime = Dict::new();
+        expected_prime.insert(str_key("lp"), Value::Dict(expected_lp));
+        let mut expected_root = Dict::new();
+        expected_root.insert(str_key("prime"), Value::Dict(expected_prime));
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            render_state(&Value::Dict(expected_root), false)
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// Second acceptance bullet: a tree *loop*'s `iter_<N>` pass
+    /// containers, mid-run -- `parallel_branches`' own branch roots are
+    /// each wrapped in their own `iter_<idx>` child, exactly as
+    /// `exec::loop_::run_each_tree` builds a named loop's own
+    /// `pass_write_node`.
+    #[test]
+    fn a_tree_loops_iter_n_pass_containers_overlay_mid_run() {
+        let path = temp_path("tree-loop");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let draft = store.ensure_dict(&prime, str_key("draft")).unwrap();
+        store.set_leaf(&draft, str_key("meta"), Value::Dict(Dict::new()));
+
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let branches = store.parallel_branches(&draft, 2).unwrap();
+        let node_path = EffectPath::root().push_name("draft");
+        mirror.register_tree_branches(&node_path, &branches);
+
+        let iter_0 = store.ensure_dict(&branches[0], str_key("iter_0")).unwrap();
+        store.set_leaf(&iter_0, str_key("step"), Value::from("pass 0 done"));
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let mut expected_iter_0 = Dict::new();
+        expected_iter_0.insert(str_key("step"), Value::from("pass 0 done"));
+        let mut expected_draft = Dict::new();
+        expected_draft.insert(str_key("meta"), Value::Dict(Dict::new()));
+        expected_draft.insert(str_key("iter_0"), Value::Dict(expected_iter_0));
+        let mut expected_prime = Dict::new();
+        expected_prime.insert(str_key("draft"), Value::Dict(expected_draft));
+        let mut expected_root = Dict::new();
+        expected_root.insert(str_key("prime"), Value::Dict(expected_prime));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            render_state(&Value::Dict(expected_root), false)
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// Third acceptance bullet: dropped at merge -- once
+    /// `clear_tree_branches` runs (`Store::merge`'s own caller,
+    /// `exec::dynamic::execute_tree`/`exec::loop_::run_each_tree`), a
+    /// later flush no longer overlays anything at that path, the same
+    /// as [`clear_graft_removes_a_path_so_a_later_flush_no_longer_overlays_it`].
+    #[test]
+    fn clear_tree_branches_removes_a_path_so_a_later_flush_no_longer_overlays_it() {
+        let path = temp_path("clear-tree-branches");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let lp = store.ensure_dict(&prime, str_key("lp")).unwrap();
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let branches = store.parallel_branches(&lp, 1).unwrap();
+        let node_path = EffectPath::root().push_name("lp");
+        mirror.register_tree_branches(&node_path, &branches);
+        store.set_leaf(&branches[0], str_key("fast"), Value::from("leftover"));
+        mirror.clear_tree_branches(&node_path);
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let mut expected_root = Dict::new();
+        expected_root.insert(
+            str_key("prime"),
+            Value::Dict({
+                let mut prime = Dict::new();
+                prime.insert(str_key("lp"), Value::Dict(Dict::new()));
+                prime
+            }),
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            render_state(&Value::Dict(expected_root), false)
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// Fourth acceptance bullet: nested trees compose -- an outer
+    /// tree's own overlay at `prime.outer` and an inner tree nested in
+    /// one of its own branches, registered at `prime.outer.inner`, both
+    /// apply, shallowest path first, the same way a nested `use`'s own
+    /// graft already composes with its parent's.
+    #[test]
+    fn a_nested_tree_composes_with_its_own_parents_overlay() {
+        let path = temp_path("nested-tree");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let outer = store.ensure_dict(&prime, str_key("outer")).unwrap();
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let outer_branches = store.parallel_branches(&outer, 1).unwrap();
+        mirror.register_tree_branches(&EffectPath::root().push_name("outer"), &outer_branches);
+
+        // The outer tree's one branch starts its own, nested tree,
+        // writing its own skeleton directly into the branch's own root.
+        let inner_branches = store.parallel_branches(&outer_branches[0], 1).unwrap();
+        mirror.register_tree_branches(
+            &EffectPath::root().push_name("outer").push_name("inner"),
+            &inner_branches,
+        );
+        store.set_leaf(&inner_branches[0], str_key("leaf"), Value::from("deep"));
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let leaf = get(&get(&get(&get(&parsed, "prime"), "outer"), "inner"), "leaf");
+        assert_eq!(leaf, Value::from("deep"), "got {text}");
+        fs::remove_file(&path).unwrap();
     }
 }

@@ -792,6 +792,18 @@ impl RunObserver for Observer<'_> {
         }
     }
 
+    fn register_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        if let Some(mirror) = self.live_state {
+            mirror.register_tree_branches(node_path, branches);
+        }
+    }
+
+    fn clear_tree_branches(&self, node_path: &EffectPath) {
+        if let Some(mirror) = self.live_state {
+            mirror.clear_tree_branches(node_path);
+        }
+    }
+
     // R4's own refinement on PR #472's review: `graft_child_write`
     // above is a no-op without a mirror, so a caller that would
     // otherwise snapshot a child store purely to call it should never
@@ -1830,7 +1842,7 @@ pub async fn run_orchestration_with_config(
                 tokio::select! {
                     result = &mut exec_fut => break result,
                     () = tokio::time::sleep(LIVE_STATE_POLL_TICK) => {
-                        mirror.flush_if_due(|| store.saved(&store.root));
+                        mirror.flush_if_due(&store, || store.saved(&store.root));
                     }
                 }
             }

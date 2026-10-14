@@ -446,7 +446,8 @@ fn execute_tree<'a>(
         // an ordinary `dynamic` tree branch's compiled path is already
         // globally unique), so *frame* passes straight through to every
         // branch unchanged, never through `Frame::nested`.
-        observer.dispatch(&frame.effect_path(&op.path), n, concurrency);
+        let container_path = frame.effect_path(&op.path);
+        observer.dispatch(&container_path, n, concurrency);
 
         if n == 0 {
             return Ok(());
@@ -460,6 +461,7 @@ fn execute_tree<'a>(
         // into until the merge below).
         let tree_chain: CtxChain = vec![CtxSource::Frozen(super::live_ctx(ctx_chain, store))];
         let branches = store.parallel_branches(dyn_node, n).map_err(store_err)?;
+        observer.register_tree_branches(&container_path, &branches);
 
         let container_name = op
             .name
@@ -585,6 +587,7 @@ fn execute_tree<'a>(
         // so there is nothing left to lose by keeping whatever every
         // branch (refused or not) already wrote.
         store.merge(dyn_node, branches).map_err(store_err)?;
+        observer.clear_tree_branches(&container_path);
         // `core/dynamic.py`'s own tree-flow merge loop ends with one
         // more `store.on_write(...)`, after every branch has landed.
         observer.write();
