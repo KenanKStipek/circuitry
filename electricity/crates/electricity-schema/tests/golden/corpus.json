@@ -798,6 +798,96 @@
     "valid": false
   },
   {
+    "described_errors": [
+      "effects[0]: 'name' is a required property",
+      "effects[0].effects[0]: 'name' is a required property"
+    ],
+    "document": {
+      "effects": [
+        {
+          "effects": [
+            {
+              "provider": "ffmpeg",
+              "type": "tool"
+            }
+          ],
+          "type": "dynamic"
+        }
+      ]
+    },
+    "name": "nested_dynamic_each_missing_name",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "described_errors": [
+      "effects[0]: 'effects' is a required property"
+    ],
+    "document": {
+      "effects": [
+        {
+          "name": "d",
+          "type": "dynamic"
+        }
+      ]
+    },
+    "name": "dynamic_missing_effects",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "described_errors": [
+      "effects[0]: 'then' is a required property"
+    ],
+    "document": {
+      "effects": [
+        {
+          "if": {
+            "expr": "true",
+            "mode": "cel"
+          },
+          "name": "i",
+          "type": "if"
+        }
+      ]
+    },
+    "name": "if_missing_then",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "described_errors": [
+      "effects[0]: 'effects' is a required property"
+    ],
+    "document": {
+      "effects": [
+        {
+          "name": "r",
+          "type": "reflector"
+        }
+      ]
+    },
+    "name": "reflector_missing_effects",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
+    "described_errors": [
+      "effects[0]: 'template' is a required property"
+    ],
+    "document": {
+      "effects": [
+        {
+          "name": "y",
+          "type": "yield"
+        }
+      ]
+    },
+    "name": "yield_missing_template",
+    "schema": "orchestration",
+    "valid": false
+  },
+  {
     "document": {},
     "locations": [],
     "name": "empty",
@@ -956,6 +1046,28 @@
     ],
     "name": "routing_wrong_oneof",
     "schema": "profile",
+    "valid": false
+  },
+  {
+    "described_errors": [
+      "effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored.",
+      "effects[0].body: value should be non-empty",
+      "effects[0]: value is not valid under any of the given schemas ('each' is a required property)"
+    ],
+    "document": {
+      "effects": [
+        {
+          "body": [],
+          "type": "loop",
+          "whlie": {
+            "expr": "true",
+            "mode": "cel"
+          }
+        }
+      ]
+    },
+    "name": "near_miss_key_next_to_schema_errors",
+    "schema": "orchestration_structural",
     "valid": false
   }
 ]

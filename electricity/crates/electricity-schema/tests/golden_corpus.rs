@@ -93,6 +93,11 @@ fn golden_corpus_matches_circuitry() {
                     }
                 }
             }
+            // Replayed against `electricity_compiler::structural_errors`
+            // instead, in `electricity-compiler/tests/structural_corpus.rs`
+            // -- this crate has no near-miss-unknown-key/`group:`/
+            // `interface.inputs`-type-error logic to replay it against.
+            "orchestration_structural" => {}
             other => panic!("case {:?}: unknown schema kind {other:?}", case.name),
         }
     }

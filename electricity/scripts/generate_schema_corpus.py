@@ -413,6 +413,49 @@ def orchestration_cases() -> list[dict]:
             "two_effects_with_identical_missing_required_errors",
             {"effects": [{}, {}]},
         ),
+        (
+            # Issue #528, review finding 1's own repro: a container missing
+            # its own required field that holds a child also missing the
+            # same field -- two identical-message, identical-keyword errors
+            # whose schema paths differ only by the outer one being a strict
+            # prefix of the inner one. Python's sort (`str(err)`, whose
+            # schema-path component drops the firing keyword) puts the
+            # shorter path first; pushing the keyword back onto the full
+            # path before comparing reverses this pair.
+            "nested_dynamic_each_missing_name",
+            {
+                "effects": [
+                    {
+                        "type": "dynamic",
+                        "effects": [{"type": "tool", "provider": "ffmpeg"}],
+                    }
+                ]
+            },
+        ),
+        (
+            "dynamic_missing_effects",
+            {"effects": [{"type": "dynamic", "name": "d"}]},
+        ),
+        (
+            "if_missing_then",
+            {
+                "effects": [
+                    {
+                        "type": "if",
+                        "name": "i",
+                        "if": {"mode": "cel", "expr": "true"},
+                    }
+                ]
+            },
+        ),
+        (
+            "reflector_missing_effects",
+            {"effects": [{"type": "reflector", "name": "r"}]},
+        ),
+        (
+            "yield_missing_template",
+            {"effects": [{"type": "yield", "name": "y"}]},
+        ),
     ]
 
     return [_orchestration_case(name, doc) for name, doc in valid + invalid]
@@ -455,8 +498,56 @@ def profile_cases() -> list[dict]:
     return [_profile_case(name, doc) for name, doc in valid + invalid]
 
 
+# ---------------------------------------------------------------------
+# Structural documents -- unknown keys interleaved with schema errors
+# ---------------------------------------------------------------------
+
+
+def _structural_case(name: str, document: Any) -> dict:
+    """Like `_orchestration_case`, but `structural_errors` rather than just
+    `schema_errors` -- near-miss unknown keys, `group:` placement and
+    `interface.inputs` type errors interleaved with schema violations, in
+    `core/document_check.structural_errors`'s own order. Replayed on the Rust
+    side against `electricity_compiler::structural_errors`, not
+    `electricity_schema::orchestration_errors` (schema errors alone) --
+    see `electricity-compiler/tests/structural_corpus.rs`'s own doc
+    comment.
+    """
+    described = document_check.structural_errors(document)
+    return {
+        "name": name,
+        "schema": "orchestration_structural",
+        "document": document,
+        "valid": not described,
+        "described_errors": described,
+    }
+
+
+def structural_cases() -> list[dict]:
+    invalid: list[tuple[str, Any]] = [
+        (
+            # Issue #528, review finding 3: a near-miss unknown key right
+            # next to two schema errors on the same effect (the issue's own
+            # acceptance bullet, "unknown keys next to schema errors") --
+            # `structural_errors` reports the near-miss first (the likelier
+            # cause), then the schema errors, in that order.
+            "near_miss_key_next_to_schema_errors",
+            {
+                "effects": [
+                    {
+                        "type": "loop",
+                        "whlie": {"mode": "cel", "expr": "true"},
+                        "body": [],
+                    }
+                ]
+            },
+        ),
+    ]
+    return [_structural_case(name, doc) for name, doc in invalid]
+
+
 def build_corpus() -> list[dict]:
-    return orchestration_cases() + profile_cases()
+    return orchestration_cases() + profile_cases() + structural_cases()
 
 
 def render(cases: list[dict]) -> str:
