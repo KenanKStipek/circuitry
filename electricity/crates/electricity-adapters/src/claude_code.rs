@@ -450,7 +450,9 @@ mod tests {
         let path = EffectPath::root();
         let call = CallContext {
             path: &path,
-            timeout_seconds: 1,
+            // Long enough for the fake to start and write its capture
+            // file even on a loaded machine; it hangs far longer.
+            timeout_seconds: 5,
             token: &token,
         };
         let err = adapter
@@ -480,9 +482,23 @@ mod tests {
         let call = call_ctx(&path, &token);
         let options = GenerateOptions::default();
         let mut fut = Box::pin(adapter.generate("", "hi", &options, &call));
-        tokio::select! {
-            _ = &mut fut => panic!("must not finish before the capture file is written"),
-            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        // Drop the future only once the fake has started and written its
+        // capture file: a fixed delay raced the fake's own startup on a
+        // loaded machine.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            tokio::select! {
+                _ = &mut fut => panic!("must not finish before the capture file is written"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            }
+            let written = std::fs::read_to_string(&capture).is_ok_and(|c| !c.trim().is_empty());
+            if written {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the fake never wrote its capture file"
+            );
         }
         drop(fut);
         assert_captured_dir_removed(&capture);
