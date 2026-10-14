@@ -601,26 +601,33 @@ fn execute_tree<'a>(
 
 /// `core/dynamic.py::TreeExecutionError._format` -- a single branch
 /// failure's own already-wrapped (`"<path>: <message>"`) text verbatim;
-/// two or more are folded into one numbered summary.
-///
-/// Known deviation (tracked in #442, the M0-H follow-ups issue): Python's
-/// own numbered lines additionally show each failure's *original*
-/// (pre-wrap) exception class name (`"[1]
-/// ValueError: <path>: <message>"`) by unwrapping one level of
-/// `__cause__` -- this crate's [`VmError`] does not carry a Python-style
-/// exception class name to reproduce that with, so each line here is
-/// just `"  [N] <already-wrapped message>"`. Acceptable for M0-H: no
-/// conformance case or acceptance criterion in issue #431 exercises two
-/// *simultaneous* tree-branch failures' combined text, only a single
-/// failure's (which this matches exactly) or `stop_on_error`'s dispatch
-/// behavior (which this does not touch).
+/// two or more are folded into one numbered summary, each line also
+/// naming the failure's own displayed class (`"[i]
+/// {type(original).__name__}: {err}"`, `err.__cause__ or err`'s
+/// one-level-only unwrap -- [`VmError::displayed_class`] already
+/// implements the same rule). The combined error itself is a
+/// [`VmError::Raised`] of [`electricity_tools::PyExc::
+/// TreeExecutionError`] (a `RuntimeError` subclass, like
+/// `DecompositionError`), not a bare [`VmError::Message`] -- issue
+/// #442's first item, closed by #537: a nested tree's own combined
+/// failure must keep a class for its *own* enclosing container's wrap
+/// to show (`"[N] TreeExecutionError: <path>: ..."`), the same way any
+/// other branch failure's class survives a chain/tree wrap.
 fn combine_tree_errors(mut errors: Vec<VmError>) -> VmError {
     if errors.len() == 1 {
         return errors.remove(0);
     }
     let mut parts = vec![format!("{} effects failed in parallel:", errors.len())];
     for (i, err) in errors.iter().enumerate() {
-        parts.push(format!("  [{}] {err}", i + 1));
+        match err.displayed_class() {
+            Some(class) => parts.push(format!("  [{}] {class}: {err}", i + 1)),
+            None => parts.push(format!("  [{}] {err}", i + 1)),
+        }
     }
-    VmError::Message(parts.join("\n"))
+    VmError::Raised {
+        py_class: electricity_tools::PyExc::TreeExecutionError,
+        message: parts.join("\n"),
+        cause: electricity_tools::ErrorCause::None,
+        cause_class: None,
+    }
 }

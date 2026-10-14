@@ -9,8 +9,8 @@
 //! [`py_int`] and [`py_strip`] are real, final implementations --
 //! small enough, and specified precisely enough, that lane A can just
 //! finish them. [`shlex_split`]/[`shlex_quote`] (lane C) and
-//! [`urlencode`] (lane E) are signature-only stubs: a not-implemented
-//! error, never a fake result.
+//! [`urlencode`] (lane E) are also real implementations now, not the
+//! signature-only stubs lane A first landed them as.
 
 use crate::Value;
 use std::fmt;
@@ -121,6 +121,14 @@ pub enum PyExc {
     /// `on_failure: fail` when a decomposition attempt ends in
     /// `planner_failed`/`invalid_plan`/`execution_failed`.
     DecompositionError,
+    /// `core/dynamic.py::TreeExecutionError` (issue #442's first item,
+    /// closed by #537) -- a `RuntimeError` subclass, raised when two or
+    /// more branches of a `flow: tree` dynamic fail together
+    /// (`TreeExecutionError._format`'s own numbered summary). A nested
+    /// tree's own combined failure is wrapped by its enclosing
+    /// container exactly like any other branch failure, so its class
+    /// shows up one level up the same way `use`'s own wrap does.
+    TreeExecutionError,
 }
 
 impl PyExc {
@@ -156,6 +164,7 @@ impl PyExc {
             PyExc::InvalidURL => "InvalidURL",
             PyExc::AttributeError => "AttributeError",
             PyExc::DecompositionError => "DecompositionError",
+            PyExc::TreeExecutionError => "TreeExecutionError",
         }
     }
 }

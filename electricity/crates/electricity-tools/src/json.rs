@@ -8,10 +8,24 @@
 //! ReadError::Syntax`'s Display), not merely at the same character
 //! offset.
 
-use crate::{CheckResult, ToolCall, ToolError, ToolPlugin, ToolResult};
+use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_json::{Separators, WriteMode, dumps_default_str, loads};
 use electricity_value::{Dict, Value};
+
+/// `plugins/json.py` never raises anything but a bare `ValueError` for
+/// any of its own failures (issue #442's tree-failure-class-names item,
+/// closed by #537) -- the path-token, mode-dispatch, parse and
+/// `int(indent)`-coercion failures all raise `ValueError` directly, not
+/// wrapped in anything else, so every one of them needs this class
+/// rather than [`ToolError::message`]'s own `RuntimeError` default.
+fn value_error(message: impl Into<String>) -> ToolError {
+    ToolError {
+        py_class: PyExc::ValueError,
+        message: message.into(),
+        cause: ErrorCause::None,
+    }
+}
 
 /// `plugins/json.py::JsonPlugin` -- `mode: parse|stringify|extract`.
 pub struct JsonTool;
@@ -71,7 +85,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 end += 1;
             }
             if end == digits_start || end >= chars.len() || chars[end] != ']' {
-                return Err(ToolError::message(format!(
+                return Err(value_error(format!(
                     "json: invalid path token at offset {pos}"
                 )));
             }
@@ -112,7 +126,7 @@ fn walk_path(value: &Value, path: &str) -> Result<(Value, bool), ToolError> {
                 _ => return Ok((Value::None, false)),
             }
         } else {
-            return Err(ToolError::message(format!(
+            return Err(value_error(format!(
                 "json: invalid path token at offset {pos}"
             )));
         }
@@ -155,14 +169,14 @@ impl ToolPlugin for JsonTool {
                 let text = match get(&params, "input") {
                     Some(Value::Str(s)) => s.clone(),
                     _ => {
-                        return Err(ToolError::message(
+                        return Err(value_error(
                             "JsonPlugin: parse mode requires params['input'] as a string."
                                 .to_string(),
                         ));
                     }
                 };
                 let value = loads(&text)
-                    .map_err(|err| ToolError::message(format!("json: parse failed: {err}")))?;
+                    .map_err(|err| value_error(format!("json: parse failed: {err}")))?;
                 (value, mode.clone())
             }
             "stringify" => {
@@ -170,7 +184,7 @@ impl ToolPlugin for JsonTool {
                 let indent = match get(&params, "indent") {
                     None | Some(Value::None) => None,
                     Some(value) => {
-                        let parsed = python_int(value).map_err(ToolError::message)?;
+                        let parsed = python_int(value).map_err(value_error)?;
                         Some(parsed.clamp(0, u8::MAX as i64) as u8)
                     }
                 };
@@ -190,7 +204,7 @@ impl ToolPlugin for JsonTool {
                 let mut subject = get(&params, "input").cloned().unwrap_or(Value::None);
                 if let Value::Str(text) = &subject {
                     subject = loads(text).map_err(|err| {
-                        ToolError::message(format!(
+                        value_error(format!(
                             "json: extract input is a string but not valid JSON: {err}"
                         ))
                     })?;
@@ -198,7 +212,7 @@ impl ToolPlugin for JsonTool {
                 let path = match get(&params, "path") {
                     Some(Value::Str(s)) if !s.is_empty() => s.clone(),
                     _ => {
-                        return Err(ToolError::message(
+                        return Err(value_error(
                             "JsonPlugin: extract mode requires params['path'].".to_string(),
                         ));
                     }
@@ -212,7 +226,7 @@ impl ToolPlugin for JsonTool {
                 (value, mode.clone())
             }
             _ => {
-                return Err(ToolError::message(format!(
+                return Err(value_error(format!(
                     "json: unknown mode {}",
                     Value::Str(mode).py_repr()
                 )));

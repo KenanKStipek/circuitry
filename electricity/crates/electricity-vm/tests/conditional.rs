@@ -329,8 +329,13 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
     );
     let (store, observer, result) = run(root).await;
     let err = result.unwrap_err();
-    let VmError::Message(text) = err else {
-        panic!("expected a Message error, got {err:?}");
+    // Issue #442's first item, closed by #537: a `Raised` branch failure
+    // now keeps its own class through an `if`'s wrap (the branch loop's
+    // own bare-name wrap, `wrap_effect_error`), so this is a `Raised`,
+    // not a bare `Message`, even though nothing here ever reads its
+    // class directly -- only a tree combine's own numbered summary does.
+    let VmError::Raised { message: text, .. } = &err else {
+        panic!("expected a Raised error, got {err:?}");
     };
     // The branch loop's own bare-name wrap ("inner: ...") happens first,
     // inside the transparent `if`; the *enclosing* chain then wraps
@@ -338,7 +343,7 @@ async fn an_unnamed_if_is_transparent_and_fires_no_hooks() {
     // contributes no path segment of its own, is just "prime" (the
     // chain's own name) -- exactly as Python's `_effect_path` falls
     // back to `container_name` for an unnamed effect.
-    assert_eq!(text, format!("prime: inner: {TOOL_FAIL_TEXT}"));
+    assert_eq!(text, &format!("prime: inner: {TOOL_FAIL_TEXT}"));
 
     let snapshot = store.snapshot(&store.root);
     let root_dict = as_dict(&snapshot);
