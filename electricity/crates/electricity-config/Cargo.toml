@@ -21,3 +21,8 @@ log = "0.4"
 # `Value::Date`/`Value::DateTime` test fixtures only -- the CompareError
 # text ported in `profile.rs`'s own `py_sort_values`.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# `golden_config.rs`'s own `complexity_yaml` case kind: a non-string
+# `runtime.complexity` mapping key only survives as such when parsed
+# from real YAML text, never through the corpus's own JSON encoding
+# (issue #536).
+electricity-yaml = { path = "../electricity-yaml" }

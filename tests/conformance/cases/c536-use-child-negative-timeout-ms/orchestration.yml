@@ -1,0 +1,15 @@
+name: c536-use-child-negative-timeout-ms
+effects:
+  - type: use
+    name: u
+    validate: false
+    inline: |
+      effects:
+        - type: tool
+          name: s
+          provider: shell
+          timeout_ms: -5000
+          params:
+            command: fake
+            allowed_commands: [fake]
+            args: ["--sleep"]

@@ -218,9 +218,10 @@ pub(crate) fn compile_prompt(
         _ => None,
     };
 
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms")
-        .map(py_int)
-        .map(|n| n.max(0) as u64);
+    // Sign kept through compilation -- a negative `timeout_ms` is still
+    // Python-truthy (`if self.defn.timeout_ms:`), resolved at run time
+    // (issue #536).
+    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
     let deterministic = get_bool_default(effect, "deterministic", false);
 
     let inputs = match effect.get(&Value::Str("inputs".to_string())) {
@@ -343,9 +344,8 @@ pub(crate) fn compile_tool(
     };
 
     let model = optional_str(effect, "model");
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms")
-        .map(py_int)
-        .map(|n| n.max(0) as u64);
+    // Sign kept through compilation -- see the `PromptOp` branch above.
+    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
     let on_error = normalize_on_error_default(effect);
     let description = optional_str(effect, "description");
     let retries = compile_retries(effect).unwrap_or_default();

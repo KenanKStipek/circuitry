@@ -3,6 +3,7 @@
 //! rather than observation order.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use electricity_bytecode::OnError;
 use serde_json::Value;
@@ -284,6 +285,40 @@ fn duration_text(created_at: &Option<String>, completed_at: &Option<String>) -> 
     }
 }
 
+/// How long [`Differ::settle_pending_ends`] holds an `End` line
+/// waiting for its node's state before giving up and falling back to
+/// the old `ok` text (issue #545's "Defer" fix, chosen over "re-read
+/// once" because neither engine writes a leaf's state before it emits
+/// that leaf's own `end`: `cof`'s chain loop calls `store.on_write`
+/// from a `finally:` strictly *after* `Store.fire_effect_complete`
+/// returns, and electricity's every exec module calls
+/// `observer.write()` strictly after `observer.effect_complete(...)`,
+/// which only *marks* the live-state mirror pending). Both engines
+/// coalesce the actual write to disk to once per 500ms
+/// (`cli/live_state.py`'s `LIVE_STATE_INTERVAL_SECONDS` and
+/// `live_state.rs`'s `LIVE_STATE_INTERVAL`), and osp polls that file
+/// every `observe::POLL_INTERVAL` (100ms) — a line can therefore need
+/// to outlive two full coalescing windows, not just one more poll, so
+/// the bound is wall-clock time, not a poll count: two coalescing
+/// windows plus one more poll to be sure of catching the write once
+/// it lands.
+const END_SUMMARY_MAX_WAIT: Duration = Duration::from_millis(2 * 500 + 100);
+
+/// An `End{ok: true}` line [`Differ::diff_event`] couldn't format yet
+/// because neither `last` nor `preview` has the path's completed
+/// state (#545) — held here, re-checked by
+/// [`Differ::settle_pending_ends`] every later tick, until either the
+/// state catches up or `END_SUMMARY_MAX_WAIT` runs out.
+struct PendingEnd {
+    ts: String,
+    path: String,
+    /// Pre-rendered (`ms.map(...)`), same text the immediate-resolve
+    /// path already builds — nothing left to compute once the state
+    /// shows up, only the result summary.
+    duration: String,
+    held_at: Instant,
+}
+
 /// Tracks each run's own progress across consecutive snapshots, so a
 /// transition (a node appearing, completing, or moving) can be told
 /// from the previous observation — DESIGN.md §2.4's diff table.
@@ -334,6 +369,9 @@ pub struct Differ {
     /// issue #433) needs the very latest snapshot available, even one
     /// `diff` hasn't been handed yet this tick.
     preview: BTreeMap<String, NodeMeta>,
+    /// `End{ok: true}` lines still waiting on their node's own state
+    /// (#545) — see [`PendingEnd`].
+    pending_ends: Vec<PendingEnd>,
 }
 
 impl Differ {
@@ -346,6 +384,7 @@ impl Differ {
             event_failed: BTreeSet::new(),
             path_failed_without_id: BTreeSet::new(),
             preview: BTreeMap::new(),
+            pending_ends: Vec::new(),
         }
     }
 
@@ -360,6 +399,101 @@ impl Differ {
     /// consulting state.
     pub fn note_preview(&mut self, state: &Value) {
         self.preview = flatten_state(state);
+    }
+
+    /// The freshest *completed* node known for `path`: `preview`
+    /// (this tick's own poll, not yet diffed into `last`) first, then
+    /// `last` (what `diff` has already processed) — `preview` is
+    /// always at least as new as `last`, since `note_preview` runs
+    /// ahead of `diff` every tick (`main.rs`'s `observe_tick`), so a
+    /// tick whose `preview` already shows a node complete must not
+    /// lose to a `last` still holding that same path's own previous,
+    /// still-running snapshot. A node without `completed_at` set is
+    /// treated the same as no entry at all: a chain leaf's state can
+    /// land before its own `end` event does, still running
+    /// (`completed_at: null`, no tokens yet) — resolving from that
+    /// would print `ok` immediately, the exact race this exists to
+    /// avoid, so such a node is skipped in favour of the pending hold
+    /// below, the same as if neither map had the path yet.
+    fn known_node(&self, path: &str) -> Option<&NodeMeta> {
+        self.preview
+            .get(path)
+            .filter(|n| n.completed_at.is_some())
+            .or_else(|| self.last.get(path).filter(|n| n.completed_at.is_some()))
+    }
+
+    /// Whether an `End` line is still waiting on its own completed
+    /// state (#545).
+    pub fn has_pending_ends(&self) -> bool {
+        !self.pending_ends.is_empty()
+    }
+
+    /// Re-checks every held `End` line (#545, [`PendingEnd`]) against
+    /// the state now known, resolving it with the real result summary
+    /// as soon as that appears; a line still held longer than
+    /// [`END_SUMMARY_MAX_WAIT`] falls back to the old `ok` text rather
+    /// than holding forever. Call once per tick, whether or not that
+    /// tick's own `diff`/`diff_event` calls found anything new — the
+    /// aging only happens here. `now` is passed in, not read with
+    /// `Instant::now()`, so a test can construct instants directly
+    /// instead of actually waiting out the bound.
+    pub fn settle_pending_ends(&mut self, now: Instant) -> Vec<LogLine> {
+        let mut resolved = Vec::new();
+        let pending = std::mem::take(&mut self.pending_ends);
+        for pending_end in pending {
+            if let Some(node) = self.known_node(&pending_end.path) {
+                resolved.push(LogLine {
+                    ts: Some(pending_end.ts),
+                    text: format!(
+                        "✓ {}  {}  {}",
+                        pending_end.path,
+                        pending_end.duration,
+                        result_summary(node)
+                    ),
+                });
+                continue;
+            }
+            if now.saturating_duration_since(pending_end.held_at) >= END_SUMMARY_MAX_WAIT {
+                resolved.push(LogLine {
+                    ts: Some(pending_end.ts),
+                    text: format!("✓ {}  {}  ok", pending_end.path, pending_end.duration),
+                });
+                continue;
+            }
+            self.pending_ends.push(pending_end);
+        }
+        resolved
+    }
+
+    /// Resolves every still-held `End` line (#545) once, with no
+    /// further ageing: called only after the run's authoritative
+    /// final state has already been diffed (`main.rs`'s
+    /// `drain_until_ended`, right after its own final `differ.diff`
+    /// call), so a line's node is either known by now, from that
+    /// final state, or it never will be — there is no "next tick" to
+    /// wait for once the engine has already exited, so ageing a line
+    /// out here based on how little wall-clock time the drain loop
+    /// itself happened to take would abandon a line to `ok` even
+    /// though its real tokens are sitting right there in the state
+    /// just diffed.
+    pub fn flush_pending_ends(&mut self) -> Vec<LogLine> {
+        let mut resolved = Vec::new();
+        for pending_end in std::mem::take(&mut self.pending_ends) {
+            let text = match self.known_node(&pending_end.path) {
+                Some(node) => format!(
+                    "✓ {}  {}  {}",
+                    pending_end.path,
+                    pending_end.duration,
+                    result_summary(node)
+                ),
+                None => format!("✓ {}  {}  ok", pending_end.path, pending_end.duration),
+            };
+            resolved.push(LogLine {
+                ts: Some(pending_end.ts),
+                text,
+            });
+        }
+        resolved
     }
 
     /// The freshest state known for container detection at `path`:
@@ -465,27 +599,40 @@ impl Differ {
                     }
                     return Vec::new();
                 }
-                let text = if *ok {
+                if *ok {
                     let duration = ms
                         .map(|m| format!("{:.1}s", m as f64 / 1000.0))
                         .unwrap_or_else(|| "?".to_string());
-                    let result = self
-                        .last
-                        .get(path)
-                        .map(result_summary)
-                        .unwrap_or_else(|| "ok".to_string());
-                    format!("✓ {path}  {duration}  {result}")
-                } else {
-                    let message = error.as_deref().unwrap_or("");
-                    format!(
+                    if let Some(node) = self.known_node(path) {
+                        return vec![LogLine {
+                            ts: Some(ts.clone()),
+                            text: format!("✓ {path}  {duration}  {}", result_summary(node)),
+                        }];
+                    }
+                    // Neither `last` nor `preview` has this path's
+                    // completed state yet (#545: a fast prompt's `end`
+                    // event can arrive before either engine's own
+                    // live-state write for it does — see
+                    // `END_SUMMARY_MAX_WAIT`'s own doc comment). Hold
+                    // the line rather than guessing "ok":
+                    // `settle_pending_ends` revisits it every later
+                    // tick.
+                    self.pending_ends.push(PendingEnd {
+                        ts: ts.clone(),
+                        path: path.clone(),
+                        duration,
+                        held_at: Instant::now(),
+                    });
+                    return Vec::new();
+                }
+                let message = error.as_deref().unwrap_or("");
+                vec![LogLine {
+                    ts: Some(ts.clone()),
+                    text: format!(
                         "✗ {path}  {}{}",
                         truncate_chars(message, 120),
                         on_error_suffix(path, plan)
-                    )
-                };
-                vec![LogLine {
-                    ts: Some(ts.clone()),
-                    text,
+                    ),
                 }]
             }
             Event::RunEnd { .. } => Vec::new(),
@@ -2131,6 +2278,17 @@ mod tests {
         assert!(start[0].text.starts_with("▶ prime.fan.a"));
         assert_eq!(start[0].ts.as_deref(), Some("t0"));
 
+        // State already knows this path by the time its `end` arrives
+        // (unlike #545's race) -- `event_sourced` from the `start`
+        // above already makes `diff` itself skip it, so this only
+        // primes `last` for the immediate-resolve path below.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "tree"},
+            "fan": {"value": null, "meta": {"completed_at": null, "flow": "tree"},
+                "a": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"}}
+            }
+        }});
+        assert!(differ.diff(&state, &PlanTree::empty()).is_empty());
+
         let end = differ.diff_event(
             &Event::End {
                 ts: "t1".to_string(),
@@ -2159,6 +2317,319 @@ mod tests {
             &RunModel::new(),
         );
         assert!(failed[0].text.starts_with("✗ prime.fan.b  boom"));
+    }
+
+    /// #545, arrival order 1: the `end` event arrives before any state
+    /// poll has this path at all -- both engines emit it before their
+    /// own live-state write for the same leaf, so this is the common
+    /// case, not a corner one. The line must wait rather than guess
+    /// "ok", and must carry the real token summary once a later state
+    /// poll (here, `diff`) catches up.
+    #[test]
+    fn an_end_event_before_its_tokens_are_known_is_held_until_state_catches_up() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert!(end.is_empty(), "held, not guessed: {end:?}");
+        assert!(differ.has_pending_ends());
+
+        // One tick still with nothing new: still held, not yet at the
+        // wait bound.
+        assert!(differ.settle_pending_ends(Instant::now()).is_empty());
+        assert!(differ.has_pending_ends());
+
+        // The state poll that finally has it -- `prime.ask` is
+        // already event-sourced, so `diff` itself emits nothing for
+        // it; this only updates `last` for `settle_pending_ends` to
+        // find.
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent": 3, "tokens_received": 5}}
+        }});
+        assert!(differ.diff(&state, &plan).is_empty());
+
+        let settled = differ.settle_pending_ends(Instant::now());
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
+        assert_eq!(settled[0].ts.as_deref(), Some("t1"));
+        assert!(!differ.has_pending_ends());
+    }
+
+    /// #545, review finding 1: the live-state writer can catch a leaf
+    /// mid-flight, with a node already in state but not yet complete
+    /// (`completed_at: null`, no tokens) -- the `end` event must still
+    /// hold, not resolve from that running node, or it prints `ok`
+    /// immediately, the very race this whole mechanism exists to
+    /// avoid. The line comes out with real tokens once a later poll
+    /// shows the node complete.
+    #[test]
+    fn an_end_event_whose_state_is_still_running_is_held_not_resolved_as_ok() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+
+        // A live-state write lands while `prime.ask` is still running
+        // (DESIGN.md §1.4: a chain leaf's running node is visible
+        // "only by accident", caught by a write that happens to land
+        // mid-flight).
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "tokens_sent": null, "tokens_received": null}}
+        }});
+        assert!(differ.diff(&running, &plan).is_empty());
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert!(
+            end.is_empty(),
+            "a running node must not resolve the end as ok: {end:?}"
+        );
+        assert!(differ.has_pending_ends());
+
+        let completed = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent": 3, "tokens_received": 5}}
+        }});
+        assert!(differ.diff(&completed, &plan).is_empty());
+
+        let settled = differ.settle_pending_ends(Instant::now());
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
+        assert!(!differ.has_pending_ends());
+    }
+
+    /// #545, review finding 1's second gap: `known_node` must look at
+    /// `preview` (this tick's own fresh poll) before `last` (a tick
+    /// old), not the other way around -- `note_preview` always runs
+    /// ahead of `diff` within the same tick (`main.rs`'s
+    /// `observe_tick`), so by the time `diff_event` processes an
+    /// `end`, `preview` can already hold the completed node while
+    /// `last` still holds that same path's own stale, running one.
+    #[test]
+    fn known_node_prefers_the_fresher_preview_over_a_stale_running_last() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let running = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": null, "meta": {"created_at": "t0", "completed_at": null, "tokens_sent": null, "tokens_received": null}}
+        }});
+        // `diff` commits the still-running node into `last`.
+        assert!(differ.diff(&running, &plan).is_empty());
+
+        // This tick's own fresh poll already has the node complete,
+        // handed to `note_preview` ahead of `diff` ever seeing it.
+        let completed = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent": 3, "tokens_received": 5}}
+        }});
+        differ.note_preview(&completed);
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(end.len(), 1, "{end:?}");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
+        assert!(!differ.has_pending_ends());
+    }
+
+    /// #545, review finding 7: the `preview` fallback in `known_node`
+    /// also has to serve an `end` arriving with no `last` entry at
+    /// all, `preview` the only place the completed node has ever been
+    /// seen.
+    #[test]
+    fn known_node_resolves_from_preview_alone_with_no_last_entry() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let completed = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent": 3, "tokens_received": 5}}
+        }});
+        differ.note_preview(&completed);
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(end.len(), 1, "{end:?}");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
+        assert!(!differ.has_pending_ends());
+    }
+
+    /// #545, arrival order 2 (the reverse): the state poll that has
+    /// this path's tokens lands *before* `diff_event` ever processes
+    /// the matching `end` -- the common case once the race is lost
+    /// the other way, e.g. a state poll and the events tailer both
+    /// drained in the same tick, state first. No hold needed at all:
+    /// `known_node` already has it.
+    #[test]
+    fn an_end_event_with_its_tokens_already_known_resolves_immediately() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null, "flow": "chain"},
+            "ask": {"value": "hi", "meta": {"created_at": "t0", "completed_at": "t1", "tokens_sent": 3, "tokens_received": 5}}
+        }});
+        assert!(differ.diff(&state, &plan).is_empty());
+
+        let end = differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        assert_eq!(end.len(), 1);
+        assert!(
+            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 ↓5"),
+            "{end:?}"
+        );
+        assert!(!differ.has_pending_ends());
+    }
+
+    /// #545's own bound: a held line whose state never catches up
+    /// within `END_SUMMARY_MAX_WAIT` of wall-clock time falls back to
+    /// the old `ok` text rather than holding for the rest of the run.
+    /// Built instants, not a real sleep: just under the bound still
+    /// holds, right at it resolves.
+    #[test]
+    fn an_end_event_still_unresolved_past_the_wait_bound_falls_back_to_ok() {
+        let mut differ = Differ::new();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+
+        differ.diff_event(
+            &Event::Start {
+                ts: "t0".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+            },
+            &plan,
+            &model,
+        );
+        let before = Instant::now();
+        differ.diff_event(
+            &Event::End {
+                ts: "t1".to_string(),
+                id: Some(1),
+                path: "prime.ask".to_string(),
+                ok: true,
+                ms: Some(100),
+                error: None,
+            },
+            &plan,
+            &model,
+        );
+        let after = Instant::now();
+
+        // `before`/`after` bracket the real `held_at` the push above
+        // recorded internally, so each bound below holds regardless
+        // of exactly when within that bracket it landed: a `now` only
+        // `END_SUMMARY_MAX_WAIT` past `before` is still short of the
+        // bound measured from the real, later `held_at`; one a full
+        // `END_SUMMARY_MAX_WAIT` past `after` is past it, measured
+        // from the real, earlier `held_at`.
+        assert!(
+            differ
+                .settle_pending_ends(before + END_SUMMARY_MAX_WAIT - Duration::from_nanos(1))
+                .is_empty()
+        );
+        assert!(differ.has_pending_ends());
+
+        let settled = differ.settle_pending_ends(after + END_SUMMARY_MAX_WAIT);
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ok");
+        assert_eq!(settled[0].ts.as_deref(), Some("t1"));
+        assert!(!differ.has_pending_ends());
     }
 
     #[test]

@@ -42,6 +42,7 @@ from circuitry.cli.complexity_config import (
 from circuitry.cli.config import CircuitryConfig, ConfigError, resolve_config
 from circuitry.cli.effective_settings import resolve_effective_settings
 from circuitry.core.store.persistence import build_persistence_backend
+from circuitry.core.yaml_load import load_yaml
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -233,6 +234,37 @@ def complexity_case(name: str, *, runtime: dict[str, Any]) -> dict[str, Any]:
         "name": name,
         "kind": "complexity",
         "input": {"runtime": runtime},
+        "expect": {"ok": True},
+    }
+
+
+def complexity_yaml_case(name: str, *, runtime_yaml: str) -> dict[str, Any]:
+    """Like `complexity_case`, but *runtime* comes from real YAML text
+    (`core/yaml_load.py`, the same loader `cof run` parses a document
+    with) rather than a Python dict literal. Issue #536: a non-string
+    YAML mapping key (`1: x`) is the one `runtime.complexity` shape
+    `complexity_case`'s own JSON corpus can't represent -- `json.dumps`
+    silently stringifies a non-string dict key, so a case built from a
+    Python dict with an int key would round-trip through the committed
+    corpus as a string key and never exercise `_as_mapping`'s own check
+    at all. The corpus carries the YAML source itself; electricity's own
+    corpus consumer parses it with its own YAML loader, the same way
+    `validate_complexity`'s real caller always does.
+    """
+    runtime = load_yaml(runtime_yaml)
+    try:
+        resolve_complexity_settings(runtime)
+    except ComplexityConfigError as exc:
+        return {
+            "name": name,
+            "kind": "complexity_yaml",
+            "input": {"runtime_yaml": runtime_yaml},
+            "expect": {"ok": False, "error": str(exc)},
+        }
+    return {
+        "name": name,
+        "kind": "complexity_yaml",
+        "input": {"runtime_yaml": runtime_yaml},
         "expect": {"ok": True},
     }
 
@@ -579,6 +611,12 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
         complexity_case(
             "complexity_decomposition_without_scoring_is_a_prerequisite_error",
             runtime={"complexity": {"decomposition": {"enabled": True}}},
+        )
+    )
+    cases.append(
+        complexity_yaml_case(
+            "complexity_non_string_key_is_rejected",
+            runtime_yaml="complexity:\n  1: x\n",
         )
     )
 

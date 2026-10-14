@@ -200,11 +200,12 @@ fn http_family_provider(provider: &str) -> bool {
 /// until then.
 fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
     // `if self.defn.timeout_ms:` -- falsy, so an explicit `timeout_ms: 0`
-    // (the compiler already clamps a negative one to 0) falls through to
-    // `runtime.tools.timeout_seconds` exactly like an absent one does.
-    if let Some(ms) = tool.timeout_ms.filter(|&ms| ms > 0) {
-        let seconds = ms.div_ceil(1000).max(1);
-        return seconds.min(u64::from(u32::MAX)) as u32;
+    // falls through to `runtime.tools.timeout_seconds` exactly like an
+    // absent one does. A negative `timeout_ms` is still truthy (issue
+    // #536): `crate::exec::effect_timeout_seconds` ports the same
+    // `max(1, ceil(ms / 1000))` rule cof applies to it.
+    if let Some(ms) = tool.timeout_ms.filter(|&ms| ms != 0) {
+        return crate::exec::effect_timeout_seconds(ms);
     }
     let raw = runtime_config
         .as_dict()
@@ -1161,6 +1162,16 @@ pub async fn execute_tool<R: ParamsCtx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_negative_timeout_ms_still_resolves_to_one_second() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("mode"), template("stringify"));
+        params.insert(Value::from("input"), template("1"));
+        let mut tool = tool_op(params);
+        tool.timeout_ms = Some(-5000);
+        assert_eq!(resolve_timeout_seconds(&tool, &Value::None), 1);
+    }
 
     #[test]
     fn an_unknown_provider_lists_pythons_full_registry() {

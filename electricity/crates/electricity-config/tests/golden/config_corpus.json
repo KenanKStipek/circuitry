@@ -1543,6 +1543,17 @@
     }
   },
   {
+    "name": "complexity_non_string_key_is_rejected",
+    "kind": "complexity_yaml",
+    "input": {
+      "runtime_yaml": "complexity:\n  1: x\n"
+    },
+    "expect": {
+      "ok": false,
+      "error": "runtime.complexity keys must be strings; found 1."
+    }
+  },
+  {
     "name": "persistence_disabled_is_never_validated",
     "kind": "persistence",
     "input": {

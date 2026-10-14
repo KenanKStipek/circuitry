@@ -497,19 +497,12 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 /// one prompt, one reply with tokens. Asserts the `prime.<name>` line
 /// carries the `↑<sent> ↓<received>` suffix `oscilloscope-core::diff`'s
 /// own `result_summary` prints for a prompt whose meta has
-/// `tokens_sent`/`tokens_received` (never the plain `"ok"` fallback).
-///
-/// Runs `electricity` directly, then `osp watch` on the finished run
-/// (`watch_mirrors_a_run_osp_did_not_start`'s own shape above), rather
-/// than `osp run`: a prompt this fast can complete before osp's own
-/// state-polling loop ever catches up even once, and an `end` event
-/// processed with no matching state-sourced entry yet falls back to
-/// the plain `"ok"` summary (`diff.rs`'s own documented ordering,
-/// `Differ::event_failed`'s doc comment) -- a real gap between
-/// `osp run`'s own live view and its documented `--log` output
-/// (`DESIGN.md:466`'s `↑3 ↓1`), tracked as issue #545 rather than
-/// fixed here. `osp watch` has no such race: it renders once, from
-/// the finished run's own complete final state.
+/// `tokens_sent`/`tokens_received` (never the plain `"ok"` fallback) --
+/// through both `osp watch` on a finished run (no race: it renders
+/// once, from the run's own complete final state) and a live `osp
+/// <doc> --log` (issue #545: a prompt this fast can complete before
+/// osp's own first state poll ever does, so the `--log`/TUI line for
+/// it must hold rather than guess until that poll catches up).
 #[test]
 fn a_scripted_prompt_prints_tokens_sent_and_received() {
     if !e2e_electricity_enabled() {
@@ -571,6 +564,26 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
     assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+
+    // The same scripted prompt, launched by `osp` itself rather than
+    // attached to after the fact (#545's own live race).
+    let run_dir2 = work.path().join("run2");
+    let child = osp_electricity_command(&home)
+        .arg(&doc)
+        .arg(&config)
+        .arg("--out-dir")
+        .arg(&run_dir2)
+        .arg("--log")
+        .current_dir(work.path())
+        .spawn()
+        .expect("spawn osp");
+    let (log_status, log_stdout) =
+        wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
+
+    assert!(log_status.success(), "stdout:\n{log_stdout}");
+    assert!(log_stdout.contains("prime.ask"), "stdout:\n{log_stdout}");
+    assert!(log_stdout.contains("↑3 ↓5"), "stdout:\n{log_stdout}");
+    assert!(log_stdout.contains("■ run ok"), "stdout:\n{log_stdout}");
 }
 
 /// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`

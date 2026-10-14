@@ -498,6 +498,7 @@ dependencies = [
  "chrono",
  "electricity-json",
  "electricity-value",
+ "electricity-yaml",
  "indexmap",
  "log",
  "regex",
