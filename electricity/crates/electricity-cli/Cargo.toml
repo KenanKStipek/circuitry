@@ -36,6 +36,16 @@ tokio = { version = "1", features = ["rt", "macros", "signal", "sync", "time"] }
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# PR #549's review, finding 2: asserting a mid-run `--live-state`
+# write's own key *order* under a tree container reads it with this
+# crate's own ordered JSON reader (`electricity-value`'s own
+# `Value::Dict` is an `IndexMap`, already a plain [dependencies] entry
+# above), never `serde_json` -- enabling `preserve_order` there
+# instead would pull every crate's own test build onto `indexmap`'s
+# own `serde_json::Value::Object`, changing stack frame sizes
+# workspace-wide; PR #492's own `depth_safety.rs` 2 MiB-thread tests
+# already overflow under exactly that kind of frame-size shift.
+electricity-json = { path = "../electricity-json" }
 libc = "0.2"
 # Ties USAGE's own "runs ... documents only" / "refused" lists to
 # Supported::current()'s own flags (a test-only need; the binary

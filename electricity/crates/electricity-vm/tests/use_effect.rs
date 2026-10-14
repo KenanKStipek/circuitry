@@ -536,6 +536,23 @@ effects:
         "the child's dispatch event must never carry its own unnamespaced prime.<loop> path: \
          {events:?}"
     );
+
+    // Issue #465: the child's own nested tree registers its branches,
+    // and clears them at merge, under that same namespaced path --
+    // `ChildObserver`'s own `register_tree_branches`/`clear_tree_
+    // branches` forward unchanged, exactly like `dispatch` above.
+    assert!(
+        events.iter().any(
+            |e| matches!(e, Event::RegisterTreeBranches(p, n) if p == "prime.step.fan" && *n == 2)
+        ),
+        "the child's own tree must register both branches under its namespaced path: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ClearTreeBranches(p) if p == "prime.step.fan")),
+        "the child's own tree must clear its branches once it merges: {events:?}"
+    );
 }
 
 /// Ruling R4 on PR #472's review: without a `--live-state`

@@ -350,6 +350,15 @@ pub enum Event {
     /// `meta` snapshot, rendered through `Debug` for the same reason
     /// [`Event::Graft`] does.
     Totals(String),
+    /// [`RunObserver::register_tree_branches`] -- the container's own
+    /// node path, and how many branches were registered (never the
+    /// branch `NodeRef`s themselves -- nothing in this crate's own
+    /// test suite needs to inspect their live content through an
+    /// `Event`; a live-state-shape test belongs in `electricity` (lib),
+    /// which actually owns a `LiveStateMirror`).
+    RegisterTreeBranches(String, usize),
+    /// [`RunObserver::clear_tree_branches`].
+    ClearTreeBranches(String),
 }
 
 pub struct RecordingObserver {
@@ -432,6 +441,19 @@ impl RunObserver for RecordingObserver {
             .push(Event::ClearGraft(node_path.to_string()));
     }
 
+    fn register_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        self.events.borrow_mut().push(Event::RegisterTreeBranches(
+            node_path.to_string(),
+            branches.len(),
+        ));
+    }
+
+    fn clear_tree_branches(&self, node_path: &EffectPath, _branches: &[electricity_vm::NodeRef]) {
+        self.events
+            .borrow_mut()
+            .push(Event::ClearTreeBranches(node_path.to_string()));
+    }
+
     fn record_totals(&self, meta: &Value) {
         self.events
             .borrow_mut()
@@ -477,6 +499,14 @@ impl RunObserver for CancelOnStart<'_> {
 
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
         self.inner.dispatch(path, branches, concurrency);
+    }
+
+    fn register_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        self.inner.register_tree_branches(node_path, branches);
+    }
+
+    fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
+        self.inner.clear_tree_branches(node_path, branches);
     }
 }
 

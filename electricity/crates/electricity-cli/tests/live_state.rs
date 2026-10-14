@@ -239,3 +239,298 @@ fn mid_run_live_state_writes_land_roughly_500ms_apart_and_the_final_write_matche
         "the final --live-state write must equal --out byte for byte"
     );
 }
+
+/// A two-branch `flow: tree` dynamic, one fast, one slow enough
+/// (`1.5s`) to guarantee a mid-run `--live-state` write lands while
+/// it's still the only one unfinished.
+const TWO_BRANCH_TREE_DOC: &str = "\
+effects:
+  - type: dynamic
+    name: lp
+    flow: tree
+    effects:
+      - name: fast
+        type: tool
+        provider: sleep
+        params: {seconds: 0.1}
+      - name: slow
+        type: tool
+        provider: sleep
+        params: {seconds: 1.5}
+";
+
+fn get<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    path.iter().try_fold(value, |v, key| v.get(key))
+}
+
+/// Issue #465: a mid-run `--live-state` write shows a tree's in-flight
+/// branches, not only the ones that have already finished when the
+/// whole tree merges. Before the fix, `prime.lp` carried no branch key
+/// at all until the whole tree (`slow` included) was done -- the
+/// `dynamic`'s own isolated branch nodes were unreachable from the
+/// root until `Store::merge` ran -- so no mid-run write ever showed
+/// `fast`'s own finished effect while `lp` itself was still running;
+/// this test fails outright on an unpatched runner.
+#[test]
+fn mid_run_live_state_shows_a_finished_branch_before_its_tree_merges() {
+    let home = TempHome::new("two-branch-tree");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", TWO_BRANCH_TREE_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    let is_done = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("completed_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+    let is_started = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("created_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+    let saw_fast_done_while_lp_still_running = observations.iter().any(|(_, contents)| {
+        let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+        !is_done(&parsed, &["prime", "lp"]) && is_done(&parsed, &["prime", "lp", "fast"])
+    });
+    assert!(
+        saw_fast_done_while_lp_still_running,
+        "expected at least one mid-run write with `fast` already finished while `lp` itself \
+         (the tree container, not yet merged) was still running; observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    // PR #549's review, finding 2: electricity's own overlay shows a
+    // branch's *in-progress* node too, as soon as it starts -- unlike
+    // cof's own publisher, which republishes a branch only once that
+    // branch itself has called `on_write` at least once (a `prompt`/
+    // `tool` effect never calls it on attempt start, only once it has
+    // a `waiting_for` or a result to report). This is a deliberate,
+    // documented difference (`electricity/DESIGN.md` §13, Q11), not a
+    // bug to hide: copying cof's staler view would mean taking a
+    // branch snapshot on every write instead of lazily at publish
+    // time, which issue #465's own performance ruling forbids. Assert
+    // it directly, on the real mid-run shape, rather than merely
+    // asserting the shape isn't broken.
+    let saw_slow_started_but_not_done_while_lp_still_running =
+        observations.iter().any(|(_, contents)| {
+            let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+            !is_done(&parsed, &["prime", "lp"])
+                && is_started(&parsed, &["prime", "lp", "slow"])
+                && !is_done(&parsed, &["prime", "lp", "slow"])
+        });
+    assert!(
+        saw_slow_started_but_not_done_while_lp_still_running,
+        "expected at least one mid-run write with `slow` already started (but not finished) \
+         while `lp` itself was still running -- electricity's own overlay shows a started \
+         branch, unlike cof's; observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    // The real published shape, key order included: the container's
+    // own skeleton `value`/`meta` first (written before the tree ever
+    // dispatches), `fast` appended once it writes (branch 0), `slow`
+    // appended once it writes too (branch 1) -- `node.update`'s own
+    // ascending-index rule, `core/store/store.py::Store.
+    // parallel_branches`. Checked with this crate's own ordered JSON
+    // reader (`electricity_value::Value::Dict` is an `IndexMap`), not
+    // `serde_json` -- enabling `serde_json`'s own `preserve_order`
+    // feature here instead would pull every crate's own test build
+    // onto `indexmap`'s `serde_json::Value::Object`, changing stack
+    // frame sizes workspace-wide and overflowing `electricity-
+    // compiler`'s own `depth_safety.rs` 2 MiB-thread tests (PR #492).
+    let lp_key_order_once_both_branches_have_written =
+        observations.iter().find_map(|(_, contents)| {
+            let parsed = electricity_json::loads(contents).unwrap();
+            let lp = parsed
+                .as_dict()
+                .and_then(|d| d.get(&electricity_value::Value::Str("prime".to_string())))
+                .and_then(electricity_value::Value::as_dict)
+                .and_then(|d| d.get(&electricity_value::Value::Str("lp".to_string())))
+                .and_then(electricity_value::Value::as_dict)?;
+            let has = |k: &str| lp.contains_key(&electricity_value::Value::Str(k.to_string()));
+            if has("fast") && has("slow") {
+                Some(
+                    lp.keys()
+                        .map(|k| match k {
+                            electricity_value::Value::Str(s) => s.clone(),
+                            other => panic!("expected a string key, got {other:?}"),
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            }
+        });
+    assert_eq!(
+        lp_key_order_once_both_branches_have_written,
+        Some(vec![
+            "value".to_string(),
+            "meta".to_string(),
+            "fast".to_string(),
+            "slow".to_string(),
+        ]),
+        "expected a mid-run write with both `fast` and `slow` present in exactly this key \
+         order, observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    // The final write still matches --out, exactly like the chain-flow
+    // case above -- this fix changes only the mid-run shape, never the
+    // final one.
+    let final_live = &observations.last().unwrap().1;
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_live, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}
+
+/// A tree *loop* (`each` with `flow: tree`) with three passes -- two
+/// fast, one slow -- so a mid-run write catches at least one finished
+/// `iter_<N>` pass container while the loop itself hasn't merged yet.
+const TREE_LOOP_DOC: &str = "\
+effects:
+  - name: seconds
+    type: tool
+    provider: json
+    params: {mode: parse, input: '[0.1, 0.1, 1.5]'}
+  - type: loop
+    name: draft
+    flow: tree
+    each:
+      in: prime.seconds.value
+      as: s
+    body:
+      - name: step
+        type: tool
+        provider: sleep
+        params: {seconds: {from: s}}
+";
+
+/// Issue #465, second kind of tree: a tree loop's own `iter_<N>` pass
+/// containers, mid-run -- the same overlay `exec::loop_::
+/// run_each_tree` now registers, not only `exec::dynamic::
+/// execute_tree`'s own branches. Before the fix, `prime.draft` carried
+/// no `iter_<N>` key at all until the whole loop merged.
+#[test]
+fn mid_run_live_state_shows_a_finished_tree_loop_pass_before_it_merges() {
+    let home = TempHome::new("tree-loop");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", TREE_LOOP_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    let is_done = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("completed_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+    let saw_a_pass_done_while_draft_still_running = observations.iter().any(|(_, contents)| {
+        let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+        !is_done(&parsed, &["prime", "draft"])
+            && (0..2)
+                .any(|idx| is_done(&parsed, &["prime", "draft", &format!("iter_{idx}"), "step"]))
+    });
+    assert!(
+        saw_a_pass_done_while_draft_still_running,
+        "expected at least one mid-run write with a fast pass already finished while `draft` \
+         itself (the loop container, not yet merged) was still running; observed {} versions: \
+         {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    let final_live = &observations.last().unwrap().1;
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_live, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}
+
+/// A `use: {inline: ...}` child whose own document has a top-level
+/// `flow: tree` (two branches, one fast, one slow). The child frame
+/// maps the child's root to the `use` node's own path -- an
+/// unnamed/transparent root tree appends no name segment of its own --
+/// so the child's own tree registers its branches at the *same* path
+/// `ChildObserver::write` periodically grafts its own snapshot onto.
+const USE_CHILD_TOP_LEVEL_TREE_DOC: &str = "\
+effects:\n  - type: use\n    name: step\n    inline: |\n      flow: tree\n      effects:\n        - name: fast\n          type: tool\n          provider: sleep\n          params: {seconds: 0.1}\n        - name: slow\n          type: tool\n          provider: sleep\n          params: {seconds: 1.5}\n";
+
+/// PR #549's review, finding 1: a `use` child whose own document has a
+/// top-level `flow: tree` collides its own tree overlay with its own
+/// `ChildObserver` graft at the exact same path. Before that finding's
+/// fix, a single `BTreeMap<String, GraftEntry>` meant whichever of the
+/// two registered *second* at that path silently destroyed the first
+/// -- once the child wrote anything after its own tree had already
+/// registered its branches, the tree overlay vanished for the rest of
+/// the run, issue #465's own original bug reintroduced through a
+/// `use` child.
+#[test]
+fn mid_run_live_state_keeps_a_use_childs_own_tree_overlay_through_a_later_child_write() {
+    let home = TempHome::new("use-child-top-level-tree");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", USE_CHILD_TOP_LEVEL_TREE_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    let is_done = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("completed_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+    let has_fast = |v: &serde_json::Value| -> bool { get(v, &["prime", "step", "fast"]).is_some() };
+
+    let parsed_observations: Vec<serde_json::Value> = observations
+        .iter()
+        .map(|(_, c)| serde_json::from_str(c).unwrap())
+        .collect();
+    let still_running: Vec<&serde_json::Value> = parsed_observations
+        .iter()
+        .filter(|parsed| !is_done(parsed, &["prime", "step"]))
+        .collect();
+
+    assert!(
+        still_running.iter().any(|v| has_fast(v)),
+        "expected at least one mid-run write with `fast` visible under the use child's own \
+         node while the child (mapped to the same path as its own graft) was still running; \
+         observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+    assert!(
+        still_running.last().is_some_and(|v| has_fast(v)),
+        "the tree overlay must survive every later child write at the same path -- `fast` \
+         must still be visible in the *last* mid-run write before the use child merges, not \
+         only the first one right after it finished; observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    let final_live = &observations.last().unwrap().1;
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_live, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}

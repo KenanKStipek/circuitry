@@ -1266,6 +1266,7 @@ async fn run_each_tree<'a>(
     let branches = store
         .parallel_branches(write_parent, total as usize)
         .map_err(store_err)?;
+    observer.register_tree_branches(&dispatch_path, &branches);
 
     let mut results: std::collections::BTreeMap<u32, (Value, IndexMap<Value, Slot>)> =
         Default::default();
@@ -1371,9 +1372,17 @@ async fn run_each_tree<'a>(
     }
 
     if interrupted {
+        // PR #549's review, finding 3: see `exec::dynamic::
+        // execute_tree`'s own identical comment -- a cancelled tree
+        // loop never merges, but its overlay must still come down here.
+        observer.clear_tree_branches(&dispatch_path, &branches);
         return Err(VmError::Cancelled);
     }
 
+    // Cleared *before* the merge below, which takes *branches* by
+    // value -- see `exec::dynamic::execute_tree`'s own identical
+    // comment.
+    observer.clear_tree_branches(&dispatch_path, &branches);
     // A refused branch still merges like any other `stop_on_error`
     // failure -- every in-flight branch has already drained above, so
     // there is nothing left to lose by keeping whatever every branch
