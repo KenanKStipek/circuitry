@@ -925,7 +925,7 @@ pub(crate) async fn execute_prompt(
     // too (`prompt.py:617-659`) -- before the generation options, the
     // assets and the attempt chain, all of which a decomposed prompt
     // never touches at all.
-    let decomposition = crate::decompose::maybe_decompose(
+    let decomposition = match crate::decompose::maybe_decompose(
         op,
         prompt,
         complexity_meta.as_ref(),
@@ -937,7 +937,43 @@ pub(crate) async fn execute_prompt(
         observer,
         token,
     )
-    .await?;
+    .await
+    {
+        Ok(result) => result,
+        // `_validate_plan`'s own uncaught-`ValueError` escape (issue
+        // #528's own comment, `decompose::validate_plan`'s own doc
+        // comment): in Python this reaches `maybe_decompose`'s own
+        // caller with no `DecompositionResult` at all, so `meta.
+        // decomposition` never gets set -- matching that here needs
+        // catching it *before* `?` would otherwise just propagate it
+        // unexamined (this function's own long-standing contract, in
+        // `maybe_decompose`'s own doc comment, that an `Err` from it is
+        // always fatal) and routing it through the same `on_error` this
+        // effect's own generation failures use, not a decomposition-
+        // specific "invalid_plan"/`on_failure` one.
+        Err(VmError::Raised {
+            py_class,
+            message,
+            cause,
+            ..
+        }) => {
+            return finish_failure(
+                store,
+                &meta_node,
+                &effect_node,
+                op,
+                &effect_path,
+                instance,
+                observer,
+                Vec::new(),
+                0,
+                message,
+                py_class,
+                cause,
+            );
+        }
+        Err(err) => return Err(err),
+    };
 
     let mut dispatch_model = resolved_model.clone();
     if let Some(result) = decomposition {

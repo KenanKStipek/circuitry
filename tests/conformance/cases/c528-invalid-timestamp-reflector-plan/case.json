@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #528's own comment: a calendar-invalid timestamp in a reflector's generated plan",
+  "description": "The reflector's scripted plan holds an unquoted, calendar-invalid date (`when: 2024-02-30`). The plan executes through the same inline `use` path an ordinary inline child does, so PyYAML's bare ValueError reports its message alone, with no location and no \"Inline orchestration validation failed:\" wrapper. expect: failure, error_compare: exact.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

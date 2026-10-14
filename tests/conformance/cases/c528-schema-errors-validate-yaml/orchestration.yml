@@ -1,0 +1,11 @@
+name: c528-schema-errors-validate-yaml
+effects:
+  - type: tool
+    name: check
+    provider: validate_yaml
+    params:
+      yaml: |-
+        effects:
+          - name: a
+            type: loop
+            body: []

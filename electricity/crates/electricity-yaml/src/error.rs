@@ -76,6 +76,23 @@ pub enum YamlError {
 }
 
 impl YamlError {
+    /// Every document-load site's own text for *self* -- this
+    /// `Display` impl's own location-suffixed text, except for
+    /// [`YamlError::InvalidTimestampValue`] (issue #528's own comment):
+    /// `core/yaml_load.py::load_yaml` lets a calendar-invalid timestamp's
+    /// bare Python `ValueError` escape uncaught, with no location and no
+    /// enclosing wrapper a caller might otherwise add around an ordinary
+    /// parse error -- this is the one `YamlError` every caller (`cof`'s
+    /// own load sites included, via this one shared method rather than
+    /// each repeating the match) must report with its own `message`
+    /// alone.
+    pub fn cof_message(&self) -> String {
+        match self {
+            YamlError::InvalidTimestampValue { message, .. } => message.clone(),
+            other => other.to_string(),
+        }
+    }
+
     /// The position this error occurred at, when it has one meaningful to
     /// compare against PyYAML's own (`DuplicateKey` carries its two marks
     /// inside the message itself instead).

@@ -106,6 +106,21 @@ def test_check_rejects_inline_child_tool(tmp_path: Path) -> None:
     ]
 
 
+def test_check_tolerates_an_inline_childs_calendar_invalid_date(tmp_path: Path) -> None:
+    """The allowlist scan over `use` children skips an inline child it can't
+    parse (a YAML syntax error, or PyYAML's own uncaught `ValueError` for a
+    calendar-invalid date like `2024-02-30`) rather than crashing `cof
+    check` itself — the same tolerance `cof run` extends it (its own
+    content renders at runtime, so the static scan can't see it either
+    way). The child's own date still fails once the run actually reaches it.
+    """
+    parent = _inline_parent(tmp_path, "effects: []\nwhen: 2024-02-30\n")
+
+    result = validate(parent, config=TOOLS_JSON_ONLY, skip_preflight=True)
+
+    assert result["ok"] is True, result["errors"]
+
+
 def test_check_rejects_path_grandchild_tool(tmp_path: Path) -> None:
     """`path:` children are followed transitively, relative to each file."""
     _write(tmp_path / "sub" / "grandchild.yml", DENIED_TOOL_CHILD)

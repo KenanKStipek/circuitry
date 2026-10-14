@@ -1,0 +1,6 @@
+{
+  "spec_case": "plugins/validate_yaml.py, issue #528",
+  "description": "A `validate_yaml` tool result with several schema errors (issue #528's own worked example: an empty `body` and a missing `each`/`while` on the same `loop` effect) -- a `minItems` violation and a `oneOf` failure with context, in Circuitry's own wording and order.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
