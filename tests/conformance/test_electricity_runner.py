@@ -2,11 +2,12 @@
 available) on each conformance case applicable to it and compares the same
 way the Python runner does (electricity/DESIGN.md §12). A case that
 expects *failure* still skips when electricity refuses it with the
-preview marker for content M0-H's own VM genuinely doesn't support yet
-(`prompt`/`loop`/`use`/... -- there is nothing to usefully compare for
-those); a case that expects *success* never does -- a success case
-electricity wrongly refuses is a real regression, and must fail the
-test, not silently skip it.
+preview marker -- by M1, this fires for exactly one case
+(`document-adapter-preflight-not-ready`, a document-level `adapter:
+litellm`, which electricity refuses for good, DESIGN.md §13), not a whole
+class of still-unported effect types; a case that expects *success* never
+does -- a success case electricity wrongly refuses is a real regression,
+and must fail the test, not silently skip it.
 """
 
 from __future__ import annotations
@@ -221,23 +222,33 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         and (metadata["expect"] != "success" or metadata["electricity_preview_ok"])
     ):
         pytest.skip(
-            "this case's real document is content M0-H's own preview "
-            "doesn't support yet — electricity/crates/electricity-cli"
+            "this case's real document is content electricity refuses for "
+            "good (adapter: litellm, DESIGN.md §13) — electricity/crates/electricity-cli"
         )
     # A *success* case never skips through the preview marker on its own
     # (PR #441 review finding 6) -- a success case electricity wrongly
     # refuses is a real regression, and must fail loudly. The one declared
     # exception is `case.json`'s own `electricity_preview_ok: true` (issue
-    # #450): a sample case whose document uses content M0-H's preview
-    # genuinely doesn't support yet (`prompt`/`shell`/`http`/...), kept
-    # passing on the Python engine and deliberately still refused by
-    # electricity until the lane that implements that capability flips it
-    # (never `known_divergence`, which means *both* engines succeeded with
-    # one documented difference -- not applicable when one engine never ran
-    # the document at all).
+    # #450): a sample case whose document uses content the preview doesn't
+    # support yet, kept passing on the Python engine and deliberately
+    # still refused by electricity until the lane that implements that
+    # capability flips it (never `known_divergence`, which means *both*
+    # engines succeeded with one documented difference -- not applicable
+    # when one engine never ran the document at all). By M1, the only
+    # refusal either path can actually hit is `document-adapter-
+    # preflight-not-ready`'s own `adapter: litellm`, which electricity
+    # refuses for good -- `electricity_preview_ok` stays declared and
+    # validated for the next lane that needs it, even though none does
+    # today.
 
     harness.assert_no_leftover_replies(
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
+    )
+
+    harness.assert_no_leaked_credentials(
+        harness.run_result_texts(result, events_path=events_path, live_state_path=live_state_path),
+        case_name=case_dir.name,
+        fake_credentials=metadata.get("fake_credentials"),
     )
 
     _assert_warnings_match(case_dir, metadata, result.stderr)
@@ -296,6 +307,11 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
             assert pretty_result.returncode == 0, (
                 f"expected success (--pretty), got exit {pretty_result.returncode}\n"
                 f"stdout: {pretty_result.stdout}\nstderr: {pretty_result.stderr}"
+            )
+            harness.assert_no_leaked_credentials(
+                harness.run_result_texts(pretty_result),
+                case_name=case_dir.name,
+                fake_credentials=metadata.get("fake_credentials"),
             )
             actual_pretty_text = pretty_out_path.read_text(encoding="utf-8")
             assert_out_serialization(actual_pretty_text, pretty=True)

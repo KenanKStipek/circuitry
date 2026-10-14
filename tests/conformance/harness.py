@@ -106,6 +106,59 @@ CREDENTIAL_ENV_VARS = (
 #: an operator's own key.
 FAKE_CREDENTIAL_MARKER = "circuitry-test-fake-"
 
+#: tools-adapters-plugins.md §7 case 22 (the redaction blanket), run as a
+#: post-check on every case (issue #448's acceptance criterion, closed by
+#: #537): a real-looking credential's own prefix -- a live key never
+#: belongs in a conformance run's own output at all, redacted or not.
+#: `FAKE_CREDENTIAL_MARKER` and a case's own `fake_credentials` values are
+#: checked the same way, for the same reason (a scripted-looking
+#: credential leaking somewhere a case never meant it to).
+_LEAKED_CREDENTIAL_PREFIX = "sk-live-"
+
+
+def assert_no_leaked_credentials(
+    texts: dict[str, str], *, case_name: str, fake_credentials: dict[str, str] | None = None
+) -> None:
+    """Case 22's own blanket check, run on every case (not just
+    `c-http-redaction-blanket`) after every run: none of *texts* (keyed by
+    a label naming where each came from -- stdout, stderr, `--out`,
+    `--events`, `--live-state`) may contain `_LEAKED_CREDENTIAL_PREFIX`,
+    `FAKE_CREDENTIAL_MARKER`, or any of the case's own `fake_credentials`
+    values. `expected.http_requests.json` (what the mock server actually
+    received) is deliberately never one of *texts* -- nine cases record a
+    real-looking credential there on purpose (the point of the header/URL
+    redaction those cases check: display-only, never a what-gets-sent
+    change), so it is the one exempt file, per `tests/conformance/
+    README.md`'s own case-22 section."""
+    patterns = [_LEAKED_CREDENTIAL_PREFIX, FAKE_CREDENTIAL_MARKER]
+    if fake_credentials:
+        patterns.extend(fake_credentials.values())
+    for label, text in texts.items():
+        for pattern in patterns:
+            if pattern in text:
+                raise AssertionError(
+                    f"{case_name}: {label} contains a credential-shaped string "
+                    f"({pattern!r}) -- case 22's own blanket check"
+                )
+
+
+def run_result_texts(
+    result: CaseResult, *, events_path: Path | None = None, live_state_path: Path | None = None
+) -> dict[str, str]:
+    """stdout/stderr plus `--out`/`--events`/`--live-state`'s own content,
+    for [`assert_no_leaked_credentials`] -- a file that was never written
+    (a load/check failure before any effect ever dispatches writes no
+    `--events`/`--live-state` at all) is simply omitted, not an empty
+    string, so a label only appears when there is real content to check."""
+    texts = {"stdout": result.stdout, "stderr": result.stderr}
+    if result.out_path.exists():
+        texts["--out"] = result.out_path.read_text(encoding="utf-8")
+    if events_path is not None and events_path.exists():
+        texts["--events"] = events_path.read_text(encoding="utf-8")
+    if live_state_path is not None and live_state_path.exists():
+        texts["--live-state"] = live_state_path.read_text(encoding="utf-8")
+    return texts
+
 #: Every `http`/`https`/`ftp`/`all`-proxy variable, both cases (`getproxies_
 #: environment`'s own convention, lowercase and uppercase alike) plus
 #: `REQUEST_METHOD` (the CGI guard that only ever *removes* the plain
