@@ -5,6 +5,8 @@
 //! directly, mirroring `oscilloscope-core`'s own "no terminal code"
 //! split one level up.
 
+use std::time::Instant;
+
 use oscilloscope_core::model::{RunStatus, StatusKind};
 use oscilloscope_core::render::{Details, Header, Row, RowKind, StateRow, TokenBar};
 use oscilloscope_core::treemap::TreemapNode;
@@ -14,7 +16,51 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
+use crate::highlight::Tracker;
 use crate::keys::{App, Dialog, Pane, visible_rows};
+use crate::theme::{ColorMode, Theme};
+
+/// Everything a draw function needs to style a cell (issue #535): the
+/// active theme, and the update-highlight tracker with the clock
+/// reading and colour mode its own `style_for` needs. Threaded by
+/// reference through every `draw_*` function below so none of them
+/// ever reach for a `Color::` literal of their own or call `Instant::
+/// now()` themselves.
+pub struct DrawCtx<'a> {
+    pub theme: &'a Theme,
+    pub highlights: &'a Tracker,
+    pub now: Instant,
+    pub color_mode: ColorMode,
+    /// `t`'s own banner (issue #535): the theme's name, shown in the
+    /// header for about 2 seconds after a switch. `None` the rest of
+    /// the time.
+    pub theme_banner: Option<&'a str>,
+}
+
+impl DrawCtx<'_> {
+    fn highlight(&self, key: &str) -> Option<Style> {
+        self.highlights
+            .style_for(key, self.now, self.theme, self.color_mode)
+    }
+}
+
+/// Overlays an update-highlight's own style onto `style` (issue
+/// #535): the highlight's background, when it has one, replaces
+/// `style`'s; its modifiers (bold, on a 16-colour terminal or `NO_
+/// COLOR`) are added, never replacing `style`'s own foreground or
+/// other modifiers (a selected row's `REVERSED` stays, for one).
+fn with_highlight(style: Style, highlight: Option<Style>) -> Style {
+    match highlight {
+        None => style,
+        Some(h) => {
+            let style = match h.bg {
+                Some(bg) => style.bg(bg),
+                None => style,
+            };
+            style.add_modifier(h.add_modifier)
+        }
+    }
+}
 
 /// Issue #527's own small-terminal fallback thresholds: below each,
 /// drop one more pane, in this order, until the rest fits. The header
@@ -185,17 +231,8 @@ fn status_glyph(kind: StatusKind) -> char {
     }
 }
 
-fn status_color(kind: StatusKind) -> Color {
-    match kind {
-        StatusKind::Pending | StatusKind::Skipped => Color::DarkGray,
-        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
-            Color::Yellow
-        }
-        StatusKind::Done => Color::Green,
-        StatusKind::Failed | StatusKind::Aborted => Color::Red,
-        StatusKind::FailedHandled => Color::LightRed,
-        StatusKind::Cancelled => Color::Magenta,
-    }
+fn status_color(kind: StatusKind, theme: &Theme) -> Color {
+    theme.status_color(kind)
 }
 
 /// `status_color`'s own `Style`, with `LikelyRunning`'s guess
@@ -204,8 +241,8 @@ fn status_color(kind: StatusKind) -> Color {
 /// dim and italic -- visibly distinct from a *confirmed* `Running`
 /// row, which keeps the plain, full-brightness style (review finding
 /// 16 on #458's comment 3).
-fn status_style(kind: StatusKind) -> Style {
-    let style = Style::default().fg(status_color(kind));
+fn status_style(kind: StatusKind, theme: &Theme) -> Style {
+    let style = Style::default().fg(status_color(kind, theme));
     if kind == StatusKind::LikelyRunning {
         style.add_modifier(Modifier::DIM | Modifier::ITALIC)
     } else {
@@ -221,11 +258,14 @@ fn format_duration(secs: f64) -> String {
     }
 }
 
-fn row_line(row: &Row, selected: bool) -> Line<'static> {
+fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     let indent = "  ".repeat(row.depth.saturating_sub(1));
     let glyph = status_glyph(row.status.kind);
     let mut spans = vec![
-        Span::styled(format!("{indent}{glyph} "), status_style(row.status.kind)),
+        Span::styled(
+            format!("{indent}{glyph} "),
+            status_style(row.status.kind, ctx.theme),
+        ),
         Span::raw(row.label.clone()),
     ];
     if let Some(progress) = &row.loop_progress {
@@ -235,36 +275,46 @@ fn row_line(row: &Row, selected: bool) -> Line<'static> {
             .unwrap_or_else(|| "?".to_string());
         spans.push(Span::styled(
             format!("  {}/{total}", progress.done),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ctx.theme.dim),
         ));
     }
     if let Some(duration) = row.duration_s {
         spans.push(Span::styled(
             format!("  {}", format_duration(duration)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ctx.theme.dim),
         ));
     }
     if let Some(dim) = &row.dim {
         spans.push(Span::styled(
             format!("  {dim}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ctx.theme.dim),
         ));
     }
-    let style = if selected {
+    let mut style = if selected {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
+    style = with_highlight(style, ctx.highlight(&format!("row:{}", row.path)));
     Line::from(spans).style(style)
 }
 
-fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render::Header) {
+/// `header_area`'s own width is what's left once the scope icon
+/// (issue #535, `crate::icon`) takes its own columns to the left --
+/// the caller decides that split, this function only ever draws into
+/// whatever `area` it's given.
+fn draw_header(
+    frame: &mut Frame,
+    area: Rect,
+    header: &oscilloscope_core::render::Header,
+    ctx: &DrawCtx,
+) {
     let (status_text, status_color) = match header.status {
-        RunStatus::Running => ("running", Color::Yellow),
-        RunStatus::Ok => ("ok", Color::Green),
-        RunStatus::Failed => ("failed", Color::Red),
-        RunStatus::Cancelled => ("cancelled", Color::Magenta),
-        RunStatus::Aborted => ("aborted", Color::Red),
+        RunStatus::Running => ("running", ctx.theme.status_running),
+        RunStatus::Ok => ("ok", ctx.theme.status_done),
+        RunStatus::Failed => ("failed", ctx.theme.status_failed),
+        RunStatus::Cancelled => ("cancelled", ctx.theme.status_cancelled),
+        RunStatus::Aborted => ("aborted", ctx.theme.status_aborted),
     };
     let effects = match header.effects_planned {
         // Finding 6: a `+` marks "planned" as a lower bound when some
@@ -277,15 +327,24 @@ fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render
     };
     let mut line = vec![
         Span::raw(format!("{}  ", header.document)),
-        Span::styled(header.engine.clone(), Style::default().fg(Color::DarkGray)),
+        Span::styled(header.engine.clone(), Style::default().fg(ctx.theme.dim)),
         Span::raw("  "),
-        Span::styled(status_text, Style::default().fg(status_color)),
+        Span::styled(
+            status_text,
+            with_highlight(
+                Style::default().fg(status_color),
+                ctx.highlight("header:status"),
+            ),
+        ),
         Span::raw(format!("  {}", format_duration(header.elapsed_s))),
-        Span::raw(format!("  effects {effects}")),
-        Span::raw(format!(
-            "  ↑{} ↓{}",
-            header.tokens_sent, header.tokens_received
-        )),
+        Span::styled(
+            format!("  effects {effects}"),
+            with_highlight(Style::default(), ctx.highlight("header:effects")),
+        ),
+        Span::styled(
+            format!("  ↑{} ↓{}", header.tokens_sent, header.tokens_received),
+            with_highlight(Style::default(), ctx.highlight("header:tokens")),
+        ),
     ];
     if let Some(eta) = header.innermost_loop_eta_s {
         line.push(Span::raw(format!("  ETA {}", format_duration(eta))));
@@ -293,7 +352,13 @@ fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render
     if let Some(run_id) = &header.run_id {
         line.push(Span::styled(
             format!("  {run_id}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ctx.theme.dim),
+        ));
+    }
+    if let Some(name) = ctx.theme_banner {
+        line.push(Span::styled(
+            format!("  theme: {name}"),
+            Style::default().fg(ctx.theme.dim),
         ));
     }
     let paragraph = Paragraph::new(Line::from(line)).block(Block::default().borders(Borders::ALL));
@@ -303,7 +368,14 @@ fn draw_header(frame: &mut Frame, area: Rect, header: &oscilloscope_core::render
 /// The orchestration pane (issue #527, formerly "plan"): scrolls to
 /// keep the selected row in view, with the current position shown in
 /// the border once any row is hidden above or below.
-fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &mut App, document: &str) {
+fn draw_tree(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[&Row],
+    app: &mut App,
+    document: &str,
+    ctx: &DrawCtx,
+) {
     let viewport = area.height.saturating_sub(2) as usize;
     app.tree_viewport = viewport;
     let selected_idx = app
@@ -318,13 +390,13 @@ fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &mut App, docume
         .iter()
         .map(|row| {
             let selected = app.selected_path.as_deref() == Some(row.path.as_str());
-            ListItem::new(row_line(row, selected))
+            ListItem::new(row_line(row, selected, ctx))
         })
         .collect();
     let border_style = if app.pane == Pane::Tree {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(ctx.theme.border_focused)
     } else {
-        Style::default()
+        Style::default().fg(ctx.theme.border)
     };
     let mut title = format!(" orchestration {}", orchestration_name(document));
     if app.follow {
@@ -343,7 +415,7 @@ fn draw_tree(frame: &mut Frame, area: Rect, rows: &[&Row], app: &mut App, docume
     frame.render_widget(list, area);
 }
 
-fn details_lines(details: &Details, kind: RowKind) -> Vec<Line<'static>> {
+fn details_lines(details: &Details, kind: RowKind, ctx: &DrawCtx) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("path   {}", details.path)),
         Line::from(format!("type   {}", kind.label())),
@@ -360,25 +432,27 @@ fn details_lines(details: &Details, kind: RowKind) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
         lines.push(Line::styled(
             format!("error  {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(ctx.theme.error),
         ));
     }
     // Issue #535: a node with `prompt_sent` gets these two blocks
     // instead of the plain `prompt_sent`/`value` ones below.
     if let Some(sent) = &details.sent {
         lines.push(Line::from(""));
-        lines.push(token_block_header("sent", '↑', sent));
+        let style = with_highlight(Style::default(), ctx.highlight("details:sent"));
+        lines.push(token_block_header("sent", '↑', sent).style(style));
         if let Some(snippet) = &sent.snippet {
             lines.push(Line::from(snippet.clone()));
         }
     }
     if let Some(received) = &details.received {
         lines.push(Line::from(""));
-        lines.push(token_block_header("received", '↓', received));
+        let style = with_highlight(Style::default(), ctx.highlight("details:received"));
+        lines.push(token_block_header("received", '↓', received).style(style));
         if received.waiting {
             lines.push(Line::styled(
                 "waiting for the reply",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ctx.theme.dim),
             ));
         } else if let Some(snippet) = &received.snippet {
             lines.push(Line::from(snippet.clone()));
@@ -435,14 +509,15 @@ fn draw_details(
     details: Option<&Details>,
     kind: RowKind,
     app: &mut App,
+    ctx: &DrawCtx,
 ) {
     let border_style = if app.pane == Pane::Details {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(ctx.theme.border_focused)
     } else {
-        Style::default()
+        Style::default().fg(ctx.theme.border)
     };
     let text = details
-        .map(|d| details_lines(d, kind))
+        .map(|d| details_lines(d, kind, ctx))
         .unwrap_or_else(|| vec![Line::from("(nothing selected)")]);
     let viewport = area.height.saturating_sub(2) as usize;
     app.details_viewport = viewport;
@@ -466,12 +541,19 @@ fn draw_details(
     frame.render_widget(paragraph, area);
 }
 
-fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String]) {
+fn draw_log(frame: &mut Frame, area: Rect, log_lines: &[String], ctx: &DrawCtx) {
     let height = area.height.saturating_sub(2) as usize;
     let start = log_lines.len().saturating_sub(height);
     let text: Vec<Line> = log_lines[start..]
         .iter()
-        .map(|l| Line::from(l.clone()))
+        .enumerate()
+        .map(|(i, l)| {
+            let style = with_highlight(
+                Style::default(),
+                ctx.highlight(&format!("log:{}", start + i)),
+            );
+            Line::from(l.clone()).style(style)
+        })
         .collect();
     let paragraph =
         Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" log "));
@@ -551,7 +633,13 @@ fn clamp_state_scroll(
 /// pane's. Finding F3: scrolling is clamped and sliced by *lines*,
 /// not by entry count, since a token line makes most entries two
 /// lines tall rather than one.
-fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[&StateRow], app: &mut App) {
+fn draw_state(
+    frame: &mut Frame,
+    area: Rect,
+    state_rows: &[&StateRow],
+    app: &mut App,
+    ctx: &DrawCtx,
+) {
     let viewport = area.height.saturating_sub(2) as usize;
     let total = state_rows.len();
     let line_counts: Vec<usize> = state_rows
@@ -598,33 +686,37 @@ fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[&StateRow], app: &mut
                     "{indent}{collapse_marker}{} ",
                     status_glyph(row.status.kind)
                 ),
-                status_style(row.status.kind),
+                status_style(row.status.kind, ctx.theme),
             ),
             Span::raw(row.key.clone()),
         ];
         if let Some(dim) = &row.dim {
             spans.push(Span::styled(
                 format!("  {dim}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ctx.theme.dim),
             ));
         }
         let mut line = Line::from(spans);
-        if selected {
-            line = line.style(Style::default().add_modifier(Modifier::REVERSED));
-        }
+        let mut style = if selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        style = with_highlight(style, ctx.highlight(&format!("state:{}", row.path)));
+        line = line.style(style);
         lines.push(line);
         if let Some((sent, received)) = row.tokens {
             lines.push(Line::styled(
                 format!("{indent}  ↑{sent} ↓{received}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(ctx.theme.dim),
             ));
         }
     }
 
     let border_style = if app.pane == Pane::State {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(ctx.theme.border_focused)
     } else {
-        Style::default()
+        Style::default().fg(ctx.theme.border)
     };
     let mut title = " state".to_string();
     let all_visible = start == 0 && end >= total;
@@ -647,7 +739,13 @@ fn draw_state(frame: &mut Frame, area: Rect, state_rows: &[&StateRow], app: &mut
 /// treemap of the current state's token totals, laid out by
 /// `oscilloscope_core::treemap::layout` (pure integer geometry) and
 /// drawn here — this function never computes a rectangle of its own.
-fn draw_treemap(frame: &mut Frame, area: Rect, nodes: &[TreemapNode], selected_path: Option<&str>) {
+fn draw_treemap(
+    frame: &mut Frame,
+    area: Rect,
+    nodes: &[TreemapNode],
+    selected_path: Option<&str>,
+    ctx: &DrawCtx,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" tokens by key ");
@@ -667,8 +765,15 @@ fn draw_treemap(frame: &mut Frame, area: Rect, nodes: &[TreemapNode], selected_p
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
-        let color = cell.status.map(status_color).unwrap_or(Color::DarkGray);
+        let color = cell
+            .status
+            .map(|s| status_color(s, ctx.theme))
+            .unwrap_or(ctx.theme.dim);
         let is_selected = selected_path.is_some() && cell.path.as_deref() == selected_path;
+        let highlight = cell
+            .path
+            .as_deref()
+            .and_then(|p| ctx.highlight(&format!("treemap:{p}")));
         let mut style = Style::default().fg(color);
         if is_selected {
             style = style.add_modifier(Modifier::REVERSED);
@@ -680,7 +785,7 @@ fn draw_treemap(frame: &mut Frame, area: Rect, nodes: &[TreemapNode], selected_p
                     &cell.label,
                     rect.width.saturating_sub(2) as usize,
                 ))
-                .border_style(style);
+                .border_style(with_highlight(style, highlight));
             frame.render_widget(block, rect);
         } else {
             // Finding F10: a leaf (or a merged `…` bucket, or a
@@ -701,15 +806,17 @@ fn draw_treemap(frame: &mut Frame, area: Rect, nodes: &[TreemapNode], selected_p
             } else {
                 fill
             };
+            let fill = with_highlight(fill, highlight);
             frame.render_widget(Block::default().style(fill), rect);
             if rect.width >= 2 {
                 let label = truncate_label(&cell.label, rect.width as usize);
-                let text_style = Style::default().bg(color).fg(Color::Black);
+                let text_style = Style::default().bg(color).fg(ctx.theme.on_accent);
                 let text_style = if is_selected {
                     text_style.add_modifier(Modifier::REVERSED)
                 } else {
                     text_style
                 };
+                let text_style = with_highlight(text_style, highlight);
                 let paragraph = Paragraph::new(Line::styled(label, text_style));
                 frame.render_widget(paragraph, rect);
             }
@@ -733,7 +840,13 @@ fn bar(value: u64, max: u64, width: usize) -> String {
 /// bottom width, two content lines. Line 1's totals always equal the
 /// header's own `↑`/`↓` — both read the same token rule
 /// (`oscilloscope_core::model::node_tokens`).
-fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &TokenBar) {
+fn draw_token_bar(
+    frame: &mut Frame,
+    area: Rect,
+    header: &Header,
+    token_bar: &TokenBar,
+    ctx: &DrawCtx,
+) {
     let inner_width = area.width.saturating_sub(2) as usize;
     let sent_str = with_thousands_separators(header.tokens_sent);
     let received_str = with_thousands_separators(header.tokens_received);
@@ -750,13 +863,26 @@ fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &To
     let max = header.tokens_sent.max(header.tokens_received);
     let in_bar = bar(header.tokens_sent, max, bar_width);
     let out_bar = bar(header.tokens_received, max, bar_width);
+    let tokenbar_highlight = ctx.highlight("tokenbar");
     let line1 = Line::from(vec![
         Span::raw("in  "),
-        Span::styled(in_bar, Style::default().fg(Color::Cyan)),
-        Span::raw(format!(" {sent_str}   ")),
+        Span::styled(
+            in_bar,
+            with_highlight(Style::default().fg(ctx.theme.token_in), tokenbar_highlight),
+        ),
+        Span::styled(
+            format!(" {sent_str}   "),
+            with_highlight(Style::default(), tokenbar_highlight),
+        ),
         Span::raw("out  "),
-        Span::styled(out_bar, Style::default().fg(Color::Yellow)),
-        Span::raw(format!(" {received_str}")),
+        Span::styled(
+            out_bar,
+            with_highlight(Style::default().fg(ctx.theme.token_out), tokenbar_highlight),
+        ),
+        Span::styled(
+            format!(" {received_str}"),
+            with_highlight(Style::default(), tokenbar_highlight),
+        ),
     ]);
     let line2 = if token_bar.prompts_running == 0 {
         Line::from("nothing in flight")
@@ -792,6 +918,7 @@ fn draw_token_bar(frame: &mut Frame, area: Rect, header: &Header, token_bar: &To
             token_bar.prompts_running
         ))
     };
+    let line2 = line2.style(with_highlight(Style::default(), tokenbar_highlight));
     let paragraph = Paragraph::new(vec![line1, line2])
         .block(Block::default().borders(Borders::ALL).title(" tokens "));
     frame.render_widget(paragraph, area);
@@ -866,6 +993,7 @@ const HELP_OVERLAY_WIDTH: u16 = 57;
 /// `prompt_sent`/`value` are already cut to `DETAILS_PREVIEW_CHARS`
 /// for the details pane, which `v`'s own full-value overlay (finding
 /// 5) must not be.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     state: &oscilloscope_core::render::RenderState,
@@ -873,19 +1001,40 @@ pub fn draw(
     log_lines: &[String],
     app: &mut App,
     raw_state: Option<&serde_json::Value>,
+    ctx: &DrawCtx,
+    icon_frame: u64,
 ) {
     let area = frame.area();
+    if let Some(bg) = ctx.theme.background {
+        frame.render_widget(Block::default().style(Style::default().bg(bg)), area);
+    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(crate::icon::ICON_HEIGHT),
             Constraint::Min(5),
             Constraint::Length(4),
         ])
         .split(area);
 
-    draw_header(frame, sections[0], &state.header);
-    draw_token_bar(frame, sections[2], &state.header, &state.token_bar);
+    // Issue #535: the scope icon sits left of the header, taking its
+    // own fixed width, below the two-column threshold the icon is
+    // hidden and the header takes the full width.
+    if area.width >= thresholds::TWO_COLUMN_MIN_WIDTH {
+        let header_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(crate::icon::ICON_WIDTH),
+                Constraint::Min(5),
+            ])
+            .split(sections[0]);
+        let icon_lines = crate::icon::lines(icon_frame, state.header.status, ctx.theme);
+        frame.render_widget(Paragraph::new(icon_lines), header_cols[0]);
+        draw_header(frame, header_cols[1], &state.header, ctx);
+    } else {
+        draw_header(frame, sections[0], &state.header, ctx);
+    }
+    draw_token_bar(frame, sections[2], &state.header, &state.token_bar, ctx);
 
     let body = sections[1];
     let visible = visible_rows(&state.rows, app);
@@ -910,9 +1059,9 @@ pub fn draw(
                 Constraint::Min(5),
             ])
             .split(body);
-        draw_details(frame, parts[0], details, selected_kind, app);
-        draw_tree(frame, parts[1], &visible, app, &state.header.document);
-        draw_log(frame, parts[2], log_lines);
+        draw_details(frame, parts[0], details, selected_kind, app, ctx);
+        draw_tree(frame, parts[1], &visible, app, &state.header.document, ctx);
+        draw_log(frame, parts[2], log_lines, ctx);
     } else {
         let left_width = oscilloscope_core::layout::left_column_width(body.width);
         let columns = Layout::default()
@@ -931,8 +1080,8 @@ pub fn draw(
                 Constraint::Length(columns[0].height - details_rows),
             ])
             .split(columns[0]);
-        draw_details(frame, left[0], details, selected_kind, app);
-        draw_tree(frame, left[1], &visible, app, &state.header.document);
+        draw_details(frame, left[0], details, selected_kind, app, ctx);
+        draw_tree(frame, left[1], &visible, app, &state.header.document, ctx);
 
         let show_treemap = area.width >= thresholds::TREEMAP_MIN_WIDTH
             && area.height >= thresholds::TREEMAP_MIN_HEIGHT;
@@ -953,19 +1102,20 @@ pub fn draw(
                 right[0],
                 &state.treemap,
                 app.selected_path.as_deref(),
+                ctx,
             );
-            draw_state(frame, right[1], &state_visible, app);
-            draw_log(frame, right[2], log_lines);
+            draw_state(frame, right[1], &state_visible, app, ctx);
+            draw_log(frame, right[2], log_lines, ctx);
         } else if show_state {
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(40), Constraint::Min(5)])
                 .split(columns[1]);
-            draw_state(frame, right[0], &state_visible, app);
-            draw_log(frame, right[1], log_lines);
+            draw_state(frame, right[0], &state_visible, app, ctx);
+            draw_log(frame, right[1], log_lines, ctx);
         } else {
             app.state_viewport = 0;
-            draw_log(frame, columns[1], log_lines);
+            draw_log(frame, columns[1], log_lines, ctx);
         }
     }
 
@@ -1295,10 +1445,30 @@ mod golden_tests {
         // actually choosing the running row builds its own `App`
         // instead of calling this helper.
         app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), log_lines, &mut app, state))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    log_lines,
+                    &mut app,
+                    state,
+                    &test_ctx,
+                    0,
+                )
+            })
             .unwrap();
         terminal.backend().to_string()
     }
@@ -1808,10 +1978,30 @@ mod golden_tests {
         );
         let details =
             render::details_for(app.selected_path.as_deref().unwrap(), &plan, Some(&state));
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &mut app, Some(&state)))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(
@@ -1920,10 +2110,30 @@ mod golden_tests {
 
         let details =
             render::details_for(app.selected_path.as_deref().unwrap(), &plan, Some(&state));
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &mut app, Some(&state)))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(
@@ -1990,11 +2200,31 @@ mod golden_tests {
         let mut app = App::new(false);
         app.selected_path = Some("n0".to_string());
 
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         let start = std::time::Instant::now();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &mut app, Some(&state)))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
             .unwrap();
         let elapsed = start.elapsed();
         assert!(
@@ -2044,10 +2274,30 @@ mod golden_tests {
         let mut app = App::new(false);
         app.selected_path = Some("prime.fan.iter_0.ask".to_string());
         app.follow = false;
+        let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let test_tracker = crate::highlight::Tracker::new();
+        let test_ctx = DrawCtx {
+            theme: &test_theme,
+            highlights: &test_tracker,
+            now: Instant::now(),
+            color_mode: ColorMode::TrueColor,
+            theme_banner: None,
+        };
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| draw(f, &rendered, Some(&details), &[], &mut app, Some(&state)))
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    Some(&details),
+                    &[],
+                    &mut app,
+                    Some(&state),
+                    &test_ctx,
+                    0,
+                )
+            })
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(

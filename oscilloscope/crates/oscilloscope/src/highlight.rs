@@ -44,12 +44,6 @@ impl Tracker {
         self.triggered_at.insert(key.to_string(), now);
     }
 
-    pub fn mark_all<'a>(&mut self, keys: impl IntoIterator<Item = &'a str>, now: Instant) {
-        for key in keys {
-            self.mark(key, now);
-        }
-    }
-
     /// Drops every key whose fade has already ended — keeps the map
     /// from growing for the life of a long run.
     pub fn prune(&mut self, now: Instant) {
@@ -122,7 +116,9 @@ fn as_rgb(color: Color) -> Option<(u8, u8, u8)> {
 /// mixes between — `theme` itself may already be `resolve`'s
 /// *displayed* theme (indexed, or `NO_COLOR`'s own all-`Reset` one),
 /// which has nothing left to mix once it's been downgraded.
-fn named_theme_fade_colors(theme: &Theme) -> Option<((u8, u8, u8), (u8, u8, u8))> {
+type Rgb = (u8, u8, u8);
+
+fn named_theme_fade_colors(theme: &Theme) -> Option<(Rgb, Rgb)> {
     if theme.name == ThemeName::Terminal {
         return None;
     }

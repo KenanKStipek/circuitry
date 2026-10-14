@@ -618,6 +618,13 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
 }
 
+/// `--theme`'s own `clap` value parser (issue #535): the same
+/// [`ThemeName::parse`] error, so a usage error from the flag reads
+/// identically to one from `OSP_THEME`.
+pub fn parse_theme_arg(s: &str) -> Result<ThemeName, String> {
+    ThemeName::parse(s)
+}
+
 /// The colour mode a terminal actually supports (DESIGN.md §535's
 /// highlights section, reused here for theme depth): detected once
 /// at startup from the same three environment signals, in the same

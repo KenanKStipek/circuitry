@@ -77,6 +77,14 @@ struct RunArgs {
     /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
     #[arg(long)]
     log: bool,
+    /// Switches off the update highlights and the scope icon's
+    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    #[arg(long)]
+    no_animation: bool,
+    /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
+    /// this isn't given; `terminal` (today's look) otherwise.
+    #[arg(long, value_parser = theme::parse_theme_arg)]
+    theme: Option<theme::ThemeName>,
 }
 
 #[derive(Parser, Debug)]
@@ -106,6 +114,27 @@ struct WatchArgs {
     /// makes.
     #[arg(long)]
     log: bool,
+    /// Switches off the update highlights and the scope icon's
+    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    #[arg(long)]
+    no_animation: bool,
+    /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
+    /// this isn't given; `terminal` (today's look) otherwise.
+    #[arg(long, value_parser = theme::parse_theme_arg)]
+    theme: Option<theme::ThemeName>,
+}
+
+/// `--theme`, else `OSP_THEME`, else `terminal` (DESIGN.md §6.3) --
+/// shared by both `osp <doc>` and `osp watch`, so the two can never
+/// resolve the same environment differently.
+fn resolve_theme_choice(cli_theme: Option<theme::ThemeName>) -> Result<theme::ThemeName, String> {
+    if let Some(t) = cli_theme {
+        return Ok(t);
+    }
+    match std::env::var("OSP_THEME") {
+        Ok(v) if !v.is_empty() => theme::ThemeName::parse(&v),
+        _ => Ok(theme::ThemeName::Terminal),
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -400,6 +429,18 @@ fn supervise_plain(
 }
 
 fn do_run(args: RunArgs) -> ExitCode {
+    // Issue #535: resolved before anything else runs, same spirit as
+    // the signal watcher just below -- a bad `OSP_THEME` is a usage
+    // error and should exit 2 before this function does anything
+    // else, exactly as an invalid `--theme` already does via clap.
+    let theme_name = match resolve_theme_choice(args.theme) {
+        Ok(name) => name,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
+
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
     // --help` detection, and compiling the plan, both run a blocking
@@ -559,6 +600,8 @@ fn do_run(args: RunArgs) -> ExitCode {
             args.orchestration.clone(),
             engine.name().to_string(),
             signals,
+            args.no_animation,
+            theme_name,
         );
     }
 
@@ -725,6 +768,32 @@ fn push_log_line(log_lines: &mut Vec<String>, line: String) {
     if log_lines.len() > MAX_LOG_LINES {
         log_lines.drain(0..log_lines.len() - MAX_LOG_LINES);
     }
+}
+
+/// Update highlights (DESIGN.md §6.3, issue #535): computes what
+/// changed between the previous render state and this one
+/// (`oscilloscope_core::changes::diff`, front-end independent) and
+/// marks each changed key's fade as starting now. The first
+/// observation (`prev` still `None`) always reports no changes, so
+/// this never needs a separate "is this the first redraw" check of
+/// its own. `--no-animation` skips both the diff and the mark
+/// entirely -- `prev` is still kept up to date either way, so turning
+/// animation on mid-run (there's no key for that today, but a future
+/// one would) picks up from a consistent baseline rather than a stale
+/// one.
+fn mark_highlights(
+    highlights: &mut highlight::Tracker,
+    prev: &mut Option<oscilloscope_core::render::RenderState>,
+    new: &oscilloscope_core::render::RenderState,
+    no_animation: bool,
+) {
+    if !no_animation {
+        let now = Instant::now();
+        for key in oscilloscope_core::changes::diff(prev.as_ref(), new) {
+            highlights.mark(&key, now);
+        }
+    }
+    *prev = Some(new.clone());
 }
 
 /// Sends one cancelling signal to the engine's process group and
@@ -929,6 +998,8 @@ fn run_tui(
     document: String,
     engine_name: String,
     mut signals: Option<SignalWatcher>,
+    no_animation: bool,
+    mut theme_name: theme::ThemeName,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
@@ -942,6 +1013,19 @@ fn run_tui(
     let mut app = App::new(false);
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
+
+    // Issue #535: the colour mode is detected once at startup, never
+    // per redraw, and is shared by every theme choice for this run --
+    // `t` only ever changes which theme is resolved against it, never
+    // the mode itself.
+    let color_mode = theme::ColorMode::from_env();
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    if let Some(note) = resolved_theme.downgrade_note.take() {
+        push_log_line(&mut log_lines, format_log_line(&mut clock, None, &note));
+    }
+    let mut highlights = highlight::Tracker::new();
+    let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
+    let mut theme_banner_until: Option<Instant> = None;
 
     let guard_and_terminal = TerminalGuard::enter()
         .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
@@ -1013,6 +1097,12 @@ fn run_tui(
         start.elapsed().as_secs_f64(),
         &now_rfc3339(),
         &[],
+    );
+    mark_highlights(
+        &mut highlights,
+        &mut prev_render_state,
+        &render_state,
+        no_animation,
     );
     if app.selected_path.is_none() {
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
@@ -1122,6 +1212,12 @@ fn run_tui(
                 &now_rfc3339(),
                 &[],
             );
+            mark_highlights(
+                &mut highlights,
+                &mut prev_render_state,
+                &render_state,
+                no_animation,
+            );
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
@@ -1138,8 +1234,7 @@ fn run_tui(
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
         let visible = keys::visible_rows(&render_state.rows, &app);
-        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
-            render_state.state_rows.iter().collect();
+        let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
         // crossterm directly here at all any more -- see
@@ -1204,6 +1299,26 @@ fn run_tui(
                                     break 'tui;
                                 }
                             }
+                            keys::Action::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                if let Some(note) = resolved_theme.downgrade_note.take() {
+                                    push_log_line(
+                                        &mut log_lines,
+                                        format_log_line(&mut clock, None, &note),
+                                    );
+                                }
+                                push_log_line(
+                                    &mut log_lines,
+                                    format_log_line(
+                                        &mut clock,
+                                        None,
+                                        &format!("theme: {}", theme_name.as_str()),
+                                    ),
+                                );
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
                             keys::Action::Quit => break 'tui,
                             keys::Action::None => {}
                         }
@@ -1227,11 +1342,40 @@ fn run_tui(
             break 'tui;
         }
 
+        // Issue #535's own redraw rule: while any highlight is
+        // fading, or the run is live with animation on (so the scope
+        // icon's own trace keeps moving), mark the frame dirty every
+        // tick -- the existing `REDRAW_INTERVAL` cap still paces the
+        // actual draw. With neither, this adds no redraws beyond what
+        // was already dirty.
+        let highlight_now = Instant::now();
+        if !no_animation {
+            highlights.prune(highlight_now);
+            if highlights.has_active(highlight_now) || exit_status.is_none() {
+                dirty = true;
+            }
+        }
+
         if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
             let details = app
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, current_state.as_ref()));
+            let icon_frame = if no_animation {
+                0
+            } else {
+                (start.elapsed().as_millis() / REDRAW_INTERVAL.as_millis()) as u64
+            };
+            let banner = theme_banner_until
+                .filter(|&until| highlight_now < until)
+                .map(|_| theme_name.as_str());
+            let ctx = tui::DrawCtx {
+                theme: &resolved_theme.theme,
+                highlights: &highlights,
+                now: highlight_now,
+                color_mode,
+                theme_banner: banner,
+            };
             let drew = terminal.draw(|f| {
                 tui::draw(
                     f,
@@ -1240,6 +1384,8 @@ fn run_tui(
                     &log_lines,
                     &mut app,
                     current_state.as_ref(),
+                    &ctx,
+                    icon_frame,
                 );
             });
             last_draw = Instant::now();
@@ -1639,6 +1785,14 @@ fn supervise_plain_watch(
 }
 
 fn do_watch(args: WatchArgs) -> ExitCode {
+    let theme_name = match resolve_theme_choice(args.theme) {
+        Ok(name) => name,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
+
     let target = PathBuf::from(&args.target);
     // P2-4: a typo'd path used to be silently treated as a direct
     // `state.live.json` target and waited on forever -- with no
@@ -1698,7 +1852,14 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // this one just detaches (§6.3), since watch owns no engine of
     // its own to ever cancel.
     if !effective_log_mode(args.log) {
-        return run_tui_watch(run_dir, live_state_path, plan, args.target.clone());
+        return run_tui_watch(
+            run_dir,
+            live_state_path,
+            plan,
+            args.target.clone(),
+            args.no_animation,
+            theme_name,
+        );
     }
 
     let mut clock = Clock::new();
@@ -1762,6 +1923,8 @@ fn run_tui_watch(
     live_state_path: PathBuf,
     plan: PlanTree,
     document: String,
+    no_animation: bool,
+    mut theme_name: theme::ThemeName,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -1780,6 +1943,15 @@ fn run_tui_watch(
     let start = Instant::now();
 
     let mut app = App::new(true);
+
+    let color_mode = theme::ColorMode::from_env();
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    if let Some(note) = resolved_theme.downgrade_note.take() {
+        push_log_line(&mut log_lines, format_log_line(&mut clock, None, &note));
+    }
+    let mut highlights = highlight::Tracker::new();
+    let mut prev_render_state: Option<oscilloscope_core::render::RenderState> = None;
+    let mut theme_banner_until: Option<Instant> = None;
 
     let guard_and_terminal = TerminalGuard::enter()
         .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
@@ -1845,6 +2017,12 @@ fn run_tui_watch(
         start.elapsed().as_secs_f64(),
         &now_rfc3339(),
         &[],
+    );
+    mark_highlights(
+        &mut highlights,
+        &mut prev_render_state,
+        &render_state,
+        no_animation,
     );
     if app.selected_path.is_none() {
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
@@ -1975,6 +2153,12 @@ fn run_tui_watch(
                 &now_rfc3339(),
                 &[],
             );
+            mark_highlights(
+                &mut highlights,
+                &mut prev_render_state,
+                &render_state,
+                no_animation,
+            );
             last_rebuild = Instant::now();
             if app.follow {
                 if let Some(target) = App::follow_target(&render_state.rows) {
@@ -1987,8 +2171,7 @@ fn run_tui_watch(
             }
         }
         let visible = keys::visible_rows(&render_state.rows, &app);
-        let state_visible: Vec<&oscilloscope_core::render::StateRow> =
-            render_state.state_rows.iter().collect();
+        let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
         // Third finding: never call into
         // crossterm directly here at all any more -- see
@@ -2037,6 +2220,26 @@ fn run_tui_watch(
                                 local_signal = Some(ForwardSignal::Int);
                                 break 'tui;
                             }
+                            keys::Action::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                if let Some(note) = resolved_theme.downgrade_note.take() {
+                                    push_log_line(
+                                        &mut log_lines,
+                                        format_log_line(&mut clock, None, &note),
+                                    );
+                                }
+                                push_log_line(
+                                    &mut log_lines,
+                                    format_log_line(
+                                        &mut clock,
+                                        None,
+                                        &format!("theme: {}", theme_name.as_str()),
+                                    ),
+                                );
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
                             keys::Action::Cancel | keys::Action::None => {}
                         }
                         dirty = true;
@@ -2056,11 +2259,34 @@ fn run_tui_watch(
             break 'tui;
         }
 
+        let highlight_now = Instant::now();
+        if !no_animation {
+            highlights.prune(highlight_now);
+            if highlights.has_active(highlight_now) || !ended {
+                dirty = true;
+            }
+        }
+
         if dirty && last_draw.elapsed() >= REDRAW_INTERVAL {
             let details = app
                 .selected_path
                 .as_deref()
                 .map(|p| oscilloscope_core::render::details_for(p, &plan, last_state.as_ref()));
+            let icon_frame = if no_animation {
+                0
+            } else {
+                (start.elapsed().as_millis() / REDRAW_INTERVAL.as_millis()) as u64
+            };
+            let banner = theme_banner_until
+                .filter(|&until| highlight_now < until)
+                .map(|_| theme_name.as_str());
+            let ctx = tui::DrawCtx {
+                theme: &resolved_theme.theme,
+                highlights: &highlights,
+                now: highlight_now,
+                color_mode,
+                theme_banner: banner,
+            };
             let drew = terminal.draw(|f| {
                 tui::draw(
                     f,
@@ -2069,6 +2295,8 @@ fn run_tui_watch(
                     &log_lines,
                     &mut app,
                     last_state.as_ref(),
+                    &ctx,
+                    icon_frame,
                 );
             });
             last_draw = Instant::now();

@@ -57,6 +57,8 @@ pub enum Action {
     /// `osp watch` always just detaches — the same three cases a real
     /// forwarded SIGINT already covers in plain mode.
     CtrlC,
+    /// `t` (issue #535): cycle to the next colour theme, wrapping.
+    CycleTheme,
 }
 
 /// The TUI's whole navigation/dialog state (DESIGN.md §6.3). `running`
@@ -300,6 +302,7 @@ impl App {
                     Pane::Details | Pane::State => Pane::Tree,
                 };
             }
+            KeyCode::Char('t') => return Action::CycleTheme,
             KeyCode::Char('f') => self.follow = !self.follow,
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
             KeyCode::Char('/') => {
