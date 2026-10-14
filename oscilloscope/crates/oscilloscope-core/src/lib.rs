@@ -8,9 +8,12 @@
 //! diffing, engine commands and process supervision. The terminal UI
 //! (`ratatui`) lands in O-2, in the `oscilloscope` binary crate only.
 
+pub mod changes;
 pub mod config_discovery;
 pub mod diff;
 pub mod engine;
+pub mod icon;
+pub mod layout;
 pub mod model;
 pub mod observe;
 pub mod plan;

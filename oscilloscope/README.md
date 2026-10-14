@@ -97,24 +97,29 @@ On a TTY, `osp <doc>` and `osp watch <dir>` show the interactive terminal UI
 (DESIGN.md §6.3) instead of the plain-text stream. `--log`, or any non-TTY
 stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 
-On a terminal big enough (120×40 shows every pane usefully): a header; a
-left column of the orchestration pane (the plan tree, a status glyph,
-duration, loop `n/total` and the provider/model in a dim colour) over the
-selected row's own details; a right column of the state pane (every effect
-node, most recently updated first, with its abbreviated value and its own
-or its subtree's tokens), a nested `tokens by key` treemap (cell area
-proportional to tokens, coloured by status, squarified and laid out as pure
-integer geometry in `oscilloscope-core`), and the log pane (the same lines
-`--log` prints, plus the engine's stderr); and a token bar across the full
-bottom width (the `↑`/`↓` totals as bars, and what's in flight — an
-estimated input for every prompt currently running, from
-`ceil(chars(prompt_sent) / 4)`, and how many). On a smaller terminal, panes
-drop in this order until the rest fits — the header and the token bar never
-disappear:
+On a terminal big enough (120×40 shows every pane usefully): a header (a
+small animated oscilloscope icon to its left, on a wide enough terminal); a
+left column of the details pane (the selected row's own meta, and, for a
+prompt, a `sent`/`received` block with a snippet and token count each)
+over the orchestration pane (the plan tree, a status glyph, duration, loop
+`n/total` and the provider/model in a dim colour), the column split and
+the left column's own row split both at the golden section; a right column
+of a nested `tokens by key` treemap (cell area proportional to tokens,
+coloured by status, squarified and laid out as pure integer geometry in
+`oscilloscope-core`), the state pane as a tree (every effect node nested
+by depth, latest-or-current first, with its status, a dim model/provider/
+duration/retries/loop-progress summary and its own or its subtree's
+tokens — no value or error text, read those in the details pane), and the
+log pane (the same lines `--log` prints, plus the engine's stderr); and a
+token bar across the full bottom width (the `↑`/`↓` totals as bars, and
+what's in flight — an estimated input for every prompt currently running,
+from `ceil(chars(prompt_sent) / 4)`, and how many). On a smaller terminal,
+panes drop in this order until the rest fits — the header and the token
+bar never disappear:
 
 1. below 100×30: the treemap;
 2. below 90×24: the state pane too (the right column becomes the log pane alone);
-3. below 80×20: the two-column layout itself, down to one column (orchestration, details, log stacked).
+3. below 80×20: the two-column layout itself, down to one column (details, orchestration, log stacked); the scope icon stops being drawn at this width too.
 
 Follow is on when the TUI starts: the orchestration pane's own selection
 tracks the running effect, and the details pane shows it with no key press.
@@ -123,20 +128,33 @@ follow off; `f` turns it back on. The orchestration pane scrolls, keeping
 the selected row in view, with a `12/48`-style position in its own border
 whenever a row is hidden above or below; the details and state panes scroll
 the same way once they have focus (`tab` cycles orchestration → details →
-state), and the state pane's own selection is independent of the
-orchestration pane's.
+state), and the state pane's own selection (and its own collapsed set) is
+independent of the orchestration pane's.
+
+Whatever just changed gets a soft background tint that fades out over about
+a second, so the eye goes to it: a row's status, a state row, a treemap
+cell, a new log line or the token totals. The first observation never
+highlights anything (so `osp watch` attaching to a finished run opens on a
+calm screen), and neither does elapsed time, selection, scrolling, the
+filter or a resize. `--theme <name>` (or `OSP_THEME`) paints the whole
+screen in one of ten named colour themes (`dracula`, `nord`, `solarized-
+dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
+`tokyo-night`, `one-dark`) instead of the terminal's own default colours;
+`t` cycles through them live. `--no-animation` turns the highlight fade and
+the scope icon's own trace off, both on `osp <doc>` and `osp watch`.
 
 | Key | Action |
 |---|---|
 | `↑↓` / `j`/`k` | move (the focused pane's own selection, or the details pane's scroll) |
 | `PgUp`/`PgDn` | move a page |
 | `Home`/`End`, `g`/`G` | jump to the first / last row |
-| `←` / `→` | collapse / expand (orchestration pane) |
+| `←` / `→` | collapse / expand (orchestration or state pane) |
 | `tab` | orchestration → details → state |
 | `f` | follow the running row (on by default) |
 | `e` | errors only |
 | `/` | filter |
 | `v` | show the full value; `v` again cycles between the prompt and the value when the row has both |
+| `t` | cycle the colour theme |
 | `c` | cancel, with a confirm (the same as a confirmed `q`) |
 | `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osp watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
 | Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osp watch` always just detaches |

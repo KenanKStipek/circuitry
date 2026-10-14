@@ -471,8 +471,9 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 00:05.7 ■ run ok  5.7s · 12 effects · ↑3 ↓1
 ```
 
-### 6.3 TUI (shipped, issue #434; the layout, state pane, treemap and
-token bar below, issue #527)
+### 6.3 TUI (shipped, issue #434; the state pane, treemap and token bar,
+issue #527; the golden-section layout, the state tree, update
+highlights, the scope icon and colour themes, issue #535)
 
 `ratatui` (`=0.30.0`, default features off, `crossterm` + `underline-color`
 only) and `crossterm` `0.29` (the version ratatui's own crossterm backend
@@ -490,12 +491,20 @@ squarified treemap layout itself (`treemap::layout`, below) is pure
 integer geometry, deterministic for the same input, computed in
 `oscilloscope-core` and only ever drawn, never computed, by `tui.rs`.
 
-**Layout.** A header across the full width; a left column of the
-orchestration pane over the details pane; a right column of the state
-pane, the `tokens by key` treemap and the log pane; and the token bar
-across the full bottom width. On a terminal at least 120×40, every pane
-shows useful content. Below that, panes drop in this order until the rest
-fits — the header and the token bar never disappear:
+**Layout.** A header across the full width (the scope icon, below, to its
+left on a wide enough terminal); a left column of the details pane over
+the orchestration pane; a right column of the `tokens by key` treemap,
+the state pane and the log pane; and the token bar across the full
+bottom width. The column split, and the left column's own row split, are
+both the golden section (`oscilloscope_core::layout::golden_section`/
+`left_column_width`): the left column is `round(W / φ²)` columns of the
+body's own width `W`, floored at `LEFT_MIN` (30) — the golden section
+already clears that floor at the two-column threshold itself (80 columns
+gives 31), so the floor only guards a later threshold change — and the
+details pane is `round(H / φ²)` rows of the left column's own height `H`,
+the orchestration pane the rest. On a terminal at least 120×40, every
+pane shows useful content. Below that, panes drop in this order until
+the rest fits — the header and the token bar never disappear:
 
 1. below 100 columns or 30 rows (`thresholds::TREEMAP_MIN_WIDTH`/
    `_MIN_HEIGHT` in `tui.rs`): the treemap, leaving the right column as
@@ -503,8 +512,11 @@ fits — the header and the token bar never disappear:
 2. below 90 columns or 24 rows (`STATE_PANE_MIN_WIDTH`/`_MIN_HEIGHT`): the
    state pane too, leaving the right column as the log pane alone;
 3. below 80 columns or 20 rows (`TWO_COLUMN_MIN_WIDTH`/`_MIN_HEIGHT`): the
-   two-column split itself, down to one column stacking the orchestration
-   pane, the details pane and the log pane (45%/25%/the rest).
+   two-column split itself, down to one column stacking the details
+   pane, the orchestration pane and the log pane (25%/45%/the rest) —
+   details still sits above the orchestration pane here too. The scope
+   icon is not drawn below this same width threshold; the header takes
+   the full width instead.
 
 **Header (unchanged):** document, engine, run state (running / ok / failed
 / cancelled / aborted), elapsed time, effects done out of planned, tokens
@@ -570,43 +582,86 @@ Collapse/expand (`←`/`→`), `e` and `/` all act on the rows the pane
 already shows, same as before; the scroll position follows whatever
 those leave visible.
 
-**The details pane** moves under the orchestration pane; its own content
-is unchanged. It scrolls when it has focus (`↑↓`, `PgUp`/`PgDn`,
+**The details pane** moves above the orchestration pane (issue #535).
+For any node whose `meta` has `prompt_sent` (a prompt), two blocks come
+right after the `path`/`type` lines, before the rest of the meta list:
+`sent  ↑ N tokens` with a snippet of `meta.prompt_sent`, and `received
+ ↓ N tokens` with a snippet of the reply — `meta.answer` when present
+(the raw reply for `boolean`/`number` prompts), else the node's own
+value. Both token counts are `model::node_tokens` (the same `_total`-
+first rule the header/token bar/state pane/treemap all use); a still-
+running prompt's `sent` shows the token bar's own in-flight estimate
+(`≈ceil(chars(prompt_sent)/4)`) and `received` reads "waiting for the
+reply", since neither engine reports output tokens before a prompt
+finishes. A prompt that failed before any reply shows its error as
+always, and no `received` block. Snippets collapse whitespace runs
+(including newlines) to one space and cut at 200 characters with `…`.
+`tokens_sent`/`tokens_received` drop out of the plain meta list for
+these nodes (the block headers already carry them), and the old
+`prompt_sent (v for full):`/`value (v for full):` blocks don't appear
+either — `v` still opens the full prompt or value. Every other node's
+details are unchanged.
+
+Measured on both engines with the scripted adapter: a model-mode `if`/
+`while` condition's own container node gets `meta.answer`, `adapter`,
+`model` and `tokens_sent`/`tokens_received` on both `cof` (`core/
+conditional.py`'s `_evaluate_model`) and electricity (`electricity-vm`'s
+`exec::condition_model`) — but *neither* engine ever writes `meta.
+prompt_sent` for one, so such a node never gets the two blocks above at
+all, only today's plain meta list. The issue's own premise (that these
+blocks also cover model-mode conditions) does not hold on either
+engine as measured; extending it would need upstream work in both
+engines, out of scope for `oscilloscope/`-only changes.
+
+The details pane scrolls when it has focus (`↑↓`, `PgUp`/`PgDn`,
 `Home`/`End`, `g`/`G`, via `ratatui::widgets::Paragraph::scroll`), and
 returns to the top the instant the orchestration pane's own selection
 changes (`App::select_tree_path`).
 
 **Focus** (`tab`) cycles orchestration → details → state →
-orchestration, each highlighted with the existing cyan border. The
-treemap and the token bar have no pane of their own to focus.
+orchestration, each highlighted with the theme's own focused-border
+colour. The treemap and the token bar have no pane of their own to
+focus.
 
-**The state pane** (`render::build_state_rows`, `tui.rs`'s `draw_state`).
-Lists `flatten_state`'s own `{value, meta}` paths (every one but `prime`
-itself), most recently updated first — a node's update time is its own
+**The state pane** (`render::build_state_rows`, `tui.rs`'s `draw_state`)
+is a tree, not a flat list (issue #535). Every `{value, meta}` node
+under `prime` is a row, nested under its parent and indented by depth;
+a container with no node of its own (a loop's own `iter_N`) is a row
+too, so the tree has no gaps — `render::build_state_tree` groups every
+path `flatten_state` returns by splitting it on `.`, synthesising a
+bare container wherever an intermediate segment has no entry of its
+own. A row is labelled with its own key only (never the full path).
+Shows no value or error text at all — the details pane and `v` are
+where those are read — only: the status glyph; the model for a prompt
+or else the provider for a tool, the duration once finished, `retries
+N` when `retries_used > 0`, and `n/total` for a loop, all in dim text
+(`None` for a bare container, which has nothing of its own to
+summarize); and `↑sent ↓received` on a second line, only when at least
+one is nonzero — a leaf's own tokens, or (for a container, bare or
+not) the sum over its whole subtree (`model::subtree_tokens`).
+
+Order is latest-or-current first, at every level, ties broken by key
+(`render::state_subtree_recency`): a row's recency is the latest update
+time anywhere in its own subtree (a node's own update time is its
 `completed_at`, or `created_at` while it has none, parsed as a real
-instant (`diff::parse_instant`, now `pub`) rather than compared as a raw
-string, with ties broken by path. Each row shows the path relative to
-`prime`, then either: the first line of its error, in red, if it has one
-(a multi-line stderr tail would otherwise break the pane's own
-one-line-per-entry shape); its own abbreviated value (one line, compact
-JSON for anything but a string, a quoted string for a string, its own
-newlines escaped) if it has one; or its status glyph, if it's running
-with no value yet. A second line shows `↑sent ↓received`, only when at
-least one is nonzero — a leaf's own tokens, or (for a container) the sum
-over its whole subtree (`model::subtree_tokens`). The pane scrolls when
-it has focus, with its own selection (`App::state_selected_path`) kept
-fully independent of the orchestration pane's own — selecting a row here
-never moves the orchestration selection, and vice versa.
+instant via `diff::parse_instant`, never compared as a raw string), and
+a running row anywhere in the subtree makes the whole row count as
+current, sorting above its finished siblings regardless of timestamps.
+Status for a row with its own node reads `statuses` (from events/plan
+inference) when it has an entry for that exact path, else the node's
+own running/ok/failed shape; a bare container with neither falls back
+to the same rule a tree-loop pass's own container row already uses
+(any running descendant makes it running, else any unhandled failure
+makes it failed, else done).
 
-Both the path label and the value/error are cut to the pane's own real
-width with `…` (`tui.rs`'s own job, not `render.rs`'s — the pane's
-width is a terminal concern): the label gets a *left*-truncated share of
-it (`tui::truncate_label_left`, `state_pane_label_width`, scaling with
-the pane), so two entries sharing a long common prefix (`loop.iter_2.
-step`/`loop.iter_2.other`) stay distinct — a right-truncated `loop.
-iter_2…` would show identical text for both; the value/error gets
-whatever's left, truncated from the right (`tui::truncate_label`), since
-its own start is usually the more identifying part.
+Collapse/expand (`←`/`→`) works here too, when the state pane has
+focus, on its own independent collapsed set (`App::state_collapsed`,
+`keys::visible_state_rows` — the same hidden-subtree rule `visible_
+rows` already applies to the orchestration pane's own `App::
+collapsed`). Everything starts expanded. The pane scrolls when it has
+focus, with its own selection (`App::state_selected_path`) kept fully
+independent of the orchestration pane's own — selecting a row here
+never moves the orchestration selection, and vice versa.
 
 **The `tokens by key` treemap** (`oscilloscope-core/src/treemap.rs`,
 drawn by `tui.rs`'s `draw_treemap`). A proportional-area chart of the
@@ -792,20 +847,127 @@ can't start (an exotic CI pty, a stdout swapped out from under osp), both
 `osp <doc>` and `osp watch` fall back to their own plain supervise/watch
 loop rather than a bare, signal-blind wait. `osp` itself being
 `SIGKILL`ed is the one exception (§4.1): nothing can run cleanup code
-after that at all. A redraw, and the render state (plan-tree rows, state
-rows, the treemap's own tree, header counts) it draws, are rebuilt at
-most once every `REDRAW_INTERVAL` and only when an observation, a key or
-a resize actually changed something — forced at least once a second
-regardless, so the header's own elapsed time still visibly ticks while
-the run is otherwise quiet. The state pane and the treemap tree are both
-built from the one `flatten_state` call `render::build` already makes
-for the plan tree, not a second pass of their own; measured against a
-synthetic 2,000-node state, one redraw stays well under
-`REDRAW_INTERVAL` (`render::tests::redraw_from_a_2000_node_state_stays_
-well_under_the_redraw_interval`). That measurement times `render::build`
-alone, which leaves out the treemap's own layout and the ratatui draw
-itself; `tui::golden_tests::drawing_a_2000_node_state_stays_well_under_
-the_redraw_interval` times one `TestBackend` draw of the same state too.
+after that at all. The render state (plan-tree rows, state rows, the
+treemap's own tree, header counts) is rebuilt at most once every
+`REDRAW_INTERVAL` and only when an observation, a key or a resize
+actually changed something — forced at least once a second regardless,
+so the header's own elapsed time still visibly ticks while the run is
+otherwise quiet. The state pane and the treemap tree are both built from
+the one `flatten_state` call `render::build` already makes for the plan
+tree, not a second pass of their own; measured against a synthetic
+2,000-node state, one redraw stays well under `REDRAW_INTERVAL`
+(`render::tests::redraw_from_a_2000_node_state_stays_well_under_the_
+redraw_interval`). That measurement times `render::build` alone, which
+leaves out the treemap's own layout and the ratatui draw itself;
+`tui::golden_tests::drawing_a_2000_node_state_stays_well_under_the_
+redraw_interval` times one `TestBackend` draw of the same state too.
+
+The actual *draw* is a separate cap from the rebuild above
+(`REDRAW_INTERVAL`, 100ms, the same tick the icon's own trace moves by):
+issue #535's own redraw rule marks the frame dirty every tick, beyond
+whatever an observation/key/resize already marked it, while any update
+highlight is still fading (`highlight::Tracker::has_active`) or the run
+is live with animation on (so the icon's trace keeps moving) — with
+neither, this adds nothing, so an idle, ended screen with `--no-
+animation` costs no extra redraws at all. `REDRAW_INTERVAL` still caps
+how often the actual draw happens either way, and ratatui's own diff
+against the previous frame means a tick with nothing visually different
+(most of an icon-animation-only tick) writes nothing to the terminal at
+all.
+
+**Update highlights** (issue #535). A soft background tint on whatever
+just changed, fading to nothing over about 1.2 seconds, eased out. What
+changed between two redraws is computed front-end-independently, in
+`oscilloscope-core::changes::diff`, from the previous `RenderState` and
+the new one, keyed by stable strings (`row:<path>`, `state:<path>`,
+`treemap:<path>`, `log:<index>`, `tokenbar`, `header:status`/`:effects`/
+`:tokens`) — a row's status or loop progress changing, a state row that's
+new or whose status/dim meta/tokens changed, a treemap cell that's new
+or whose total grew (never a shrink), a new log line, the token bar, and
+the header's run state/effects/tokens. A treemap cell marks only when
+its own total grew (or it's new) and no direct child's did too, since a
+container's total is always the sum of its children and tinting every
+ancestor whose own total rose along with a leaf's would point at
+nothing. The first observation (`old:
+None`) never reports anything, so `osp watch` attaching to an already-
+finished run opens on a calm screen; elapsed time, selection, scrolling,
+the filter, collapse sets and a resize are not part of `RenderState` at
+all, so none of them can ever appear as a change. Every redraw rebuild
+feeds its own diff into a `highlight::Tracker` (`main.rs`'s `mark_
+highlights`), which only ever remembers the most recent trigger time per
+key — a retrigger restarts that key's own fade rather than stacking a
+second one. `Tracker::style_for` turns a fade's own linear progress,
+eased out, into a `Style` for the active theme and colour mode
+(`highlight.rs`, in the `oscilloscope` crate, never `oscilloscope-core`
+— the fade's own timing and styling are a front-end concern): a named
+theme fades its own highlight tint to its own background in RGB (or the
+nearest xterm-256 index on a 256-colour terminal); `terminal` has no
+fixed background to fade toward, so it keeps a stepped ramp instead (6
+truecolour steps, 3 indexed steps, or bold for about the first half-
+second on 16 colours/`NO_COLOR`), always ending in no override at all.
+The ramp's own tint is a low-chroma slate blue, `rgb(92, 108, 122)`
+(HSV saturation ~0.25), chosen to read as subtle rather than an alert
+on a dark terminal while staying legible under dark text on a light
+one; each step desaturates it toward a neutral mid grey at roughly
+the same lightness, `rgb(107, 107, 107)`, never toward black — mixing
+toward black was tried first and either clashed with light default
+text (near full strength, on a dark terminal) or buried dark default
+text (near the ramp's dark end, on a light one).
+`--no-animation` (both `osp <doc>` and `osp watch`) skips marking
+entirely, so `Tracker::has_active` never reports anything after it.
+
+**The oscilloscope icon** (`oscilloscope_core::icon` for the trace's own
+dot math, `oscilloscope`'s own `icon.rs` for the braille/bezel drawing,
+issue #535). Sits left of the header, 3 rows high (the header's own
+height) and 17 columns wide: one rounded bezel, split by a `┬`/`┴`
+divider into a 12-column braille screen (24×4 dots, `icon::
+trace_dots`) and a 2-column knob strip holding a single `◉` on the
+middle row — one device, not two boxes side by side. While the run is
+live, a sine-like wave scrolls
+one dot column per frame, a frame being the same `REDRAW_INTERVAL` tick
+the redraw rule above forces while live; once the run has ended (or
+with `--no-animation`, which freezes the frame at 0 while live), the
+trace is a single still, flat line — `osp watch` on an already-ended run
+shows the flat line from its own first frame. The trace's own colour
+follows run state through the active theme (`icon_trace_ok`/`_failed`/
+`_cancelled`); the bezel is always `icon_bezel` (dim). The icon is not
+drawn below the two-column width threshold (80 columns); the header
+takes the full width there instead. `trace_dots` takes its own frame
+index as a plain `u64`, never `Instant::now()`, so a test pins an exact
+frame.
+
+**Colour themes** (`oscilloscope`'s own `theme.rs`, issue #535). One
+`Theme` of named colour roles (background, text, border/focused border,
+dim text, a colour per status kind, error, the token bar's in/out
+colours, the treemap's on-accent text, the highlight tint, and the
+icon's bezel/trace colours) is the only place a `ratatui::style::Color`
+literal lives in the `oscilloscope` crate; every draw function reads its
+colours from a `&Theme` (`tui::DrawCtx`), never a literal of its own.
+`terminal`, the default, reuses the terminal's own ANSI colours and
+paints no background — choosing no theme looks identical to before this
+issue. The other ten (`dracula`, `nord`, `solarized-dark`/`-light`,
+`gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`, `tokyo-night`,
+`one-dark`) are fixed RGB palettes from each project's own published
+colour specification, paint the whole screen's own background, and have
+a handful of roles adjusted per theme wherever the published value
+didn't clear a 4.5:1 (3:1 for dim text) WCAG contrast ratio against that
+background — documented, per role, in `theme.rs` itself.
+
+`--theme <name>` (both `osp <doc>` and `osp watch`) chooses a theme;
+with neither flag, `OSP_THEME` applies; with neither, `terminal`. An
+unknown name from either is a usage error listing the valid ones. `t`
+cycles live through the eleven names in listed order, wrapping, without
+rebuilding the render state; the header shows the new name for about 2
+seconds, and the log pane gets a `theme: <name>` line. `ColorMode`
+(`theme::ColorMode::from_env`) is detected once at startup from
+`NO_COLOR`/`COLORTERM`/`TERM`, in that priority order, and shared by
+every theme choice for the run: truecolour keeps a named theme's RGB as
+is; 256 colours maps every role to the nearest xterm-256 index
+(`theme::nearest_xterm256`, the standard 6×6×6 cube plus the 24-step
+greyscale ramp, picking whichever is closer); 16 colours falls back to
+`terminal` with one log line saying so; `NO_COLOR` always wins, over any
+theme, resetting every role to the terminal's own default — structure
+still reads from glyphs and modifiers, never colour alone.
 
 ### 6.4 Tests
 
@@ -829,6 +991,7 @@ the_redraw_interval` times one `TestBackend` draw of the same state too.
 
   Live tests are never run.
 - **End-to-end with electricity** (`tests/e2e_electricity.rs`, issue #431's lane E2): the same shape as `e2e_cof.rs`, against an `electricity` built with `--features test-tools`, behind `OSP_E2E_ELECTRICITY=1`.
+- **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/treemap/log/token-bar/header change each, a treemap shrink staying silent, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSP_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 
 ---

@@ -57,6 +57,8 @@ pub enum Action {
     /// `osp watch` always just detaches — the same three cases a real
     /// forwarded SIGINT already covers in plain mode.
     CtrlC,
+    /// `t` (issue #535): cycle to the next colour theme, wrapping.
+    CycleTheme,
 }
 
 /// The TUI's whole navigation/dialog state (DESIGN.md §6.3). `running`
@@ -71,6 +73,10 @@ pub struct App {
     /// entry there does not move the orchestration selection".
     pub state_selected_path: Option<String>,
     pub collapsed: std::collections::HashSet<String>,
+    /// The state pane's own collapsed set (issue #535) — deliberately
+    /// independent of `collapsed` (the orchestration pane's own),
+    /// same as `state_selected_path` is independent of `selected_path`.
+    pub state_collapsed: std::collections::HashSet<String>,
     pub pane: Pane,
     pub follow: bool,
     pub errors_only: bool,
@@ -111,6 +117,7 @@ impl App {
             selected_path: None,
             state_selected_path: None,
             collapsed: std::collections::HashSet::new(),
+            state_collapsed: std::collections::HashSet::new(),
             pane: Pane::Tree,
             // Issue #527: "follow is on when the TUI starts".
             follow: true,
@@ -272,6 +279,18 @@ impl App {
                     self.collapsed.remove(path);
                 }
             }
+            // Issue #535: the state pane collapses/expands with the
+            // same two keys, on its own independent collapsed set.
+            KeyCode::Left if self.pane == Pane::State => {
+                if let Some(path) = &self.state_selected_path {
+                    self.state_collapsed.insert(path.clone());
+                }
+            }
+            KeyCode::Right if self.pane == Pane::State => {
+                if let Some(path) = &self.state_selected_path {
+                    self.state_collapsed.remove(path);
+                }
+            }
             KeyCode::Tab => {
                 // Finding 12: on a small terminal the state pane isn't
                 // drawn at all (`tui::draw` zeroes `state_viewport` the
@@ -283,6 +302,7 @@ impl App {
                     Pane::Details | Pane::State => Pane::Tree,
                 };
             }
+            KeyCode::Char('t') => return Action::CycleTheme,
             KeyCode::Char('f') => self.follow = !self.follow,
             KeyCode::Char('e') => self.errors_only = !self.errors_only,
             KeyCode::Char('/') => {
@@ -498,6 +518,29 @@ fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) ->
     }
     let prefix = format!("{}.", row.path);
     rows.iter().any(|r| r.path.starts_with(&prefix) && pred(r))
+}
+
+/// Everything currently visible in the state pane (issue #535): a
+/// collapsed row's own descendants are dropped, same rule `visible_
+/// rows` uses for the orchestration pane's own `app.collapsed` — but
+/// against `app.state_collapsed` instead, and with no errors-only/
+/// filter view (the state pane has neither).
+pub fn visible_state_rows<'a>(rows: &'a [StateRow], app: &App) -> Vec<&'a StateRow> {
+    let mut out = Vec::new();
+    let mut hidden_prefix: Option<String> = None;
+    for row in rows {
+        if let Some(prefix) = &hidden_prefix {
+            if row.path.starts_with(prefix.as_str()) {
+                continue;
+            }
+            hidden_prefix = None;
+        }
+        if app.state_collapsed.contains(&row.path) {
+            hidden_prefix = Some(format!("{}.", row.path));
+        }
+        out.push(row);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -919,13 +962,15 @@ mod tests {
     fn state_row(path: &str) -> StateRow {
         StateRow {
             path: path.to_string(),
+            depth: 0,
+            key: path.rsplit('.').next().unwrap().to_string(),
+            has_children: false,
             status: RowStatus {
                 kind: StatusKind::Done,
                 skip_reason: None,
                 retrying: false,
             },
-            value_preview: Some("x".to_string()),
-            error_preview: None,
+            dim: None,
             tokens: None,
         }
     }
@@ -969,5 +1014,48 @@ mod tests {
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::Home), &visible, &[], true, false);
         assert_eq!(app.details_scroll, 0);
+    }
+
+    #[test]
+    fn t_returns_the_cycle_theme_action() {
+        let mut app = App::new(false);
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('t')), &[], &[], true, false),
+            Action::CycleTheme
+        );
+    }
+
+    fn state_row_with_children(path: &str, has_children: bool) -> StateRow {
+        let mut row = state_row(path);
+        row.has_children = has_children;
+        row
+    }
+
+    #[test]
+    fn left_right_collapse_and_expand_the_state_pane_independently_of_the_tree_pane() {
+        let rows = [
+            state_row_with_children("fan", true),
+            state_row("fan.iter_0"),
+        ];
+        let state_rows: Vec<&StateRow> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.pane = Pane::State;
+        app.state_selected_path = Some("fan".to_string());
+        app.handle_key(key(KeyCode::Left), &[], &state_rows, true, false);
+        assert!(app.state_collapsed.contains("fan"));
+        assert!(
+            app.collapsed.is_empty(),
+            "the orchestration pane's own collapsed set must be untouched"
+        );
+        let visible = visible_state_rows(&rows, &app);
+        assert_eq!(
+            visible.len(),
+            1,
+            "a collapsed row's own children are hidden"
+        );
+        app.handle_key(key(KeyCode::Right), &[], &state_rows, true, false);
+        assert!(!app.state_collapsed.contains("fan"));
+        let visible = visible_state_rows(&rows, &app);
+        assert_eq!(visible.len(), 2);
     }
 }

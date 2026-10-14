@@ -170,22 +170,59 @@ pub struct Details {
     pub error: Option<String>,
     pub prompt_sent: Option<String>,
     pub value: Option<String>,
+    /// The `sent`/`received` blocks (issue #535): set only for a node
+    /// whose `meta` has `prompt_sent` (a prompt) -- replacing the
+    /// separate `prompt_sent`/`value` blocks above for exactly those
+    /// nodes. `received` is `None` when the prompt failed before any
+    /// reply (the error is shown instead, as always).
+    pub sent: Option<TokenBlock>,
+    pub received: Option<TokenBlock>,
 }
 
-/// One `state` pane entry (DESIGN.md §6.3, issue #527): one of
-/// `flatten_state`'s own `{value, meta}` paths, most recently updated
-/// first. `value_preview` is `None` exactly when there is nothing
-/// useful to show instead of the status glyph: a running node with no
-/// value yet, or (regardless of status) once `error_preview` already
-/// has something to show in its place.
+/// One of the details pane's `sent`/`received` blocks (issue #535).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenBlock {
+    /// `None` only while `received` is still waiting for a reply.
+    pub snippet: Option<String>,
+    /// `None` only while `received` is still waiting for a reply --
+    /// `sent` always has a number, actual once the prompt has gone
+    /// out, estimated while it's still in flight.
+    pub tokens: Option<u64>,
+    /// `true` for `sent`'s own in-flight estimate; always `false` for
+    /// `received` (DESIGN.md §6.3: neither engine reports output
+    /// tokens before a prompt finishes, so there is no estimate to
+    /// mark, only the waiting state below).
+    pub estimated: bool,
+    /// `received` only: the prompt is still running, so there is no
+    /// reply yet at all, estimated or otherwise.
+    pub waiting: bool,
+}
+
+/// A tree, not a flat list (issue #535): every `{value, meta}` node
+/// under `prime` is a row, nested under its parent and indented by
+/// `depth` — including a container with no node of its own (a loop's
+/// `iter_N`), so the tree has no gaps. No value or error text: the
+/// details pane and `v` are where those are read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateRow {
     /// Relative to `prime` (`"summarize"`, `"loop.iter_2.step"`) —
-    /// `prime` itself is never one of these rows.
+    /// `prime` itself is never one of these rows. Doubles as this
+    /// row's own stable key (collapse sets, selection, update
+    /// highlights).
     pub path: String,
+    /// `0` for a direct child of `prime`.
+    pub depth: usize,
+    /// This row's own key only (`"step"`, `"iter_2"`), never the full
+    /// path — a front end left-truncates/indents using `depth`
+    /// instead.
+    pub key: String,
+    pub has_children: bool,
     pub status: RowStatus,
-    pub value_preview: Option<String>,
-    pub error_preview: Option<String>,
+    /// The model for a prompt, the provider for a tool, the duration
+    /// once finished, `retries N` when `retries_used > 0`, and
+    /// `n/total` for a loop — dim text, `None` for a row with nothing
+    /// to show (a bare container with no node of its own).
+    pub dim: Option<String>,
     /// `↑sent ↓received`, only when at least one is nonzero (issue
     /// #527) — a leaf's own [`crate::model::node_tokens`], or a
     /// container's sum over its subtree ([`subtree_tokens`]); the two
@@ -303,101 +340,251 @@ pub fn build(
     }
 }
 
-/// The state pane's own rows (DESIGN.md §6.3, issue #527): every
-/// path `flatten_state` returns, except `prime` itself, most recently
-/// updated first (§2.1's own real-instant parsing, never a raw string
-/// compare), ties broken by path.
+/// One node of the state pane's own tree, built once per `path` seen
+/// in `flat` (issue #535) -- `own` is `Some` for a path with a real
+/// `{value, meta}` node, `None` for a bare container (a loop's
+/// `iter_N`) that exists only because some descendant's path runs
+/// through it.
+#[derive(Default)]
+struct StateTreeNode<'a> {
+    own: Option<&'a NodeMeta>,
+    children: BTreeMap<String, StateTreeNode<'a>>,
+}
+
+/// Every path `flatten_state` returns, except `prime` itself, grouped
+/// into a tree by splitting each dotted path on `.` -- including every
+/// intermediate segment with no `{value, meta}` node of its own, so
+/// the tree has no gaps (issue #535).
+fn build_state_tree(flat: &BTreeMap<String, NodeMeta>) -> BTreeMap<String, StateTreeNode<'_>> {
+    let mut root: BTreeMap<String, StateTreeNode> = BTreeMap::new();
+    for (path, node) in flat {
+        let Some(relative) = path.strip_prefix("prime.") else {
+            continue; // `prime` itself
+        };
+        let segments: Vec<&str> = relative.split('.').collect();
+        let mut cursor = &mut root;
+        for (i, segment) in segments.iter().enumerate() {
+            let entry = cursor.entry((*segment).to_string()).or_default();
+            if i + 1 == segments.len() {
+                entry.own = Some(node);
+            }
+            cursor = &mut entry.children;
+        }
+    }
+    root
+}
+
+/// `(is_current, most_recent_update)` over a node's own update time
+/// (if it has one) and every descendant's -- issue #535's own sort
+/// rule: "a row's recency is the latest update time in its subtree"
+/// and "a running row counts as current".
+fn state_subtree_recency(
+    node: &StateTreeNode,
+) -> (bool, Option<chrono::DateTime<chrono::FixedOffset>>) {
+    let mut current = false;
+    let mut recency = None;
+    if let Some(own) = node.own {
+        if own.is_running() {
+            current = true;
+        }
+        recency = own
+            .completed_at
+            .as_deref()
+            .or(own.created_at.as_deref())
+            .and_then(crate::diff::parse_instant);
+    }
+    for child in node.children.values() {
+        let (child_current, child_recency) = state_subtree_recency(child);
+        current |= child_current;
+        recency = match (recency, child_recency) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, None) => a,
+            (None, b) => b,
+        };
+    }
+    (current, recency)
+}
+
+/// The dim meta summary for a row with its own node (issue #535): the
+/// model for a prompt, else the provider for a tool; the duration
+/// once finished; `retries N` when `retries_used > 0`; and `n/total`
+/// for a loop. `None` when there's nothing to show.
+fn state_row_dim(node: &NodeMeta) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(model) = node.meta.get("model").and_then(Value::as_str) {
+        parts.push(model.to_string());
+    } else if let Some(provider) = node.meta.get("provider").and_then(Value::as_str) {
+        parts.push(provider.to_string());
+    }
+    // Finding 2: a duration shows only once finished -- while a row
+    // is still running, `now` ticked with every rebuild (K4's own
+    // once-a-second floor alone), so a live row's `dim` kept
+    // changing every redraw and the row never stopped highlighting.
+    if let (Some(created), Some(completed)) = (&node.created_at, &node.completed_at) {
+        if let Some(secs) = duration_seconds(created, completed) {
+            parts.push(format_duration_dim(secs));
+        }
+    }
+    if let Some(retries) = node.meta.get("retries_used").and_then(Value::as_u64) {
+        if retries > 0 {
+            parts.push(format!("retries {retries}"));
+        }
+    }
+    if node.progress_total.is_some() || node.progress_done.is_some() {
+        let total = node
+            .progress_total
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        parts.push(format!("{}/{total}", node.progress_done.unwrap_or(0)));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("  "))
+    }
+}
+
+fn format_duration_dim(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{secs:.1}s")
+    } else {
+        // Finding 17: rounding `secs % 60.0` to a whole number of
+        // seconds independently of the minutes below it could print
+        // `1m60s` (119.7s: 1m and a seconds remainder of 59.7,
+        // `{:02.0}` rounds that up to 60) -- rounding the *whole*
+        // duration to a whole number of seconds first, then deriving
+        // minutes and seconds from that single integer, carries
+        // correctly (119.7s rounds to 120s, "2m00s").
+        let total_seconds = secs.round() as u64;
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        format!("{minutes}m{seconds:02}s")
+    }
+}
+
+/// A row's own status: `statuses` when it has an entry for this exact
+/// path; otherwise, for a row with its own node, the running/ok/
+/// failed fallback the pane always used; otherwise (a bare container
+/// with no node of its own) the same rule a tree-loop pass's own
+/// container row already follows: any running descendant makes it
+/// running, else any unhandled failure makes it failed, else done.
+fn state_row_status(
+    path: &str,
+    node: &StateTreeNode,
+    statuses: &BTreeMap<String, RowStatus>,
+) -> RowStatus {
+    if let Some(status) = statuses.get(path) {
+        return status.clone();
+    }
+    if let Some(own) = node.own {
+        let kind = if own.is_running() {
+            StatusKind::Running
+        } else if own.is_ok() {
+            StatusKind::Done
+        } else {
+            StatusKind::Failed
+        };
+        return RowStatus {
+            kind,
+            skip_reason: None,
+            retrying: false,
+        };
+    }
+    aggregate_container_status(node)
+}
+
+fn aggregate_container_status(node: &StateTreeNode) -> RowStatus {
+    fn walk(node: &StateTreeNode) -> (bool, bool, bool) {
+        let mut running = false;
+        let mut failed = false;
+        let mut seen = false;
+        if let Some(own) = node.own {
+            seen = true;
+            if own.is_running() {
+                running = true;
+            } else if !own.is_ok() {
+                failed = true;
+            }
+        }
+        for child in node.children.values() {
+            let (r, f, s) = walk(child);
+            running |= r;
+            failed |= f;
+            seen |= s;
+        }
+        (running, failed, seen)
+    }
+    let (any_running, any_failed, any_seen) = walk(node);
+    let kind = if any_running {
+        StatusKind::Running
+    } else if any_failed {
+        StatusKind::Failed
+    } else if any_seen {
+        StatusKind::Done
+    } else {
+        StatusKind::Pending
+    };
+    RowStatus {
+        kind,
+        skip_reason: None,
+        retrying: false,
+    }
+}
+
+/// The state pane's own rows (DESIGN.md §6.3, issue #535): a tree,
+/// flattened depth-first, latest-or-current first at every level
+/// (ties broken by key) -- a front end collapses a subtree the same
+/// way the orchestration pane does, by skipping its descendants.
 fn build_state_rows(
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
 ) -> Vec<StateRow> {
-    let mut entries: Vec<(&String, &NodeMeta)> = flat
-        .iter()
-        .filter(|(path, _)| path.as_str() != "prime")
-        .collect();
-    entries.sort_by(|(path_a, node_a), (path_b, node_b)| {
-        let instant_a = node_a
-            .completed_at
-            .as_deref()
-            .or(node_a.created_at.as_deref())
-            .and_then(crate::diff::parse_instant);
-        let instant_b = node_b
-            .completed_at
-            .as_deref()
-            .or(node_b.created_at.as_deref())
-            .and_then(crate::diff::parse_instant);
-        match (instant_a, instant_b) {
-            (Some(a), Some(b)) => b.cmp(&a).then_with(|| path_a.cmp(path_b)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => path_a.cmp(path_b),
-        }
-    });
-
-    entries
-        .into_iter()
-        .map(|(path, node)| {
-            let relative = path
-                .strip_prefix("prime.")
-                .unwrap_or(path.as_str())
-                .to_string();
-            let status = statuses.get(path.as_str()).cloned().unwrap_or_else(|| {
-                let kind = if node.is_running() {
-                    StatusKind::Running
-                } else if node.is_ok() {
-                    StatusKind::Done
-                } else {
-                    StatusKind::Failed
-                };
-                RowStatus {
-                    kind,
-                    skip_reason: None,
-                    retrying: false,
-                }
-            });
-            // Finding 9: the first line only — a multi-line error (a
-            // shell's own stderr tail, say) would otherwise break the
-            // state pane's one-line-per-entry shape just as badly as an
-            // untruncated value would.
-            let error_preview = node
-                .error
-                .as_deref()
-                .map(|e| e.lines().next().unwrap_or(e))
-                .map(|e| preview(e, STATE_PANE_PREVIEW_CHARS));
-            let no_value_yet = node.is_running() && node.value.is_null();
-            let value_preview = if error_preview.is_some() || no_value_yet {
-                None
-            } else {
-                abbreviated_value(&node.value).map(|v| preview(&v, STATE_PANE_PREVIEW_CHARS))
-            };
-            let (sent, received) = subtree_tokens(path, flat);
-            let tokens = (sent > 0 || received > 0).then_some((sent, received));
-            StateRow {
-                path: relative,
-                status,
-                value_preview,
-                error_preview,
-                tokens,
-            }
-        })
-        .collect()
+    let tree = build_state_tree(flat);
+    let mut out = Vec::new();
+    flatten_state_tree(&tree, "prime", 0, flat, statuses, &mut out);
+    out
 }
 
-const STATE_PANE_PREVIEW_CHARS: usize = 120;
+#[allow(clippy::too_many_arguments)]
+fn flatten_state_tree(
+    nodes: &BTreeMap<String, StateTreeNode>,
+    parent_path: &str,
+    depth: usize,
+    flat: &BTreeMap<String, NodeMeta>,
+    statuses: &BTreeMap<String, RowStatus>,
+    out: &mut Vec<StateRow>,
+) {
+    let mut entries: Vec<(&String, &StateTreeNode, String)> = nodes
+        .iter()
+        .map(|(key, node)| (key, node, format!("{parent_path}.{key}")))
+        .collect();
+    entries.sort_by(|(key_a, node_a, _), (key_b, node_b, _)| {
+        let (current_a, recency_a) = state_subtree_recency(node_a);
+        let (current_b, recency_b) = state_subtree_recency(node_b);
+        current_b
+            .cmp(&current_a)
+            .then_with(|| recency_b.cmp(&recency_a))
+            .then_with(|| key_a.cmp(key_b))
+    });
 
-/// One state node's own value, abbreviated (issue #527): compact JSON
-/// for anything but a string, a quoted string for a string (its own
-/// newlines escaped so the state pane's one-line-per-entry shape
-/// never breaks), `None` for `null` (nothing to show).
-fn abbreviated_value(value: &Value) -> Option<String> {
-    match value {
-        Value::Null => None,
-        Value::String(s) => Some(format!("\"{}\"", s.replace('\n', "\\n"))),
-        other => Some(
-            serde_json::to_string(other)
-                .unwrap_or_default()
-                .replace('\n', " "),
-        ),
+    for (key, node, full_path) in entries {
+        let status = state_row_status(&full_path, node, statuses);
+        let (sent, received) = subtree_tokens(&full_path, flat);
+        let tokens = (sent > 0 || received > 0).then_some((sent, received));
+        let dim = node.own.and_then(state_row_dim);
+        out.push(StateRow {
+            path: full_path
+                .strip_prefix("prime.")
+                .unwrap_or(&full_path)
+                .to_string(),
+            depth,
+            key: key.clone(),
+            has_children: !node.children.is_empty(),
+            status,
+            dim,
+            tokens,
+        });
+        flatten_state_tree(&node.children, &full_path, depth + 1, flat, statuses, out);
     }
 }
 
@@ -482,8 +669,14 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         };
     };
 
-    let mut meta_summary = Vec::new();
     let meta = &node.meta;
+    // Issue #535: a node with `prompt_sent` gets the `sent`/`received`
+    // blocks below instead -- their headers already carry the token
+    // counts, so the plain meta list drops them to avoid saying the
+    // same thing twice.
+    let has_prompt_sent = meta.get("prompt_sent").and_then(Value::as_str).is_some();
+
+    let mut meta_summary = Vec::new();
     for key in [
         "provider",
         "model",
@@ -494,6 +687,9 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         "tokens_received",
         "retries_used",
     ] {
+        if has_prompt_sent && (key == "tokens_sent" || key == "tokens_received") {
+            continue;
+        }
         if let Some(v) = meta.get(key) {
             if !v.is_null() {
                 meta_summary.push((key.to_string(), display_value(v)));
@@ -520,6 +716,26 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
         }
     }
 
+    let (sent, received) = if has_prompt_sent {
+        let sent_block = build_sent_block(meta, node);
+        // "A prompt that failed before any reply shows its error as
+        // today, and no received snippet" (issue #535) -- finding 18:
+        // that's narrower than "any error". A reply that arrived and
+        // then failed later (an `expect`/parsing mismatch, say) still
+        // left `meta.answer` or the node's own value behind, so only
+        // an error with neither counts as "before any reply".
+        let got_reply =
+            meta.get("answer").and_then(Value::as_str).is_some() || !node.value.is_null();
+        let received_block = if node.error.is_some() && !got_reply {
+            None
+        } else {
+            Some(build_received_block(meta, node))
+        };
+        (Some(sent_block), received_block)
+    } else {
+        (None, None)
+    };
+
     Details {
         path: path.to_string(),
         plan_summary,
@@ -530,6 +746,79 @@ pub fn details_for(path: &str, plan: &PlanTree, state: Option<&Value>) -> Detail
             .and_then(Value::as_str)
             .map(|s| preview(s, DETAILS_PREVIEW_CHARS)),
         value: Some(preview(&display_value(&node.value), DETAILS_PREVIEW_CHARS)),
+        sent,
+        received,
+    }
+}
+
+/// Whitespace runs, including newlines, collapsed to one space (issue
+/// #535) -- applied before [`preview`]'s own truncation, so a cut
+/// snippet's `…` lands after real content, not mid-run of spaces.
+fn collapse_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The `sent` block (issue #535): always present for a node with
+/// `prompt_sent`, whether it's still running (the token bar's own
+/// in-flight estimate) or finished (the actual count, [`node_tokens`]
+/// -- the same `*_total`-first rule the header/token bar/state pane/
+/// treemap all use).
+fn build_sent_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
+    let prompt_sent = meta
+        .get("prompt_sent")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let snippet = Some(preview(
+        &collapse_whitespace(prompt_sent),
+        DETAILS_PREVIEW_CHARS,
+    ));
+    if node.is_running() {
+        TokenBlock {
+            snippet,
+            tokens: Some(estimated_prompt_tokens(prompt_sent)),
+            estimated: true,
+            waiting: false,
+        }
+    } else {
+        let (sent, _) = crate::model::node_tokens(meta);
+        TokenBlock {
+            snippet,
+            tokens: Some(sent),
+            estimated: false,
+            waiting: false,
+        }
+    }
+}
+
+/// The `received` block (issue #535), for a node with `prompt_sent`
+/// that hasn't failed before any reply. While the prompt is still
+/// running: `waiting`, no snippet, no number -- neither engine
+/// reports output tokens before a prompt finishes (the same rule the
+/// token bar's own estimate follows). Once it's answered: `meta.
+/// answer` when present (the raw reply for `boolean`/`number`
+/// prompts and model-mode conditions), else the node's own value (a
+/// string as is, anything else as compact JSON).
+fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
+    if node.is_running() {
+        return TokenBlock {
+            snippet: None,
+            tokens: None,
+            estimated: false,
+            waiting: true,
+        };
+    }
+    let text = meta
+        .get("answer")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| display_value(&node.value));
+    let snippet = Some(preview(&collapse_whitespace(&text), DETAILS_PREVIEW_CHARS));
+    let (_, received) = crate::model::node_tokens(meta);
+    TokenBlock {
+        snippet,
+        tokens: Some(received),
+        estimated: false,
+        waiting: false,
     }
 }
 
@@ -1999,6 +2288,145 @@ mod tests {
     }
 
     #[test]
+    fn sent_received_blocks_for_a_finished_text_prompt() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "the final reply", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "what is the answer",
+                "tokens_sent": 12, "tokens_received": 34
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let sent = details.sent.expect("a prompt node gets a sent block");
+        assert_eq!(sent.snippet.as_deref(), Some("what is the answer"));
+        assert_eq!(sent.tokens, Some(12));
+        assert!(!sent.estimated);
+        let received = details
+            .received
+            .expect("a finished prompt gets a received block");
+        assert_eq!(received.snippet.as_deref(), Some("the final reply"));
+        assert_eq!(received.tokens, Some(34));
+        assert!(!received.waiting);
+        // the plain meta list no longer repeats the token counts.
+        assert!(!details.meta_summary.iter().any(|(k, _)| k == "tokens_sent"));
+        assert!(
+            !details
+                .meta_summary
+                .iter()
+                .any(|(k, _)| k == "tokens_received")
+        );
+    }
+
+    #[test]
+    fn sent_received_blocks_for_a_finished_json_prompt() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": {"ok": true}, "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "reply in json",
+                "tokens_sent_total": 9, "tokens_received_total": 3
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let received = details.received.unwrap();
+        // no `meta.answer` here (not boolean/number), so the node's
+        // own value, as compact JSON, is the snippet.
+        assert_eq!(received.snippet.as_deref(), Some(r#"{"ok":true}"#));
+        assert_eq!(received.tokens, Some(3));
+        let sent = details.sent.unwrap();
+        assert_eq!(sent.tokens, Some(9));
+    }
+
+    #[test]
+    fn sent_block_estimates_tokens_and_received_waits_while_a_prompt_is_running() {
+        let plan = PlanTree::empty();
+        let prompt_sent = "x".repeat(40);
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": null, "adapter": "scripted", "model": "m",
+                "prompt_sent": prompt_sent
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, Some(&state_json));
+        let sent = details.sent.unwrap();
+        assert_eq!(sent.tokens, Some(10)); // ceil(40/4)
+        assert!(sent.estimated);
+        let received = details.received.unwrap();
+        assert!(received.waiting);
+        assert_eq!(received.snippet, None);
+        assert_eq!(received.tokens, None);
+    }
+
+    #[test]
+    fn received_block_uses_meta_answer_for_a_boolean_prompt() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "gate": {"value": true, "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "yes or no?", "answer": "yes, definitely",
+                "tokens_sent": 1, "tokens_received": 2
+            }}
+        }});
+        let details = details_for("prime.gate", &plan, Some(&state_json));
+        let received = details.received.unwrap();
+        assert_eq!(received.snippet.as_deref(), Some("yes, definitely"));
+    }
+
+    #[test]
+    fn a_prompt_failed_before_any_reply_has_no_received_block() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "what is the answer", "error": "adapter unreachable"
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, Some(&state_json));
+        assert!(details.sent.is_some(), "it still sent the prompt");
+        assert!(details.received.is_none());
+        assert_eq!(details.error.as_deref(), Some("adapter unreachable"));
+    }
+
+    /// Finding 18: a reply that arrived and *then* failed (an
+    /// `expect`/parsing mismatch, here) still gets a `received`
+    /// block -- only a failure with no reply at all drops it.
+    #[test]
+    fn a_prompt_that_failed_after_a_reply_still_has_a_received_block() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "gate": {"value": null, "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "yes or no?", "answer": "maybe",
+                "error": "expected a boolean reply, got \"maybe\""
+            }}
+        }});
+        let details = details_for("prime.gate", &plan, Some(&state_json));
+        assert!(details.sent.is_some());
+        let received = details
+            .received
+            .expect("a reply that arrived before the failure keeps its received block");
+        assert_eq!(received.snippet.as_deref(), Some("maybe"));
+        assert_eq!(
+            details.error.as_deref(),
+            Some("expected a boolean reply, got \"maybe\"")
+        );
+    }
+
+    #[test]
+    fn a_non_prompt_node_gets_no_sent_received_blocks() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ls": {"value": "a\nb\n", "meta": {
+                "created_at": "t0", "completed_at": "t1", "provider": "shell", "exit_code": 0
+            }}
+        }});
+        let details = details_for("prime.ls", &plan, Some(&state_json));
+        assert!(details.sent.is_none());
+        assert!(details.received.is_none());
+    }
+
+    #[test]
     fn state_rows_sort_most_recently_updated_first_with_path_as_tiebreak() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
@@ -2023,21 +2451,63 @@ mod tests {
             .iter()
             .map(|r| r.path.as_str())
             .collect();
-        // `c` is still running (no `completed_at`), so its own update
-        // time is `created_at` (00:05), tied with `b`'s own
-        // `completed_at` (00:05) -- the tie then breaks by path.
-        assert_eq!(paths, vec!["b", "c", "a"]);
+        // `c` is still running, so it counts as current and sorts
+        // first regardless of timestamps (issue #535); `a` and `b`
+        // are both finished, tied by nothing since their own
+        // `completed_at` differ, so `b` (00:05) sorts before `a`
+        // (00:03).
+        assert_eq!(paths, vec!["c", "b", "a"]);
     }
 
+    /// Finding 15: latest-first ordering at a *nested* level, not
+    /// just the top -- `older` and `newer` are both bare containers
+    /// (no `{value, meta}` node of their own) two levels under
+    /// `fan`, sorted by the latest update anywhere in their own
+    /// subtree, same as the top level.
     #[test]
-    fn state_rows_abbreviate_strings_and_json_and_show_the_glyph_for_a_running_node_with_no_value()
-    {
+    fn state_rows_order_nested_containers_by_their_latest_child_update() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "older": {
+                    "p": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"}}
+                },
+                "newer": {
+                    "q": {"value": "y", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:09Z"}}
+                }
+            }
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            9.0,
+            "2026-01-01T00:00:09Z",
+            &[],
+        );
+        let paths: Vec<&str> = rendered
+            .state_rows
+            .iter()
+            .filter(|r| r.depth == 1)
+            .map(|r| r.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["fan.newer", "fan.older"]);
+    }
+
+    /// Issue #535: the state pane no longer shows any value or error
+    /// text at all — just the key, status, dim meta and tokens.
+    #[test]
+    fn state_rows_carry_no_value_or_error_text() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
             "summarize": {"value": "The report covers everything", "meta": {"created_at": "t0", "completed_at": "t1"}},
-            "items": {"value": ["a", "b"], "meta": {"created_at": "t0", "completed_at": "t1"}},
-            "pending": {"value": null, "meta": {"created_at": "t2", "completed_at": null}}
+            "pending": {"value": null, "meta": {"created_at": "t2", "completed_at": null}},
+            "bad": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1)\nls: no such file"}}
         }});
         let rendered = build(
             "do-thing.yml",
@@ -2050,39 +2520,109 @@ mod tests {
             "t2",
             &[],
         );
-        let summarize = rendered
-            .state_rows
-            .iter()
-            .find(|r| r.path == "summarize")
-            .unwrap();
-        assert_eq!(
-            summarize.value_preview.as_deref(),
-            Some("\"The report covers everything\"")
-        );
-        let items = rendered
-            .state_rows
-            .iter()
-            .find(|r| r.path == "items")
-            .unwrap();
-        assert_eq!(items.value_preview.as_deref(), Some(r#"["a","b"]"#));
+        // Type-level: `StateRow` has no `value`/`error` field at all
+        // any more, so there's nothing further to assert for
+        // `summarize`/`bad` beyond their status glyph.
         let pending = rendered
             .state_rows
             .iter()
             .find(|r| r.path == "pending")
             .unwrap();
-        assert_eq!(
-            pending.value_preview, None,
-            "a running node with no value yet shows the glyph instead"
-        );
         assert_eq!(pending.status.kind, StatusKind::Running);
+        let bad = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "bad")
+            .unwrap();
+        assert_eq!(bad.status.kind, StatusKind::Failed);
+    }
+
+    /// Finding 2: the state tree's own dim meta shows a duration only
+    /// once a row has finished -- a running row's `dim` must not
+    /// depend on `now` at all (two real RFC 3339 `now` values, a
+    /// second apart, give the exact same dim for it), while a
+    /// finished row's own duration is already pinned by its own
+    /// `completed_at`, not by whichever `now` happened to rebuild it.
+    #[test]
+    fn a_running_rows_dim_never_shows_a_duration_at_any_now() {
+        let plan = PlanTree::empty();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "running": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null}},
+            "done": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:05Z"}}
+        }});
+        let mut model_a = RunModel::new();
+        let at_t1 = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_a,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-01-01T00:00:01Z",
+            &[],
+        );
+        let mut model_b = RunModel::new();
+        let at_t9 = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model_b,
+            Some(&state),
+            ProcessState::Running,
+            9.0,
+            "2026-01-01T00:00:09Z",
+            &[],
+        );
+        let running_dim = |r: &RenderState| {
+            r.state_rows
+                .iter()
+                .find(|row| row.path == "running")
+                .unwrap()
+                .dim
+                .clone()
+        };
+        assert_eq!(running_dim(&at_t1), None, "a running row shows no duration");
+        assert_eq!(
+            running_dim(&at_t1),
+            running_dim(&at_t9),
+            "a running row's dim must not depend on `now`"
+        );
+        let done_dim = |r: &RenderState| {
+            r.state_rows
+                .iter()
+                .find(|row| row.path == "done")
+                .unwrap()
+                .dim
+                .clone()
+        };
+        assert_eq!(done_dim(&at_t1).as_deref(), Some("5.0s"));
+        assert_eq!(
+            done_dim(&at_t1),
+            done_dim(&at_t9),
+            "a finished row's duration is pinned by its own completed_at, not `now`"
+        );
+    }
+
+    /// Finding 17: rounding the seconds remainder independently of
+    /// the minutes could carry into a bogus `1m60s` at 119.7s.
+    #[test]
+    fn format_duration_dim_carries_seconds_into_minutes_correctly() {
+        assert_eq!(format_duration_dim(119.7), "2m00s");
+        assert_eq!(format_duration_dim(119.4), "1m59s");
+        assert_eq!(format_duration_dim(65.0), "1m05s");
     }
 
     #[test]
-    fn a_failed_state_row_shows_the_start_of_its_error_and_no_value() {
+    fn state_rows_nest_bare_containers_with_no_node_of_their_own() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "bad": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1): ls: no such file"}}
+            "fan": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "iter_0": {
+                    "nap": {"value": "", "meta": {"created_at": "t0", "completed_at": "t1"}}
+                }
+            }
         }});
         let rendered = build(
             "do-thing.yml",
@@ -2095,27 +2635,73 @@ mod tests {
             "t1",
             &[],
         );
-        let bad = rendered
+        let by_path: std::collections::HashMap<&str, &StateRow> = rendered
             .state_rows
             .iter()
-            .find(|r| r.path == "bad")
-            .unwrap();
+            .map(|r| (r.path.as_str(), r))
+            .collect();
+        let fan = by_path.get("fan").expect("fan has its own node");
+        assert_eq!(fan.depth, 0);
+        assert_eq!(fan.key, "fan");
+        assert!(fan.has_children);
+
+        let iter0 = by_path
+            .get("fan.iter_0")
+            .expect("a bare container with no node of its own is still a row");
+        assert_eq!(iter0.depth, 1);
+        assert_eq!(iter0.key, "iter_0");
+        assert!(iter0.has_children);
         assert_eq!(
-            bad.error_preview.as_deref(),
-            Some("/bin/ls failed (exit 1): ls: no such file")
+            iter0.dim, None,
+            "a bare container has nothing of its own to summarize"
         );
-        assert_eq!(bad.value_preview, None);
+
+        let nap = by_path.get("fan.iter_0.nap").unwrap();
+        assert_eq!(nap.depth, 2);
+        assert_eq!(nap.key, "nap");
+        assert!(!nap.has_children);
     }
 
-    /// Finding 9: only an error's first line — a shell's own
-    /// multi-line stderr tail must not break the state pane's
-    /// one-line-per-entry shape.
     #[test]
-    fn a_multiline_error_only_shows_its_first_line() {
+    fn state_rows_put_a_running_sibling_before_a_finished_one_regardless_of_timestamps() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        // `a` finished *after* `b` started running, yet `b` (still
+        // running) must sort first (issue #535: "a running row counts
+        // as current").
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "a": {"value": "x", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:09Z"}},
+            "b": {"value": null, "meta": {"created_at": "2026-01-01T00:00:01Z", "completed_at": null}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            9.0,
+            "2026-01-01T00:00:09Z",
+            &[],
+        );
+        let paths: Vec<&str> = rendered
+            .state_rows
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn a_bare_containers_token_sum_and_dim_come_from_its_subtree() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
-            "bad": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1", "error": "/bin/ls failed (exit 1)\nls: no such file\nmore detail"}}
+            "fan": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+                "iter_0": {
+                    "ask": {"value": "ok", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z", "tokens_sent": 5, "tokens_received": 7, "model": "m"}}
+                }
+            }
         }});
         let rendered = build(
             "do-thing.yml",
@@ -2125,18 +2711,21 @@ mod tests {
             Some(&state),
             ProcessState::Running,
             1.0,
-            "t1",
+            "2026-01-01T00:00:01Z",
             &[],
         );
-        let bad = rendered
+        let iter0 = rendered
             .state_rows
             .iter()
-            .find(|r| r.path == "bad")
+            .find(|r| r.path == "fan.iter_0")
             .unwrap();
-        assert_eq!(
-            bad.error_preview.as_deref(),
-            Some("/bin/ls failed (exit 1)")
-        );
+        assert_eq!(iter0.tokens, Some((5, 7)));
+        let ask = rendered
+            .state_rows
+            .iter()
+            .find(|r| r.path == "fan.iter_0.ask")
+            .unwrap();
+        assert_eq!(ask.dim.as_deref(), Some("m  1.0s"));
     }
 
     /// Acceptance list: a tree container's own sum, not just a named
