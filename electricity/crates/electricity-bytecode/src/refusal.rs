@@ -22,11 +22,18 @@
 //! `reflector`'s own `effects:`, an `if`'s own branches -- the walker
 //! still recurses into it once that lane's flag is `true`, so an
 //! unsupported effect *inside* an otherwise-supported container is
-//! still found). The walker's own body does not need to change again
-//! after this lane: [`Supported::m0`] is the exact value M0 ran with
-//! (every flag `false`), pinned by this module's own golden tests
-//! below so no later lane can silently widen what the walker accepts
-//! without a reviewed, intentional flip. [`Supported::preflight`] is
+//! still found). The walker's own body does not otherwise need to
+//! change again after this lane: [`Supported::m0`] is the exact value
+//! M0 ran with (every flag `false`), pinned by this module's own
+//! golden tests below so no later lane can silently widen what the
+//! walker accepts without a reviewed, intentional flip. The one
+//! exception is the tool-provider check itself (issue #511): it also
+//! consults [`crate::plugin_names::PLUGIN_NAMES`] directly, not only
+//! *supported*, to tell a cof plugin this build has no builder for yet
+//! (still refused, with the preview marker) from a provider that is
+//! not a cof plugin at all (never refused here -- it reaches the same
+//! "Unknown plugin" failure `cof run` gives it, at the same point).
+//! [`Supported::preflight`] is
 //! one such flag, added by #451: a document naming a top-level
 //! `adapter:` is refused while it's `false`, the same as every other
 //! capability here, even though it stands in for a safety check this
