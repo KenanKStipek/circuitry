@@ -13,6 +13,7 @@ real-database counterpart, opt-in via ``CIRCUITRY_POSTGRES_TEST_DSN``.
 
 from __future__ import annotations
 
+import datetime
 import json
 import sys
 import types
@@ -177,8 +178,6 @@ def test_save_run_snapshot_stringifies_a_date_instead_of_raising(fake_db: FakeDa
     """Issue #512: a state a reflector/tool/use/interface-default route put
     an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
     persistence write the way a plain `json.dumps` would."""
-    import datetime
-
     backend = _backend()
 
     backend.save_run_snapshot(

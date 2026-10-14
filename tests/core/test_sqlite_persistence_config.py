@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 import pytest
@@ -85,8 +86,6 @@ def test_sqlite_save_run_snapshot_stringifies_a_date_instead_of_raising(
     """Issue #512: a state a reflector/tool/use/interface-default route put
     an unquoted YAML 1.1 date into must not crash `--resume <run-id>`'s own
     persistence write the way a plain `json.dumps` would."""
-    import datetime
-
     backend = SQLiteStatePersistence.from_config(
         {"backend": "sqlite", "db_path": str(tmp_path / "runs.db")}
     )

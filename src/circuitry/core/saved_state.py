@@ -117,20 +117,24 @@ def _ref_target(node: dict[str, Any]) -> str | None:
 
 
 def json_safe_default(value: Any) -> str:
-    """``json.dumps(..., default=str)``, but only for the YAML 1.1 types a
-    loaded orchestration document can actually produce that plain JSON
-    can't encode: an unquoted date or timestamp (``datetime.date``,
+    """``json.dumps(..., default=str)``, but only for two of the YAML 1.1
+    types a loaded orchestration document can produce that plain JSON can't
+    encode: an unquoted date or timestamp (``datetime.date``,
     ``datetime.datetime`` — a subclass of ``date``) and ``!!binary``
     (``bytes``). These can reach state several ways — a reflector's own
     ``meta.iterations[i].parsed``, a tool's ``meta.params_rendered``, a
     ``use`` effect's literal (non-``{from: ...}``) inputs, an
-    ``interface.inputs`` default with no declared ``type:`` — all fixed
-    here, at the serialisation boundary, rather than at each entry point.
-    Every ``json.dumps(..., default=...)`` call writing run state uses this
+    ``interface.inputs`` default with no declared ``type:`` (or nested
+    inside an ``object``/``array`` default) — all fixed here, at the
+    serialisation boundary, rather than at each entry point. A CLI ``-e``
+    value never needs this: it's always a string. Every
+    ``json.dumps(..., default=...)`` call writing run state uses this
     (``--out``/``--print``/``--live-state`` below; the ``core.store``
     persistence backends ``--resume <run-id>`` reads from). Anything else
-    json.dumps can't encode still raises, same as a plain ``json.dumps``
-    with no ``default=`` at all.
+    json.dumps can't encode — including ``!!set`` (``set``), the one other
+    YAML 1.1 type a document can produce that plain JSON can't encode —
+    still raises, same as a plain ``json.dumps`` with no ``default=`` at
+    all.
     """
     if isinstance(value, (datetime.date, bytes)):
         return str(value)

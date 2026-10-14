@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #512",
+  "description": "Two `interface.inputs` entries, run with no `-e` so both defaults fill in as-is: `d` has no declared `type:` and a `default:` that's an unquoted YAML 1.1 date; `o` is `type: object` with a date nested inside its own default. Both land in state (`input.d`, `input.o.nested`) as the parsed `datetime.date`; `--out` writes them stringified via `default=str` instead of raising `TypeError: Object of type date is not JSON serializable`.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

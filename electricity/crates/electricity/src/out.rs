@@ -98,12 +98,17 @@ fn stdout_json_mode(sort_keys: bool) -> electricity_json::WriteMode {
 /// was given), never a trailing newline of its own (the caller's
 /// `print!`/`println!` choice, not this function's). Stringifies a
 /// `Date`/`DateTime`/`Bytes` leaf the same way [`render_state`] does
-/// (issue #512); a caller reporting its own run result must never panic
-/// doing so, though, so any other encode failure still falls back to a
-/// minimal, always-valid JSON object naming it rather than unwrapping.
-pub fn render_state_for_stdout(state: &Value, pretty: bool) -> String {
+/// (issue #512); anything else `dumps` can't encode (a non-string dict
+/// key, nesting past [`crate::MAX_DEPTH`], ...) still returns `Err` --
+/// the caller's job to turn into a nonzero exit with a stderr message,
+/// the same as `cli/app.py::run_cmd`'s own `console.print_json(dumps_
+/// saved_state(...))` crashing uncaught rather than printing a
+/// placeholder and exiting 0.
+pub fn render_state_for_stdout(
+    state: &Value,
+    pretty: bool,
+) -> Result<String, electricity_json::WriteError> {
     electricity_json::dumps_default_str(state, stdout_json_mode(pretty))
-        .unwrap_or_else(|err| format!("{{\"error\": \"could not serialize run state: {}\"}}", err))
 }
 
 /// Writes *state*'s saved form to *path*, creating its parent directory

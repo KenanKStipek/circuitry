@@ -1671,15 +1671,19 @@ the value has them), `b'...'`. These can reach state several ways a document
 author doesn't always write on purpose — a `reflector`'s own
 `meta.iterations[i].parsed`, any effect's `meta.params_rendered`, a `use`
 effect's literal (non-`{from: ...}`) inputs, or an `interface.inputs`
-default with no declared `type:` — and the rule is the same everywhere saved
-state is written (`--out`, `--print`, the `--live-state` mirror, and the
-saved state `--resume` reads back) and in both engines. A `--resume`d run
-therefore sees that already-completed node's recorded value as the string
-`--out` wrote, not the original date/bytes value — the effect itself is not
-rerun, so this only affects reading the saved record back, never what a
-rerun would produce from the orchestration's own YAML. Anything else a value
-can't be encoded as remains an ordinary error, same as `json.dumps` with no
-fallback at all.
+default with no declared `type:` (or nested inside an `object`/`array`
+default) — and the rule is the same everywhere saved state is written
+(`--out`, `--print`, the `--live-state` mirror, every `runtime.persistence`
+backend's own snapshot, and the saved state `--resume` reads back) and in
+both engines. A CLI `-e` value never reaches this: it always arrives as a
+string. A `--resume`d run therefore sees that already-completed node's
+recorded value as the string `--out` wrote, not the original date/bytes
+value — the effect itself is not rerun, so this only affects reading the
+saved record back, never what a rerun would produce from the
+orchestration's own YAML. Anything else a value can't be encoded as remains
+an ordinary error, same as `json.dumps` with no fallback at all — including
+a non-string dict key (a date/bytes key is never stringified, in either
+engine) and `!!set`.
 
 ### Iteration Bindings Inside Nested Containers
 

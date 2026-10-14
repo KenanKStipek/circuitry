@@ -1615,19 +1615,19 @@ default with no declared `type:`. `default=` is never consulted for a dict
 as a plain `json.dumps` with no `default=` at all (issue #512).
 
 electricity's own `--out`/`--live-state` writer (`electricity::out::
-render_state`) reproduces this fallback byte for byte
-(`electricity_json::dumps_default_str`, the same function several other
-sites already use for a Python `default=str` caller — §8.2's redacted-`raw`
-size-cap path, among others). Before issue #512, a value this fallback now
-handles made `electricity::out::render_state` write a
-`{"error": "could not serialize run state: ..."}` placeholder and exit `0`;
-now that only remains true for a value `default=str` itself doesn't cover
-(an unserializable dict key, nesting past the depth limit, ...), and even
-then only for the non-TTY stdout summary (`render_state_for_stdout`, used
-only when no `--out` was given) — `write_out` instead returns an error,
-which `electricity-cli`'s `run_action` reports on stderr and turns into exit
-code `1`, matching a real `cof run`'s own uncaught `TypeError` for the same
-case.
+render_state`) and its non-TTY stdout summary (`electricity::out::
+render_state_for_stdout`, used only when no `--out` was given) both
+reproduce this fallback byte for byte (`electricity_json::
+dumps_default_str`, the same function several other sites already use for
+a Python `default=str` caller — §8.2's redacted-`raw` size-cap path, among
+others). Before issue #512, a value this fallback now handles made
+`render_state` write a `{"error": "could not serialize run state: ..."}`
+placeholder and exit `0`, and `render_state_for_stdout` print the same
+placeholder and exit `0` too; both now return an error instead for a value
+`default=str` itself doesn't cover (an unserializable dict key, nesting
+past the depth limit, ...), which `electricity-cli`'s `run_action` reports
+on stderr and turns into exit code `1`, matching a real `cof run`'s own
+uncaught `TypeError` for the same case.
 
 ### 8.4 Exit codes
 
