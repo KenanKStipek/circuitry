@@ -1727,7 +1727,32 @@ contiguous-from-0 prefix (not by eyeballing whether `iter_<N>` merely *looks*
 finished — a pass that died partway through writing its own node must not
 be mistaken for complete) — chain flow only (every `while`, or an `each` not
 running `flow: tree`); a tree-flow `each` loop and an unnamed loop always
-rerun whole. A `finally:` effect is **never** skipped by resume (§6.4).
+rerun whole. The loop writes that record on success, on failure, and on an
+interrupt (#574): `core/loop.py`'s outer handler is `except BaseException`,
+so Ctrl-C/SIGTERM/SIGHUP or a cancelled run gets the failure path's own
+writes — `completed_passes`, `completed_at`, `value.termination` `{"reason":
+"error", "detail": ...}` and `meta.error` — with the interrupt text of §6.5
+(`"Interrupted (Ctrl-C/SIGINT)"`, `"Interrupted (SIGTERM)"`, `"Interrupted
+(SIGHUP)"`) as both the error and the detail, never the empty `str()` of the
+exception; then it re-raises the same exception, so exit code, cleanup and
+`finally:` are unchanged. electricity's `exec/loop_.rs` does the same for
+`VmError::Cancelled`. A `finally:` effect is **never** skipped by resume (§6.4).
+
+The first unfinished pass of such a loop continues **inside** its body when
+the saved state holds its `iter_<N>` node (`core/loop.py` `resume_pass`,
+`_execute_body(resume=True)`, #573): body effects are skipped by the same
+positional rule as a chain `dynamic`'s `effects:` until the first one that
+isn't resumed whole, which runs with resume on (so a nested `dynamic`,
+loop, `if` or `use` resumes inside itself), and every later body effect
+reruns. A `while` loop runs that pass **without evaluating its condition**:
+it held when the pass started. Every later pass, and a first unfinished pass
+with no saved `iter_<N>`, runs from its start, condition first. An
+unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
+`meta.branch` before anything else, evaluates its condition again (a model
+condition asks again), and, when the condition selects that branch again,
+runs the branch by the same positional rule; the other branch runs from its
+start. An unnamed `if` and a `reflector` rerun whole. electricity has no
+`--resume` yet (M2-G), so this is reference behaviour only.
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
 `_SavedChildRun`) reruns its child from the start in a fresh state, unless
@@ -1742,7 +1767,9 @@ current digest and resolved inputs, and the saved `meta.expect.result` is
 not false (a check that judged the output false would just fail again);
 otherwise the record is dropped and the child runs from its start. Only the
 first attempt resumes — a `retries` retry reruns the child whole. A `use`
-in a loop pass, an `if` branch, or a tree-flow branch still reruns whole.
+that is the first unfinished effect of a resumed loop pass or `if` branch
+resumes inside its child the same way; one in a tree-flow branch, or in a
+pass or branch that runs from its start, reruns whole.
 
 ### 8.6 Config keys that affect a run
 

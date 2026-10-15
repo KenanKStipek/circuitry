@@ -240,11 +240,13 @@ class DynamicRuntime:
         # whose own node already finished without error, reusing it as-is —
         # see ``core.resume``. Carried down into every nested ``dynamic``/
         # ``loop`` this instance constructs, so the skip applies at any
-        # depth a chain of ``dynamic``s reaches. ``conditional``/
-        # ``reflector`` children aren't passed this flag: they always rerun
-        # whole once reached. A ``use`` child gets it, and continues inside
-        # its child when ``runtime.state.record_children`` saved the child's
-        # record (#567; see ``UseRuntime.execute``).
+        # depth a chain of ``dynamic``s reaches. A ``reflector`` child isn't
+        # passed this flag: it always reruns whole once reached. A ``use``
+        # child gets it, and continues inside its child when
+        # ``runtime.state.record_children`` saved the child's record (#567;
+        # see ``UseRuntime.execute``). A ``conditional`` gets it, and
+        # continues inside the branch its saved node took when its
+        # condition selects that branch again (#573).
         self.resume = resume
 
     def execute(
@@ -1014,6 +1016,7 @@ class DynamicRuntime:
                     progress_display=self.progress_display,
                     depth=self.depth,
                     ancestors=self._child_ancestors,
+                    resume=effective_resume,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, LoopDefinition):

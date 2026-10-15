@@ -508,6 +508,10 @@ impl RunObserver for CancelOnStart<'_> {
     fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
         self.inner.clear_tree_branches(node_path, branches);
     }
+
+    fn record_totals(&self, meta: &Value) {
+        self.inner.record_totals(meta);
+    }
 }
 
 /// A bare-minimum [`RunContext`] -- an unconfigured registry/limiter,

@@ -132,14 +132,14 @@ fn wait_until_running(home: &TempHome) {
 /// must stop the loop before pass 1 ever starts (chain flow runs one
 /// pass at a time, so "no new pass starts" here just means the loop
 /// never reaches `iter_1`), exit 130, still run `finally:`, and write
-/// `--out` with cof's own "cancellation bypasses `on_error`, with no
-/// final `value`/`meta` write at all" shape (`core/loop.py`'s own
-/// `except Exception`, never `BaseException` -- `exec::loop_::is_fatal`
-/// mirrors it). The loop's own node and pass 0's own `iter_0` both
-/// exist already (both are created up front, before that pass's body
-/// ever dispatches), but neither ever gets a `completed_at`/`value`
-/// write of its own, since cancellation during pass 0's own in-flight
-/// `sleep` skips even that pass's own completion.
+/// `--out` with cof's own interrupted-loop shape (#574, `core/loop.py`'s
+/// own `except BaseException`): the loop records the interrupt exactly
+/// like a failure -- `completed_passes`, `completed_at`, the interrupt
+/// text as `meta.error` and `value.termination.detail` -- and the
+/// cancellation still propagates past `on_error`. Pass 0's own
+/// `iter_0` exists already (created up front, before that pass's body
+/// ever dispatches), but its in-flight `sleep` never completes, so the
+/// pass isn't in `completed_passes`.
 const CHAIN_SLEEP_LOOP_DOC: &str = "\
 effects:
   - name: seed
@@ -190,13 +190,33 @@ fn sigint_mid_chain_loop_pass_exits_130_runs_finally_and_starts_no_new_pass() {
         shots["iter_1"].is_null(),
         "a cancelled chain loop must start no new pass after the signal: {state}"
     );
-    assert!(
-        shots["value"].is_null(),
-        "cancellation bypasses the loop's own final value/meta write entirely: {state}"
+    assert_interrupt_recorded(shots, &state);
+}
+
+/// The loop's own record of an interrupt (#574): the failure path's own
+/// `value`/`meta` writes, with no completed pass and the interrupt text.
+fn assert_interrupt_recorded(shots: &serde_json::Value, state: &serde_json::Value) {
+    assert_eq!(
+        shots["value"],
+        serde_json::json!({
+            "iterations": 0,
+            "termination": {"reason": "error", "detail": "Interrupted (Ctrl-C/SIGINT)"},
+            "effects_by_iteration": [],
+        }),
+        "an interrupted loop records the failure-path value: {state}"
+    );
+    assert_eq!(
+        shots["meta"]["error"], "Interrupted (Ctrl-C/SIGINT)",
+        "an interrupted loop records the interrupt as its error: {state}"
     );
     assert!(
-        shots["meta"]["completed_at"].is_null(),
-        "cancellation bypasses the loop's own final meta write entirely: {state}"
+        shots["meta"]["completed_at"].is_string(),
+        "an interrupted loop records its completed_at: {state}"
+    );
+    assert_eq!(
+        shots["meta"]["completed_passes"],
+        serde_json::json!([]),
+        "no pass finished before the interrupt: {state}"
     );
 }
 
@@ -261,8 +281,5 @@ fn sigint_mid_tree_loop_dispatch_exits_130_runs_finally_and_never_starts_the_que
         "no merge happens at all once the run is cancelled, even for a branch that did \
          finish before the signal: {state}"
     );
-    assert!(
-        shots["value"].is_null(),
-        "cancellation skips the merge and the loop's own final value/meta write entirely: {state}"
-    );
+    assert_interrupt_recorded(shots, &state);
 }

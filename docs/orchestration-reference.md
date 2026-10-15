@@ -1858,13 +1858,42 @@ contain — a pass interrupted partway through its body, or an unnamed `if`
 in the body whose condition raised before writing anything, can leave an
 `iter_<N>` node that holds some finished-looking children without the pass
 itself having completed, and the loop's own record is what tells those
-apart. A **tree**-flow `each` loop finishes its passes out of order, and an
+apart. The loop writes that record when it fails and also when the run is
+interrupted (Ctrl-C, SIGTERM or SIGHUP, or a cancelled run): it records the
+interruption as its `meta.error`, keeps the passes it finished, and lets the
+interrupt carry on stopping the run.
+
+The first unfinished pass continues *inside* its body when the saved state
+holds its `iter_<N>` node (the run stopped partway through that pass): the
+body effects that finished without error are reused, and the first one that
+didn't reruns along with everything after it in the body, the same
+positional rule as at the top level. A `while` loop runs that pass without
+evaluating its condition again: the condition was true when the pass
+started, and evaluating it against a half-updated state could end the loop
+with the pass half done. Every later pass runs from its start, condition
+first, as in a fresh run. A pass with no saved `iter_<N>` node (the run
+stopped before it started, for example in the `while` condition check) also
+runs from its start, condition first.
+
+A **tree**-flow `each` loop finishes its passes out of order, and an
 **unnamed** loop has no `iter_<N>` record at all (each pass overwrites the
 last at the same path) — neither is sound to resume pass-by-pass, so both
-rerun their whole loop. An `if` and a `reflector` are all-or-nothing for
-resume: if the effect's own node already finished without error,
-`--resume` skips the whole thing; otherwise the whole thing reruns from the
-start.
+rerun their whole loop.
+
+An `if` whose node already finished without error is skipped whole. One
+that didn't finish evaluates its condition again (a `mode: model`
+condition asks the model again). If the condition selects the branch the
+saved node took (`meta.branch`), that branch continues at its first
+unfinished effect, by the same positional rule; if it selects the other
+branch, that branch runs from its start. An **unnamed** `if` has no node
+to record its branch, so its branch always runs from its start. A
+`reflector` always reruns from its start on `--resume`: it records no
+`completed_at`, so a finished reflector is not skipped either (#585 tracks
+changing that).
+Inside a resumed pass or branch, the first effect that didn't finish
+resumes the same way it would at the top level: a nested loop at its own
+first unfinished pass, a nested `if` inside its branch, a `dynamic` at its
+first unfinished effect, and a `use` inside its child (below).
 
 A `use` effect whose node already finished without error is skipped whole
 too. One that didn't finish reruns its child from the start, in a fresh
@@ -1886,9 +1915,10 @@ same check and fail again on every resume. An `expect` whose own model call
 failed recorded no result, so the finished child is reused and only the
 check runs again. A `use` with `retries` continues inside its child on its
 first attempt only; a retry runs the whole child again, as always. A `use`
-inside a loop pass or an `if` branch, or as a branch of a `flow: tree`
-dynamic (including a `flow: tree` root), reruns from its start: a loop pass
-or `if` branch reruns whole, and a tree branch starts from only the
+inside a resumed loop pass or `if` branch continues inside its child by the
+same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
+(including a `flow: tree` root), or inside a pass or branch that runs from
+its start, reruns from its start: a tree branch starts from only the
 finished nodes of the saved state.
 
 **Where the saved state comes from.** `--resume` needs a saved state that
