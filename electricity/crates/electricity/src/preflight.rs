@@ -2,7 +2,8 @@
 //! tool a raw document references from *config*'s own runtime block
 //! (never the merged `effective.runtime` -- a document-level
 //! `runtime.adapters.scripted.replies_file` is invisible to preflight
-//! but used by the run), and awaits/calls `check()`. The pure half
+//! but used by the run; only a document's adapter aliases are carried
+//! over, [`with_document_aliases`]), and awaits/calls `check()`. The pure half
 //! (`classify_preflight_results`, the two formatters,
 //! `collect_adapter_usages`) lives in `electricity_config::preflight`,
 //! which cannot reach `electricity_vm::adapter::Adapter` without a
@@ -166,6 +167,75 @@ pub fn unbuildable_known_tool_plugin(document: &Value) -> Option<String> {
         electricity_tools::plugin_names::PLUGIN_NAMES.contains(&normalized.as_str())
             && !buildable.contains(&normalized)
     })
+}
+
+/// `cli/runtime_shim.py::with_document_aliases` -- *config_runtime* plus
+/// the adapter aliases (`runtime.adapters.<alias>.adapter`) *run_runtime*
+/// defines. An alias only the document defines would otherwise be an
+/// unknown adapter to preflight; nothing else of the document's
+/// `runtime:` is carried over.
+pub fn with_document_aliases(
+    config_runtime: Option<&Value>,
+    run_runtime: Option<&Value>,
+    adapters: &AdapterRegistry,
+) -> Option<Value> {
+    let adapters_key = Value::Str("adapters".to_string());
+    let run_value = run_runtime.cloned().unwrap_or(Value::None);
+    let run_adapters = run_runtime
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&adapters_key))
+        .and_then(Value::as_dict);
+    let aliases: Vec<(&Value, &Value)> = run_adapters
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| matches!(name, Value::Str(name) if adapters.is_alias(name, &run_value)))
+        .collect();
+    if aliases.is_empty() {
+        return config_runtime.cloned();
+    }
+    let mut runtime = config_runtime
+        .and_then(Value::as_dict)
+        .cloned()
+        .unwrap_or_default();
+    let mut merged = match runtime.get(&adapters_key) {
+        Some(Value::Dict(dict)) => dict.clone(),
+        _ => electricity_value::Dict::new(),
+    };
+    for (name, entry) in aliases {
+        merged.insert(name.clone(), entry.clone());
+    }
+    runtime.insert(adapters_key, Value::Dict(merged));
+    Some(Value::Dict(runtime))
+}
+
+/// `cli/runtime_shim.py::classify_preflight_results`'s own
+/// `is_known_adapter`, for the names *results* failed on: Circuitry's
+/// full registry plus each alias in *runtime* that builds. A name
+/// that is neither is hard, never skippable.
+pub fn known_adapter_names(
+    results: &[PreflightResult],
+    runtime: Option<&Value>,
+    adapters: &AdapterRegistry,
+) -> Vec<String> {
+    let runtime_value = runtime.cloned().unwrap_or(Value::None);
+    let mut known: Vec<String> = electricity_vm::adapter_names::ADAPTER_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for (label, result) in results {
+        let Some(name) = label.strip_prefix("adapter:") else {
+            continue;
+        };
+        let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
+        if !result.ok
+            && !known.contains(&normalized)
+            && adapters.is_alias(&normalized, &runtime_value)
+            && adapters.build(&normalized, &runtime_value).is_ok()
+        {
+            known.push(normalized);
+        }
+    }
+    known
 }
 
 /// `cli/runtime_shim.py::preflight`, narrowed to what this milestone

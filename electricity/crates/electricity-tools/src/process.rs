@@ -44,6 +44,11 @@ pub struct RunOpts {
     /// trip it with `surrogateescape`; a `HashMap<String, String>`
     /// can't hold it at all).
     pub env_remove: Vec<String>,
+    /// Variables to set in the child's environment, applied with
+    /// `Command::env` after [`RunOpts::env_remove`] (so one named in both
+    /// gets this value), only while `env` is `None` (`agent_cli.py::
+    /// child_env`'s own `env`, ported: an adapter alias's own variables).
+    pub env_set: Vec<(String, String)>,
 }
 
 /// A finished child process -- text-mode stdout/stderr (universal-
@@ -203,6 +208,9 @@ pub async fn run_tracked(
     } else {
         for name in &opts.env_remove {
             command.env_remove(name);
+        }
+        for (name, value) in &opts.env_set {
+            command.env(name, value);
         }
     }
     command.stdout(Stdio::piped());

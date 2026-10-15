@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #579 (aliases of the CLI adapters), env",
+  "description": "Two `claude_code` aliases with different `env` values, one whose `unset_env` also names the variable (`env` wins), one that unsets it without setting it, one `pi` alias, and both base adapters, which get none of those. The fakes report the plain test variable `ALIAS_PROBE` they received (the case's own `env` sets it to `ambient` for both engines' process). `<alias>:<model>` selects an alias with a model; `meta.adapter` is the alias name.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "env": {
+    "ALIAS_PROBE": "ambient"
+  }
+}

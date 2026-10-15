@@ -358,6 +358,7 @@ pub(crate) async fn run_binary(
         env,
         new_session: armed,
         env_remove: Vec::new(),
+        env_set: Vec::new(),
     };
 
     let completed = match process::run_tracked(&cmd, &opts, token).await {

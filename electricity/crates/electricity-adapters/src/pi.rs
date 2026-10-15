@@ -13,7 +13,9 @@ use crate::agent_cli::{
     build_generate_result, check_binary, check_type_error, io_error_to_adapter,
     parse_error_to_adapter, resolve_model, run_error_to_adapter,
 };
-use crate::config::{cfg_value_or, require_str, resolve_truthy_str, string_list};
+use crate::config::{
+    EnvPairs, cfg_value_or, env_pairs, require_str, resolve_truthy_str, string_list,
+};
 use async_trait::async_trait;
 use electricity_tools::agent_cli::{
     DEFAULT_UNSET_ENV, PiCommandOpts, TempDirGuard, parse_pi_output, pi_command, run_agent_cli,
@@ -28,17 +30,21 @@ use electricity_vm::adapter::{
 /// (`crate::config`'s own doc comment, B5), not a plain `String`.
 #[derive(Debug)]
 pub struct PiAdapter {
+    /// `pi`, or an alias's own name (`adapters/factory.py::_build_alias`).
+    name: String,
     binary: Value,
     default_model: Value,
     thinking: Value,
     unset_env: Vec<String>,
     extra_args: Vec<String>,
+    /// `env`, applied to the child last; its `Debug` shows names only.
+    env: EnvPairs,
 }
 
 #[async_trait(?Send)]
 impl Adapter for PiAdapter {
     fn name(&self) -> &str {
-        "pi"
+        &self.name
     }
 
     async fn generate(
@@ -67,6 +73,7 @@ impl Adapter for PiAdapter {
         let proc = run_agent_cli(
             &cmd,
             &self.unset_env,
+            self.env.as_slice(),
             f64::from(call.timeout_seconds),
             Vec::new(),
             Some(workdir.path().to_path_buf()),
@@ -75,12 +82,12 @@ impl Adapter for PiAdapter {
         .await
         .map_err(run_error_to_adapter)?;
         let result = parse_pi_output(&proc).map_err(parse_error_to_adapter)?;
-        Ok(build_generate_result("pi", result, options))
+        Ok(build_generate_result(&self.name, result, options))
     }
 
     async fn check(&self) -> CheckResult {
         match require_str(&self.binary) {
-            Ok(binary) => check_binary("pi", binary),
+            Ok(binary) => check_binary(&self.name, binary),
             Err(err) => check_type_error(&err),
         }
     }
@@ -89,19 +96,27 @@ impl Adapter for PiAdapter {
 /// The pure half of `adapters/factory.py::_build_pi` -- kept separate
 /// from [`build_pi`] so a test can inspect the resolved fields
 /// directly (`claude_code.rs`'s own `build`, same reasoning).
-fn build(cfg: &Value) -> Result<PiAdapter, AdapterError> {
+fn build(name: &str, cfg: &Value) -> Result<PiAdapter, AdapterError> {
     Ok(PiAdapter {
+        name: name.to_string(),
         binary: cfg_value_or(cfg, "binary", "pi"),
         default_model: cfg_value_or(cfg, "default_model", ""),
         thinking: cfg_value_or(cfg, "thinking", ""),
-        unset_env: string_list(cfg, "unset_env", "pi", DEFAULT_UNSET_ENV)?,
-        extra_args: string_list(cfg, "extra_args", "pi", &[])?,
+        unset_env: string_list(cfg, "unset_env", name, DEFAULT_UNSET_ENV)?,
+        extra_args: string_list(cfg, "extra_args", name, &[])?,
+        env: env_pairs(cfg, name)?,
     })
 }
 
 /// `adapters/factory.py::_build_pi`.
 pub fn build_pi(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(Box::new(build(cfg)?))
+    build_pi_named("pi", cfg)
+}
+
+/// `adapters/factory.py::_build_pi` under *name*: an alias's own name,
+/// which is also what it reports as its `meta.adapter`.
+pub fn build_pi_named(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+    Ok(Box::new(build(name, cfg)?))
 }
 
 #[cfg(test)]
@@ -199,6 +214,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_pi(&tmp, SUCCESS_SCRIPT);
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -231,6 +248,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_pi(&tmp, SUCCESS_SCRIPT);
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -253,7 +272,7 @@ mod tests {
 
     #[test]
     fn build_pi_defaults_binary_model_and_thinking() {
-        let adapter = build(&Value::None).unwrap();
+        let adapter = build("pi", &Value::None).unwrap();
         assert_eq!(adapter.binary, Value::Str("pi".to_string()));
         assert_eq!(adapter.default_model, Value::Str(String::new()));
         assert_eq!(adapter.thinking, Value::Str(String::new()));
@@ -269,7 +288,7 @@ mod tests {
     #[test]
     fn build_pi_rejects_a_non_list_extra_args() {
         let cfg = dict(&[("extra_args", Value::from(1i64))]);
-        let err = build(&cfg).unwrap_err();
+        let err = build("pi", &cfg).unwrap_err();
         assert_eq!(
             err.message,
             "runtime.adapters.pi.extra_args must be a list of strings, got 1"
@@ -283,20 +302,22 @@ mod tests {
             "unset_env",
             Value::List(vec![Value::Str("AGENT_CLI_FAKE_DROP".to_string())]),
         )]);
-        let adapter = build(&cfg).unwrap();
+        let adapter = build("pi", &cfg).unwrap();
         assert_eq!(adapter.unset_env, vec!["AGENT_CLI_FAKE_DROP".to_string()]);
     }
 
     #[test]
     fn a_non_string_thinking_never_falls_back_to_the_default() {
         let cfg = dict(&[("thinking", Value::Bool(true))]);
-        let adapter = build(&cfg).unwrap();
+        let adapter = build("pi", &cfg).unwrap();
         assert_eq!(adapter.thinking, Value::Bool(true));
     }
 
     #[tokio::test]
     async fn check_reports_missing_for_a_name_that_cannot_exist() {
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str("circuitry-test-missing-pi".to_string()),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -314,6 +335,8 @@ mod tests {
     #[tokio::test]
     async fn check_raises_type_error_text_for_a_non_string_binary() {
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Bool(true),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -337,6 +360,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_pi(&tmp, SUCCESS_SCRIPT);
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Bool(true),
@@ -369,6 +394,8 @@ mod tests {
         let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_SUCCESS));
         let capture = tmp.join("cwd.txt");
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -397,6 +424,8 @@ mod tests {
         let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_FAILURE));
         let capture = tmp.join("cwd.txt");
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -429,6 +458,8 @@ mod tests {
         let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_HANG));
         let capture = tmp.join("cwd.txt");
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),
@@ -460,6 +491,8 @@ mod tests {
         let binary = write_fake_pi(&tmp, &capture_cwd_script(CAPTURE_HANG));
         let capture = tmp.join("cwd.txt");
         let adapter = PiAdapter {
+            name: "pi".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             thinking: Value::Str(String::new()),

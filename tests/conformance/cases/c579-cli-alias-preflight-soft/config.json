@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "adapters": {
+      "claude_alt": {
+        "adapter": "claude_code",
+        "binary": "circuitry-test-missing-claude"
+      }
+    }
+  }
+}

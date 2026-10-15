@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #579 (aliases of the CLI adapters), default adapter",
+  "description": "A document `adapter:` that names an alias: the run default is the alias, with its own `env` and `timeout_seconds` (the run's `effective_settings.sources` says so), and its name is `meta.adapter`. `env` values never reach `effective_settings` in the saved state (they are redacted, the variable names stay).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
