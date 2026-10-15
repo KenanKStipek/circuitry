@@ -39,7 +39,7 @@ cases/<name>/
 | `description` | one or two sentences, cite the spec section |
 | `engines` | `["python"]`, `["electricity"]`, or both — which runner(s) run this case |
 | `expect` | `"success"` or `"failure"` |
-| `cli_args` | extra argv appended after `--out <path>`, e.g. `["-e", "x=5"]` -- a `__MOCK_HTTP_PORT__` substring in any element is replaced with the mock server's real port, see "Mock HTTP server" below |
+| `cli_args` | extra argv appended after `--out <path>`, e.g. `["-e", "x=5"]` -- a `__MOCK_HTTP_PORT__` substring in any element is replaced with the mock server's real port, see "Mock HTTP server" below, and a `__CASE_DIR__` substring with the case directory's absolute path (the expected state carries it as `<CASE_DIR>`) |
 | `config` | filename (relative to the case dir) to pass as `--config`, or omitted |
 | `also_pretty` | success cases only — also capture `--out --pretty` (used by C23) |
 | `error_compare` | failure cases only — `"exact"` (Circuitry's own message, byte-for-byte) or `"location"` (a third-party library's message — CEL, YAML/JSON parse errors, JSON Schema — compared only for failing at the same place with a non-empty message, per §12) |

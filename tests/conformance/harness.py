@@ -47,6 +47,13 @@ CASES_DIR = Path(__file__).resolve().parent / "cases"
 #: `materialize_cli_args` below.
 MOCK_HTTP_PORT_PLACEHOLDER = "__MOCK_HTTP_PORT__"
 
+#: Substituted, verbatim, for the case directory's own absolute path in a
+#: case's `cli_args` -- a `-e` input that must name a directory as an
+#: absolute path (a prompt's `within:`, issue #578) can't be committed with
+#: one. Both engines run with that directory as `cwd`; the expected state
+#: carries it as `<CASE_DIR>` (`case_redaction_replacements`).
+CASE_DIR_PLACEHOLDER = "__CASE_DIR__"
+
 #: Mirrors `tests/cli/test_run_cancel_parallel.py`'s `_CREDENTIAL_ENV_VARS` —
 #: a case subprocess must never see a live credential, real or scripted.
 #: `_sandboxed_env` additionally drops every `CIRCUITRY_*` variable
@@ -552,13 +559,17 @@ def assert_no_leftover_replies(
         )
 
 
-def materialize_cli_args(cli_args: list[Any], *, mock_http_port: int | None) -> list[str]:
+def materialize_cli_args(
+    cli_args: list[Any], *, mock_http_port: int | None, case_dir: Path | None = None
+) -> list[str]:
     """`cli_args` as given, or with `MOCK_HTTP_PORT_PLACEHOLDER` substituted
-    for the mock server's real port in every element -- the only way a
-    `-e key=value` input can name the port an `http` tool URL needs, since
-    the port is only known once the harness has actually started the
-    server for this run."""
+    for the mock server's real port, and `CASE_DIR_PLACEHOLDER` for
+    *case_dir*, in every element -- the only way a `-e key=value` input can
+    name the port an `http` tool URL needs, since the port is only known once
+    the harness has actually started the server for this run."""
     args = [str(a) for a in cli_args]
+    if case_dir is not None:
+        args = [a.replace(CASE_DIR_PLACEHOLDER, str(case_dir)) for a in args]
     if mock_http_port is None:
         return args
     return [a.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port)) for a in args]
@@ -662,7 +673,9 @@ def run_case(
         # is always a relative path (issue #495's own harness addition).
         profile_stem = profile_name_from_path(profile_rel)
         cmd += ["--profile", profile_stem]
-    cmd += materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
+    cmd += materialize_cli_args(
+        metadata.get("cli_args", []), mock_http_port=mock_http_port, case_dir=case_dir
+    )
 
     proc = subprocess.run(
         cmd,

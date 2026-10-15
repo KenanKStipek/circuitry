@@ -28,7 +28,13 @@ from .prompt_compose import (
     check_prompt_composition,
     compile_declared_prompts,
 )
-from .prompt_files import resolve_text_or_file
+from .prompt_files import (
+    DispatchFileSource,
+    PromptFileError,
+    compile_dispatch_file,
+    is_dispatch_file,
+    resolve_text_or_file,
+)
 from .reflector import ReflectorDefinition
 from .state_ns import (
     validate_bare_input_refs,
@@ -76,16 +82,19 @@ _RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"
 #: through every container-compiling function's signature. ``None`` means
 #: this document has no file of its own (generated at run time, or no path
 #: at all) — see ``core.prompt_files``.
-_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None]] = ContextVar(
-    "circuitry_document_location", default=(None, None)
+#: The third item is whether the document is trusted (run by path), which
+#: decides if a ``file: {from: ...}``'s ``within`` is confined to the project
+#: (#578); see :func:`compile_orchestration`.
+_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None, bool]] = ContextVar(
+    "circuitry_document_location", default=(None, None, False)
 )
 
 
 @contextmanager
 def _document_location(
-    document_dir: Path | None, confinement_root: Path | None
+    document_dir: Path | None, confinement_root: Path | None, trusted: bool = False
 ) -> Iterator[None]:
-    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root))
+    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root, trusted))
     try:
         yield
     finally:
@@ -98,6 +107,10 @@ def _current_document_dir() -> Path | None:
 
 def _current_confinement_root() -> Path | None:
     return _DOCUMENT_LOCATION.get()[1]
+
+
+def _current_document_trusted() -> bool:
+    return _DOCUMENT_LOCATION.get()[2]
 
 
 def _scope_child(scope_path: str, child_name: str) -> str:
@@ -374,6 +387,7 @@ def compile_orchestration(
     root_name: str = "prime",
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    trusted: bool = False,
 ) -> DynamicDefinition:
     """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
     carrying its own declared prompts (#396).
@@ -383,13 +397,16 @@ def compile_orchestration(
     (``core.prompt_files``) — ``None`` (the default) for a document with no
     file of its own: generated at run time (a reflector/decompose plan, a
     ``use: inline`` child) or with no path at all (stdin, an SDK string),
-    for which ``file:`` is then a compile error. A caller that executes the
+    for which ``file:`` is then a compile error. *trusted* is true for a
+    document run by path (the caller's own ``trust_document``): only then can a
+    prompt's ``file: {from: ...}`` name a ``within`` outside *confinement_root*
+    (#578); a limited document's stays inside it. A caller that executes the
     result threads ``root.prompts`` into ``runtime_config`` under
     ``core.prompt_compose.RUNTIME_CONFIG_KEY`` itself, fresh for every
     ``use`` child, so "a child document sees only its own declared prompts"
     needs no special-casing at the ``use`` boundary.
     """
-    with _document_location(document_dir, confinement_root):
+    with _document_location(document_dir, confinement_root, trusted):
         # Support both 'effects' (spec) and 'steps' (legacy)
         effects = orch.get("effects") or orch.get("steps") or []
         # Bare {{name}} refs to this document's declared interface inputs are a
@@ -818,6 +835,28 @@ def _compile_effect(
         )
 
         plan_from_step = effect.get("plan_from_step") or "propose_steps"
+        for inner_effect in compiled_inner:
+            if not (
+                isinstance(inner_effect, PromptDefinition)
+                and inner_effect.name == str(plan_from_step)
+            ):
+                continue
+            file_fields = [
+                *(["template"] if inner_effect.template_file is not None else []),
+                *(
+                    f"messages[{index}].content"
+                    for index, message in enumerate(inner_effect.messages or ())
+                    if message.file is not None
+                ),
+            ]
+            if file_fields:
+                raise ValueError(
+                    f"Reflector effect '{valid_name}' at '{effect_path}': its plan prompt "
+                    f"'{inner_effect.name}' reads {file_fields[0]} from a file named in "
+                    "state ('file: {from: ...}'), but a reflector builds its planning "
+                    "prompt from the prompt's own text and would drop the file. Write the "
+                    "text in the prompt, or name the file with 'file: <path>'."
+                )
         max_iterations = int(effect.get("max_iterations") or 1)
         generated_key = effect.get("generated_key") or "generated"
         stop_on_done = bool(effect.get("stop_on_done", True))
@@ -1425,6 +1464,7 @@ def _compile_use(
         description=description,
         retries=retries,
         expect=expect,
+        parent_trusted=_current_document_trusted(),
     )
 
 
@@ -1479,6 +1519,28 @@ def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefiniti
     )
 
 
+def _compile_dispatch_file(
+    value: dict[str, Any],
+    *,
+    field: str,
+    effect_path: str,
+    loop_names: frozenset[str],
+) -> DispatchFileSource:
+    """A prompt's ``file: {from: ...}`` source (#578), under this document's trust."""
+    try:
+        return compile_dispatch_file(
+            value,
+            field=field,
+            effect_path=effect_path,
+            loop_names=loop_names,
+            document_dir=_current_document_dir(),
+            confinement_root=_current_confinement_root(),
+            trusted=_current_document_trusted(),
+        )
+    except PromptFileError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def _compile_prompt(
     effect: dict[str, Any],
     *,
@@ -1502,38 +1564,67 @@ def _compile_prompt(
 
     # Primary input form: template or messages
     template_raw = effect.get("template")
-    template = (
-        resolve_text_or_file(
-            template_raw,
-            field=f"{effect_path}.template",
-            document_dir=_current_document_dir(),
-            confinement_root=_current_confinement_root(),
+    template_file: DispatchFileSource | None = None
+    template: str | None
+    if is_dispatch_file(template_raw):
+        template_file = _compile_dispatch_file(
+            template_raw, field=f"{effect_path}.template", effect_path=effect_path, loop_names=loop_names
         )
-        if template_raw is not None
-        else None
-    )
+        template = None
+    else:
+        template = (
+            resolve_text_or_file(
+                template_raw,
+                field=f"{effect_path}.template",
+                document_dir=_current_document_dir(),
+                confinement_root=_current_confinement_root(),
+            )
+            if template_raw is not None
+            else None
+        )
     messages_raw = effect.get("messages")
 
     messages = None
     if messages_raw and isinstance(messages_raw, list):
-        messages = tuple(
-            MessageDef(
-                role=m.get("role", "user"),
-                content=resolve_text_or_file(
-                    m.get("content", ""),
-                    field=f"{effect_path}.messages[{index}].content",
-                    document_dir=_current_document_dir(),
-                    confinement_root=_current_confinement_root(),
-                ),
+        compiled_messages: list[MessageDef] = []
+        for index, m in enumerate(messages_raw):
+            if not isinstance(m, dict):
+                continue
+            content_raw = m.get("content", "")
+            content_field = f"{effect_path}.messages[{index}].content"
+            if is_dispatch_file(content_raw):
+                compiled_messages.append(
+                    MessageDef(
+                        role=m.get("role", "user"),
+                        content="",
+                        file=_compile_dispatch_file(
+                            content_raw,
+                            field=content_field,
+                            effect_path=effect_path,
+                            loop_names=loop_names,
+                        ),
+                    )
+                )
+                continue
+            compiled_messages.append(
+                MessageDef(
+                    role=m.get("role", "user"),
+                    content=resolve_text_or_file(
+                        content_raw,
+                        field=content_field,
+                        document_dir=_current_document_dir(),
+                        confinement_root=_current_confinement_root(),
+                    ),
+                )
             )
-            for index, m in enumerate(messages_raw)
-            if isinstance(m, dict)
-        )
+        messages = tuple(compiled_messages)
 
-    if not template and not messages:
+    if not template and template_file is None and not messages:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
     _check_templates(template, effect_path=effect_path, field="template", allow_partials=True)
     for index, message in enumerate(messages or ()):
+        if message.file is not None:
+            continue
         _check_templates(
             message.content,
             effect_path=effect_path,
@@ -1632,6 +1723,7 @@ def _compile_prompt(
     return PromptDefinition(
         name=name,
         template=template,
+        template_file=template_file,
         messages=messages,
         prompt_type=prompt_type,
         schema=schema,

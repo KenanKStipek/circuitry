@@ -1,0 +1,20 @@
+name: prompt-file-from-state-built-at-run-time
+adapter: scripted
+model: m
+runtime:
+  state:
+    prompt_sent: sha256
+effects:
+  - type: tool
+    name: build
+    provider: fs
+    params: {mode: write, path: "scratch/built.txt", content: "{{{input.body}}}"}
+  - type: prompt
+    name: review
+    template:
+      file: {from: prime.build.value}
+      within: {from: input.work_dir}
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

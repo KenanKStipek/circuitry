@@ -2001,6 +2001,7 @@ mod tests {
 
     fn use_op() -> UseOp {
         UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -2026,6 +2027,7 @@ mod tests {
     #[test]
     fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
         let op = block(vec![leaf(LeafKind::Use(UseOp {
+            parent_trusted: false,
             expect: Some(ExpectCondition::Model {
                 template: TemplateText::new("ok?".to_string(), false, Escape::None),
             }),

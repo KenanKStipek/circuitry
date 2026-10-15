@@ -1,0 +1,4 @@
+prime.from_template:
+  - text: "a summary"
+prime.from_messages:
+  - text: "brief"

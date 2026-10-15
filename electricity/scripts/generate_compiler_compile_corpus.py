@@ -1189,6 +1189,121 @@ for _type in ("tool", "prompt"):
     _timeout_case(f"{_type}_timeout_ms_binding_outside_its_loop", _type, "{from: job.ms}")
 
 
+# --- Issue #578: `file: {from: <state path>}, within: <dir>` ---------
+
+
+def _dispatch_file_case(name: str, effect: str, *, schema_error: bool = False) -> None:
+    add(doc(text="effects:\n" + effect))
+    CASES[-1]["name"] = name
+    if schema_error:
+        # The JSON-schema rejection is third-party text; only its location is pinned.
+        CASES[-1]["error_modes"] = {
+            "validate_errors": ["location_prefix"],
+            "run_error": "location_prefix",
+        }
+
+
+_PROMPT_HEAD = "  - type: prompt\n    name: edit\n"
+
+_dispatch_file_case(
+    "prompt_template_file_from_state",
+    _PROMPT_HEAD
+    + "    template:\n      file: {from: prime.prep.value.prompt_file}\n"
+    "      within: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "prompt_template_file_from_state_with_a_literal_within_and_a_trimmed_path",
+    _PROMPT_HEAD
+    + "    template:\n      file: {from: '  input.prompt_file  '}\n      within: /srv/work\n",
+)
+_dispatch_file_case(
+    "prompt_message_content_file_from_state",
+    _PROMPT_HEAD
+    + "    messages:\n"
+    "      - {role: system, content: 'Be brief about {{input.topic}}.'}\n"
+    "      - role: user\n"
+    "        content:\n"
+    "          file: {from: input.user_file}\n"
+    "          within: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "prompt_template_file_from_a_loop_binding",
+    "  - type: loop\n    name: each_job\n    each: {in: input.jobs, as: job}\n    body:\n"
+    "      - type: prompt\n        name: edit\n        template:\n"
+    "          file: {from: job.path}\n          within: {from: input.work_dir}\n",
+)
+for _label, _template in (
+    ("no_within", "{file: {from: input.f}}"),
+    ("a_relative_within", "{file: {from: input.f}, within: relative/dir}"),
+    ("a_within_with_a_template_tag", "{file: {from: input.f}, within: '/srv/{{x}}'}"),
+    ("a_within_from_an_effect_output", "{file: {from: input.f}, within: {from: prime.prep.value}}"),
+    ("a_within_from_a_nested_input", "{file: {from: input.f}, within: {from: input.a.b}}"),
+    ("a_within_from_with_an_extra_key", "{file: {from: input.f}, within: {from: input.d, x: 1}}"),
+    ("a_non_string_within", "{file: {from: input.f}, within: 5}"),
+    ("an_empty_from", "{file: {from: ''}, within: {from: input.d}}"),
+    ("a_non_string_from", "{file: {from: 5}, within: {from: input.d}}"),
+    ("an_empty_file_mapping", "{file: {}, within: {from: input.d}}"),
+    ("an_extra_key_in_file", "{file: {from: input.f, x: 1}, within: {from: input.d}}"),
+    ("a_from_without_a_root", "{file: {from: bare}, within: {from: input.d}}"),
+    ("a_state_prefixed_from", "{file: {from: state.input.f}, within: {from: input.d}}"),
+    ("an_extra_top_level_key", "{file: {from: input.f}, within: {from: input.d}, x: 1}"),
+):
+    _dispatch_file_case(
+        f"prompt_template_file_from_state_{_label}_is_a_check_error",
+        _PROMPT_HEAD + f"    template: {_template}\n",
+        schema_error=_label == "an_extra_top_level_key",
+    )
+_dispatch_file_case(
+    "prompt_message_file_from_state_no_within_names_the_message",
+    _PROMPT_HEAD
+    + "    messages:\n      - {role: user, content: hi}\n"
+    "      - role: user\n        content: {file: {from: input.f}}\n",
+)
+_dispatch_file_case(
+    "yield_template_file_from_state_is_a_check_error",
+    "  - type: yield\n    name: y\n    template:\n      file: {from: input.f}\n"
+    "      within: {from: input.d}\n",
+    schema_error=True,
+)
+add(doc(text=(
+    "prompts:\n  p:\n    file: {from: input.f}\n    within: {from: input.d}\n"
+    "effects:\n  - type: prompt\n    name: a\n    template: '{{> p}}'\n"
+)))
+CASES[-1]["name"] = "declared_prompt_file_from_state_is_a_check_error"
+CASES[-1]["error_modes"] = {
+    "validate_errors": ["location_prefix"],
+    "run_error": "location_prefix",
+}
+
+
+# A reflector builds its planning prompt from the prompt's own text, so a plan
+# prompt that reads its text from a file named in state would lose the file.
+_REFLECTOR_HEAD = "  - type: reflector\n    name: r\n    effects:\n"
+_PLAN_PROMPT_HEAD = "      - type: prompt\n        name: propose_steps\n"
+_dispatch_file_case(
+    "reflector_plan_prompt_template_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template:\n          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_plan_prompt_message_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        messages:\n          - {role: system, content: plan}\n"
+    "          - role: user\n            content:\n"
+    "              file: {from: input.f}\n              within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_other_prompt_file_from_state_is_allowed",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template: plan\n"
+    + "      - type: prompt\n        name: other\n        template:\n"
+    "          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+
+
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 

@@ -22,6 +22,7 @@
         {
           "name": "greet",
           "template": "Hello, {{input.name}}!",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,

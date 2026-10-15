@@ -1,0 +1,18 @@
+{
+  "spec_case": "issue #578: a prompt's text read at dispatch from a file named in state",
+  "description": "`template: {file: {from: ...}, within: ...}` and a message's `content` of the same form read the file when the effect dispatches and send its text verbatim (a literal `{{...}}` stays), recording `meta.template_files`; each error — no such file, a directory, a path outside `within`, not UTF-8, a state value that is not a string, a `within` that is not absolute — fails its effect with its own message, naming the effect, the field and the path, and `on_error: continue` goes on.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": [
+    "-e", "work_dir=__CASE_DIR__",
+    "-e", "prompt_file=prompts/item.txt",
+    "-e", "topic=widgets",
+    "-e", "missing_file=prompts/nope.txt",
+    "-e", "dir=prompts",
+    "-e", "escape_file=../case.json",
+    "-e", "binary_file=prompts/binary.bin",
+    "-e", "bad_path=5",
+    "-e", "relative_dir=prompts"
+  ],
+  "expect": "success"
+}

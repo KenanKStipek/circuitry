@@ -182,6 +182,20 @@ fn project_retries(retries: electricity_bytecode::effects::RetryPolicy) -> Json 
     })
 }
 
+/// `template_file`/`MessageDef.file`: the Python dataclass's own
+/// `DispatchFileSource` dump, or `null`.
+fn project_dispatch_file(file: Option<&electricity_bytecode::effects::DispatchFile>) -> Json {
+    match file {
+        None => Json::Null,
+        Some(file) => json!({
+            "path_from": file.path_from,
+            "within": file.within,
+            "within_from": file.within_from,
+            "confine_to": file.confine_to,
+        }),
+    }
+}
+
 /// `timeout_ms`: an integer literal as a number, a `{from: ...}` as the
 /// Python dataclass's own `TimeoutFrom` dump (`{"path", "default"}`).
 fn project_timeout_ms(timeout_ms: &Option<electricity_bytecode::effects::TimeoutMs>) -> Json {
@@ -345,9 +359,15 @@ fn project_loop_region(op: &Op, region: &Region) -> Json {
 fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
     match leaf {
         LeafKind::Prompt(prompt) => {
-            let (template, messages) = match &prompt.content {
-                PromptContent::Template(text) => (Json::String(text.source.clone()), Json::Null),
+            let (template, template_file, messages) = match &prompt.content {
+                PromptContent::Template(text) => {
+                    (Json::String(text.source.clone()), Json::Null, Json::Null)
+                }
+                PromptContent::TemplateFile(file) => {
+                    (Json::Null, project_dispatch_file(Some(file)), Json::Null)
+                }
                 PromptContent::Messages(messages) => (
+                    Json::Null,
                     Json::Null,
                     Json::Array(
                         messages
@@ -361,6 +381,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                                         Role::Tool => "tool",
                                     },
                                     "content": m.content.source,
+                                    "file": project_dispatch_file(m.file.as_ref()),
                                 })
                             })
                             .collect(),
@@ -379,6 +400,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             json!({
                 "name": op.name,
                 "template": template,
+                "template_file": template_file,
                 "messages": messages,
                 "prompt_type": prompt_type,
                 "schema": prompt.schema.as_ref().map(value_to_json).unwrap_or(Json::Null),
@@ -441,6 +463,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "retries": project_retries(use_op.retries),
                 "expect": project_expect(&use_op.expect),
                 "enabled": op.enabled,
+                "parent_trusted": use_op.parent_trusted,
             })
         }
         LeafKind::Yield(yield_op) => json!({
