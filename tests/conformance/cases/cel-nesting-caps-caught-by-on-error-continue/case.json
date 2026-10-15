@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #403 P1-5: on_error: continue catches an over-limit CEL condition the same way on both engines",
+  "spec_case": "issue #403: on_error: continue catches an over-limit CEL condition the same way on both engines",
   "description": "Five `if` effects, each on_error: continue, each over a different nesting cap at its own exact measured boundary (paren/call 54, list/map 49, an index chain 239 fed real data, a logical chain 486 terms, a method-call chain 297 links) -- each fails during evaluation and is caught the same way an if's own condition failure always is (the else branch runs, meta.error set), and the run reaches the trailing marker on both engines.",
   "engines": [
     "python",

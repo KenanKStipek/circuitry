@@ -55,8 +55,8 @@
 //!   as opposed to a list literal's own opening `[`) -- tracked
 //!   separately from `chain` even though both recurse through the same
 //!   `member`/`calc`/`relation` grammar rules in `cel`'s own parser,
-//!   because Circuitry's own measured floor for the two differs (finding
-//!   P2-2: 238 for an index chain, 241 for the operator shapes `chain`
+//!   because Circuitry's own measured floor for the two differs
+//!   (238 for an index chain, 241 for the operator shapes `chain`
 //!   covers -- sharing one counter at the tighter of the two, as an
 //!   earlier version of this module did, rejected an operator chain
 //!   Circuitry itself still accepted).
@@ -143,14 +143,14 @@
 //! chain (not just an absent/empty one): the same 610-613 range, because
 //! the failing mechanism (`_collect_state_paths`'s own parse-tree walk,
 //! next section) runs before any value is ever read, so whether the path
-//! resolves to real data never affects it (finding P1-4, first half).
+//! resolves to real data never affects it.
 //!
 //! The method-call shape is different again: a chain containing a call
 //! is governed by the *real evaluator's* own recursion (next section),
 //! not by `_collect_state_paths`'s structural walk, and that evaluator's
 //! own per-link cost turned out considerably higher than a plain select
 //! -- 295, not 610-613 -- confirmed directly via `cof run` in all three
-//! contexts (finding P1-4, second half: this shape was entirely
+//! contexts (this shape was entirely
 //! unmeasured before, assumed to share `accessor`'s own number and
 //! phase, which both turned out wrong once actually measured).
 //!
@@ -356,7 +356,7 @@ pub const MAX_LIST_MAP_NESTING_DEPTH: usize = 48;
 /// (module docs): 241. An index chain (`a[0][0]...`) has its own,
 /// tighter cap, [`MAX_INDEX_NESTING_DEPTH`] -- not this one, even
 /// though both recurse through the same `member`/`calc`/`relation`
-/// grammar rules in `cel`'s own parser (finding P2-2: measured
+/// grammar rules in `cel`'s own parser (measured
 /// independently once an operator chain's real floor turned out
 /// looser than an index chain's).
 pub const MAX_CHAIN_NESTING_DEPTH: usize = 241;
@@ -426,7 +426,7 @@ pub struct NestingDepths {
     pub chain: usize,
     /// Deepest index chain reached ([`MAX_INDEX_NESTING_DEPTH`]'s own
     /// input, a different, tighter cap from `chain` above -- module
-    /// docs, finding P2-2).
+    /// docs).
     pub index: usize,
     /// Deepest run of `&&`/`||`/prefix-`!`/prefix-`-` reached.
     pub logical_unary: usize,

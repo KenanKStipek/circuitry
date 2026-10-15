@@ -847,7 +847,7 @@ def build_corpus() -> list[dict]:
         condition("{'a':" * 49 + "1" + "}" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
         # Arithmetic (`+`)/relational (`<`) chains: `MAX_CHAIN_NESTING_DEPTH`
         # (241) now matches Circuitry's own floor for this family exactly
-        # (finding P2-2: index got its own, tighter cap below instead of
+        # (index got its own, tighter cap below instead of
         # sharing this one, so this cap no longer needs to be stricter
         # than Circuitry just to stay safe for the index shape too). 238
         # is pinned as accepted by both -- comfortably inside the real
@@ -893,8 +893,8 @@ def build_corpus() -> list[dict]:
         # `serde_json`'s `unbounded_depth` feature to work around that).
         condition("state" + ".a" * 20, _nested_dict(20)),
         # Index (`[]`) chains: a *separate*, tighter cap from the
-        # operator chains above (`MAX_INDEX_NESTING_DEPTH`, 238,
-        # finding P2-2), a clean, caught evaluation failure (not the
+        # operator chains above (`MAX_INDEX_NESTING_DEPTH`, 238),
+        # a clean, caught evaluation failure (not the
         # member-access shape's bare one) once the path it indexes into
         # resolves to real data -- confirmed on both engines through a
         # real document at the exact boundary (239 links) in

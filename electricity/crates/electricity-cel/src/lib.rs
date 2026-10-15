@@ -182,7 +182,7 @@ pub enum NestingCapKind {
     /// An index chain (`a[0][0]...`, [`MAX_INDEX_NESTING_DEPTH`]) --
     /// its own, tighter cap from `Chain` above, even though both
     /// recurse through the same grammar rule in `cel`'s own parser
-    /// (`nesting.rs`'s module docs, finding P2-2).
+    /// (`nesting.rs`'s module docs).
     Index,
     LogicalUnary,
     Accessor,
@@ -312,7 +312,7 @@ fn check_length(expr: &str) -> Result<(), CelError> {
 /// with no Circuitry counterpart at all. Both are genuine stack-safety
 /// checks, unlike [`check_parity_nesting`]'s four, which must run
 /// *after* [`evaluate_condition`]'s own unset-path short-circuit to
-/// match Circuitry's order (finding P1-3): Circuitry's `_compile`
+/// match Circuitry's order: Circuitry's `_compile`
 /// never fails for those four shapes, only evaluation does, and
 /// evaluation never happens once the unset-path check already decided
 /// the condition is `false`.
@@ -370,14 +370,14 @@ fn check_stack_safety(expr: &str) -> Result<(), CelError> {
 /// (`"maximum recursion depth exceeded"`), wrapped the same way every
 /// other genuine evaluation failure is
 /// (`"CEL evaluation failed for {expr!r}: ..."`) -- the *same* four
-/// words regardless of which of the four shapes failed (finding P1-2):
+/// words regardless of which of the four shapes failed:
 /// which cap and how deep is carried in [`CelError::nesting_cap`]
 /// instead of the message, since Circuitry's own text never says
 /// either.
 ///
 /// Must run *after* [`evaluate_condition`]'s unset-path short-circuit,
 /// not before: Circuitry only ever reaches the evaluation that can
-/// raise this once that check has already passed (finding P1-3).
+/// raise this once that check has already passed.
 fn check_parity_nesting(expr: &str) -> Result<(), CelError> {
     let depths = nesting::max_nesting_depths(expr);
     let detail = if depths.paren_call > MAX_PAREN_CALL_NESTING_DEPTH {
@@ -551,7 +551,7 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
     // The four parity caps, checked only now: Circuitry's own
     // evaluation (the thing that can raise this) never runs once the
     // unset-path check above already decided the condition is `false`
-    // (finding P1-3) -- `check_stack_safety` above is a genuine
+    // -- `check_stack_safety` above is a genuine
     // pre-compile concern instead, unaffected by this ordering. This
     // crate's own pre-check stands in for the real evaluator's own
     // recursion failure (the `cel` crate doesn't actually overflow at
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn an_unset_path_past_a_parity_cap_is_still_false_not_a_nesting_error() {
-        // Finding P1-3: the four parity caps must run *after* the
+        // The four parity caps must run *after* the
         // unset-path short-circuit, matching Circuitry's own order
         // (compile, then unset path, then evaluate) -- `_compile`
         // never fails for these shapes, only evaluation does, and
