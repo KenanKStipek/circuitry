@@ -30,16 +30,10 @@
 //! | [`prompt_files`] | D | `core/prompt_files.py` |
 //! | [`overrides`] | M1-J2 (#518) | `core/compiler.py::apply_effect_overrides`/`_overlay_effect`/`_disable_subtree` |
 //! | [`digest`] | D | `core/prompt_compose.py::document_content_digest` |
+//! | [`lint`] | #428 | `core/lint.py::lint_orchestration` |
 //!
 //! # Known divergences
 //!
-//! - [`pipeline::check_report`]'s `warnings` does not reproduce
-//!   Circuitry's own advisory lint (`core/lint.py::lint_orchestration`
-//!   -- deprecated aliases, loop-body reference footguns, `threshold:`
-//!   on a built-in `if`, `min_iterations` on an `each` loop, and more):
-//!   only `unknown_key_warnings` and the host-settings notice are
-//!   ported. Lint parity was never assigned to any of issue #408's
-//!   lanes; tracked as issue #428.
 //! - `.toon` documents are refused outright (an electricity-specific
 //!   message: convert to YAML or JSON) — Circuitry's own TOON support
 //!   has no Rust-side port.
@@ -170,6 +164,7 @@ pub mod cycles;
 pub mod difflib;
 pub mod digest;
 pub mod groups;
+pub mod lint;
 pub mod load;
 pub mod overrides;
 pub mod pipeline;
@@ -184,6 +179,7 @@ pub mod use_children;
 
 pub use compile::compile_document;
 pub use digest::document_content_digest;
+pub use lint::lint_warnings;
 pub use load::load_document;
 pub use pipeline::{
     Loaded, apply_declared_inputs, build_input_namespace, build_input_namespace_best_effort,
