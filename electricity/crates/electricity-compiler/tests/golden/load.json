@@ -17,7 +17,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .md. Supported: .json, .toon, .yaml, .yml",
@@ -47,7 +46,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
     "definition": null,
     "definition_error": "ImportError: The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
@@ -77,7 +75,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
     "definition": {
       "name": "prime",
@@ -119,7 +116,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Expecting value: line 1 column 1 (char 0)",
     "definition": null,
     "definition_error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
@@ -149,7 +145,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
     "definition": null,
     "definition_error": "ScannerError: while scanning for the next token\nfound character '\\t' that cannot start any token\n  in \"<unicode string>\", line 1, column 4:\n       \t\n       ^",
@@ -179,7 +174,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration YAML must be a mapping/object at the root.",
     "definition": null,
     "definition_error": "ValueError: Orchestration YAML must be a mapping/object at the root.",
@@ -209,7 +203,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
     "definition": {
       "name": "prime",
@@ -251,7 +244,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration JSON must be a mapping/object at the root.",
     "definition": null,
     "definition_error": "ValueError: Orchestration JSON must be a mapping/object at the root.",
@@ -281,7 +273,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
@@ -311,7 +302,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "<root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.yml: duplicate key 'name' at line 3, column 1 (first defined at line 1, column 1); YAML would silently keep only the last one",
@@ -341,7 +331,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "<root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
     "definition": null,
     "definition_error": "DuplicateKeyError: <root>/doc.json: duplicate key 'name' in top level; JSON would silently keep only the last one",
@@ -371,7 +360,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored.",
     "definition": {
       "name": "prime",
@@ -456,7 +444,6 @@
         "effects[1]: unknown key 'owner' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
       ]
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: unknown key 'prams' on a 'tool' effect — did you mean 'params'? As written it is ignored.",
     "definition": {
       "name": "prime",
@@ -535,7 +522,6 @@
         "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, model, plugins, prompts, runtime, steps, strategy, version."
       ]
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -575,7 +561,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found neither).",
@@ -607,7 +592,6 @@
         "effects[0]: unknown key 'group' on a 'dynamic' effect is ignored. Known keys: description, effects, finally, flow, labels, max_concurrency, name, on_error, steps, stop_on_error, strategy, type."
       ]
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0]: 'group' is only allowed on tool/prompt effects (it names a concurrency-group slot a leaf effect holds at dispatch) — found on a 'dynamic' effect.",
     "definition": {
       "name": "prime",
@@ -685,7 +669,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - interface.inputs.x.type: 'stringg' is not a recognized type — expected one of string, number, integer, boolean, array, object.",
     "definition": {
       "name": "prime",
@@ -727,7 +710,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - interface.inputs.x.default: declared type 'integer' but '3' is str — quoting it makes it a string; remove the quotes to declare it as integer.",
     "definition": {
       "name": "prime",
@@ -767,7 +749,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration 'runtime' must be an object if provided.",
     "definition": {
       "name": "prime",
@@ -805,7 +786,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration 'plugins' must be a list if provided.",
     "definition": {
       "name": "prime",
@@ -843,7 +823,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Plugins must be strings.",
     "definition": {
       "name": "prime",
@@ -881,7 +860,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input 'x' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -919,7 +897,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input '1' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -959,7 +936,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input '1' declared type 'integer' but 'not an int' could not be converted: invalid literal for int() with base 10: 'not an int'",
     "definition": {
       "name": "prime",
@@ -1001,7 +977,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1041,7 +1016,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1081,7 +1055,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1121,7 +1094,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1161,7 +1133,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1201,7 +1172,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input 'x' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -1241,7 +1211,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'boolean' but got int.",
     "definition": {
       "name": "prime",
@@ -1281,7 +1250,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'number' but got bool.",
     "definition": {
       "name": "prime",
@@ -1321,7 +1289,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'array' but got dict.",
     "definition": {
       "name": "prime",
@@ -1359,7 +1326,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input '_token' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -1399,7 +1365,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1439,7 +1404,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input 'name' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -1480,7 +1444,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input 'name' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -1520,7 +1483,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "missing required input 'prime' declared in orchestration interface.",
     "definition": {
       "name": "prime",
@@ -1560,7 +1522,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1600,7 +1561,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'number' but 'notanumber' could not be converted: could not convert string to float: 'notanumber'",
     "definition": {
       "name": "prime",
@@ -1640,7 +1600,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1680,7 +1639,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
     "definition": {
       "name": "prime",
@@ -1720,7 +1678,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1760,7 +1717,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'boolean' but 'nope' could not be converted: 'nope' is not a boolean",
     "definition": {
       "name": "prime",
@@ -1800,7 +1756,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1840,7 +1795,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'array' but '[1,2,' could not be converted: Expecting value: line 1 column 6 (char 5)",
     "definition": {
       "name": "prime",
@@ -1880,7 +1834,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1920,7 +1873,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'x' declared type 'object' but 'notjson' could not be converted: Expecting value: line 1 column 1 (char 0)",
     "definition": {
       "name": "prime",
@@ -1960,7 +1912,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -2000,7 +1951,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "input 'count' declared type 'integer' but 'abc' could not be converted: invalid literal for int() with base 10: 'abc'",
     "definition": {
       "name": "prime",
@@ -2041,7 +1991,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -2079,7 +2028,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
@@ -2111,7 +2059,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .png. Supported: .json, .toon, .yaml, .yml",
@@ -2143,7 +2090,6 @@
         "Applied host settings from doc.yml: runtime.max_concurrency"
       ]
     },
-    "lint_warnings": [],
     "run_error": "Invalid runtime concurrency configuration:\n  - runtime.max_concurrency must be a positive integer, got -1.",
     "definition": {
       "name": "prime",
@@ -2208,7 +2154,6 @@
         "Applied host settings from doc.yml: runtime.concurrency_groups.io"
       ]
     },
-    "lint_warnings": [],
     "run_error": "Invalid runtime concurrency configuration:\n  - runtime.concurrency_groups.io must be a positive integer, got -1.",
     "definition": {
       "name": "prime",
@@ -2273,7 +2218,6 @@
         "Applied host settings from doc.yml: runtime.concurrency_groups.1"
       ]
     },
-    "lint_warnings": [],
     "run_error": "Invalid runtime concurrency configuration:\n  - runtime.concurrency_groups has a non-string or empty group name: 1.",
     "definition": {
       "name": "prime",
@@ -2317,9 +2261,6 @@
         "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
       ]
     },
-    "lint_warnings": [
-      "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
-    ],
     "run_error": "Orchestration validation failed:\n  - effects[0].threshold: 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is greater than the maximum of 1",
     "definition": null,
     "definition_error": "OverflowError: int too large to convert to float",
@@ -2349,7 +2290,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 is less than the minimum of 1",
     "definition": {
       "name": "prime",
@@ -2430,7 +2370,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -2471,6 +2410,1033 @@
     },
     "definition_error": null,
     "digest": "e2cd791f974341305a66afb93a1c165d383c4621d3af07c58468bf3e69bc0ed2",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_deprecated_effect_type_alias",
+    "files": {
+      "doc.yml": "effects:\n  - type: conditional\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "c",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "c",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "9dad538ee8cea176575a72c2046815e7c19373a62de92634042aaf4287147bc9",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_deprecated_flow_alias_at_top_level",
+    "files": {
+      "doc.yml": "flow: cot\neffects:\n  - {type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "top level: flow 'cot' is a deprecated alias — write 'flow: chain'. Both parse; only 'chain' is documented."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "1d5eb125eadfe26098733d409721c8135c77ef6232ba42c4c30edd0aa591e45a",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_deprecated_flow_alias_on_an_effect",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: poll\n    flow: tot\n    each: {in: 'input.xs'}\n    body: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: flow 'tot' is a deprecated alias — write 'flow: tree'. Both parse; only 'tree' is documented."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "poll",
+          "body": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.xs",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "tree",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "poll",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "9420dbff29591fe594f99227c458380cbd9f7af58a5cd3d7c08229eb818864ce",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_effect_named_after_its_own_type",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: tool\n    provider: json\n    params: {mode: stringify, input: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: effect is named 'tool', which is an effect-type keyword. Name effects after the job they do (e.g. 'summarize_article'), not after their type — generic names collide when two of them end up siblings in the same scope."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "tool",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "tool"
+      ]
+    },
+    "definition_error": null,
+    "digest": "fe90c15926c3c75547552421a16aa5eb3110e27832510608894cad588fd5b651",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_tool_args_yaml_scalar_gotchas",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: run_it\n    provider: shell\n    params: {command: echo, args: [0x1, off, -0, ~]}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: params.args[0] is not a string — YAML read it as the int 1, so the tool receives the text '1'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0).",
+        "effects[0]: params.args[1] is not a string — YAML read it as the bool False, so the tool receives the text 'False'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0).",
+        "effects[0]: params.args[2] is not a string — YAML read it as the int 0, so the tool receives the text '0'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0).",
+        "effects[0]: params.args[3] is not a string — YAML read it as the null None, so the tool receives the text 'None'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0)."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "run_it",
+          "provider": "shell",
+          "params": {
+            "command": "echo",
+            "args": [
+              1,
+              false,
+              0,
+              null
+            ]
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "run_it"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e7e6d3f1e4b8075238b234214575305e6f60ac8b987af37a90924c718c3faa57",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_loop_fixed_iteration_reference",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: prompt\n        name: first\n        template: 'FIRST {{item}}'\n      - type: prompt\n        name: second\n        template: 'iter0=[{{prime.outer.iter_0.first.value}}]'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].body[1]: 'prime.outer.iter_0' names a fixed pass of the loop it sits inside. It does not fail — it resolves to pass 0's output in every iteration, so every later pass reads stale data. Use '{{prime.<step>.value}}' for the current pass; iter_<N> is only meaningful outside the loop."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "outer",
+          "body": [
+            {
+              "name": "first",
+              "template": "FIRST {{item}}",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            },
+            {
+              "name": "second",
+              "template": "iter0=[{{prime.outer.iter_0.first.value}}]",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "first",
+        "outer",
+        "second"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5472f6e48ebedd6dd857341cbaf3d58c1b9e830e4329eb2868df3adb58353bb1",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_loop_last_reference_inside_body",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: review\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: prompt\n        name: refine\n        template: 'Base it on {{prime.review.last.refine.value}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].body[0]: 'prime.review.last' inside the loop it names resolves to the previous pass at best — 'last' is written when the loop completes. Use '{{prime.<step>.value}}' for the current pass; 'prime.review.last.<step>.value' is only meaningful after the loop."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "review",
+          "body": [
+            {
+              "name": "refine",
+              "template": "Base it on {{prime.review.last.refine.value}}",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "refine",
+        "review"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ee6dc756e360e3a1aee71847602641893edb857688ab5c8be12837b28a9c0ee5",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_loop_sibling_path_never_resolves",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: prompt\n        name: first\n        template: 'FIRST {{item}}'\n      - type: prompt\n        name: second\n        template: 'loopname=[{{prime.outer.first.value}}]'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].body[1]: 'prime.outer.first' never resolves — 'prime.outer' is the loop's own node (iter_<N>, last, collected, meta), not a scope its body steps live in. Use '{{prime.first.value}}' for the current pass, or 'prime.outer.collected.value' after the loop."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "outer",
+          "body": [
+            {
+              "name": "first",
+              "template": "FIRST {{item}}",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            },
+            {
+              "name": "second",
+              "template": "loopname=[{{prime.outer.first.value}}]",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "first",
+        "outer",
+        "second"
+      ]
+    },
+    "definition_error": null,
+    "digest": "e0cd3a267f99f59cef03039df23a1212df9e194bd45e1941eeaf32a56e0d3951",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_min_iterations_on_each_loop_has_no_effect",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: l\n    each: {in: 'input.items'}\n    min_iterations: 5\n    body: [{type: prompt, name: s, template: 'x'}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: 'min_iterations' has no effect on an 'each' loop; it only forces extra passes before a 'while' loop's condition is checked. An 'each' loop always runs once per collection element."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "l",
+          "body": [
+            {
+              "name": "s",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 5,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "l",
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "43bce8d0c7967869a961ac46e5647b6b4323ffadd25a2b44071b8f00333933f0",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_if_threshold_has_no_effect",
+    "files": {
+      "doc.yml": "effects:\n  - type: if\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: prompt, name: t, template: 'y'}]\n    threshold: 0.7\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "c",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "template": "y",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.7,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "c",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "7eede2c4643f84d174dc3b99a87eacb02043b9dd877970940600aea3340d29ab",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_several_rules_together",
+    "files": {
+      "doc.yml": "effects:\n  - type: conditional\n    name: use\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: tool\n        name: t\n        provider: shell\n        params: {command: echo, args: [off]}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented.",
+        "effects[0]: effect is named 'use', which is an effect-type keyword. Name effects after the job they do (e.g. 'summarize_article'), not after their type — generic names collide when two of them end up siblings in the same scope.",
+        "effects[0].then[0]: params.args[0] is not a string — YAML read it as the bool False, so the tool receives the text 'False'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0)."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "use",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "provider": "shell",
+              "params": {
+                "command": "echo",
+                "args": [
+                  false
+                ]
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t",
+        "use"
+      ]
+    },
+    "definition_error": null,
+    "digest": "9eea22daee0bfa202416444115be9cdde65bb5ac4a6faf23a981b08809d2493c",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_warning_next_to_unknown_key_warning",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: tool\n    provider: json\n    params: {mode: stringify, input: 1}\n    owner: ops\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: effect is named 'tool', which is an effect-type keyword. Name effects after the job they do (e.g. 'summarize_article'), not after their type — generic names collide when two of them end up siblings in the same scope.",
+        "effects[0]: unknown key 'owner' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "tool",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "tool"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ccb0466669979192404b523dc3c749d85380189b57c9f5eeca81ccdb5fe58fd3",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_warning_next_to_host_settings_notice",
+    "files": {
+      "doc.yml": "runtime: {max_concurrency: 2}\neffects:\n  - type: loop\n    name: l\n    each: {in: 'input.items'}\n    min_iterations: 5\n    body: [{type: prompt, name: s, template: 'x'}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0]: 'min_iterations' has no effect on an 'each' loop; it only forces extra passes before a 'while' loop's condition is checked. An 'each' loop always runs once per collection element.",
+        "Applied host settings from doc.yml: runtime.max_concurrency"
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "l",
+          "body": [
+            {
+              "name": "s",
+              "template": "x",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 5,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "l",
+        "s"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ed3644a0f524ec9d9b4304223e1e5f30f259736346a288af26abab92386bf102",
     "comparison": {
       "validate_errors": [],
       "run_error": null

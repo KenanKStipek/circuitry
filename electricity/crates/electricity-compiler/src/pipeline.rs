@@ -24,7 +24,7 @@
 
 use crate::{
     CheckOptions, CheckReport, DocumentOrigin, RunCheckError, compile_document, cycles, digest,
-    groups, load, load_document, structural_errors, unknown_key_warnings,
+    groups, lint, load, load_document, structural_errors, unknown_key_warnings,
 };
 use electricity_bytecode::{DocumentInfo, Program};
 use electricity_value::{Dict, Value};
@@ -753,10 +753,12 @@ fn declared_type_outcome(
 /// empty." if it is blank (before any parsing, matching `validate()`'s
 /// own `text.strip()` check, which runs *outside* the broad
 /// `except Exception` the rest of the function is wrapped in);
-/// [`load_document`]; [`unknown_key_warnings`] plus the "Applied host
-/// settings" notice (both folded into `warnings` immediately, so they
-/// survive every early return below, exactly as `validate()`'s own
-/// `lint_warnings` variable does); [`structural_errors`]; compilation
+/// [`load_document`]; [`lint::lint_warnings`], [`unknown_key_warnings`]
+/// and the "Applied host settings" notice, in that order (all three
+/// folded into `warnings` immediately, so they survive every early
+/// return below, exactly as `validate()`'s own `lint_warnings` variable
+/// does -- `core.lint.lint_orchestration(orch)` runs before
+/// `unknown_key_warnings(orch)` there too); [`structural_errors`]; compilation
 /// ([`compile_document`], lane C); [`concurrency_config_errors`] against
 /// the merged runtime config (checked *after* compilation here --
 /// `validate()`'s own order, `cli/runtime_shim.py`'s own parse calls
@@ -798,7 +800,8 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
     let document_name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
-    let mut warnings = unknown_key_warnings(&document);
+    let mut warnings = lint::lint_warnings(&document);
+    warnings.extend(unknown_key_warnings(&document));
     if let Some(name) = &document_name {
         warnings.extend(host_setting_warnings(&document, name));
     }
