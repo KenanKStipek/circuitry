@@ -740,14 +740,32 @@ async fn attempt_once<R: ParamsCtx>(
     if let Some(electricity_bytecode::ParamNode::Map(entries)) = &use_op.inputs {
         for (key, node) in entries {
             let value = match node {
-                electricity_bytecode::ParamNode::From { path, .. } => {
+                electricity_bytecode::ParamNode::From { path, as_json, .. } => {
                     let resolved = ctx.resolve_from(path).unwrap_or(Value::None);
                     if matches!(resolved, Value::None) {
                         if let Value::Str(key_str) = key {
                             unresolved.insert(key_str.clone(), path.clone());
                         }
+                        resolved
+                    } else if *as_json {
+                        // `core/use.py::_render_inputs`: `as: json` only
+                        // serializes a value that resolved; an unresolved
+                        // one stays `None`.
+                        crate::params::serialize_as_json(&resolved)
+                            .map(Value::Str)
+                            .map_err(|reason| {
+                                not_retried(
+                                    crate::params::RenderParamsError::NotSerializable {
+                                        label: format!("inputs.{}", key.py_str()),
+                                        reference_path: path.clone(),
+                                        reason,
+                                    }
+                                    .to_string(),
+                                )
+                            })?
+                    } else {
+                        resolved
                     }
-                    resolved
                 }
                 electricity_bytecode::ParamNode::Template(text) => {
                     let label_for_render = format!("inputs.{}", key.py_str());

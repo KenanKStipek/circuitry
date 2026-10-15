@@ -117,10 +117,12 @@ fn param_reference(dict: &Dict) -> Option<ParamNode> {
         1 => Some(ParamNode::From {
             path,
             default: None,
+            as_json: false,
         }),
         2 if dict.contains_key(&default_key) => Some(ParamNode::From {
             path,
             default: Some(dict.get(&default_key).unwrap().clone()),
+            as_json: false,
         }),
         _ => None,
     }

@@ -33,44 +33,78 @@ use std::collections::BTreeSet;
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 pub(crate) const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 
-/// A `{from: <path>}` (optionally with `default:`) leaf's path/default,
-/// or `None` for any other value -- ports `core/tool.py::param_reference`.
-/// Only a mapping with exactly the keys `{"from"}` or `{"from",
-/// "default"}`, and a string `from` value, is a reference.
-fn param_reference(value: &Value) -> Option<(String, Option<Value>)> {
+/// A `{from: <path>}` leaf's path, `default:` and `as:` as written -- ports
+/// `core/tool.py::ParamReference`.
+struct ParamReference {
+    path: String,
+    default: Option<Value>,
+    as_value: Option<Value>,
+}
+
+/// Ports `core/tool.py::param_reference`: `Some` only for a mapping whose
+/// keys are `from` (a string) plus any of `default` and `as`.
+fn param_reference(value: &Value) -> Option<ParamReference> {
     let Value::Dict(dict) = value else {
         return None;
     };
     let from_key = Value::Str("from".to_string());
     let default_key = Value::Str("default".to_string());
-    match dict.len() {
-        1 => {
-            let path = dict.get(&from_key)?.as_str()?;
-            Some((path.trim().to_string(), None))
-        }
-        2 if dict.contains_key(&from_key) && dict.contains_key(&default_key) => {
-            let path = dict.get(&from_key)?.as_str()?;
-            Some((
-                path.trim().to_string(),
-                Some(dict.get(&default_key)?.clone()),
-            ))
-        }
-        _ => None,
+    let as_key = Value::Str("as".to_string());
+    let path = dict.get(&from_key)?.as_str()?.trim().to_string();
+    if dict
+        .keys()
+        .any(|key| *key != from_key && *key != default_key && *key != as_key)
+    {
+        return None;
     }
+    Some(ParamReference {
+        path,
+        default: dict.get(&default_key).cloned(),
+        as_value: dict
+            .get(&as_key)
+            .filter(|v| !matches!(v, Value::None))
+            .cloned(),
+    })
 }
 
 /// A `{from: <path>}` leaf (no `default:` support) for a `use` effect's
-/// `inputs` -- ports `core/use.py::reference_path`: only a mapping with
-/// exactly the one key `from` and a string value is a reference.
-fn reference_path_only(value: &Value) -> Option<String> {
+/// `inputs` -- ports `core/use.py::reference_path` and `reference_as`:
+/// only a mapping with the key `from` (a string value), optionally plus
+/// `as`, is a reference. Returns the path and the `as:` value.
+fn reference_path_only(value: &Value) -> Option<(String, Option<Value>)> {
     let Value::Dict(dict) = value else {
         return None;
     };
-    if dict.len() != 1 {
+    let from_key = Value::Str("from".to_string());
+    let as_key = Value::Str("as".to_string());
+    let path = dict.get(&from_key)?.as_str()?.trim().to_string();
+    if dict.keys().any(|key| *key != from_key && *key != as_key) {
         return None;
     }
-    let path = dict.get(&Value::Str("from".to_string()))?.as_str()?;
-    Some(path.trim().to_string())
+    Some((
+        path,
+        dict.get(&as_key)
+            .filter(|v| !matches!(v, Value::None))
+            .cloned(),
+    ))
+}
+
+/// Ports `core/use.py::validate_reference_as`: `as:` must be absent or name
+/// a supported format (`json`). Returns whether `as: json` was asked for.
+fn validate_reference_as(
+    as_value: &Option<Value>,
+    label: &str,
+    effect_path: &str,
+) -> Result<bool, CompileError> {
+    match as_value {
+        None => Ok(false),
+        Some(Value::Str(format)) if format == "json" => Ok(true),
+        Some(other) => Err(CompileError(format!(
+            "{label} at '{effect_path}': unknown 'as: {}' on a '{{from: ...}}' \
+             reference (supported: json).",
+            other.py_str()
+        ))),
+    }
 }
 
 /// Ports `core/compiler.py::_check_security_sensitive_param_leaf`:
@@ -119,14 +153,15 @@ fn build_param_node(
     field: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<ParamNode, CompileError> {
-    if let Some((path, default)) = param_reference(value) {
-        validate_reference_path(
-            &path,
-            &format!("Tool effect '{name}' param '{field}'"),
-            effect_path,
-            loop_names,
-        )?;
-        return Ok(ParamNode::From { path, default });
+    if let Some(reference) = param_reference(value) {
+        let label = format!("Tool effect '{name}' param '{field}'");
+        validate_reference_path(&reference.path, &label, effect_path, loop_names)?;
+        let as_json = validate_reference_as(&reference.as_value, &label, effect_path)?;
+        return Ok(ParamNode::From {
+            path: reference.path,
+            default: reference.default,
+            as_json,
+        });
     }
     match value {
         Value::Str(s) => {
@@ -231,24 +266,22 @@ pub(crate) fn build_use_inputs(
         }
     }
     for (key, value) in inputs {
-        if let Some(path) = reference_path_only(value) {
-            validate_reference_path(
-                &path,
-                &format!("Use effect '{name}' input '{}'", key_str(key)),
-                effect_path,
-                loop_names,
-            )?;
+        if let Some((path, as_value)) = reference_path_only(value) {
+            let label = format!("Use effect '{name}' input '{}'", key_str(key));
+            validate_reference_path(&path, &label, effect_path, loop_names)?;
+            validate_reference_as(&as_value, &label, effect_path)?;
         }
     }
 
     let mut map = IndexMap::new();
     for (key, value) in inputs {
-        if let Some(path) = reference_path_only(value) {
+        if let Some((path, as_value)) = reference_path_only(value) {
             map.insert(
                 key.clone(),
                 ParamNode::From {
                     path,
                     default: None,
+                    as_json: as_value.is_some(),
                 },
             );
             continue;
@@ -365,7 +398,12 @@ mod tests {
         let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
         match node {
             ParamNode::Map(m) => match m.get(&Value::Str("x".to_string())) {
-                Some(ParamNode::From { path, default }) => {
+                Some(ParamNode::From {
+                    path,
+                    default,
+                    as_json,
+                }) => {
+                    assert!(!as_json);
                     assert_eq!(path, "input.x");
                     assert_eq!(default, &Some(Value::Int(1.into())));
                 }
@@ -373,6 +411,117 @@ mod tests {
             },
             _ => panic!("expected a map"),
         }
+    }
+
+    fn reference_dict(pairs: Vec<(&str, Value)>) -> Value {
+        Value::Dict(dict(pairs))
+    }
+
+    #[test]
+    fn from_reference_with_as_json_sets_as_json_at_any_depth() {
+        let leaf = reference_dict(vec![
+            ("from", Value::Str("input.x".to_string())),
+            ("as", Value::Str("json".to_string())),
+        ]);
+        let params = dict(vec![(
+            "args",
+            Value::List(vec![Value::Str("record".to_string()), leaf]),
+        )]);
+        let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
+        let ParamNode::Map(m) = node else {
+            panic!("expected a map");
+        };
+        let Some(ParamNode::List(items)) = m.get(&Value::Str("args".to_string())) else {
+            panic!("expected a list");
+        };
+        assert!(matches!(
+            &items[1],
+            ParamNode::From { path, default: None, as_json: true } if path == "input.x"
+        ));
+    }
+
+    #[test]
+    fn an_unknown_as_value_is_rejected_naming_the_param() {
+        for (bad, shown) in [
+            (Value::Str("yaml".to_string()), "yaml"),
+            (Value::Str("JSON".to_string()), "JSON"),
+            (Value::Int(5.into()), "5"),
+            (Value::Bool(true), "True"),
+        ] {
+            let leaf = reference_dict(vec![
+                ("from", Value::Str("input.x".to_string())),
+                ("as", bad),
+            ]);
+            let params = dict(vec![("v", leaf)]);
+            let err = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap_err();
+            assert_eq!(
+                err.0,
+                format!(
+                    "Tool effect 't' param 'params.v' at 'p': unknown 'as: {shown}' on a \
+                     '{{from: ...}}' reference (supported: json)."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_null_as_is_the_same_as_none() {
+        let leaf = reference_dict(vec![
+            ("from", Value::Str("input.x".to_string())),
+            ("as", Value::None),
+        ]);
+        let params = dict(vec![("v", leaf)]);
+        let node = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap();
+        let ParamNode::Map(m) = node else {
+            panic!("expected a map");
+        };
+        assert!(matches!(
+            m.get(&Value::Str("v".to_string())),
+            Some(ParamNode::From { as_json: false, .. })
+        ));
+    }
+
+    #[test]
+    fn a_reference_with_as_json_is_still_refused_in_allowed_commands() {
+        let leaf = reference_dict(vec![
+            ("from", Value::Str("input.x".to_string())),
+            ("as", Value::Str("json".to_string())),
+        ]);
+        let params = dict(vec![(
+            "allowed_commands",
+            Value::List(vec![Value::Str("ls".to_string()), leaf]),
+        )]);
+        let err = build_tool_params(&params, "t", "p", &BTreeSet::new()).unwrap_err();
+        assert!(err.0.contains("security-sensitive setting"), "{}", err.0);
+    }
+
+    #[test]
+    fn use_input_reference_accepts_as_json_and_rejects_an_unknown_as() {
+        let good = reference_dict(vec![
+            ("from", Value::Str("input.x".to_string())),
+            ("as", Value::Str("json".to_string())),
+        ]);
+        let inputs = dict(vec![("got", good)]);
+        let node = build_use_inputs(&inputs, "sub", "p", &BTreeSet::new()).unwrap();
+        let ParamNode::Map(m) = node else {
+            panic!("expected a map");
+        };
+        assert!(matches!(
+            m.get(&Value::Str("got".to_string())),
+            Some(ParamNode::From { as_json: true, .. })
+        ));
+
+        let bad = reference_dict(vec![
+            ("from", Value::Str("input.x".to_string())),
+            ("as", Value::Str("yaml".to_string())),
+        ]);
+        let inputs = dict(vec![("got", bad)]);
+        let err = build_use_inputs(&inputs, "sub", "p", &BTreeSet::new()).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Use effect 'sub' input 'got' at 'p': unknown 'as: yaml' on a \
+             '{from: ...}' reference (supported: json)."
+        );
     }
 
     #[test]

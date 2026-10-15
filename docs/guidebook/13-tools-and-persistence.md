@@ -57,7 +57,7 @@ Here `arguments.labels` is the label list an `array` prompt chose, the list itse
       symbols: {from: prime.symbol_list.value}
 ```
 
-`arguments.symbols` arrives as the native array `prime.symbol_list.value` holds, not its Mustache-rendered string form. It resolves against the same scope a `use` effect's by-reference `inputs` do (state namespaces, an enclosing loop's bindings) and fails `cof check` the same way on an unrooted path; add `default: <value>` alongside `from:` to fall back instead of failing when the path doesn't resolve. See [Params by reference](../orchestration-reference.md#params-by-reference).
+`arguments.symbols` arrives as the native array `prime.symbol_list.value` holds, not its Mustache-rendered string form. It resolves against the same scope a `use` effect's by-reference `inputs` do (state namespaces, an enclosing loop's bindings) and fails `cof check` the same way on an unrooted path; add `default: <value>` alongside `from:` to fall back instead of failing when the path doesn't resolve, and `as: json` to receive the value as compact JSON text (for a string-only param such as a CLI argument). See [Params by reference](../orchestration-reference.md#params-by-reference).
 
 The division of labour is strict. Tools are for what a model *cannot* do — side effects and observations. Text work — summarising, extracting, classifying, writing, coding — is a prompt, and the pattern that joins them is **prompt-then-tool**: a `json` prompt produces the parameters, a tool executes them.
 

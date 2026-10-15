@@ -725,7 +725,22 @@ time.
   is no way to tell "missing" from "stored null" — so it also raises (or
   falls back to `default:`), unlike a `use` effect's input reference, which
   passes `null` through as the value.
-- Only a mapping with exactly the key `from` (optionally plus `default`) is a
+- `as: json` hands the value over as compact JSON text instead (keys in their
+  stored order, non-ASCII text kept as is) — for a param that must be a
+  string, such as a CLI argument in `shell`'s `args`. It works at every place
+  `{from:}` does, list items included, and `default:` is applied before the
+  value is serialized:
+  ```yaml
+  params:
+    command: mytool
+    args: [record, --meta, {from: prime.session.meta, as: json, default: {}}]
+  ```
+  The last `args` entry is then the text `{"k":1}`, or `{}` when
+  `prime.session.meta` didn't resolve. A value JSON can't carry (`NaN`,
+  bytes, ...) fails the effect with `Tool effect '<name>' param '<path>':
+  '{from: ..., as: json}' did not serialize to JSON: ...`. `json` is the only
+  `as` value: `cof check` rejects any other.
+- Only a mapping with the key `from` (optionally plus `default` and `as`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
   `{from: ...}` object to a plugin, use `params_json` instead.
@@ -1056,7 +1071,12 @@ child a value as it is (an array, an object, a number, a boolean) write `{from: 
 - The child gets a deep copy: nothing it does can reach the parent's state.
 - A path that resolves to nothing passes `null`; if the child's interface marks that input
   `required`, the `use` fails with the path in the message.
-- Only a mapping with the single key `from` is a reference. Any other mapping is a literal value.
+- `{from: <path>, as: json}` passes the value as compact JSON text instead (keys in their stored
+  order), for a child that wants a string. A path that resolves to nothing still passes `null`.
+  A value JSON can't carry fails the `use` naming the input. `json` is the only `as` value;
+  `cof check` rejects any other.
+- Only a mapping with the key `from` (optionally plus `as`) is a reference. Any other mapping is a
+  literal value.
 
 #### Complete record (opt-in)
 
