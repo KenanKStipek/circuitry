@@ -655,7 +655,9 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
     // runtime (`check_nesting_depth`) or, for brackets, by `cel`'s own
     // parser guard (`nesting.rs`'s module docs).
     if depths.raw_combined > nesting::MAX_SAFETY_CHAIN_DEPTH {
-        return Err(CelSyntaxError::TooDeeplyNestedForSafety(depths.raw_combined));
+        return Err(CelSyntaxError::TooDeeplyNestedForSafety(
+            depths.raw_combined,
+        ));
     }
     let env = stdlib_env();
     env.compile(expr)

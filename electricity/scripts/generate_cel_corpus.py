@@ -120,7 +120,7 @@ def _at_depth(pad: int, call: Any) -> Any:
 
     Reproduces, from this generator's own shallow top-level call stack,
     how much Python recursion budget `evaluate_cel` actually has left in
-    a real run's deepest measured context -- seee `_DEEPEST_CONTEXT_PAD`.
+    a real run's deepest measured context -- see `_DEEPEST_CONTEXT_PAD`.
     """
     if pad <= 0:
         return call()

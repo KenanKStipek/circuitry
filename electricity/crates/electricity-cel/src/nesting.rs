@@ -168,8 +168,12 @@
 //! of nested parentheses and rejects, gracefully, every depth from 96 up
 //! to at least 50,000, never a crash). A chain-shaped expression has no
 //! such guard and recurses for real in `env.compile`'s own ANTLR visitor;
-//! measured directly on a 2 MiB thread stack (the default a spawned
-//! thread gets, within [`crate::MAX_EXPR_LENGTH`]'s 4096 characters): an
+//! measured directly on an explicit 2 MiB thread stack (this crate's own
+//! deliberately conservative floor for the test that measured it, not a
+//! platform default or a claim about how `electricity-cli` itself runs --
+//! its own `main.rs` evaluates CEL on the process's main thread, whose
+//! stack is the OS default, not a spawned one at all), within
+//! [`crate::MAX_EXPR_LENGTH`]'s 4096 characters: an
 //! arithmetic chain and a sequential index chain both overflowed between
 //! 1,620 and 1,640 terms (debug and `--release` alike); a select chain, a
 //! relation chain and a method-call chain did not overflow even at the

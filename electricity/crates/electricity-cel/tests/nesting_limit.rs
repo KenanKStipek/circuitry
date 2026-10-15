@@ -3,17 +3,21 @@
 //! `MAX_CHAIN_NESTING_DEPTH`, `MAX_LOGICAL_UNARY_NESTING_DEPTH`,
 //! `MAX_ACCESSOR_NESTING_DEPTH`), enforced before parsing (`nesting.rs`'s
 //! module docs), not by whatever the test harness's own thread stack
-//! happens to be. Every test here runs on an explicit 2 MiB stack -- the
-//! default a spawned thread gets, where the runner does most of this
-//! work -- in a debug build, which needs `Cargo.toml`'s
+//! happens to be. Every test here runs on an explicit 2 MiB stack -- a
+//! deliberately conservative floor, not a measured figure for how this
+//! crate is actually run: `electricity-cli`'s own `main.rs` evaluates
+//! CEL on the process's main thread, under a
+//! `tokio::runtime::Builder::new_current_thread()`, whose stack is the
+//! OS default (far bigger than 2 MiB), not a spawned thread at all. In
+//! a debug build, this 2 MiB floor needs `Cargo.toml`'s
 //! `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]`
 //! override to stay safe at all (see that file's own comment, and
 //! `nesting.rs`'s module docs, for the measurements behind both).
 
 use electricity_cel::{
-    CelError, MAX_ACCESSOR_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH,
-    MAX_LIST_MAP_NESTING_DEPTH, MAX_LOGICAL_UNARY_NESTING_DEPTH, MAX_PAREN_CALL_NESTING_DEPTH,
-    evaluate_condition, validate_syntax,
+    CelError, MAX_ACCESSOR_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH, MAX_LIST_MAP_NESTING_DEPTH,
+    MAX_LOGICAL_UNARY_NESTING_DEPTH, MAX_PAREN_CALL_NESTING_DEPTH, evaluate_condition,
+    validate_syntax,
 };
 use electricity_value::{Dict, Value};
 
