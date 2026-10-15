@@ -3441,5 +3441,462 @@
       "validate_errors": [],
       "run_error": null
     }
+  },
+  {
+    "name": "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
+    "files": {
+      "doc.yml": "steps:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: loop\n        name: inner\n        while: {mode: cel, expr: \"prime.inner.last.marker.value == ''\"}\n        body:\n          - type: prompt\n            name: marker\n            template: 'ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}'\nfinally:\n  - type: conditional\n    name: cleanup\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "top level: 'effects' is a required property"
+      ],
+      "warnings": [
+        "effects[0].body[0]: 'prime.inner.last' inside the loop it names resolves to the previous pass at best — 'last' is written when the loop completes. Use '{{prime.<step>.value}}' for the current pass; 'prime.inner.last.<step>.value' is only meaningful after the loop.",
+        "effects[0].body[0].body[0]: 'prime.outer.last' inside the loop it names resolves to the previous pass at best — 'last' is written when the loop completes. Use '{{prime.<step>.value}}' for the current pass; 'prime.outer.last.<step>.value' is only meaningful after the loop.",
+        "finally[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented."
+      ]
+    },
+    "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "outer",
+          "body": [
+            {
+              "name": "inner",
+              "body": [
+                {
+                  "name": "marker",
+                  "template": "ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}",
+                  "messages": null,
+                  "prompt_type": "text",
+                  "schema": null,
+                  "model": null,
+                  "provider": null,
+                  "provider_fallbacks": null,
+                  "routing_override": null,
+                  "params": null,
+                  "timeout_ms": null,
+                  "deterministic": false,
+                  "inputs": null,
+                  "assets": null,
+                  "retries": null,
+                  "on_error": "fail",
+                  "description": null,
+                  "enabled": true,
+                  "group": null
+                }
+              ],
+              "while_def": {
+                "mode": "cel",
+                "template": null,
+                "expr": "prime.inner.last.marker.value == ''",
+                "strict": false
+              },
+              "each_def": null,
+              "max_iterations": null,
+              "min_iterations": 0,
+              "on_error": "fail",
+              "collect": null,
+              "flow": "chain",
+              "max_concurrency": null,
+              "enabled": true,
+              "labels": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [
+        {
+          "name": "cleanup",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "cleanup",
+        "inner",
+        "marker",
+        "outer",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "98c0fb5bb6267be76d1cb417f55c91c80b5ab1e9351a1b344a12dd6235cfe017",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "lint_mixed_case_aliases_float_arg_and_conditional_threshold",
+    "files": {
+      "doc.yml": "effects:\n  - type: Conditional\n    name: route\n    flow: ' COT '\n    if: {mode: cel, expr: 'true'}\n    then:\n      - type: tool\n        name: t\n        provider: shell\n        params: {command: echo, args: [1.0e+3]}\n  - type: conditional\n    name: gate\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t2, provider: json, params: {mode: stringify, input: 1}}]\n    threshold: 0.5\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']"
+      ],
+      "warnings": [
+        "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented.",
+        "effects[0]: flow ' COT ' is a deprecated alias — write 'flow: chain'. Both parse; only 'chain' is documented.",
+        "effects[0].then[0]: params.args[0] is not a string — YAML read it as the float 1000.0, so the tool receives the text '1000.0'. Quote it to pass exactly what you wrote (unquoted, YAML turns 0x1 into 1, off into false and -0 into 0).",
+        "effects[1]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented.",
+        "effects[1]: 'threshold' has no effect — the built-in evaluator reads a categorical yes/no with no calibrated confidence to cut, so it is recorded on meta.threshold and never consulted. Deprecated: kept schema-valid only so existing documents that set it keep passing; new documents should not set it.",
+        "effects[0]: unknown key 'flow' on a 'conditional' effect is ignored. Known keys: description, else, if, labels, name, on_error, then, threshold, type."
+      ]
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].type: 'Conditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "route",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "provider": "shell",
+              "params": {
+                "command": "echo",
+                "args": [
+                  1000.0
+                ]
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        },
+        {
+          "name": "gate",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t2",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "gate",
+        "route",
+        "t",
+        "t2"
+      ]
+    },
+    "definition_error": null,
+    "digest": "2ed74cbe10f5fd6615376cfc24697c98c62911a4120a9d4446a51a0d86351d8a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "lint_loop_fixed_iteration_reference_unicode_digit",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: outer\n    each: {in: 'input.items', as: 'item'}\n    body:\n      - type: prompt\n        name: first\n        template: 'FIRST {{item}}'\n      - type: prompt\n        name: second\n        template: 'iter1=[{{prime.outer.iter_١.first.value}}]'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "effects[0].body[1]: 'prime.outer.iter_١' names a fixed pass of the loop it sits inside. It does not fail — it resolves to pass ١'s output in every iteration, so every later pass reads stale data. Use '{{prime.<step>.value}}' for the current pass; iter_<N> is only meaningful outside the loop."
+      ]
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "outer",
+          "body": [
+            {
+              "name": "first",
+              "template": "FIRST {{item}}",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            },
+            {
+              "name": "second",
+              "template": "iter1=[{{prime.outer.iter_١.first.value}}]",
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.items",
+            "as_name": "item",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "first",
+        "outer",
+        "second"
+      ]
+    },
+    "definition_error": null,
+    "digest": "f0d970e267e25da64ec35f64c681ee5e5ec67beaea6c38e7abe69dfe0b226c37",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "lint_deprecated_type_alias_with_control_character_whitespace",
+    "files": {
+      "doc.yml": "effects:\n  - type: \"\\x1cconditional\"\n    name: c\n    if: {mode: cel, expr: 'true'}\n    then: [{type: tool, name: t, provider: json, params: {mode: stringify, input: 1}}]\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']"
+      ],
+      "warnings": [
+        "effects[0]: type 'conditional' is a deprecated alias — write 'type: if'. Both parse; only 'if' is documented."
+      ]
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].type: '\\x1cconditional' is not one of ['prompt', 'dynamic', 'if', 'conditional', 'loop', 'reflector', 'tool', 'use', 'yield']",
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "c",
+          "condition": {
+            "mode": "cel",
+            "template": null,
+            "expr": "true",
+            "strict": false
+          },
+          "then_effects": [
+            {
+              "name": "t",
+              "provider": "json",
+              "params": {
+                "mode": "stringify",
+                "input": 1
+              },
+              "params_json": null,
+              "prompt": null,
+              "model": null,
+              "timeout_ms": null,
+              "on_error": "fail",
+              "description": null,
+              "retries": null,
+              "expect": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "else_effects": [],
+          "threshold": 0.5,
+          "on_error": "fail",
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "c",
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "b9038a49515b7110b03ae47178ae1d5c360fd2d208548c672ea6a9c946cf31e3",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
   }
 ]

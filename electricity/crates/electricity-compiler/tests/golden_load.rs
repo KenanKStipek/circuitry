@@ -470,6 +470,26 @@ fn lint_warning_next_to_host_settings_notice() {
 }
 
 #[test]
+fn lint_legacy_steps_nested_loops_finally_and_seen_dedup() {
+    run_case("lint_legacy_steps_nested_loops_finally_and_seen_dedup");
+}
+
+#[test]
+fn lint_mixed_case_aliases_float_arg_and_conditional_threshold() {
+    run_case("lint_mixed_case_aliases_float_arg_and_conditional_threshold");
+}
+
+#[test]
+fn lint_loop_fixed_iteration_reference_unicode_digit() {
+    run_case("lint_loop_fixed_iteration_reference_unicode_digit");
+}
+
+#[test]
+fn lint_deprecated_type_alias_with_control_character_whitespace() {
+    run_case("lint_deprecated_type_alias_with_control_character_whitespace");
+}
+
+#[test]
 fn every_case_in_the_corpus_has_a_test() {
     let text = include_str!("golden/load.json");
     let cases: Vec<Case> = serde_json::from_str(text).expect("golden/load.json is valid JSON");
@@ -546,6 +566,10 @@ fn every_case_in_the_corpus_has_a_test() {
         "lint_several_rules_together",
         "lint_warning_next_to_unknown_key_warning",
         "lint_warning_next_to_host_settings_notice",
+        "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
+        "lint_mixed_case_aliases_float_arg_and_conditional_threshold",
+        "lint_loop_fixed_iteration_reference_unicode_digit",
+        "lint_deprecated_type_alias_with_control_character_whitespace",
     ];
     for case in &cases {
         assert!(

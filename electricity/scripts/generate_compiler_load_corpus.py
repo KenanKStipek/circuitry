@@ -1062,6 +1062,101 @@ CASES: list[dict[str, Any]] = [
         },
         "entry": "doc.yml",
     },
+    {
+        # A legacy top-level `steps:` document (path stays `effects[i]`),
+        # a top-level `finally:` block, nested loops with an inner body
+        # step naming the *outer* loop, a loop's own `while:` naming
+        # itself, and a repeated reference the `seen` set dedupes to one
+        # warning -- five branches no prior case reaches.
+        "name": "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
+        "files": {
+            "doc.yml": (
+                "steps:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: loop\n"
+                "        name: inner\n"
+                "        while: {mode: cel, expr: \"prime.inner.last.marker.value == ''\"}\n"
+                "        body:\n"
+                "          - type: prompt\n"
+                "            name: marker\n"
+                "            template: 'ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}'\n"
+                "finally:\n"
+                "  - type: conditional\n"
+                "    name: cleanup\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # Mixed-case/whitespace type and flow aliases (the message
+        # echoes the raw, unstripped flow), a `params.args` float that
+        # reads as a float (not an int), and `conditional` with
+        # `threshold` together -- exactly two warnings, in order.
+        "name": "lint_mixed_case_aliases_float_arg_and_conditional_threshold",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: Conditional\n"
+                "    name: route\n"
+                "    flow: ' COT '\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: tool\n"
+                "        name: t\n"
+                "        provider: shell\n"
+                "        params: {command: echo, args: [1.0e+3]}\n"
+                "  - type: conditional\n"
+                "    name: gate\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then: [{type: tool, name: t2, provider: json, params: {mode: stringify, input: 1}}]\n"
+                "    threshold: 0.5\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # `_ITER_SEGMENT`'s `\d` must match a non-ASCII Unicode decimal
+        # digit (U+0661 ARABIC-INDIC DIGIT ONE), same as Python's own
+        # default `\d`.
+        "name": "lint_loop_fixed_iteration_reference_unicode_digit",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: prompt\n"
+                "        name: first\n"
+                "        template: 'FIRST {{item}}'\n"
+                "      - type: prompt\n"
+                "        name: second\n"
+                "        template: 'iter1=[{{prime.outer.iter_\u0661.first.value}}]'\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A C0 control character (`\x1c`, FS) Python's own `str.strip()`
+        # removes but Rust's `.trim()` does not -- without `py_strip`
+        # this `type:` value never normalizes to the deprecated alias.
+        "name": "lint_deprecated_type_alias_with_control_character_whitespace",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                '  - type: "\\x1cconditional"\n'
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
 ]
 
 

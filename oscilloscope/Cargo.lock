@@ -724,6 +724,7 @@ dependencies = [
  "electricity-cel",
  "electricity-config",
  "electricity-json",
+ "electricity-pyre",
  "electricity-schema",
  "electricity-template",
  "electricity-value",

@@ -1,4 +1,4 @@
-//! Lane B: `lint_warnings`, porting `core/lint.py::lint_orchestration` in
+//! Issue #428: `lint_warnings`, porting `core/lint.py::lint_orchestration` in
 //! full -- deprecated effect-type/flow aliases, an effect named after its
 //! own type, a tool's `params.args` entries YAML turned into a non-string
 //! scalar, `min_iterations` on an `each` loop, `threshold:` on a built-in
@@ -7,6 +7,7 @@
 //! valid document invalid, and every message is Circuitry's own, word for
 //! word.
 
+use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use regex::Regex;
 use std::collections::HashSet;
@@ -51,9 +52,11 @@ fn is_type_keyword(name: &str) -> bool {
 const CHILD_KEYS: [&str; 5] = ["effects", "then", "else", "body", "finally"];
 
 /// `core/lint.py::_ITER_SEGMENT`: a fixed-iteration path segment, e.g.
-/// `iter_0`.
+/// `iter_0`. `\d` (not `[0-9]`) to match Python's own Unicode digit
+/// class -- `prime.outer.iter_\u0661` (an Arabic-Indic digit) warns in
+/// cof too.
 static ITER_SEGMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^iter_[0-9]+$").expect("static regex"));
+    LazyLock::new(|| Regex::new(r"^iter_\d+$").expect("static regex"));
 
 fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
     dict.get(&Value::Str(key.to_string()))
@@ -99,7 +102,7 @@ fn lint_effects_or_steps(dict: &Dict) -> Option<&Value> {
 }
 
 fn is_loop(effect: &Dict) -> bool {
-    matches!(dict_get(effect, "type"), Some(Value::Str(s)) if s.trim().to_lowercase() == "loop")
+    matches!(dict_get(effect, "type"), Some(Value::Str(s)) if py_strip(s).to_lowercase() == "loop")
 }
 
 /// `core/lint.py::_loop_scope`.
@@ -187,6 +190,56 @@ fn reference_strings(effect: &Dict) -> Vec<String> {
     found
 }
 
+/// One `prime.<name>.<segment>` reference, found by a literal scan for
+/// `prime.<name>.` with a hand-checked `\b` before it, then the longest
+/// run of `electricity_pyre::is_py_word_char` (first character
+/// restricted to `[A-Za-z_]`) after it -- `core/lint.py::
+/// _check_loop_references`'s own pattern. A literal scan rather than a
+/// regex compiled per loop name for two reasons: a loop name of a few
+/// hundred KB can exceed the `regex` crate's default compiled-size
+/// limit, and `is_py_word_char` is CPython 3.11's own `\w` membership
+/// table, not Rust's wider Unicode word class (which also counts
+/// combining marks). Non-overlapping, left to right, like
+/// `re.finditer`: a successful match resumes the scan after it; a
+/// failed one (no boundary, or no valid segment) resumes one character
+/// later.
+fn find_scope_references<'t>(text: &'t str, name: &str) -> Vec<&'t str> {
+    let prefix = format!("prime.{name}.");
+    let mut found = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(offset) = text[search_from..].find(&prefix) {
+        let start = search_from + offset;
+        let boundary_ok = match text[..start].chars().next_back() {
+            Some(prev) => !electricity_pyre::is_py_word_char(prev),
+            None => true,
+        };
+        if !boundary_ok {
+            search_from = start + 1;
+            continue;
+        }
+        let after_prefix = start + prefix.len();
+        let mut rest = text[after_prefix..].chars();
+        let Some(first) = rest.next() else {
+            search_from = start + 1;
+            continue;
+        };
+        if !(first.is_ascii_alphabetic() || first == '_') {
+            search_from = start + 1;
+            continue;
+        }
+        let mut end = after_prefix + first.len_utf8();
+        for ch in rest {
+            if !electricity_pyre::is_py_word_char(ch) {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        found.push(&text[after_prefix..end]);
+        search_from = end;
+    }
+    found
+}
+
 /// `core/lint.py::_check_loop_references`.
 fn check_loop_references(
     effect: &Dict,
@@ -194,27 +247,17 @@ fn check_loop_references(
     warnings: &mut Vec<String>,
     loops: &[LoopScope],
 ) {
-    let scope_patterns: Vec<(&str, &HashSet<String>, Regex)> = loops
-        .iter()
-        .filter_map(|scope| {
-            let name = scope.name.as_ref()?;
-            let pattern = Regex::new(&format!(
-                r"\bprime\.{}\.([A-Za-z_]\w*)",
-                regex::escape(name)
-            ))
-            .expect("escaped loop name is always a valid regex");
-            Some((name.as_str(), &scope.body_names, pattern))
-        })
-        .collect();
-    if scope_patterns.is_empty() {
+    let named: Vec<&LoopScope> = loops.iter().filter(|scope| scope.name.is_some()).collect();
+    if named.is_empty() {
         return;
     }
 
     let mut seen: HashSet<String> = HashSet::new();
     for text in reference_strings(effect) {
-        for (name, body_names, pattern) in &scope_patterns {
-            for captures in pattern.captures_iter(&text) {
-                let segment = &captures[1];
+        for scope in &named {
+            let name = scope.name.as_ref().expect("filtered to named scopes");
+            let body_names = &scope.body_names;
+            for segment in find_scope_references(&text, name) {
                 let key = format!("{name}.{segment}");
                 if seen.contains(&key) {
                     continue;
@@ -288,7 +331,7 @@ fn check_flow(flow: Option<&Value>, where_: &str, warnings: &mut Vec<String>) {
     let Some(Value::Str(flow)) = flow else {
         return;
     };
-    let normalized = flow.trim().to_lowercase();
+    let normalized = py_strip(flow).to_lowercase();
     if let Some((_, canonical)) = DEPRECATED_FLOW_ALIASES
         .iter()
         .find(|(alias, _)| *alias == normalized)
@@ -303,7 +346,7 @@ fn check_flow(flow: Option<&Value>, where_: &str, warnings: &mut Vec<String>) {
 /// `core/lint.py::_check_effect`.
 fn check_effect(effect: &Dict, where_: &str, warnings: &mut Vec<String>, loops: &[LoopScope]) {
     let effect_type = match dict_get(effect, "type") {
-        Some(Value::Str(s)) => s.trim().to_lowercase(),
+        Some(Value::Str(s)) => py_strip(s).to_lowercase(),
         _ => String::new(),
     };
 
@@ -320,7 +363,7 @@ fn check_effect(effect: &Dict, where_: &str, warnings: &mut Vec<String>, loops: 
     check_flow(dict_get(effect, "flow"), where_, warnings);
 
     if let Some(Value::Str(name)) = dict_get(effect, "name") {
-        if is_type_keyword(&name.trim().to_lowercase()) {
+        if is_type_keyword(&py_strip(name).to_lowercase()) {
             warnings.push(format!(
                 "{where_}: effect is named '{name}', which is an effect-type keyword. \
                  Name effects after the job they do (e.g. 'summarize_article'), not \
@@ -677,5 +720,28 @@ mod tests {
     fn non_mapping_entries_in_effects_are_skipped() {
         let doc = doc_with_effects(vec![Value::None, str_("nope"), int(3)]);
         assert_eq!(lint_warnings(&doc), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pathologically_long_loop_name_does_not_panic() {
+        let long_name = "a".repeat(400_000);
+        let mut each = Dict::new();
+        each.insert(Value::Str("in".to_string()), str_("input.items"));
+        each.insert(Value::Str("as".to_string()), str_("item"));
+        let doc = doc_with_effects(vec![effect(vec![
+            ("type", str_("loop")),
+            ("name", str_(&long_name)),
+            ("each", Value::Dict(each)),
+            (
+                "body",
+                Value::List(vec![body_effect(
+                    "step",
+                    &format!("{{{{prime.{long_name}.last.step.value}}}}"),
+                )]),
+            ),
+        ])]);
+        let warnings = lint_warnings(&doc);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("previous pass at best"));
     }
 }
