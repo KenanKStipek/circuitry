@@ -44,7 +44,7 @@ def _now_iso() -> str:
 
 #: Providers whose raw["status"] is an HTTP status code, not some other
 #: plugin's unrelated int field that happens to be named "status".
-_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear"})
+_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear", "systemone"})
 
 #: Cap on meta.raw's serialized size, in bytes, after redaction. Protects
 #: state (and anything that mirrors it: --out, --live-state, persisted
@@ -460,10 +460,11 @@ class ToolRuntime:
       process-backed plugins) — it is ``None`` for every other plugin. A
       tool fails — ``meta.error`` is set and ``on_error`` applies — whenever
       the plugin raises, or returns a ``ToolResult`` with ``ok=False``. HTTP-
-      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``) fail
-      this way on a 4xx/5xx response by default and set ``meta.status_code``
-      to the HTTP status; each has a per-effect opt-out param (see each
-      plugin's docstring) that restores the old always-succeeds behaviour.
+      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``,
+      ``systemone``) fail this way on a 4xx/5xx response by default and set
+      ``meta.status_code`` to the HTTP status; all but ``systemone`` have a
+      per-effect opt-out param (see each plugin's docstring) that restores
+      the old always-succeeds behaviour.
       Soft-failure plugins (``wikipedia``, ``dns``, ``port_check``,
       ``validate_yaml``) report their own outcome via ``value``/``raw``
       fields with ``ok`` staying ``True`` — see orchestration-reference.md.
@@ -743,6 +744,10 @@ class ToolRuntime:
                         self.defn.params_json, ctx, declared=declared, known_names=known_names
                     )
                     _reject_params_json_security_overrides(params_json_overlay)
+                    if self.defn.provider.strip().lower() == "systemone":
+                        from ..plugins.systemone import reject_overlay_within
+
+                        reject_overlay_within(params_json_overlay)
                     params = _deep_merge_params(params, params_json_overlay)
 
                 rendered = {**top_level, **params}

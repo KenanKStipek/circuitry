@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..adapters._retry import RetryInfo, next_backoff_delay_ms
+from ..document_scope import DocumentScope, document_scope, install_document_scope
 from ..output import console as _console
 from .cancellation import get_token
 from .document_check import structural_errors
@@ -1062,6 +1063,17 @@ class UseRuntime:
                         child_document_dir = Path(identity).parent
                         child_runtime_config["_orchestration_dir"] = str(child_document_dir)
                         child_confinement_root = self._confinement_root_for(child_document_dir)
+                        parent_scope = document_scope(self.runtime_config)
+                        if parent_scope is not None:
+                            # A child resolved through the library is someone
+                            # else's document, whatever the parent's trust.
+                            install_document_scope(
+                                child_runtime_config,
+                                DocumentScope(
+                                    limited=parent_scope.limited or self._pin is not None,
+                                    project_root=child_confinement_root,
+                                ),
+                            )
 
                     child_root = compile_orchestration(
                         orch=child_orch,

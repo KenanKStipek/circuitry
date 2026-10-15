@@ -71,6 +71,7 @@ pub const PLUGIN_NAMES: &[&str] = &[
     "slack",
     "surrealdb",
     "system_info",
+    "systemone",
     "tar",
     "traceroute",
     "uuid",

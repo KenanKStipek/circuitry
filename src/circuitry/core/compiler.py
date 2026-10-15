@@ -1257,6 +1257,19 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
+    if provider.strip().lower() == "systemone":
+        from ..plugins.systemone import static_param_errors
+
+        # The effect-level `model:` is merged under params at dispatch.
+        problems = static_param_errors(
+            {**({"model": model} if model else {}), **params},
+            has_params_json=params_json is not None,
+        )
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (systemone) at '{effect_path}': " + "; ".join(problems)
+            )
+
     timeout_ms = compile_timeout_ms(
         effect.get("timeout_ms"),
         effect_type="tool",

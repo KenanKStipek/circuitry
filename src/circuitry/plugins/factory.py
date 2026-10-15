@@ -64,6 +64,9 @@ from . import (
     sevenz as _sevenz_mod,
 )
 from . import (
+    systemone as _systemone_mod,
+)
+from . import (
     traceroute as _traceroute_mod,
 )
 from . import (
@@ -489,6 +492,14 @@ def _build_surrealdb(cfg: dict[str, Any]) -> ToolPlugin:
     )
 
 
+# systemone reads base_url / api_key_env / allow_remote from
+# runtime.plugins.systemone; the key itself comes from the named environment
+# variable at dispatch, so nothing secret can reach config or saved state.
+# build_plugin also hands it the run's document scope (see below).
+def _build_systemone(cfg: dict[str, Any]) -> ToolPlugin:
+    return _systemone_mod.build(cfg)
+
+
 def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return PlaywrightPlugin()
@@ -594,6 +605,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "gdrive": _build_gdrive,
     "s3": _build_s3_tool,
     "surrealdb": _build_surrealdb,
+    "systemone": _build_systemone,
     "playwright": _build_playwright,
     "screenshot": _build_screenshot,
     "embed": _build_embed,
@@ -632,4 +644,8 @@ def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
         )
 
     cfg = plugins_cfg.get(plugin_name) or {}
+    if plugin_name == "systemone":
+        # The one plugin that reads a path the document names, so it needs to
+        # know whose document that is (see circuitry.document_scope).
+        return _systemone_mod.build(cfg, runtime)
     return builder(cfg)

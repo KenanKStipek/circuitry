@@ -859,6 +859,30 @@ mod tests {
     }
 
     #[test]
+    fn systemone_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
+        // `systemone` (issue #580) is a cof-only plugin until it is ported:
+        // it is in `PLUGIN_NAMES` (so it is not mistaken for an unknown
+        // name) and no build supports it.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"systemone"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("decide"),
+            LeafKind::Tool(tool_op_with_provider(
+                "systemone",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("systemone".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("systemone"));
+    }
+
+    #[test]
     fn a_document_with_both_an_unknown_name_and_a_known_unbuilt_plugin_still_refuses() {
         // Issue #511's own requirement: a document holding both keeps
         // the preview refusal -- here the unknown name comes *first* in
