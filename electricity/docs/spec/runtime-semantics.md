@@ -295,8 +295,8 @@ Per-effect-type `meta` (confirmed field sets from live runs):
 
 - **prompt** (`core/prompt.py:453` docstring, confirmed live):
   `adapter, model, model_reason ("explicit"|"router"|"default"), prompt_type,
-  prompt_sent, tokens_sent, tokens_received, tokens_sent_total,
-  tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
+  prompt_sent, prompt_sent_sha256, prompt_chars, tokens_sent, tokens_received,
+  tokens_sent_total, tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
@@ -924,6 +924,23 @@ written **before** the first dispatch attempt — confirmed live (`adapter`,
 before any network/adapter call). This is what makes a complexity score (and
 the fully-rendered prompt) visible on a prompt that then fails.
 
+**`runtime.state.prompt_sent`** (issue #577, `core/prompt_record.py`): shapes
+only the `meta.prompt_sent` record; the text in memory (what the adapter
+receives, retries, fallback, complexity scoring, token estimates) is never
+touched. `full` (default) records the whole text; `sha256` records `null`;
+`head:<N>` (N >= 1) records the first N Unicode code points followed by
+`"\n[… <M> more characters not recorded]"` (`M` = code points left out; a text of
+N code points or fewer is kept whole, no marker). In every mode
+`meta.prompt_sent_sha256` (lowercase hex SHA-256 of the UTF-8 bytes) and
+`meta.prompt_chars` (code points of the whole text, `len(text)` /
+`text.chars().count()`) follow `prompt_sent` in key order. A `messages`
+prompt records the flattened form. Any other value, `head:0` and a
+non-string included, is a configuration error with the message
+`runtime.state.prompt_sent must be 'full', 'sha256' or 'head:<N>' (N a
+positive integer), got <repr>.` — raised by `cof check` after the
+concurrency-configuration errors, and by a run right after the complexity
+block. Attempt and fallback records never carry prompt text.
+
 **Routing/scoring/decomposition** — see §5.8.
 
 **Confirmed live node** (`prompt_type: text`, no retries/fallbacks/scoring):
@@ -932,6 +949,7 @@ the fully-rendered prompt) visible on a prompt that then fails.
   "meta": {
     "adapter": "scripted", "model": "test-model", "model_reason": "default",
     "prompt_type": "text", "prompt_sent": "hi world",
+    "prompt_sent_sha256": "<hex sha-256 of \"hi world\">", "prompt_chars": 8,
     "tokens_sent": 10, "tokens_received": 5,
     "tokens_sent_total": 10, "tokens_received_total": 5,
     "dry_run": false, "error": null, "waiting_for": null,

@@ -28,6 +28,7 @@ from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.prompt_record import prompt_sent_errors
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -1437,6 +1438,13 @@ def validate(
             return {
                 "ok": False,
                 "errors": concurrency_config_errors,
+                "warnings": lint_warnings,
+            }
+        state_config_errors = prompt_sent_errors(merged_runtime)
+        if state_config_errors:
+            return {
+                "ok": False,
+                "errors": state_config_errors,
                 "warnings": lint_warnings,
             }
         group_name_errors = unknown_concurrency_group_errors(root_def, frozenset(groups))

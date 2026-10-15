@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #577: runtime.state.prompt_sent",
+  "description": "expect: failure, error_compare: exact. `runtime.state.prompt_sent: \"head:0\"` is rejected before any effect runs, with an error naming the key.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

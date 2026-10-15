@@ -34,7 +34,7 @@ Run it, and one node appears in state:
 ```
 prime.kind.value    # the model's answer
 prime.kind.meta     # adapter, model, model_reason, prompt_type, prompt_sent,
-                    # tokens_sent, tokens_received, tokens_sent_total,
+                    # prompt_sent_sha256, prompt_chars, tokens_sent, tokens_received, tokens_sent_total,
                     # tokens_received_total, error, fallback_attempts,
                     # created_at, completed_at
 ```
@@ -186,6 +186,8 @@ prime.<name>.meta.model                  # which model — after routing, if rou
 prime.<name>.meta.model_reason           # "default" | "explicit" | "router"
 prime.<name>.meta.prompt_type
 prime.<name>.meta.prompt_sent            # the rendered prompt, post-interpolation
+prime.<name>.meta.prompt_sent_sha256     # SHA-256 of the whole rendered prompt (UTF-8)
+prime.<name>.meta.prompt_chars           # its length in characters
 prime.<name>.meta.tokens_sent / tokens_received            # the winning attempt's own cost
 prime.<name>.meta.tokens_sent_total / tokens_received_total # every attempt this execution made
 prime.<name>.meta.error                  # null, or the failure
@@ -200,6 +202,20 @@ prime.<name>.meta.assets                 # present only with image assets: path,
 prime.<name>.meta.complexity             # present only when scoring is on (chapter 10)
 prime.<name>.meta.decomposition          # present only when decomposition fired (chapter 11)
 ```
+
+**Keeping the prompt text out of the state.** `prompt_sent` is the whole rendered prompt, which a run that sends tens of large prompts keeps in its saved state: `--out`, `--live-state`, `--resume`, persistence. `runtime.state.prompt_sent` shapes only that record. `full` (the default) keeps the text; `sha256` leaves `null`; `head:<N>` keeps the first N characters and a marker saying how many were left out. `prompt_sent_sha256` and `prompt_chars` always describe the whole text, so the identity of a prompt survives without its copy.
+
+```yaml
+runtime:
+  state:
+    prompt_sent: "head:500"
+effects:
+  - type: prompt
+    name: review
+    template: "Review this file: {{input.source}}"
+```
+
+The adapter still receives the whole text, and retries, fallback and complexity scoring still see it. [The reference](../orchestration-reference.md#recording-the-prompt-text-runtimestateprompt_sent) has the details.
 
 Inside a `dynamic` the path gains the container's name (`prime.context.search.value`); inside a loop it gains the pass (`prime.diagnoses.iter_0.diagnose.value`). The rule never changes: the path is derived from the names above it, and nothing else.
 

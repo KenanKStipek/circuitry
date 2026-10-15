@@ -766,6 +766,16 @@ pub(crate) async fn execute_prompt(
     }
     let render_root = live_scope::LiveRoot::new(&render_chain, store);
 
+    // Validated before the run starts (`pre_input_checks`); a bad value that
+    // got here anyway fails the run rather than recording the text in full.
+    let prompt_sent_setting = electricity_config::prompt_sent_setting(Some(run_ctx.runtime_config))
+        .map_err(|message| VmError::Raised {
+            py_class: electricity_tools::PyExc::ValueError,
+            message,
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        })?;
+
     let render_result = render_prompt(prompt, &render_root, run_ctx);
     let (messages, prompt_sent) = match render_result {
         Ok(pair) => pair,
@@ -838,11 +848,29 @@ pub(crate) async fn execute_prompt(
         "prompt_type",
         Value::Str(prompt_type_str(prompt.prompt_type).to_string()),
     );
+    // What `runtime.state.prompt_sent` leaves of the text, plus the two
+    // fields that describe all of it (#577). Only this record is shaped:
+    // `prompt_sent` itself stays whole for everything below.
     set_leaf(
         store,
         &meta_node,
         "prompt_sent",
-        Value::Str(prompt_sent.clone()),
+        match prompt_sent_setting.record_text(&prompt_sent) {
+            Some(text) => Value::Str(text),
+            None => Value::None,
+        },
+    );
+    set_leaf(
+        store,
+        &meta_node,
+        "prompt_sent_sha256",
+        Value::Str(super::use_::sha256_hex(prompt_sent.as_bytes())),
+    );
+    set_leaf(
+        store,
+        &meta_node,
+        "prompt_chars",
+        Value::from(prompt_sent.chars().count() as i64),
     );
     set_leaf(store, &meta_node, "tokens_sent", Value::None);
     set_leaf(store, &meta_node, "tokens_received", Value::None);

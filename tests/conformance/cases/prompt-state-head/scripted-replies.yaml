@@ -1,0 +1,10 @@
+prime.long_text:
+  - text: "one"
+prime.exact_fit:
+  - text: "two"
+prime.short_text:
+  - text: "three"
+prime.multibyte:
+  - text: "four"
+prime.from_messages:
+  - text: "five"

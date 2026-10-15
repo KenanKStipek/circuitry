@@ -163,6 +163,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.finish_reason` — the provider's stop reason (`stop`, `length`, `end_turn`, `max_tokens`, ...) when it reports one.
 - `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
 - `meta.cost_usd` — the winning attempt's cost in US dollars, when its adapter reports one (`pi`, `claude_code`). The run's `runtime.last_run.totals.cost_usd` sums it.
+- `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
 
 **Example — an image to a local vision model:**
@@ -185,6 +186,33 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 ```
 
 A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the timeout of whichever adapter the attempt actually dispatches to, so it can only shorten the wait — that's `ollama`'s own configured timeout here even when `ollama` isn't the run's default adapter, as long as this prompt's `provider:` (or a fallback) names it. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
+
+#### Recording the prompt text (`runtime.state.prompt_sent`)
+
+Every `prompt` effect records the text it sent in `meta.prompt_sent`, with no cap: a document that sends many large prompts keeps every one of them in its saved state (`--out`, `--live-state`, `--resume`, persistence). `runtime.state.prompt_sent` decides what that one field holds. Like `record_children`, it sits under `runtime.state`, so it applies however the document arrives (config, or the document's own `runtime:` block).
+
+| Value | `meta.prompt_sent` |
+|-------|--------------------|
+| `full` (default) | the whole text |
+| `sha256` | `null` |
+| `head:<N>` (N ≥ 1) | the first N characters, then the marker `\n[… <M> more characters not recorded]`, `<M>` being the number left out. A text of N characters or fewer is kept whole, with no marker |
+
+```yaml
+runtime:
+  state:
+    prompt_sent: sha256
+```
+
+In every mode, `full` included, two fields describe the whole text:
+
+| Field | Meaning |
+|-------|---------|
+| `meta.prompt_sent_sha256` | the lowercase hex SHA-256 of the text's UTF-8 bytes |
+| `meta.prompt_chars` | its length in Unicode code points |
+
+For a `messages` prompt the setting applies to the flattened `role: content` form that `meta.prompt_sent` holds. Only the record changes: the text in memory is untouched, so what the adapter receives, retries, fallback, complexity scoring and token estimates behave exactly as before. The fields are written alongside `meta.prompt_sent`, whether the prompt succeeds, fails, runs under `on_error: continue`, or is a dry run; a retry's or fallback's attempt record never carries the prompt text. `cof check` rejects any other value, and `head:0`, naming `runtime.state.prompt_sent`.
+
+Runtime plugins read the effect's `meta`, so what they store follows the setting; the bundled SQL persistence plugins keep no prompt text at all and have no column for the two new fields.
 
 #### Coding-agent CLI adapters: `pi` and `claude_code`
 

@@ -75,6 +75,8 @@ fn as_dict(value: &Value) -> &IndexMap<Value, Value> {
 struct FakeAdapter {
     name: String,
     replies: std::cell::RefCell<std::collections::VecDeque<Result<GenerateResult, AdapterError>>>,
+    /// Every prompt text `generate` received, in call order.
+    received: std::cell::RefCell<Vec<String>>,
 }
 
 impl FakeAdapter {
@@ -82,6 +84,7 @@ impl FakeAdapter {
         FakeAdapter {
             name: name.to_string(),
             replies: std::cell::RefCell::new(replies.into()),
+            received: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -107,10 +110,11 @@ impl Adapter for FakeAdapter {
     async fn generate(
         &self,
         _model: &str,
-        _prompt: &str,
+        prompt: &str,
         _options: &GenerateOptions,
         _call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
+        self.received.borrow_mut().push(prompt.to_string());
         self.replies.borrow_mut().pop_front().unwrap_or_else(|| {
             Err(AdapterError {
                 message: "FakeAdapter: no reply queued".to_string(),
@@ -185,6 +189,17 @@ async fn run_prompt(
     default_adapter: Rc<dyn Adapter>,
     adapters: &AdapterRegistry,
 ) -> (Store, RecordingObserver, Result<(), VmError>) {
+    run_prompt_with_runtime(op, on_error, default_adapter, adapters, &Value::None).await
+}
+
+/// [`run_prompt`] under *runtime_config* (the merged `runtime:` block).
+async fn run_prompt_with_runtime(
+    op: PromptOp,
+    on_error: OnError,
+    default_adapter: Rc<dyn Adapter>,
+    adapters: &AdapterRegistry,
+    runtime_config: &Value,
+) -> (Store, RecordingObserver, Result<(), VmError>) {
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = json_registry();
@@ -193,6 +208,7 @@ async fn run_prompt(
     ctx.default_adapter = default_adapter;
     ctx.adapters = adapters;
     ctx.model = "m";
+    ctx.runtime_config = runtime_config;
     let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, on_error);
     let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
     let observer = RecordingObserver::new();
@@ -993,6 +1009,8 @@ async fn meta_key_order_on_success_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1050,6 +1068,8 @@ async fn meta_key_order_on_failure_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1162,6 +1182,8 @@ async fn meta_key_order_on_a_reused_node_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1665,4 +1687,115 @@ async fn an_unknown_pinned_band_raises_before_effect_start_and_on_error_skip_doe
         "no start/complete pair must ever fire for the prompt's own node: {:?}",
         observer.events()
     );
+}
+
+fn state_prompt_sent(setting: &str) -> Value {
+    let mut state = Dict::new();
+    state.insert(
+        Value::Str("prompt_sent".to_string()),
+        Value::Str(setting.to_string()),
+    );
+    let mut runtime = Dict::new();
+    runtime.insert(Value::Str("state".to_string()), Value::Dict(state));
+    Value::Dict(runtime)
+}
+
+/// The `prime.ask` meta of a finished run, as a snapshot.
+fn ask_meta(store: &Store) -> IndexMap<Value, Value> {
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    as_dict(get(ask, "meta").unwrap()).clone()
+}
+
+const HELLO_SHA256: &str = "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969";
+
+#[tokio::test]
+async fn the_default_records_the_whole_text_and_the_two_new_fields() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) =
+        run_prompt(template_prompt("Hello"), OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "prompt_sent"),
+        Some(&Value::Str("Hello".to_string()))
+    );
+    assert_eq!(
+        get(&meta, "prompt_sent_sha256"),
+        Some(&Value::Str(HELLO_SHA256.to_string()))
+    );
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(5i64)));
+}
+
+#[tokio::test]
+async fn sha256_leaves_null_and_the_adapter_still_gets_the_whole_text() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("sha256");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("Hello"),
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "prompt_sent"), Some(&Value::None));
+    assert_eq!(
+        get(&meta, "prompt_sent_sha256"),
+        Some(&Value::Str(HELLO_SHA256.to_string()))
+    );
+    assert_eq!(*default.received.borrow(), vec!["Hello".to_string()]);
+}
+
+#[tokio::test]
+async fn head_keeps_n_code_points_then_a_marker_and_counts_code_points() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("head:3");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("a\u{1F642}bcdef"),
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "prompt_sent"),
+        Some(&Value::Str(
+            "a\u{1F642}b\n[\u{2026} 4 more characters not recorded]".to_string()
+        ))
+    );
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(7i64)));
+    assert_eq!(
+        *default.received.borrow(),
+        vec!["a\u{1F642}bcdef".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_failed_dispatch_under_on_error_continue_records_it_too() {
+    let default = Rc::new(FakeAdapter::new("scripted", Vec::new()));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("sha256");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("Hello"),
+        OnError::Continue,
+        default,
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "prompt_sent"), Some(&Value::None));
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(5i64)));
+    assert_ne!(get(&meta, "error"), Some(&Value::None));
 }

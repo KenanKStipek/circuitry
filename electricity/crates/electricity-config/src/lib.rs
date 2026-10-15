@@ -44,6 +44,7 @@ mod merge;
 mod persistence;
 pub mod preflight;
 mod profile;
+mod prompt_sent;
 mod timeout;
 mod util;
 
@@ -71,6 +72,7 @@ pub use profile::{
     collect_orchestration_effect_paths, condition_target_message, profile_name_from_path,
     settings_from_raw, validate_effect_paths, validate_profile_routing_pins,
 };
+pub use prompt_sent::{PromptSentSetting, prompt_sent_errors, prompt_sent_setting};
 pub use timeout::configured_timeout_seconds;
 
 use electricity_value::Value;

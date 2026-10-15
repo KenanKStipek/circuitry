@@ -39,6 +39,7 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .prompt_record import PromptSentSetting, prompt_sent_fields, prompt_sent_setting
 from .store import Store
 from .templates import render_template
 from .timeout_ref import TimeoutFrom, resolve_timeout_ms
@@ -344,7 +345,8 @@ class PromptRuntime:
     Writes:
       <name>.value
       <name>.meta{created_at, completed_at, adapter, model, model_reason,
-                  prompt_type, prompt_sent, tokens_sent, tokens_received,
+                  prompt_type, prompt_sent, prompt_sent_sha256, prompt_chars,
+                  tokens_sent, tokens_received,
                   tokens_sent_total, tokens_received_total, error, dry_run,
                   fallback_attempts, fallback_recovered, retries_used?,
                   complexity?, assets?, finish_reason?, warnings?, cost_usd?}
@@ -466,6 +468,7 @@ class PromptRuntime:
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
+        self._prompt_sent_setting: PromptSentSetting = prompt_sent_setting(self.runtime_config)
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -526,7 +529,10 @@ class PromptRuntime:
         # below if the router substitutes a band's model for the default.
         meta["model_reason"] = "explicit" if self.defn.model else "default"
         meta["prompt_type"] = self.defn.prompt_type
-        meta["prompt_sent"] = prompt_sent
+        # What ``runtime.state.prompt_sent`` leaves of the text, plus the two
+        # fields that describe all of it (#577). Only this record is shaped:
+        # ``prompt_sent`` itself stays whole for everything below.
+        meta.update(prompt_sent_fields(prompt_sent, self._prompt_sent_setting))
         meta["tokens_sent"] = None
         meta["tokens_received"] = None
         meta["tokens_sent_total"] = None
