@@ -17,7 +17,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - prompts: 'nope' is not of type 'object'",
     "definition": null,
     "definition_error": "ValueError: 'prompts' must be a mapping of name to template.",
@@ -47,7 +46,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
     "definition": null,
     "definition_error": "ValueError: 'prompts' key 'a.b' must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
@@ -77,7 +75,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "'prompts' key 5 must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
     "definition": null,
     "definition_error": "ValueError: 'prompts' key 5 must be a valid name ([A-Za-z_][A-Za-z0-9_]*, no '.').",
@@ -107,7 +104,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - prompts.voice: 5 is not valid under any of the given schemas (5 is not of type 'string')",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice must be a string or {file: <path>}.",
@@ -137,7 +133,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - prompts.voice: value is not valid under any of the given schemas ({'file': 5} is not of type 'string')",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' must be a non-empty string path.",
@@ -167,7 +162,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' must be a relative path, got absolute path '/etc/passwd'.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' must be a relative path, got absolute path '/etc/passwd'.",
@@ -197,7 +191,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' must be a literal path — it cannot contain a template tag: '{{input.name}}.md'.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' must be a literal path — it cannot contain a template tag: '{{input.name}}.md'.",
@@ -227,7 +220,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'nope.md' does not exist.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'nope.md' does not exist.",
@@ -258,7 +250,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'sub' is not a regular file.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'sub' is not a regular file.",
@@ -292,7 +283,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'big.md' is 1048577 bytes, over the 1048576-byte limit for a prompt file.",
@@ -325,7 +315,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'bad.md' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'bad.md' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte",
@@ -359,7 +348,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'secret.md' could not be read: [Errno 13] Permission denied: '<root>/secret.md'",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'secret.md' could not be read: [Errno 13] Permission denied: '<root>/secret.md'",
@@ -388,7 +376,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -444,7 +431,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' 'escape.md' resolves outside the project (<root>) — 'file:' paths must stay inside it.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' 'escape.md' resolves outside the project (<root>) — 'file:' paths must stay inside it.",
@@ -475,7 +461,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
     "definition": null,
     "definition_error": "PromptFileError: prompts.voice: 'file' '../outside.md' resolves outside the project (<root>/proj) — 'file:' paths must stay inside it.",
@@ -511,7 +496,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Symlink loop from '<root>/loopA.md'",
     "definition": null,
     "definition_error": "RuntimeError: Symlink loop from '<root>/loopA.md'",
@@ -542,7 +526,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
@@ -573,7 +556,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
@@ -603,7 +585,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
@@ -633,7 +614,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - 'x' is both a declared prompt and an effect name — '{{> x}}' would be ambiguous.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - 'x' is both a declared prompt and an effect name — '{{> x}}' would be ambiguous.",
@@ -663,7 +643,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect 't1' (type 'tool'), which is neither a 'yield' nor a text 'prompt'.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> t1}}' names effect 't1' (type 'tool'), which is neither a 'yield' nor a text 'prompt'.",
@@ -693,7 +672,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[1]: '{{> p1}}' names effect 'p1' (type 'prompt'), which is neither a 'yield' nor a text 'prompt'.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> p1}}' names effect 'p1' (type 'prompt'), which is neither a 'yield' nor a text 'prompt'.",
@@ -723,7 +701,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - cycle among declared prompts: a -> b -> a",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - cycle among declared prompts: a -> b -> a",
@@ -753,7 +730,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> 1bad}}' is not a valid name.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> 1bad}}' is not a valid name.",
@@ -783,7 +759,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - prompts.a: '{{=...=}}' (set-delimiter) is not allowed inside a declared prompt — it would change the delimiters of the template that includes it.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - prompts.a: '{{=...=}}' (set-delimiter) is not allowed inside a declared prompt — it would change the delimiters of the template that includes it.",
@@ -813,7 +788,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - prompts.a: malformed Mustache template: Unexpected EOF the tag \"open\" was never closed was opened at line 1",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - prompts.a: malformed Mustache template: Unexpected EOF the tag \"open\" was never closed was opened at line 1",
@@ -843,7 +817,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[1]: '{{> inner}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> inner}}' does not name a declared prompt or effect.",
@@ -871,7 +844,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -946,7 +918,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1021,7 +992,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1096,7 +1066,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0].then[1]: '{{> inner.x}}' does not name a declared prompt or effect.",
@@ -1126,7 +1095,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> nope}}' does not name a declared prompt or effect.",
@@ -1156,7 +1124,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[0]: '{{> greeting.x}}' names declared prompt 'greeting', which has no nested state — a declared prompt is plain text, never dotted.",
@@ -1186,7 +1153,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
     "definition": null,
     "definition_error": "ValueError: Prompt composition errors:\n  - effects[1]: '{{> branch.missing}}' does not name a declared prompt or effect.",
@@ -1214,7 +1180,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1264,7 +1229,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -1317,7 +1281,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",

@@ -67,8 +67,7 @@ release alongside the Python distributions, marked as a preview.
   `.toon` documents and `use: {ref: ...}` are refused. Windows isn't
   supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
-  JSON Schema shapes (#507); a reflector plan containing a date (#512);
-  lint advisories (#428).
+  JSON Schema shapes (#507); a reflector plan containing a date (#512).
 
 ## Build and test
 
