@@ -18,6 +18,10 @@ Params:
   - ``cwd`` (optional, str).
   - ``stdin`` (optional, str).
   - ``allow_nonzero`` (optional, bool).
+  - ``parse`` (optional, ``"json"``): ``value`` is the parsed JSON of
+    stdout instead of the text; the raw stdout stays on ``meta.stdout``.
+    Empty or invalid stdout fails the effect, a nonzero exit's stdout
+    included under ``allow_nonzero``.
 
 Default allowlist is intentionally tiny and read-only:
 ``("ls", "cat", "head", "tail", "wc", "echo", "pwd", "date")``.
@@ -46,7 +50,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..preflight import CheckResult
-from ._subprocess import resolve_binary, run_binary
+from ._subprocess import parse_mode, resolve_binary, run_binary
 from .base import ToolResult, _as_bool
 
 _DEFAULT_ALLOWED: tuple[str, ...] = (
@@ -119,6 +123,8 @@ class ShellPlugin:
                 "or pick a different command."
             )
 
+        parse_json = parse_mode(params, plugin_name="shell")
+
         args = params.get("args") or []
         if not isinstance(args, list):
             raise ValueError("shell: params['args'] must be a list.")
@@ -141,6 +147,7 @@ class ShellPlugin:
             stdin=params.get("stdin"),
             timeout_seconds=timeout_seconds,
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
+            parse_json=parse_json,
         )
 
     def check(self) -> CheckResult:

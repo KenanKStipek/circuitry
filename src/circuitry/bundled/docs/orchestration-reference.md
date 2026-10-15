@@ -816,6 +816,16 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   other plugin — including the HTTP-family, `mcp_client`, and the
   soft-outcome ones below — always leaves it `None`: it is never an HTTP
   status or a soft 0/1/2 flag.
+- **`parse: json`** — `shell` and the plugins built on the shared
+  subprocess base (`git`, `gh`, `ripgrep`, `docker`, `pytest`, and the rest of
+  that family) accept `parse: json`: `value` is then the parsed JSON of
+  stdout (an object, array or scalar) instead of the text, so a later
+  `{from: prime.<name>.value.ok}` or CEL expression reads real types. The raw
+  stdout stays on `meta.stdout`. Empty or invalid stdout fails the effect
+  with the exit code and the first 200 characters of stdout; with
+  `allow_nonzero: true` a non-zero exit's stdout is parsed the same way and
+  `meta.exit_code` keeps the code. Any other `parse` value fails before the
+  process runs.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
   on **`meta.status_code`**. The failure message (`meta.error`, and

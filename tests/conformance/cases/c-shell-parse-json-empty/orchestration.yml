@@ -1,0 +1,10 @@
+name: c-shell-parse-json-empty
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--exit", "0"]
+      parse: json
