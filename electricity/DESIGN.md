@@ -233,8 +233,9 @@ this workspace that reads, writes or evaluates nested data checks against, rathe
 picking its own number (#394): `electricity-json` and `electricity-yaml` re-export it directly
 for their own readers/writers (§3.2, §3.4); `electricity-cel`'s `convert` module bounds its own
 recursion by it when converting a run-time-built `value`/`meta`/`state` argument (§7.2) — CEL
-expression *syntax* nesting is a distinct, much smaller limit of its own, `MAX_NESTING_DEPTH`,
-for reasons specific to that crate's parser (§7.2); `electricity-template`'s own section-nesting
+expression *syntax* nesting is bounded by two distinct, much smaller limits of its own,
+`MAX_BRACKET_NESTING_DEPTH` and `MAX_CHAIN_NESTING_DEPTH`, for reasons specific to that crate's
+parser (§7.2); `electricity-template`'s own section-nesting
 limit, `MAX_SECTION_DEPTH`, is smaller still, for reasons specific to its renderer (§3.3). A
 `Value` read through this workspace's own JSON/YAML loaders can never exceed `MAX_DEPTH`, but one
 built at run time (a future state merge or a loop that wraps a value — nothing in this workspace
@@ -338,7 +339,12 @@ reason: rendering a deeply nested section isn't only a stack-depth concern (the 
 renderer recurses once per level) but a CPU-time one, since a lookup inside a section clones the
 child subtree it resolves at each level. (Until #477 the renderer also cloned its whole scope stack
 on every section push, which made render time cubic in depth.) 64 keeps a render at the limit
-itself fast, not merely safe. Dotted-name
+itself fast, not merely safe. `core/templates.py` has no section-depth limit of its own at all
+(#403): `chevron` recurses too, but Python's own default recursion limit tolerates a far deeper
+template than a 2 MiB Rust thread stack does before this crate's own, much smaller per-frame
+budget overflows (measured directly: somewhere between 350 and 400 levels) — so `core/templates.py`
+still renders a template nested far past 64 sections, just slowly, where this port rejects it
+outright; listed in `electricity-template`'s own "Known divergences from chevron." Dotted-name
 resolution (`a.b.c`) is an ordinary loop over a `.`-split name, never recursion, so it needs no
 limit of its own regardless of how long a dotted name is.
 
@@ -1580,35 +1586,60 @@ regardless of which underlying crate is used:
 - **Bindings**: `if`/`while` bind one root, `state`; `expect:` binds three — `value`, `meta`
   (this effect's own outcome, unprefixed), and `state` (the full run state).
 - Max expression length 4096 chars; an empty/whitespace-only expression raises immediately.
-- **Expression nesting** (#394): `cel`'s `Env::compile` always uses its ANTLR-generated parser
-  (not the crate's separate, feature-gated `PrattParser`, off by default and not enabled here),
-  whose visitor recurses once per level of bracket nesting (`(`/`[`/`{`) *and* once per link of a
-  binary-operator chain (arithmetic, comparison, equality, `in`) or a member/index/call chain
-  (`.field`, `[i]`, `.method(...)`) — measured directly, an unoptimized debug build overflows a 2
-  MiB thread stack at as few as 12 levels of bracket nesting, and `0+1+1+...`/`state[0][0]...`
-  chains overflow the same stack, in both debug and `--release`, at 1600–1700 and 1300 terms
-  respectively, well inside the 4096-character expression cap. Chained unary `!` and a long
-  `&&`/`||` chain never come close, because the grammar collects a run of either into one node
-  visited once, and `conditionalAnd`/`conditionalOr` are themselves flat, non-recursive
-  productions — not because `cel` parses with a loop instead of recursive descent in general.
-  `electricity-cel` pre-scans an expression's combined bracket-and-chain nesting before ever
-  parsing it and rejects anything over `electricity_cel::MAX_NESTING_DEPTH` (64) with its own
-  `CelError` kind — a crate-specific limit, not §3.1's shared `MAX_DEPTH` (512), because it bounds
-  expression *syntax*, not a `Value` tree. `electricity-cel`'s own `convert` module bounds *that*
-  — a run-time-built `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting
-  with the same `CelError` kind rather than recursing further. `Cargo.toml`'s
-  `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]` overrides exist so a debug
-  build's much larger per-frame stack cost doesn't overflow before either check runs. Circuitry's
-  own `core/cel_eval.py` has no equivalent pre-scan: `celpy`'s parser raises Python's own
-  `RecursionError` well before a native stack overflow, in principle a graceful, catchable failure
-  for this exact input — but `_compile`'s own `except Exception` handler that would turn it into
-  `CelValidationError` can itself re-trigger a second `RecursionError` formatting the first one's
-  message (`str(exc)`, still deep in the same exhausted recursion budget), which escapes
-  **uncaught** past every call site in `core/cel_eval.py` as a bare `RecursionError`, confirmed
+- **Expression nesting** (#394, #403): `cel`'s `Env::compile` always uses its ANTLR-generated
+  parser (not the crate's separate, feature-gated `PrattParser`, off by default and not enabled
+  here), whose visitor recurses once per level of bracket nesting (`(`/`[`/`{`) *and* once per
+  link of a binary-operator chain (arithmetic, comparison, equality, `in`) or a member/index/call
+  chain (`.field`, `[i]`, `.method(...)`). `electricity-cel` pre-scans an expression's bracket
+  nesting and operator/accessor chain *independently* before ever parsing it
+  (`electricity_cel::MAX_BRACKET_NESTING_DEPTH` (48) and `MAX_CHAIN_NESTING_DEPTH` (242)), each
+  rejecting with its own `CelError` kind, worded in Circuitry's own `"CEL evaluation failed for
+  ..."` form — neither is §3.1's shared `MAX_DEPTH` (512), because they bound expression *syntax*,
+  not a `Value` tree. `electricity-cel`'s own `convert` module bounds *that* — a run-time-built
+  `value`/`meta`/`state` argument — by the shared `MAX_DEPTH` instead, rejecting with the same
+  `CelError` kind rather than recursing further.
+
+  Both caps were measured directly against Circuitry's own evaluator (`cel-python` 0.5.0, pinned),
+  not guessed, in three real call contexts (a top-level `if`, a CEL `while` loop condition, an `if`
+  inside a `use` child's own nested run — `electricity-cel`'s `nesting.rs` module docs have the
+  full method and numbers): bracket nesting (parentheses, list/map literals, a global function
+  call) is clean in Circuitry up to 48 levels (list/map literals' own floor; parentheses alone
+  tolerate 53) in every context measured; an arithmetic (`+`) or relational (`<`) chain is clean up
+  to 242 terms in every context; a member-access chain (`state.a.a...`) is clean up to 615 terms in
+  the deepest context (one term tighter than the other two, which both still accept 616) — each cap
+  below is set at or under the *smallest* depth every context accepted, so electricity's own Rust
+  pre-scan never rejects an expression shape Circuitry itself accepted in its most call-stack-
+  constrained real context. Sharing one bracket counter across parentheses/list/map
+  literals/global calls (simpler than three separate counters) means electricity is slightly
+  *stricter* than Circuitry for parentheses specifically between 49 and 53 levels — a known, safe,
+  documented divergence (`nesting.rs`'s module docs), not pinned by the corpus.
+
+  Past these clean boundaries, Circuitry's own limit is **not a stable, single number**: a few
+  terms further, the *same* expression was observed to sometimes raise cleanly
+  (`CelEvaluationError`) and sometimes escape as a **bare, uncaught `RecursionError`** — confirmed
   directly (`evaluate_cel("0" + "+1" * 2000, {})` raises `RecursionError`, not
-  `CelEvaluationError`). `electricity-cel`'s pre-scan means it never reaches an equivalent native
-  stack overflow to begin with, which incidentally also means it rejects this input more cleanly
-  than Circuitry's own evaluator does today.
+  `CelEvaluationError`) — because `_compile`'s own `except Exception` handler that would wrap the
+  first `RecursionError` can itself re-trigger a second one formatting the first's message
+  (`str(exc)`, still deep in the same exhausted recursion budget), which then escapes **uncaught**
+  past every call site in `core/cel_eval.py`. *Where* that transition happens moves with how much
+  of Python's recursion budget the caller has already spent, which electricity cannot know or
+  reproduce — so neither cap above claims to match Circuitry exactly past its own clean boundary,
+  only within it. electricity-cel's golden corpus (`tests/golden/corpus.json`, from
+  `generate_cel_corpus.py`) accordingly pins boundary cases only at depths every measured context
+  agreed on, never inside that unstable band.
+
+  Measured directly, on a 2 MiB thread stack (`[profile.dev.package.cel]`/
+  `[profile.dev.package.antlr4rust]`'s `opt-level = 2` overrides keep a debug build's much larger
+  per-frame cost from overflowing before either check runs): `cel` 0.15.0's own parser has a
+  hard-coded internal recursion guard (`max_recursion_depth`, 96) for bracket-type grammar rules,
+  which rejects *gracefully* from 96 through at least 50,000 levels, never a crash — so bracket
+  nesting in this crate never risks a real stack overflow at all, independent of either pre-scan
+  cap; `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
+  between 1,620 and 1,640 terms — a wide margin (~6.7x) over `MAX_CHAIN_NESTING_DEPTH` (242).
+  Chained unary `!` and a long `&&`/`||` chain never come close to either cap, because the grammar
+  collects a run of either into one node visited once, and `conditionalAnd`/`conditionalOr` are
+  themselves flat, non-recursive productions — not because `cel` parses with a loop instead of
+  recursive descent in general.
 
 ### 7.3 Regex engines
 
