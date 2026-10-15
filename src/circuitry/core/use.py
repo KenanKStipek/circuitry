@@ -321,13 +321,21 @@ class _SavedChildRun:
     ``cof run --resume`` continues inside the child (#567) only when the child
     would run the same document (``meta.orchestration_sha256``) with the same
     inputs (``meta.inputs``) as the run that left the record; otherwise the
-    record is stale and the child runs from its start.
+    record is stale and the child runs from its start. A child whose output
+    the ``use``'s own ``expect:`` judged false (``meta.expect.result``) runs
+    from its start too: reused whole, it would hand the same output to the
+    same check and fail again on every resume. An ``expect`` that raised
+    (its adapter call failed) recorded no result, so the finished child is
+    reused and only the check runs again.
     """
 
     inputs: Any
     orchestration_sha256: Any
+    expect_failed: bool = False
 
     def matches(self, *, digest: str, inputs: dict[str, Any]) -> bool:
+        if self.expect_failed:
+            return False
         if not self.orchestration_sha256 or self.orchestration_sha256 != digest:
             return False
         if not isinstance(self.inputs, dict):
@@ -834,9 +842,12 @@ class UseRuntime:
         # received and ran, which decides whether its record is resumable.
         saved_child_run: _SavedChildRun | None = None
         if self.resume and record_children:
+            saved_expect = meta.get("expect")
             saved_child_run = _SavedChildRun(
                 inputs=meta.get("inputs"),
                 orchestration_sha256=meta.get("orchestration_sha256"),
+                expect_failed=isinstance(saved_expect, dict)
+                and not saved_expect.get("result"),
             )
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None

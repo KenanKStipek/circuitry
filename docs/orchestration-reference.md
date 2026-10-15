@@ -1828,9 +1828,16 @@ that left the record: the child's content hash (`meta.orchestration_sha256`,
 which covers the prompt files it references) and its resolved inputs
 (`meta.inputs`) must both match what it gets now. If either changed, the
 record is stale and the child runs from its start, as it does without the
-record. A `use` with `retries` continues inside its child on its first
-attempt only; a retry runs the whole child again, as always. A `use` inside
-a loop pass or an `if` branch reruns with that pass or branch.
+record. So does a child whose output the `use`'s own `expect:` judged false
+(`meta.expect.result`): reused whole, it would hand the same output to the
+same check and fail again on every resume. An `expect` whose own model call
+failed recorded no result, so the finished child is reused and only the
+check runs again. A `use` with `retries` continues inside its child on its
+first attempt only; a retry runs the whole child again, as always. A `use`
+inside a loop pass or an `if` branch, or as a branch of a `flow: tree`
+dynamic (including a `flow: tree` root), reruns from its start: a loop pass
+or `if` branch reruns whole, and a tree branch starts from only the
+finished nodes of the saved state.
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and

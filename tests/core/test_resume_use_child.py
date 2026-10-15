@@ -394,3 +394,89 @@ def test_a_retry_of_a_resumed_use_child_runs_it_from_its_start(tmp_path: Path) -
     second = _run(orch, retrying, saved=_saved(first))
     assert second.ok is True, second.error
     assert retrying.calls == ["c x", "a x", "b x", "c x"]
+
+
+def _expect_parent(tmp_path: Path, expect: Any) -> Path:
+    return _write(
+        tmp_path,
+        "parent.yml",
+        {
+            "runtime": RECORD,
+            "effects": [
+                {
+                    "type": "use",
+                    "name": "sub",
+                    "path": str(_child(tmp_path)),
+                    "inputs": {"topic": "x"},
+                    "expect": expect,
+                }
+            ],
+        },
+    )
+
+
+def test_resume_runs_a_use_child_from_its_start_when_its_expect_failed(
+    tmp_path: Path,
+) -> None:
+    """The child finished, but the `use`'s own `expect` judged its output
+    false: reusing the child whole would hand the same output to the same
+    check, and the run could never get past it."""
+    orch = _expect_parent(tmp_path, "value.last == 'good'")
+
+    class Replies(CountingAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.last_reply = "bad"
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            super().generate(model=model, prompt=prompt, timeout_seconds=timeout_seconds)
+            return GenerateResult(text=self.last_reply if prompt == "c x" else "ok", raw={})
+
+    adapter = Replies()
+    first = _run(orch, adapter)
+    assert first.ok is False
+    assert first.state["prime"]["sub"]["meta"]["expect"]["result"] is False
+    assert adapter.calls == ["a x", "b x", "c x"]
+
+    adapter.last_reply = "good"
+    second = _run(orch, adapter, saved=_saved(first))
+    assert second.ok is True, second.error
+    assert adapter.calls[3:] == ["a x", "b x", "c x"]
+    assert second.state["prime"]["sub"]["value"] == {"last": "good"}
+
+
+def test_resume_reuses_a_finished_use_child_when_its_expect_raised(
+    tmp_path: Path,
+) -> None:
+    """A model-mode `expect` whose own adapter call failed recorded no
+    result: the child's output was never judged, so the finished child is
+    reused and only the check runs again."""
+    orch = _expect_parent(tmp_path, {"mode": "model", "template": "is {{value.last}} fine?"})
+
+    class Judge(CountingAdapter):
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            if prompt.startswith("Evaluate the following"):
+                self.calls.append("judge")
+                if self.fail_prompts:
+                    raise RuntimeError("judge unavailable")
+                return GenerateResult(text="yes", raw={})
+            return super().generate(
+                model=model, prompt=prompt, timeout_seconds=timeout_seconds
+            )
+
+    adapter = Judge()
+    adapter.fail_prompts = {"judge"}
+    first = _run(orch, adapter)
+    assert first.ok is False
+    assert "expect" not in first.state["prime"]["sub"]["meta"]
+    assert adapter.calls == ["a x", "b x", "c x", "judge"]
+
+    adapter.fail_prompts = set()
+    second = _run(orch, adapter, saved=_saved(first))
+    assert second.ok is True, second.error
+    assert adapter.calls[4:] == ["judge"]
+    assert second.state["prime"]["sub"]["meta"]["expect"]["result"] is True
