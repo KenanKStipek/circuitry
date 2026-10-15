@@ -1616,13 +1616,22 @@ pub async fn run_orchestration_with_config(
     // `--skip-preflight`/`--dry-run` in electricity's own CLI shape).
     // `config.runtime`, never the merged `effective.runtime` (a
     // document-level `runtime.adapters.scripted.replies_file` is
-    // invisible to preflight but used by the run).
+    // invisible to preflight but used by the run) -- plus the adapter
+    // aliases the run's own merge defines.
+    let preflight_runtime = preflight::with_document_aliases(
+        cfg.runtime.as_ref(),
+        effective.runtime.as_ref(),
+        &adapters,
+    );
     let preflight_results =
-        preflight::run_preflight(&loaded.document, cfg.runtime.as_ref(), &adapters).await;
+        preflight::run_preflight(&loaded.document, preflight_runtime.as_ref(), &adapters).await;
+    let known_adapters =
+        preflight::known_adapter_names(&preflight_results, preflight_runtime.as_ref(), &adapters);
+    let known_adapters: Vec<&str> = known_adapters.iter().map(String::as_str).collect();
     let (hard_results, soft_results) = electricity_config::preflight::classify_preflight_results(
         &loaded.document,
         preflight_results,
-        electricity_vm::adapter_names::ADAPTER_NAMES,
+        &known_adapters,
     );
     let preflight_errors = electricity_config::preflight::format_preflight_errors(&hard_results);
     if !preflight_errors.is_empty() {

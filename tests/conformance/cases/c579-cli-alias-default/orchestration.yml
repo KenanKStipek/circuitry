@@ -1,0 +1,7 @@
+name: c579-cli-alias-default
+adapter: claude_alt
+model: alias-run-model
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

@@ -201,9 +201,39 @@ fn redact_string(value: &str) -> String {
     value.to_string()
 }
 
+/// `cli/redaction.py::_redact_adapter_env` -- a `runtime.adapters` block
+/// with every `<adapter>.env` value replaced by [`REDACTED`] (the
+/// variable names stay; an `env` that is not a mapping is replaced whole), and the rest redacted as usual.
+fn redact_adapter_env(mut adapters: Value) -> Value {
+    let Value::Dict(dict) = &mut adapters else {
+        return redact(adapters);
+    };
+    let taken = std::mem::take(dict);
+    let mut out = Dict::with_capacity(taken.len());
+    for (name, mut entry) in taken {
+        if let Value::Dict(entry_dict) = &mut entry {
+            let env_key = Value::Str("env".to_string());
+            match entry_dict.get_mut(&env_key) {
+                Some(Value::Dict(env)) => {
+                    for value in env.values_mut() {
+                        *value = Value::Str(REDACTED.to_string());
+                    }
+                }
+                // Not a mapping (a config error preflight rejects, but the
+                // snapshot is written first): replaced whole.
+                Some(other) => *other = Value::Str(REDACTED.to_string()),
+                None => {}
+            }
+        }
+        out.insert(name, redact(entry));
+    }
+    Value::Dict(out)
+}
+
 /// `cli/redaction.py::redact` -- recursively redacts credential-like
 /// fields: a dict value is wholesale-redacted when its own key matches
-/// [`is_sensitive_key`]; a string is redacted (wholesale, or just its
+/// [`is_sensitive_key`]; every value of an `env` mapping under an
+/// `adapters` key is redacted ([`redact_adapter_env`]); a string is redacted (wholesale, or just its
 /// URL userinfo) when it looks like a JWT, an API key, or a URL with
 /// userinfo; lists and nested dicts are walked; every other scalar
 /// passes through unchanged. Returns a new [`Value`]; never mutates in
@@ -224,6 +254,8 @@ pub fn redact(mut value: Value) -> Value {
                 let is_sensitive = matches!(&key, Value::Str(s) if is_sensitive_key(s));
                 let redacted_inner = if is_sensitive {
                     Value::Str(REDACTED.to_string())
+                } else if matches!(&key, Value::Str(s) if s == "adapters") {
+                    redact_adapter_env(inner)
                 } else {
                     redact(inner)
                 };
@@ -292,6 +324,77 @@ mod tests {
             d.insert(Value::Str(k.to_string()), v);
         }
         Value::Dict(d)
+    }
+
+    #[test]
+    fn every_env_value_under_adapters_redacts_and_the_names_stay() {
+        let env = dict(vec![
+            ("CLAUDE_CONFIG_DIR", Value::from("~/.claude-alt")),
+            ("OTHER", Value::from("plain")),
+        ]);
+        let entry = dict(vec![
+            ("adapter", Value::from("claude_code")),
+            ("env", env),
+            ("binary", Value::from("claude")),
+        ]);
+        let input = dict(vec![("adapters", dict(vec![("claude_alt", entry)]))]);
+        let expected_entry = dict(vec![
+            ("adapter", Value::from("claude_code")),
+            (
+                "env",
+                dict(vec![
+                    ("CLAUDE_CONFIG_DIR", Value::from(REDACTED)),
+                    ("OTHER", Value::from(REDACTED)),
+                ]),
+            ),
+            ("binary", Value::from("claude")),
+        ]);
+        let expected = dict(vec![(
+            "adapters",
+            dict(vec![("claude_alt", expected_entry)]),
+        )]);
+        assert_eq!(redact(input), expected);
+    }
+
+    #[test]
+    fn an_env_that_is_not_a_mapping_is_replaced_whole() {
+        for bad in [
+            Value::from("A=secret"),
+            Value::List(vec![Value::from("A=secret")]),
+            Value::from(5i64),
+        ] {
+            let input = dict(vec![(
+                "adapters",
+                dict(vec![(
+                    "alt",
+                    dict(vec![("adapter", Value::from("pi")), ("env", bad)]),
+                )]),
+            )]);
+            let expected = dict(vec![(
+                "adapters",
+                dict(vec![(
+                    "alt",
+                    dict(vec![
+                        ("adapter", Value::from("pi")),
+                        ("env", Value::from(REDACTED)),
+                    ]),
+                )]),
+            )]);
+            assert_eq!(redact(input), expected);
+        }
+    }
+
+    #[test]
+    fn an_adapters_list_is_redacted_like_any_other_list() {
+        let input = dict(vec![(
+            "adapters",
+            Value::List(vec![dict(vec![("api_key", Value::from("x"))])]),
+        )]);
+        let expected = dict(vec![(
+            "adapters",
+            Value::List(vec![dict(vec![("api_key", Value::from(REDACTED))])]),
+        )]);
+        assert_eq!(redact(input), expected);
     }
 
     #[test]

@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Defense-in-depth for c579-cli-alias-config-errors (issue #579): this
+case's `openai` and `claude_code` entries set `adapter: pi`, an alias named
+like a built-in adapter, which is a config error at build time -- never a
+call that could reach this binary. The suite's own guard
+(`test_agent_cli_fakes.py`) still counts any entry based on `pi` as one that
+could start the real CLI, so the case ships this fake."""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    print("should never be reached", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c579-cli-alias-env (issue #579): answers with the
+value of the plain test variable `ALIAS_PROBE` in its own environment (or
+`unset`) and the `--model` it was given -- never a path, so the expected
+files hold nothing machine-specific. Answers as Claude Code's own
+`--output-format json` result shape."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+def main() -> int:
+    sys.stdin.read()
+    argv = sys.argv[1:]
+    model = argv[argv.index("--model") + 1] if "--model" in argv else "none"
+    report = f"ALIAS_PROBE={os.environ.get('ALIAS_PROBE', 'unset')} MODEL={model}"
+    print(json.dumps({"result": report, "is_error": False, "stop_reason": "end_turn"}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

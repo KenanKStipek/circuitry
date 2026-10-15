@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Defense-in-depth for c579-cli-alias-config-errors (issue #579): every
+alias this case's config defines is a config error that fails at adapter
+*build* time, before any call could reach this binary -- this fake exists
+only so the suite's own guard (`test_agent_cli_fakes.py`) never has reason
+to treat the case as missing one, and so a future change that let a bad
+alias build would still never spend a real request."""
+
+from __future__ import annotations
+
+import json
+import sys
+
+
+def main() -> int:
+    sys.stdin.read()
+    print(json.dumps({"result": "should never be reached", "is_error": True}))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
