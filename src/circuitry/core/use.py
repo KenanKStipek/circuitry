@@ -350,6 +350,55 @@ def _graft_child_record(node: dict[str, Any], child_state: Mapping[str, Any]) ->
         node[key] = val
 
 
+def _take_child_record(node: dict[str, Any]) -> dict[str, Any]:
+    """Remove the child effects a saved record left under *node*, and return them."""
+    keys = [key for key in node if key not in ("value", "meta")]
+    return {key: node.pop(key) for key in keys}
+
+
+_UNSAVEABLE = object()
+
+
+def _saved_form(value: Any) -> Any:
+    """*value* as it reads back from saved state (JSON), or a sentinel when it can't be saved."""
+    from .saved_state import json_safe_default
+
+    try:
+        return json.loads(json.dumps(value, sort_keys=True, default=json_safe_default))
+    except (TypeError, ValueError):
+        return _UNSAVEABLE
+
+
+@dataclass(frozen=True)
+class _SavedChildRun:
+    """What a saved, unfinished ``use`` node says about its child's last run.
+
+    ``cof run --resume`` continues inside the child (#567) only when the child
+    would run the same document (``meta.orchestration_sha256``) with the same
+    inputs (``meta.inputs``) as the run that left the record; otherwise the
+    record is stale and the child runs from its start. A child whose output
+    the ``use``'s own ``expect:`` judged false (``meta.expect.result``) runs
+    from its start too: reused whole, it would hand the same output to the
+    same check and fail again on every resume. An ``expect`` that raised
+    (its adapter call failed) recorded no result, so the finished child is
+    reused and only the check runs again.
+    """
+
+    inputs: Any
+    orchestration_sha256: Any
+    expect_failed: bool = False
+
+    def matches(self, *, digest: str, inputs: dict[str, Any]) -> bool:
+        if self.expect_failed:
+            return False
+        if not self.orchestration_sha256 or self.orchestration_sha256 != digest:
+            return False
+        if not isinstance(self.inputs, dict):
+            return False
+        saved = _saved_form(self.inputs)
+        return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
+
+
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     """Validate an inline YAML string the way ``cof check`` validates a file.
 
@@ -441,6 +490,7 @@ class UseRuntime:
         cb_error: Callable[[str], None] | None = None,
         display_name: str | None = None,
         ancestors: list | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -463,6 +513,10 @@ class UseRuntime:
         # Pin recorded when `ref:` resolved through a library source, mirrored
         # onto the effect's meta for per-effect introspection.
         self._pin: dict[str, Any] | None = None
+        # ``cof run --resume`` (#567): with ``runtime.state.record_children``,
+        # an unfinished node's saved child record lets the child continue at
+        # its first unfinished effect instead of starting over.
+        self.resume = resume
 
     def _resolve_orchestration(self) -> Path:
         """Resolve orchestration reference to a file path.
@@ -838,6 +892,18 @@ class UseRuntime:
 
         legacy_ref = self.defn.ref or self.defn.path or self.defn.orchestration
         label = legacy_ref or "inline"
+        record_children = _record_children_enabled(self.runtime_config)
+        # Read before the reset below clears them: what the saved run's child
+        # received and ran, which decides whether its record is resumable.
+        saved_child_run: _SavedChildRun | None = None
+        if self.resume and record_children:
+            saved_expect = meta.get("expect")
+            saved_child_run = _SavedChildRun(
+                inputs=meta.get("inputs"),
+                orchestration_sha256=meta.get("orchestration_sha256"),
+                expect_failed=isinstance(saved_expect, dict)
+                and not saved_expect.get("result"),
+            )
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["orchestration"] = legacy_ref
@@ -851,7 +917,6 @@ class UseRuntime:
         #: or reproduce this step.
         meta["inputs"] = None
         meta["orchestration_sha256"] = None
-        record_children = _record_children_enabled(self.runtime_config)
 
         #: This effect's canonical dotted path — what child effects namespace
         #: under and where their live state is mirrored for observers.
@@ -1059,6 +1124,18 @@ class UseRuntime:
                     meta["inputs"] = copy.deepcopy(child_inputs)
                     child_state: dict[str, Any] = {"input": child_inputs}
 
+                    # `cof run --resume` (#567): the saved child record comes
+                    # off the node either way -- it seeds the child when the
+                    # document and inputs match the run that left it, and is
+                    # stale otherwise. Only the first attempt resumes; a retry
+                    # re-runs the whole child from scratch.
+                    resume_child = False
+                    if saved_child_run is not None and attempt_index == 0:
+                        saved_effects = _take_child_record(node)
+                        if saved_child_run.matches(digest=digest, inputs=child_inputs):
+                            child_state[_CHILD_ROOT] = saved_effects
+                            resume_child = True
+
                     # Isolated state, shared observation: the child keeps its own
                     # state dict (and its explicit inputs/outputs mapping) but
                     # inherits the parent's callbacks, its lock — so a snapshot is
@@ -1103,6 +1180,7 @@ class UseRuntime:
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                             label_prefix=child_label_prefix,
+                            resume=resume_child,
                         ).execute(store=child_store)
 
                     # Surface errors an on_error: skip/continue swallowed inside the
@@ -1255,5 +1333,12 @@ class UseRuntime:
                 # must not let that pass's value survive next to this
                 # pass's error (#260).
                 node["value"] = None
+        except BaseException:
+            # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
+            # Exception, but what the child finished before it is exactly
+            # what `cof run --resume` continues from (#567).
+            if record_children and child_store is not None:
+                _graft_child_record(node, child_store.state)
+            raise
         finally:
             store.fire_effect_complete(self.defn.name, node)

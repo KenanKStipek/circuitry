@@ -621,3 +621,53 @@ effects:
     assert second.exit_code == 1, second.stdout
     after = json.loads(run_json.read_text(encoding="utf-8"))
     assert after["input"]["api_key"] == "realsecret123"
+
+
+def test_resume_last_continues_inside_a_recorded_use_child(tmp_path: Path) -> None:
+    """With `runtime.state.record_children: true`, `--resume` continues
+    inside an unfinished `use` child (#567): the child's finished `uuid`
+    step keeps its value, and its `fs` read, which failed while the file was
+    missing, runs again and now succeeds."""
+    data = tmp_path / "data.txt"
+    _write(
+        tmp_path / "child.yml",
+        f"""
+effects:
+  - type: tool
+    name: id
+    provider: uuid
+  - type: tool
+    name: read
+    provider: fs
+    params:
+      mode: read
+      path: {data}
+""".lstrip(),
+    )
+    orch = _write(
+        tmp_path / "parent.yml",
+        """
+runtime:
+  state:
+    record_children: true
+effects:
+  - type: use
+    name: sub
+    path: child.yml
+""".lstrip(),
+    )
+    out = tmp_path / "run.json"
+    allow = ["--allow-capabilities", "fs-write"]
+
+    first = runner.invoke(app, ["run", str(orch), "--out", str(out), *allow])
+    assert first.exit_code == 1, first.stdout
+    saved = json.loads(out.read_text(encoding="utf-8"))["prime"]["sub"]
+    child_uuid = saved["id"]["value"]
+    assert saved["read"]["meta"]["error"]
+
+    data.write_text("hello", encoding="utf-8")
+    second = runner.invoke(app, ["run", str(orch), "--resume", "last", *allow])
+    assert second.exit_code == 0, second.stdout
+    resumed = json.loads(out.read_text(encoding="utf-8"))["prime"]["sub"]
+    assert resumed["id"]["value"] == child_uuid
+    assert resumed["read"]["meta"]["error"] is None

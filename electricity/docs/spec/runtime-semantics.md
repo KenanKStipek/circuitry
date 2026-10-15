@@ -1060,7 +1060,10 @@ onto** the `use` node itself, so a child effect named `inner` surfaces at
 `prime.<use_name>.inner.value`, exactly the nesting convention a `dynamic`
 container gives its own children. `runtime.state.record_children` (config)
 additionally grafts the child's full effect record under the `use` node even
-in explicit/auto-outputs mode, for observability.
+in explicit/auto-outputs mode, for observability. With it on, a child stopped
+by an interrupt (Ctrl-C/SIGTERM/SIGHUP, a cancelled run — a `BaseException`,
+not an ordinary failure) keeps its record too, and `--resume` continues
+inside that recorded child rather than rerunning it (§8.5).
 
 **Child errors**: `meta.child_errors` is a flat list of `{path, error}` for
 **every** node anywhere in the child's tree whose own `meta.error` is set —
@@ -1715,6 +1718,21 @@ finished — a pass that died partway through writing its own node must not
 be mistaken for complete) — chain flow only (every `while`, or an `each` not
 running `flow: tree`); a tree-flow `each` loop and an unnamed loop always
 rerun whole. A `finally:` effect is **never** skipped by resume (§6.4).
+
+An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
+`_SavedChildRun`) reruns its child from the start in a fresh state, unless
+`runtime.state.record_children` is on and the saved node holds the child's
+record: then the resumed `use` continues **inside** its recorded child —
+the record seeds the child's `prime` and the child's root `dynamic` runs
+with resume on, so every rule above applies inside it, recursively for a
+nested `use`. A child interrupted by Ctrl-C/SIGTERM/SIGHUP keeps its record
+for exactly this. It does so only when the saved `meta.orchestration_sha256`
+and `meta.inputs` (compared in their saved JSON form) equal the child's
+current digest and resolved inputs, and the saved `meta.expect.result` is
+not false (a check that judged the output false would just fail again);
+otherwise the record is dropped and the child runs from its start. Only the
+first attempt resumes — a `retries` retry reruns the child whole. A `use`
+in a loop pass, an `if` branch, or a tree-flow branch still reruns whole.
 
 ### 8.6 Config keys that affect a run
 
