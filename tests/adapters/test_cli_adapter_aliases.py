@@ -22,6 +22,8 @@ from circuitry.api import run_orchestration
 from circuitry.cli.app import app
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.redaction import REDACTED, redact
+from circuitry.cli.runtime_shim import validate
+from circuitry.tui.diagnostics import check_targets
 
 MARKER = "alias-secret-marker-7f3a"
 
@@ -530,3 +532,33 @@ def test_an_alias_is_the_default_adapter_and_its_timeout_is_its_own(tmp_path: Pa
     assert read_record(path)["argv"][0] == "-p"
     assert configured_timeout_seconds("pi_alt", runtime) == 77
     assert configured_timeout_seconds("pi", runtime) is None
+
+
+def test_check_finds_an_alias_a_by_path_document_defines_but_not_a_limited_ones(
+    tmp_path: Path,
+) -> None:
+    fake = write_fake_cli(tmp_path, "fake-claude", stdout=claude_result(result="hi"))
+    doc = _doc(
+        tmp_path,
+        [_prompt("a", "claude_alt")],
+        runtime=_runtime(claude_alt={"adapter": "claude_code", "binary": str(fake)}),
+    )
+    config = CircuitryConfig(default_model="m")
+
+    trusted = validate(doc, config=config, trust_document=True)
+    assert trusted["ok"], trusted
+    assert any(w.startswith("Applied host settings") for w in trusted["warnings"])
+
+    limited = validate(doc, config=config, trust_document=False)
+    assert not limited["ok"]
+    assert any("Unknown adapter: 'claude_alt'" in e for e in limited["errors"])
+
+
+def test_doctor_lists_the_aliases_config_defines() -> None:
+    config = CircuitryConfig(runtime=_runtime(claude_alt={"adapter": "claude_code"}))
+    names = [t.name for t in check_targets(config) if t.category == "adapter"]
+    assert "claude_alt" in names and "claude_code" in names
+    allowlisted = CircuitryConfig(
+        enabled_adapters=["pi"], runtime=_runtime(claude_alt={"adapter": "claude_code"})
+    )
+    assert [t.name for t in check_targets(allowlisted) if t.category == "adapter"] == ["pi"]

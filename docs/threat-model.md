@@ -191,6 +191,12 @@ or a project `.mcp.json` would start and their tools would be offered to
 the model. Which binary runs is
 `runtime.adapters.<name>.binary`, a host setting a limited document cannot
 set (see [What a document can set](guidebook/04-configuration.md#what-a-document-can-set)).
+An alias of either adapter (`runtime.adapters.<alias>.adapter`) can add
+variables to that child's environment (`env`), for instance a config
+directory that selects another login. That is the same host-setting
+boundary: a limited document cannot define an alias, and `env` values are
+blanked in the saved `effective_settings` and kept out of events, logs,
+error messages and the "Applied host settings" notice.
 
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s

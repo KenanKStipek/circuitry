@@ -2248,6 +2248,10 @@ the command lines, `--json-schema` wrapping, reading the reply, retries, and `me
 cited there from the reference's own `adapters/claude_code.py`/`adapters/pi.py`, not repeated
 here.
 
+Both also run as *aliases* (issue #579): a `runtime.adapters.<alias>` entry that sets `adapter: claude_code|pi`,
+with its own settings and an `env` set in that child's environment after the removals. Resolution is
+`AdapterRegistry::build`'s; the rules and error texts are tools-adapters-plugins §3.13's.
+
 ---
 
 ## 10. Runtime plugins for v1

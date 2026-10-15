@@ -201,7 +201,7 @@ A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_se
 
 `--tools ""` turns off only Claude Code's built-in tools, so `claude_code` also passes `--strict-mcp-config`: no MCP server starts, neither one from your Claude Code config nor a project `.mcp.json`. Each call runs in a fresh temporary directory, so no project's `AGENTS.md`/`CLAUDE.md` is read, and in its own process group: a timeout or a cancelled run (Ctrl-C, SIGTERM) stops the CLI and everything it started. A timeout is retried like any other; a CLI error is not, and fails the attempt with the CLI's own message — an auth failure (`Failed to authenticate. API Error: 401 ...`) or a CLI too old for the requested model (`... version X or newer is required`). `params`, `messages` turns and images are not sent: the prompt arrives flattened, with one warning naming what was ignored.
 
-The child gets the caller's environment minus the variables that make a CLI think it runs inside a parent session (`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — always removed) and minus `unset_env` (by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so the CLI uses its own login rather than a key that happens to be exported). Config, in `runtime.adapters.pi` / `runtime.adapters.claude_code`:
+The child gets the caller's environment minus the variables that make a CLI think it runs inside a parent session (`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — always removed) and minus `unset_env` (by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so the CLI uses its own login rather than a key that happens to be exported); `env` is applied last. Config, in `runtime.adapters.pi` / `runtime.adapters.claude_code`:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -211,6 +211,29 @@ The child gets the caller's environment minus the variables that make a CLI thin
 | `timeout_seconds` | the run's adapter timeout | Per-call budget. A CLI retries a failing request on its own before it gives up, which can take minutes |
 | `unset_env` | `["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]` | Variables removed from the CLI's environment; replaces the default list (`[]` keeps both) |
 | `extra_args` | `[]` | Extra CLI arguments, added before the prompt (`pi`) or last (`claude_code`) |
+| `env` | `{}` | Variables set in the CLI's environment, after the always-removed variables and `unset_env` are taken out, so a variable named in both `unset_env` and `env` gets the `env` value. Values are strings; a leading `~/` is the home directory, nothing else is expanded. Only that CLI's child process sees them. The values never appear in saved state, events, logs, error messages or `cof doctor` output (see [Aliases](#aliases-of-the-cli-adapters)) |
+
+##### Aliases of the CLI adapters
+
+A CLI often picks its login or profile from an environment variable (a config directory, say), and a `prompt` effect has no `env` of its own. An **alias** runs `pi` or `claude_code` with settings and an `env` of its own, so one run can send some effects through one login and others through another. Define it where adapter settings already live, `runtime.adapters`:
+
+```json
+{"runtime": {"adapters": {
+  "claude_alt": {
+    "adapter": "claude_code",
+    "env": {"CLAUDE_CONFIG_DIR": "~/.claude-alt"},
+    "timeout_seconds": 1800
+  }
+}}}
+```
+
+- **The base.** `adapter` names the alias's base: `claude_code` or `pi`, and nothing else (not another alias, not an API adapter). Every other key is one of the base's own settings from the table above (`binary`, `default_model`, `thinking` for `pi`, `timeout_seconds`, `unset_env`, `extra_args`) or `env`. An alias starts from nothing: it does not inherit the base's own `runtime.adapters.claude_code` entry, and it never changes that entry or another alias's.
+- **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`. `meta.adapter` records the alias name. `enabled_adapters` lists an alias by its own name, like any adapter.
+- **The child's environment.** In order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
+- **Errors.** A config error names the alias, and never shows an `env` value: an unknown base, or one other than `claude_code` or `pi`; a base that is itself an alias; an alias named like a built-in adapter (any name `cof list --extensions` shows); an `env` that is not a mapping, has a non-string value, or has a variable name that does not match `[A-Za-z_][A-Za-z0-9_]*`. A name that sets no `adapter` is not an alias, whatever else it sets.
+- **`cof check` and `cof doctor`** check the alias's binary, its own `binary` or else the base's default, and report it as `binary:<name>` under the alias's name.
+- **Secrecy.** `env` values are blanked in the `runtime.effective_settings` snapshot of the saved state (the variable names stay) and appear in no event, log, error message or "Applied host settings" line (which lists key paths, such as `runtime.adapters.claude_alt.env`, never values). Treat `env` as host configuration all the same: put a secret in a file the CLI reads, not in a value that config.json holds.
+- **Trust.** An alias is adapter configuration, so the trust boundary is unchanged. A document run by path may define aliases in its `runtime.adapters`, and they are listed in "Applied host settings"; a limited document's `runtime.adapters` is ignored, so an effect of it that names an alias only that document defines fails as an unknown adapter.
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
