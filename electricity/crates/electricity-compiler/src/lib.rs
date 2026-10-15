@@ -203,7 +203,8 @@ pub enum DocumentOrigin {
         confinement_root: PathBuf,
     },
     /// A document with a real file of its own that is *limited*, not run
-    /// by path: a `use` child. It resolves `{file: ...}` exactly like
+    /// by path: a `use` child of a limited parent (a child of a trusted
+    /// parent is [`DocumentOrigin::File`]). It resolves `{file: ...}` exactly like
     /// [`DocumentOrigin::File`]; the one difference is a prompt's
     /// `file: {from: ...}` (issue #578), whose `within` must stay inside
     /// `confinement_root` here.

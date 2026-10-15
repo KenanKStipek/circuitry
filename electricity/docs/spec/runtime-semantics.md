@@ -964,11 +964,27 @@ points), appended after `waiting_for` and absent when nothing was read. The
 file's content is run data, not part of the document digest.
 
 Trust (`DocumentOrigin`): a document run by path (`File`) can name any
-`within`. A `use` child (`LimitedFile`) is limited: a literal `within` must
-resolve inside its confinement root (a compile error otherwise), and a
+`within`. A limited document (`LimitedFile`) is limited: a literal `within`
+must resolve inside its confinement root (a compile error otherwise), and a
 `within` taken from `input` is held to the same rule at dispatch. A
 generated document (`Generated`) cannot use the form at all: the same
 `'file:' cannot be used here` compile error `{file: <path>}` gives.
+
+A `use` child named by `path:` has its parent's trust, which the compiled
+`use` carries as `parent_trusted` (true when the document it is compiled in is
+`File`): a child of a trusted parent loads as `File`, a child of a limited one
+as `LimitedFile`. A `use: inline` child is `Generated`, so its own `use`
+children are limited. Circuitry additionally limits a child it resolves
+through the library; electricity has no library (`ref:` is a compile error), so
+no child here is ever limited that way. In a child, `input.<name>` is whatever
+the parent maps to it, which can be another effect's output, so the parent's
+author decides what a trusted child may read.
+
+A reflector builds its planning prompt from the plan prompt's own text, so a
+plan prompt (the top-level `prompt` named `plan_from_step`) whose `template` or
+a message's `content` is `file: {from: ...}` is a compile error naming the
+reflector, the prompt and the field: `Reflector effect '<name>' at '<path>':
+its plan prompt '<prompt>' reads <field> from a file named in state ...`.
 
 **Routing/scoring/decomposition** — see §5.8.
 

@@ -563,6 +563,7 @@ pub(crate) fn compile_use(
     name: &str,
     effect_path: &str,
     loop_names: &BTreeSet<String>,
+    origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
     let field_str = |key: &str| -> Option<String> {
         effect
@@ -662,6 +663,7 @@ pub(crate) fn compile_use(
     };
 
     let op = UseOp {
+        parent_trusted: matches!(origin, DocumentOrigin::File { .. }),
         source,
         inputs,
         outputs,
@@ -793,6 +795,37 @@ pub(crate) fn compile_reflector(
         &mut seen,
     )?;
 
+    let plan_from_step = get_truthy(effect, "plan_from_step")
+        .map(Value::py_str)
+        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
+    for inner_op in &compiled_inner {
+        if inner_op.name.as_deref() != Some(plan_from_step.as_str()) {
+            continue;
+        }
+        let NodeKind::Leaf(leaf) = &inner_op.kind else {
+            continue;
+        };
+        let LeafKind::Prompt(prompt) = leaf.as_ref() else {
+            continue;
+        };
+        let file_field = match &prompt.content {
+            PromptContent::TemplateFile(_) => Some("template".to_string()),
+            PromptContent::Messages(messages) => messages
+                .iter()
+                .position(|message| message.file.is_some())
+                .map(|index| format!("messages[{index}].content")),
+            PromptContent::Template(_) => None,
+        };
+        if let Some(field) = file_field {
+            return Err(CompileError(format!(
+                "Reflector effect '{name}' at '{effect_path}': its plan prompt \
+                 '{plan_from_step}' reads {field} from a file named in state \
+                 ('file: {{from: ...}}'), but a reflector builds its planning prompt from \
+                 the prompt's own text and would drop the file. Write the text in the \
+                 prompt, or name the file with 'file: <path>'."
+            )));
+        }
+    }
     let inner_region = match flow {
         electricity_bytecode::LoopFlow::Tree => Region::Parallel {
             branches: compiled_inner,
@@ -805,9 +838,6 @@ pub(crate) fn compile_reflector(
         },
     };
 
-    let plan_from_step = get_truthy(effect, "plan_from_step")
-        .map(Value::py_str)
-        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
     let max_iterations = get_truthy(effect, "max_iterations")
         .map(py_int)
         .unwrap_or(electricity_bytecode::defaults::REFLECTOR_MAX_ITERATIONS as i64)

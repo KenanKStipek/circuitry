@@ -92,6 +92,30 @@ def test_a_run_with_a_bad_value_fails_before_any_effect_dispatches(
     assert "single" not in result.state.get("prime", {})
 
 
+def test_a_bad_value_is_a_config_error_the_cli_prints_as_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    orch = _setup(tmp_path, "head:0")
+    result = runner.invoke(app, ["doctor", "--orch", str(orch)])
+    assert result.exit_code == 1
+    assert "Error: runtime.state.prompt_sent must be" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_bad_value_is_a_config_error_for_the_tui_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("textual")
+    from circuitry.cli.config import ConfigError
+    from circuitry.tui.diagnostics import load_diagnostics
+
+    monkeypatch.chdir(tmp_path)
+    orch = _setup(tmp_path, "head:0")
+    with pytest.raises(ConfigError, match=r"runtime\.state\.prompt_sent must be"):
+        load_diagnostics(orchestration_path=orch)
+
+
 def test_the_setting_applies_from_config_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

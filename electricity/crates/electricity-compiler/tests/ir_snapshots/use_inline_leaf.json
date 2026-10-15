@@ -22,6 +22,7 @@
                     "expect": null,
                     "inputs": null,
                     "outputs": null,
+                    "parent_trusted": true,
                     "retries": {
                       "backoff_ms": 1000,
                       "max_attempts": 1

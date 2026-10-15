@@ -463,6 +463,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "retries": project_retries(use_op.retries),
                 "expect": project_expect(&use_op.expect),
                 "enabled": op.enabled,
+                "parent_trusted": use_op.parent_trusted,
             })
         }
         LeafKind::Yield(yield_op) => json!({

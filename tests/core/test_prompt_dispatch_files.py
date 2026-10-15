@@ -368,6 +368,38 @@ def test_it_is_not_allowed_in_a_yield_or_the_prompts_map(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize(
+    ("plan_prompt", "field"),
+    [
+        ({"template": _from()}, "template"),
+        (
+            {"messages": [{"role": "system", "content": "plan"}, {"role": "user", "content": _from()}]},
+            r"messages\[1\]\.content",
+        ),
+    ],
+)
+def test_a_reflectors_plan_prompt_cannot_read_its_text_from_a_file_in_state(
+    tmp_path: Path, plan_prompt: dict[str, Any], field: str
+) -> None:
+    reflector = {
+        "type": "reflector",
+        "name": "r",
+        "effects": [{"type": "prompt", "name": "propose_steps", **plan_prompt}],
+    }
+    with pytest.raises(ValueError, match=rf"Reflector effect 'r' .*plan prompt 'propose_steps' reads {field} "):
+        compile_orchestration(
+            orch={"effects": [reflector]}, document_dir=tmp_path, confinement_root=tmp_path, trusted=True
+        )
+    # Another prompt in the reflector may still read a file at dispatch.
+    reflector["effects"] = [
+        {"type": "prompt", "name": "propose_steps", "template": "plan"},
+        {"type": "prompt", "name": "other", "template": _from()},
+    ]
+    compile_orchestration(
+        orch={"effects": [reflector]}, document_dir=tmp_path, confinement_root=tmp_path, trusted=True
+    )
+
+
 def test_a_generated_document_cannot_use_it(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="this document has no file of its own"):
         _compile({"template": _from()}, tmp_path, document=False)

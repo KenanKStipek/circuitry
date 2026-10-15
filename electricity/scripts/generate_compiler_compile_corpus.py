@@ -1276,6 +1276,34 @@ CASES[-1]["error_modes"] = {
 }
 
 
+# A reflector builds its planning prompt from the prompt's own text, so a plan
+# prompt that reads its text from a file named in state would lose the file.
+_REFLECTOR_HEAD = "  - type: reflector\n    name: r\n    effects:\n"
+_PLAN_PROMPT_HEAD = "      - type: prompt\n        name: propose_steps\n"
+_dispatch_file_case(
+    "reflector_plan_prompt_template_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template:\n          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_plan_prompt_message_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        messages:\n          - {role: system, content: plan}\n"
+    "          - role: user\n            content:\n"
+    "              file: {from: input.f}\n              within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_other_prompt_file_from_state_is_allowed",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template: plan\n"
+    + "      - type: prompt\n        name: other\n        template:\n"
+    "          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+
+
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 

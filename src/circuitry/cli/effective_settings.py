@@ -20,7 +20,7 @@ from .complexity_config import (
     RoutingSettings,
     resolve_complexity_settings,
 )
-from .config import CircuitryConfig
+from .config import CircuitryConfig, ConfigError
 
 if TYPE_CHECKING:
     from .profiles import ProfileSettings
@@ -523,7 +523,7 @@ def resolve_effective_settings(
     # text in state the document asked to keep it out of.
     state_errors = prompt_sent_errors(runtime)
     if state_errors:
-        raise ValueError(state_errors[0])
+        raise ConfigError(state_errors[0])
     _record_complexity_sources(
         sources,
         config_block=(cfg.runtime or {}).get("complexity"),

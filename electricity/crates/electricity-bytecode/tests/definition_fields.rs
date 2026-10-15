@@ -181,6 +181,11 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("UseDefinition", "retries", "effects::UseOp::retries");
     add("UseDefinition", "expect", "effects::UseOp::expect");
     add("UseDefinition", "enabled", "op::Op::enabled");
+    add(
+        "UseDefinition",
+        "parent_trusted",
+        "effects::UseOp::parent_trusted",
+    );
 
     // YieldDefinition -> effects::YieldOp
     add("YieldDefinition", "name", "op::Op::name");

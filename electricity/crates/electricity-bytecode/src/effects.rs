@@ -205,6 +205,11 @@ pub enum UseSource {
 /// `UseDefinition`, minus `name`/`on_error`/`enabled`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UseOp {
+    /// `UseDefinition.parent_trusted`: whether the document carrying this
+    /// effect is trusted (run by path: `DocumentOrigin::File`). A child named
+    /// by `path:` gets this trust; electricity has no library, so no child is
+    /// ever limited by being resolved through one.
+    pub parent_trusted: bool,
     pub source: UseSource,
     pub inputs: Option<ParamNode>,
     /// `outputs`, already normalized (DESIGN.md §4 step 3) to a name ->

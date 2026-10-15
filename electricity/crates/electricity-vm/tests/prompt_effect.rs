@@ -662,6 +662,7 @@ effects:
     template: hi
 ";
     let use_op = electricity_bytecode::UseOp {
+        parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(
             inline_yaml.to_string(),
             true,
@@ -1255,6 +1256,7 @@ effects:
     on_error: continue
 ";
     let use_op = electricity_bytecode::UseOp {
+        parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(
             inline_yaml.to_string(),
             true,

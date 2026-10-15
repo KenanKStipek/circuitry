@@ -835,6 +835,28 @@ def _compile_effect(
         )
 
         plan_from_step = effect.get("plan_from_step") or "propose_steps"
+        for inner_effect in compiled_inner:
+            if not (
+                isinstance(inner_effect, PromptDefinition)
+                and inner_effect.name == str(plan_from_step)
+            ):
+                continue
+            file_fields = [
+                *(["template"] if inner_effect.template_file is not None else []),
+                *(
+                    f"messages[{index}].content"
+                    for index, message in enumerate(inner_effect.messages or ())
+                    if message.file is not None
+                ),
+            ]
+            if file_fields:
+                raise ValueError(
+                    f"Reflector effect '{valid_name}' at '{effect_path}': its plan prompt "
+                    f"'{inner_effect.name}' reads {file_fields[0]} from a file named in "
+                    "state ('file: {from: ...}'), but a reflector builds its planning "
+                    "prompt from the prompt's own text and would drop the file. Write the "
+                    "text in the prompt, or name the file with 'file: <path>'."
+                )
         max_iterations = int(effect.get("max_iterations") or 1)
         generated_key = effect.get("generated_key") or "generated"
         stop_on_done = bool(effect.get("stop_on_done", True))
@@ -1442,6 +1464,7 @@ def _compile_use(
         description=description,
         retries=retries,
         expect=expect,
+        parent_trusted=_current_document_trusted(),
     )
 
 

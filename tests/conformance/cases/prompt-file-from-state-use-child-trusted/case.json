@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #578: trust boundary",
+  "description": "A `use` child named by `path:` gets its parent's trust. The parent is run by path, so the child, which has a project of its own, reads a file outside that project through `within: {from: input.work_dir}`.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": [
+    "-e", "work_dir=__CASE_DIR__",
+    "-e", "prompt_file=prompts/item.txt"
+  ],
+  "expect": "success"
+}

@@ -67,7 +67,8 @@
     "description",
     "retries",
     "expect",
-    "enabled"
+    "enabled",
+    "parent_trusted"
   ],
   "YieldDefinition": [
     "name",
