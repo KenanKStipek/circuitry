@@ -519,6 +519,24 @@ def test_a_use_in_a_resumed_branch_continues_inside_its_recorded_child(tmp_path:
 # -- unchanged ----------------------------------------------------------------
 
 
+def test_a_named_if_whose_condition_raised_runs_its_branch_from_its_start(
+    tmp_path: Path,
+) -> None:
+    orch = _write(
+        tmp_path, "if.yml", {"effects": [_gate({"mode": "model", "template": "go on?"})]}
+    )
+    adapter = ScriptedAdapter()
+    adapter.fail_condition = 1
+
+    first = _run(orch, adapter)
+    assert first.ok is False
+    assert "branch" not in first.state["prime"]["gate"]["meta"]
+
+    second, calls = _resume_calls(orch, adapter, first)
+    assert second.ok is True, second.error
+    assert calls == [CONDITION, "a-then", "b-then", "c-then"]
+
+
 def test_an_unnamed_if_reruns_its_branch_from_its_start(tmp_path: Path) -> None:
     orch = _write(tmp_path, "if.yml", {"effects": [_gate(FLAG, name=None)]})
     adapter = ScriptedAdapter()
@@ -564,7 +582,12 @@ def test_a_tree_flow_each_loop_reruns_whole(tmp_path: Path) -> None:
     assert sorted(calls) == ["a-0", "a-1", "b-0", "b-1", "c-0", "c-1"]
 
 
-def test_a_reflector_in_a_resumed_pass_reruns_whole(tmp_path: Path) -> None:
+def test_a_reflector_in_a_resumed_pass_reruns_from_its_start_though_it_finished(tmp_path: Path) -> None:
+    """Pins the rerun: a reflector records no ``meta.completed_at`` on success.
+
+    So `--resume` cannot tell a finished reflector from an unfinished one and
+    always runs it again from its start; #585 tracks changing that.
+    """
     reflector = {
         "type": "reflector",
         "name": "planner",

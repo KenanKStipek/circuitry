@@ -1887,8 +1887,9 @@ saved node took (`meta.branch`), that branch continues at its first
 unfinished effect, by the same positional rule; if it selects the other
 branch, that branch runs from its start. An **unnamed** `if` has no node
 to record its branch, so its branch always runs from its start. A
-`reflector` is all-or-nothing for resume: if its own node already finished
-without error, `--resume` skips it; otherwise it reruns from the start.
+`reflector` always reruns from its start on `--resume`: it records no
+`completed_at`, so a finished reflector is not skipped either (#585 tracks
+changing that).
 Inside a resumed pass or branch, the first effect that didn't finish
 resumes the same way it would at the top level: a nested loop at its own
 first unfinished pass, a nested `if` inside its branch, a `dynamic` at its

@@ -842,9 +842,11 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   branches ever *run* (none that hadn't started when the signal arrived), not which already-done
   ones get merged (none, on either engine, before or after the fix).
 - **an interrupted `dynamic` must not look finished to `--resume`; an `if`/`use` already
-  don't.** A conditional and `use` catch only `except Exception`, so a real interrupt passes
-  straight through both untouched, leaving in place the `completed_at: None`/`error: None` pair
-  each already wrote when it started, and `--resume` reruns them. A named `loop` catches the
+  don't.** A conditional catches only `except Exception`, so a real interrupt passes
+  straight through it untouched; `use` has an `except BaseException` handler (#570) that saves
+  the child's record but writes neither `completed_at` nor `error`. Either way the
+  `completed_at: None`/`error: None` pair each wrote when it started stays in place, and
+  `--resume` reruns them. A named `loop` catches the
   interrupt too (#574): it records it exactly like a failure — `completed_passes`, `completed_at`,
   and the interrupt text below as `meta.error` and `value.termination.detail` — so `--resume`
   keeps the passes it finished, then re-raises it unchanged (electricity: `VmError::Cancelled`

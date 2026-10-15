@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 from circuitry.adapters.base import GenerateResult
-from circuitry.cli.interrupts import SigTermInterrupt
+from circuitry.cli.interrupts import SigHupInterrupt, SigTermInterrupt
 from circuitry.cli.runtime_shim import RunRequest, RunResult, run
 from circuitry.core.cancellation import RunCancelledBySignal
 from circuitry.core.compiler import compile_orchestration
@@ -162,6 +162,25 @@ def test_a_while_loop_stopped_by_sigterm_resumes_at_its_first_unfinished_pass(
     second = _run(orch, adapter, saved=_saved(first))
     assert second.ok is True, second.error
     assert adapter.calls[3:] == ["poll-2", "poll-3"]
+
+
+def test_an_each_loop_stopped_by_sighup_resumes_at_its_first_unfinished_pass(
+    tmp_path: Path,
+) -> None:
+    orch = _frames_orch(tmp_path)
+    adapter = InterruptingAdapter()
+    adapter.raises = {"frame-2": SigHupInterrupt()}
+
+    first = _run(orch, adapter, inputs=ITEMS)
+    assert first.interrupted is True
+    assert first.sighup is True
+    meta = first.state["prime"]["frames"]["meta"]
+    assert meta["completed_passes"] == [0, 1]
+    assert meta["error"] == "Interrupted (SIGHUP)"
+
+    second = _run(orch, adapter, saved=_saved(first))
+    assert second.ok is True, second.error
+    assert adapter.calls[3:] == ["frame-2", "frame-3"]
 
 
 def test_an_each_loop_in_a_cancelled_run_resumes_at_its_first_unfinished_pass(
