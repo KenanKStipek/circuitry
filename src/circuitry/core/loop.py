@@ -1153,9 +1153,17 @@ class LoopRuntime:
             if is_named and self.defn.name:
                 store.fire_effect_complete(self.defn.name, node or {})
 
-        except Exception as e:
+        except BaseException as e:
+            # An interrupt (Ctrl-C, SIGTERM, SIGHUP, a cancelled run) is not
+            # an Exception, but the passes finished before it are exactly
+            # what `cof run --resume` continues after (#574): it records the
+            # same as a failure, then propagates unchanged. Its text is
+            # never empty, or the record would read as finished cleanly.
+            from .dynamic import _error_text
+
+            error_text = str(e) if isinstance(e, Exception) else _error_text(e)
             if meta:
-                meta["error"] = str(e)
+                meta["error"] = error_text
                 meta["completed_at"] = _now_iso()
                 # Whatever passes this call did complete before the
                 # failure stay resumable, even though the loop as a whole
@@ -1166,7 +1174,7 @@ class LoopRuntime:
                     "iterations": iteration_count,
                     "termination": {
                         "reason": "error",
-                        "detail": str(e),
+                        "detail": error_text,
                     },
                     "effects_by_iteration": iterations_effects,
                 }

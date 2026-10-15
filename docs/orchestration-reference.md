@@ -1858,7 +1858,10 @@ contain — a pass interrupted partway through its body, or an unnamed `if`
 in the body whose condition raised before writing anything, can leave an
 `iter_<N>` node that holds some finished-looking children without the pass
 itself having completed, and the loop's own record is what tells those
-apart. A **tree**-flow `each` loop finishes its passes out of order, and an
+apart. The loop writes that record when it fails and also when the run is
+interrupted (Ctrl-C, SIGTERM or SIGHUP, or a cancelled run): it records the
+interruption as its `meta.error`, keeps the passes it finished, and lets the
+interrupt carry on stopping the run. A **tree**-flow `each` loop finishes its passes out of order, and an
 **unnamed** loop has no `iter_<N>` record at all (each pass overwrites the
 last at the same path) — neither is sound to resume pass-by-pass, so both
 rerun their whole loop. An `if` and a `reflector` are all-or-nothing for
