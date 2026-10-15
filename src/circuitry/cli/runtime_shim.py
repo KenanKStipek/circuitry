@@ -28,6 +28,7 @@ from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.prompt_record import prompt_sent_errors
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -777,6 +778,10 @@ def run(req: RunRequest) -> RunResult:
                 is_cache_path=document_is_cache_path,
                 remote_library_source=req.remote_library_source,
             ),
+            # The same trust the document's `runtime:` block gets: a document
+            # run by path can name any `within` for a prompt's
+            # `file: {from: ...}`; a limited one stays inside its project.
+            trusted=document_trust_document or cfg.trust_orchestration_runtime,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
@@ -1413,6 +1418,7 @@ def validate(
                 library_registry=library_registry,
                 is_cache_path=document_is_cache_path,
             ),
+            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
 
         # Same merge `run()` applies (document `runtime:` key by key over
@@ -1441,6 +1447,13 @@ def validate(
             return {
                 "ok": False,
                 "errors": concurrency_config_errors,
+                "warnings": lint_warnings,
+            }
+        state_config_errors = prompt_sent_errors(merged_runtime)
+        if state_config_errors:
+            return {
+                "ok": False,
+                "errors": state_config_errors,
                 "warnings": lint_warnings,
             }
         group_name_errors = unknown_concurrency_group_errors(root_def, frozenset(groups))

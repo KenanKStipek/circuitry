@@ -2377,6 +2377,7 @@
         {
           "name": "p",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -2788,6 +2789,7 @@
             {
               "name": "first",
               "template": "FIRST {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -2809,6 +2811,7 @@
             {
               "name": "second",
               "template": "iter0=[{{prime.outer.iter_0.first.value}}]",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -2893,6 +2896,7 @@
             {
               "name": "refine",
               "template": "Base it on {{prime.review.last.refine.value}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -2976,6 +2980,7 @@
             {
               "name": "first",
               "template": "FIRST {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -2997,6 +3002,7 @@
             {
               "name": "second",
               "template": "loopname=[{{prime.outer.first.value}}]",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3081,6 +3087,7 @@
             {
               "name": "s",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3170,6 +3177,7 @@
             {
               "name": "t",
               "template": "y",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3387,6 +3395,7 @@
             {
               "name": "s",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3477,6 +3486,7 @@
                 {
                   "name": "marker",
                   "template": "ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}",
+                  "template_file": null,
                   "messages": null,
                   "prompt_type": "text",
                   "schema": null,
@@ -3741,6 +3751,7 @@
             {
               "name": "first",
               "template": "FIRST {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3762,6 +3773,7 @@
             {
               "name": "second",
               "template": "iter1=[{{prime.outer.iter_١.first.value}}]",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -3943,6 +3955,7 @@
         {
           "name": "p",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,

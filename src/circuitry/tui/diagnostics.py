@@ -504,6 +504,7 @@ def validate_report(
             root_name="prime",
             document_dir=_document_dir,
             confinement_root=default_project_root(_document_dir),
+            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
     except Exception as exc:
         issues.append(ValidationIssue("compile", str(exc)))

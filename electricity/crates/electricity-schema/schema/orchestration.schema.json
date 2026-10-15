@@ -182,6 +182,31 @@
       ]
     },
 
+    "PromptTextSource": {
+      "description": "A prompt effect's template or a message's content: a Mustache template string, {file: <path>} read when the document loads (#396), or {file: {from: <state path>}, within: <dir>} read when the effect dispatches (#578). The state value is the file's path; it resolves against 'within', a literal absolute directory or {from: input.<name>}, and must stay inside it. The text is used verbatim, never rendered.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "description": "Relative path to the template file." }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "description": "{file: {from: <state path>}, within: <dir>}. Its parts are checked by cof check with their own messages: 'within' is required, and is a literal absolute path or {from: input.<name>}.",
+          "properties": {
+            "file": { "type": "object" },
+            "within": {}
+          }
+        }
+      ]
+    },
+
     "MessageDef": {
       "type": "object",
       "required": ["role", "content"],
@@ -191,7 +216,7 @@
           "type": "string",
           "enum": ["system", "user", "assistant", "tool"]
         },
-        "content": { "$ref": "#/$defs/TemplateOrFile" }
+        "content": { "$ref": "#/$defs/PromptTextSource" }
       }
     },
 
@@ -315,8 +340,8 @@
           "description": "JSON Schema for validating structured output. Enforced as required when prompt_type is json, object, or array."
         },
         "template": {
-          "$ref": "#/$defs/TemplateOrFile",
-          "description": "Mustache template string, or {file: <path>}. Use {{key}} for initial state, {{prime.name.value}} for effect outputs, {{> name}} to splice in a declared prompt or a yield/text-prompt effect's own text (#396). {{x}} inserts the value as-is, like {{{x}}} — prompt text is not HTML, so it is never escaped (#397)."
+          "$ref": "#/$defs/PromptTextSource",
+          "description": "Mustache template string, {file: <path>}, or {file: {from: <state path>}, within: <dir>} (read at dispatch, used verbatim). Use {{key}} for initial state, {{prime.name.value}} for effect outputs, {{> name}} to splice in a declared prompt or a yield/text-prompt effect's own text (#396). {{x}} inserts the value as-is, like {{{x}}} — prompt text is not HTML, so it is never escaped (#397)."
         },
         "messages": {
           "type": "array",

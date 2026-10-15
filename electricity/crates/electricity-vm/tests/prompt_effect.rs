@@ -75,6 +75,10 @@ fn as_dict(value: &Value) -> &IndexMap<Value, Value> {
 struct FakeAdapter {
     name: String,
     replies: std::cell::RefCell<std::collections::VecDeque<Result<GenerateResult, AdapterError>>>,
+    /// Every prompt text `generate` received, in call order.
+    received: std::cell::RefCell<Vec<String>>,
+    /// Runs at the start of every `generate` call.
+    on_generate: std::cell::RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl FakeAdapter {
@@ -82,6 +86,8 @@ impl FakeAdapter {
         FakeAdapter {
             name: name.to_string(),
             replies: std::cell::RefCell::new(replies.into()),
+            received: std::cell::RefCell::new(Vec::new()),
+            on_generate: std::cell::RefCell::new(None),
         }
     }
 
@@ -107,10 +113,14 @@ impl Adapter for FakeAdapter {
     async fn generate(
         &self,
         _model: &str,
-        _prompt: &str,
+        prompt: &str,
         _options: &GenerateOptions,
         _call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
+        self.received.borrow_mut().push(prompt.to_string());
+        if let Some(hook) = self.on_generate.borrow().as_ref() {
+            hook();
+        }
         self.replies.borrow_mut().pop_front().unwrap_or_else(|| {
             Err(AdapterError {
                 message: "FakeAdapter: no reply queued".to_string(),
@@ -185,6 +195,38 @@ async fn run_prompt(
     default_adapter: Rc<dyn Adapter>,
     adapters: &AdapterRegistry,
 ) -> (Store, RecordingObserver, Result<(), VmError>) {
+    run_prompt_with_runtime(op, on_error, default_adapter, adapters, &Value::None).await
+}
+
+/// [`run_prompt`] under *runtime_config* (the merged `runtime:` block).
+async fn run_prompt_with_runtime(
+    op: PromptOp,
+    on_error: OnError,
+    default_adapter: Rc<dyn Adapter>,
+    adapters: &AdapterRegistry,
+    runtime_config: &Value,
+) -> (Store, RecordingObserver, Result<(), VmError>) {
+    run_prompt_in_ctx(
+        op,
+        on_error,
+        default_adapter,
+        adapters,
+        runtime_config,
+        &Value::None,
+    )
+    .await
+}
+
+/// [`run_prompt_with_runtime`] with *ctx* as the document's rendering
+/// context (what `input.<name>` reads).
+async fn run_prompt_in_ctx(
+    op: PromptOp,
+    on_error: OnError,
+    default_adapter: Rc<dyn Adapter>,
+    adapters: &AdapterRegistry,
+    runtime_config: &Value,
+    ctx_value: &Value,
+) -> (Store, RecordingObserver, Result<(), VmError>) {
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = json_registry();
@@ -193,18 +235,13 @@ async fn run_prompt(
     ctx.default_adapter = default_adapter;
     ctx.adapters = adapters;
     ctx.model = "m";
+    ctx.runtime_config = runtime_config;
     let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, on_error);
     let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
     let observer = RecordingObserver::new();
-    let result = electricity_vm::execute_root(
-        &program(root),
-        &store,
-        &Value::None,
-        &ctx,
-        &observer,
-        &token,
-    )
-    .await;
+    let result =
+        electricity_vm::execute_root(&program(root), &store, ctx_value, &ctx, &observer, &token)
+            .await;
     (store, observer, result)
 }
 
@@ -502,10 +539,12 @@ async fn messages_flatten_into_the_prompt_sent_role_content_form() {
             Message {
                 role: Role::System,
                 content: TemplateText::new("be nice", true, Escape::None),
+                file: None,
             },
             Message {
                 role: Role::User,
                 content: TemplateText::new("hi", true, Escape::None),
+                file: None,
             },
         ]),
         prompt_type: PromptType::Text,
@@ -623,6 +662,7 @@ effects:
     template: hi
 ";
     let use_op = electricity_bytecode::UseOp {
+        parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(
             inline_yaml.to_string(),
             true,
@@ -993,6 +1033,8 @@ async fn meta_key_order_on_success_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1050,6 +1092,8 @@ async fn meta_key_order_on_failure_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1162,6 +1206,8 @@ async fn meta_key_order_on_a_reused_node_matches_cof_run() {
             &Value::Str("model_reason".to_string()),
             &Value::Str("prompt_type".to_string()),
             &Value::Str("prompt_sent".to_string()),
+            &Value::Str("prompt_sent_sha256".to_string()),
+            &Value::Str("prompt_chars".to_string()),
             &Value::Str("tokens_sent".to_string()),
             &Value::Str("tokens_received".to_string()),
             &Value::Str("tokens_sent_total".to_string()),
@@ -1210,6 +1256,7 @@ effects:
     on_error: continue
 ";
     let use_op = electricity_bytecode::UseOp {
+        parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(
             inline_yaml.to_string(),
             true,
@@ -1664,5 +1711,432 @@ async fn an_unknown_pinned_band_raises_before_effect_start_and_on_error_skip_doe
         )),
         "no start/complete pair must ever fire for the prompt's own node: {:?}",
         observer.events()
+    );
+}
+
+fn state_prompt_sent(setting: &str) -> Value {
+    let mut state = Dict::new();
+    state.insert(
+        Value::Str("prompt_sent".to_string()),
+        Value::Str(setting.to_string()),
+    );
+    let mut runtime = Dict::new();
+    runtime.insert(Value::Str("state".to_string()), Value::Dict(state));
+    Value::Dict(runtime)
+}
+
+/// The `prime.ask` meta of a finished run, as a snapshot.
+fn ask_meta(store: &Store) -> IndexMap<Value, Value> {
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    as_dict(get(ask, "meta").unwrap()).clone()
+}
+
+const HELLO_SHA256: &str = "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969";
+
+#[tokio::test]
+async fn the_default_records_the_whole_text_and_the_two_new_fields() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) =
+        run_prompt(template_prompt("Hello"), OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "prompt_sent"),
+        Some(&Value::Str("Hello".to_string()))
+    );
+    assert_eq!(
+        get(&meta, "prompt_sent_sha256"),
+        Some(&Value::Str(HELLO_SHA256.to_string()))
+    );
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(5i64)));
+}
+
+#[tokio::test]
+async fn sha256_leaves_null_and_the_adapter_still_gets_the_whole_text() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("sha256");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("Hello"),
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "prompt_sent"), Some(&Value::None));
+    assert_eq!(
+        get(&meta, "prompt_sent_sha256"),
+        Some(&Value::Str(HELLO_SHA256.to_string()))
+    );
+    assert_eq!(*default.received.borrow(), vec!["Hello".to_string()]);
+}
+
+#[tokio::test]
+async fn head_keeps_n_code_points_then_a_marker_and_counts_code_points() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("head:3");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("a\u{1F642}bcdef"),
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "prompt_sent"),
+        Some(&Value::Str(
+            "a\u{1F642}b\n[\u{2026} 4 more characters not recorded]".to_string()
+        ))
+    );
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(7i64)));
+    assert_eq!(
+        *default.received.borrow(),
+        vec!["a\u{1F642}bcdef".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_failed_dispatch_under_on_error_continue_records_it_too() {
+    let default = Rc::new(FakeAdapter::new("scripted", Vec::new()));
+    let adapters = registry_with_scripted();
+    let runtime = state_prompt_sent("sha256");
+    let (store, _observer, result) = run_prompt_with_runtime(
+        template_prompt("Hello"),
+        OnError::Continue,
+        default,
+        &adapters,
+        &runtime,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(get(&meta, "prompt_sent"), Some(&Value::None));
+    assert_eq!(get(&meta, "prompt_chars"), Some(&Value::from(5i64)));
+    assert_ne!(get(&meta, "error"), Some(&Value::None));
+}
+
+// ---------- issue #578: a prompt's text read at dispatch from a file named in state ----------
+
+fn dispatch_file(
+    within_from: Option<&str>,
+    within: Option<&str>,
+) -> electricity_bytecode::DispatchFile {
+    electricity_bytecode::DispatchFile {
+        path_from: "input.prompt_file".to_string(),
+        within: within.map(str::to_string),
+        within_from: within_from.map(str::to_string),
+        confine_to: None,
+    }
+}
+
+fn input_ctx(pairs: &[(&str, Value)]) -> Value {
+    let mut input = Dict::new();
+    for (name, value) in pairs {
+        input.insert(Value::Str((*name).to_string()), value.clone());
+    }
+    let mut root = Dict::new();
+    root.insert(Value::Str("input".to_string()), Value::Dict(input));
+    Value::Dict(root)
+}
+
+/// A fresh scratch directory under the system temp dir, removed on drop.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Scratch {
+        let dir =
+            std::env::temp_dir().join(format!("electricity-578-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(std::fs::canonicalize(&dir).unwrap())
+    }
+
+    fn path(&self) -> &str {
+        self.0.to_str().unwrap()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn file_prompt(source: electricity_bytecode::DispatchFile) -> PromptOp {
+    let mut op = template_prompt("");
+    op.content = PromptContent::TemplateFile(Box::new(source));
+    op
+}
+
+#[tokio::test]
+async fn a_template_file_is_read_at_dispatch_verbatim_and_recorded() {
+    let scratch = Scratch::new("verbatim");
+    let text = "line {{not rendered}}\r\nh\u{e9}llo \u{1F642}\n";
+    std::fs::write(scratch.0.join("p.txt"), text).unwrap();
+    let ctx = input_ctx(&[
+        ("prompt_file", Value::Str("p.txt".to_string())),
+        ("work", Value::Str(scratch.path().to_string())),
+    ]);
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt_in_ctx(
+        file_prompt(dispatch_file(Some("input.work"), None)),
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &Value::None,
+        &ctx,
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(*default.received.borrow(), vec![text.to_string()]);
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "prompt_sent"),
+        Some(&Value::Str(text.to_string()))
+    );
+    let Some(Value::List(files)) = get(&meta, "template_files") else {
+        panic!("template_files must be a list");
+    };
+    assert_eq!(files.len(), 1);
+    let record = as_dict(&files[0]);
+    assert_eq!(
+        get(record, "field"),
+        Some(&Value::Str("template".to_string()))
+    );
+    assert_eq!(
+        get(record, "path"),
+        Some(&Value::Str(format!("{}/p.txt", scratch.path())))
+    );
+    assert_eq!(
+        get(record, "chars"),
+        Some(&Value::from(text.chars().count() as i64))
+    );
+    let sha256 = electricity_vm::exec::use_::sha256_hex(text.as_bytes());
+    assert_eq!(get(record, "sha256"), Some(&Value::Str(sha256)));
+}
+
+#[tokio::test]
+async fn a_message_file_is_read_beside_a_rendered_message() {
+    let scratch = Scratch::new("messages");
+    std::fs::write(scratch.0.join("p.txt"), "raw {{x}} body").unwrap();
+    let ctx = input_ctx(&[
+        ("prompt_file", Value::Str("p.txt".to_string())),
+        ("tone", Value::Str("brief".to_string())),
+    ]);
+    let mut op = template_prompt("");
+    op.content = PromptContent::Messages(vec![
+        Message {
+            role: Role::System,
+            content: TemplateText::new("be {{input.tone}}", true, Escape::None),
+            file: None,
+        },
+        Message {
+            role: Role::User,
+            content: TemplateText::new("", true, Escape::None),
+            file: Some(dispatch_file(None, Some(scratch.path()))),
+        },
+    ]);
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt_in_ctx(
+        op,
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &Value::None,
+        &ctx,
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(
+        *default.received.borrow(),
+        vec!["system: be brief\n\nuser: raw {{x}} body".to_string()]
+    );
+    let meta = ask_meta(&store);
+    let Some(Value::List(files)) = get(&meta, "template_files") else {
+        panic!("template_files must be a list");
+    };
+    assert_eq!(
+        get(as_dict(&files[0]), "field"),
+        Some(&Value::Str("messages[1].content".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn a_file_error_fails_the_effect_naming_effect_field_and_path() {
+    let scratch = Scratch::new("errors");
+    std::fs::write(scratch.0.join("big.txt"), vec![b'a'; 1024 * 1024 + 1]).unwrap();
+    std::fs::write(scratch.0.join("bin.txt"), [0xffu8, 0x00]).unwrap();
+    std::fs::create_dir(scratch.0.join("d")).unwrap();
+    let cases: Vec<(Value, &str)> = vec![
+        (
+            Value::Str("nope.txt".to_string()),
+            "Prompt effect 'ask': template: file 'nope.txt' does not exist.",
+        ),
+        (
+            Value::Str("d".to_string()),
+            "Prompt effect 'ask': template: file 'd' is not a regular file.",
+        ),
+        (
+            Value::Str("../escape.txt".to_string()),
+            "Prompt effect 'ask': template: file '../escape.txt' resolves outside 'within' (",
+        ),
+        (
+            Value::Str("big.txt".to_string()),
+            "Prompt effect 'ask': template: file 'big.txt' is over the 1048576-byte limit for a prompt file.",
+        ),
+        (
+            Value::Str("bin.txt".to_string()),
+            "Prompt effect 'ask': template: file 'bin.txt' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte",
+        ),
+        (
+            Value::from(5i64),
+            "Prompt effect 'ask': template: 'file: {from: input.prompt_file}' resolved to 5; expected a file path string.",
+        ),
+        (
+            Value::None,
+            "Prompt effect 'ask': template: 'file: {from: input.prompt_file}' resolved to None; expected a file path string.",
+        ),
+    ];
+    for (value, expected) in cases {
+        let ctx = input_ctx(&[
+            ("prompt_file", value),
+            ("work", Value::Str(scratch.path().to_string())),
+        ]);
+        let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+        let adapters = registry_with_scripted();
+        let (store, _observer, result) = run_prompt_in_ctx(
+            file_prompt(dispatch_file(Some("input.work"), None)),
+            OnError::Continue,
+            default.clone(),
+            &adapters,
+            &Value::None,
+            &ctx,
+        )
+        .await;
+        result.unwrap();
+        assert!(default.received.borrow().is_empty(), "{expected}");
+        let meta = ask_meta(&store);
+        let Some(Value::Str(error)) = get(&meta, "error") else {
+            panic!("{expected}: no error recorded");
+        };
+        assert!(error.starts_with(expected), "{error}");
+        assert!(get(&meta, "template_files").is_none());
+    }
+}
+
+#[tokio::test]
+async fn a_relative_or_missing_within_fails_the_effect() {
+    let ctx = input_ctx(&[
+        ("prompt_file", Value::Str("p.txt".to_string())),
+        ("work", Value::Str("relative/dir".to_string())),
+    ]);
+    let default = Rc::new(FakeAdapter::new("scripted", Vec::new()));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt_in_ctx(
+        file_prompt(dispatch_file(Some("input.work"), None)),
+        OnError::Continue,
+        default,
+        &adapters,
+        &Value::None,
+        &ctx,
+    )
+    .await;
+    result.unwrap();
+    let meta = ask_meta(&store);
+    assert_eq!(
+        get(&meta, "error"),
+        Some(&Value::Str(
+            "Prompt effect 'ask': template: 'within' {from: input.work} resolved to 'relative/dir'; expected an absolute directory path.".to_string()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_limited_documents_within_must_stay_inside_its_project() {
+    let project = Scratch::new("project");
+    let outside = Scratch::new("outside");
+    std::fs::write(outside.0.join("p.txt"), "outside").unwrap();
+    let ctx = input_ctx(&[
+        ("prompt_file", Value::Str("p.txt".to_string())),
+        ("work", Value::Str(outside.path().to_string())),
+    ]);
+    let mut source = dispatch_file(Some("input.work"), None);
+    source.confine_to = Some(project.path().to_string());
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt_in_ctx(
+        file_prompt(source),
+        OnError::Continue,
+        default.clone(),
+        &adapters,
+        &Value::None,
+        &ctx,
+    )
+    .await;
+    result.unwrap();
+    assert!(default.received.borrow().is_empty());
+    let meta = ask_meta(&store);
+    let Some(Value::Str(error)) = get(&meta, "error") else {
+        panic!("no error recorded");
+    };
+    assert!(error.contains("resolves outside the project"), "{error}");
+}
+
+#[tokio::test]
+async fn retries_reuse_the_text_read_before_the_first_attempt() {
+    let scratch = Scratch::new("retries");
+    std::fs::write(scratch.0.join("p.txt"), "first read").unwrap();
+    let ctx = input_ctx(&[
+        ("prompt_file", Value::Str("p.txt".to_string())),
+        ("work", Value::Str(scratch.path().to_string())),
+    ]);
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "scripted: server_error".to_string(),
+                retry: RetryInfo::retryable(),
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("ok"),
+        ],
+    ));
+    let mut op = file_prompt(dispatch_file(Some("input.work"), None));
+    op.retries = Some(RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 1,
+    });
+    let adapters = registry_with_scripted();
+    // Rewriting the file during the first attempt must change nothing: the
+    // adapter only ever sees the text read before it.
+    let target = scratch.0.join("p.txt");
+    *default.on_generate.borrow_mut() = Some(Box::new(move || {
+        std::fs::write(&target, "changed mid-run").unwrap();
+    }));
+    let (_store, _observer, result) = run_prompt_in_ctx(
+        op,
+        OnError::Fail,
+        default.clone(),
+        &adapters,
+        &Value::None,
+        &ctx,
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(
+        *default.received.borrow(),
+        vec!["first read".to_string(), "first read".to_string()]
     );
 }

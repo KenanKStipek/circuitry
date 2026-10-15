@@ -35,6 +35,10 @@ pub enum PyExc {
     /// lane appending its own variant there (lane E, #485) can never
     /// collide with this one on the same or an adjacent line.
     TemplateError,
+    /// `core/prompt_files.py::PromptFileError` (a `ValueError` subclass,
+    /// issue #578) -- a prompt's `file: {from: ...}` source that could not
+    /// be read at dispatch.
+    PromptFileError,
     /// `core/answers.py::AnswerParseError` (lane G, issue #498) -- an
     /// unreadable `boolean`/`number` reply. Inserted directly after
     /// `TemplateError`, never at the enum's own tail (where lane E
@@ -147,6 +151,7 @@ impl PyExc {
         match self {
             PyExc::ValueError => "ValueError",
             PyExc::TemplateError => "TemplateError",
+            PyExc::PromptFileError => "PromptFileError",
             PyExc::AnswerParseError => "AnswerParseError",
             PyExc::SchemaValidationError => "SchemaValidationError",
             PyExc::AllowlistError => "AllowlistError",
@@ -194,6 +199,7 @@ impl PyExc {
             self,
             PyExc::ValueError
                 | PyExc::TemplateError
+                | PyExc::PromptFileError
                 | PyExc::AnswerParseError
                 | PyExc::SchemaValidationError
                 | PyExc::AllowlistError
