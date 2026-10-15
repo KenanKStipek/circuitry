@@ -10,10 +10,11 @@ use crate::compile::containers::{compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
 use crate::compile::params::{build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
+use crate::state_ns::validate_reference_path;
 use crate::{CompileError, DocumentOrigin, prompt_files};
 use electricity_bytecode::effects::{
-    AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role, ToolOp, UseOp,
-    UseSource, YieldOp,
+    AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role, TimeoutFrom,
+    TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
 };
 use electricity_bytecode::path::EffectPath;
 use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, ParamNode, Region};
@@ -49,6 +50,78 @@ fn normalize_on_error_default(dict: &Dict) -> OnError {
     }
 }
 
+/// `core/timeout_ref.py::_is_positive_integer`: a `bool` is not an integer
+/// here, and `0` or a negative one is not positive.
+fn is_positive_integer(value: &Value) -> bool {
+    matches!(value, Value::Int(i) if !i.is_zero() && !i.is_negative())
+}
+
+/// `core/timeout_ref.py::compile_timeout_ms` (issue #564): a literal
+/// `timeout_ms` as `int(...)` -- sign kept -- and a `{from: <path>,
+/// default: <int>}` mapping as a [`TimeoutFrom`], its path rooted like
+/// every other `{from:}` and its default a positive integer.
+fn compile_timeout_ms(
+    effect: &Dict,
+    effect_type: &str,
+    name: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<Option<TimeoutMs>, CompileError> {
+    let Some(raw) = crate::compile::coerce::get_present(effect, "timeout_ms") else {
+        return Ok(None);
+    };
+    let Value::Dict(raw) = raw else {
+        return Ok(Some(TimeoutMs::Literal(py_int(raw))));
+    };
+    let mut capitalized = effect_type.to_string();
+    capitalized[..1].make_ascii_uppercase();
+    let where_ = format!("{capitalized} effect '{name}' at '{effect_path}'");
+    let from_key = Value::Str("from".to_string());
+    let default_key = Value::Str("default".to_string());
+    let has_from = raw.contains_key(&from_key);
+    if !has_from
+        || raw
+            .keys()
+            .any(|key| key != &from_key && key != &default_key)
+    {
+        let mut keys: Vec<String> = raw.keys().map(Value::py_str).collect();
+        keys.sort();
+        let listed: Vec<String> = keys
+            .iter()
+            .map(|key| Value::Str(key.clone()).py_repr())
+            .collect();
+        return Err(CompileError(format!(
+            "{where_}: 'timeout_ms' must be an integer, or {{from: <path>, default: \
+             <positive integer>}}; got keys [{}].",
+            listed.join(", ")
+        )));
+    }
+    let Some(Value::Str(path)) = raw.get(&from_key) else {
+        let got = raw.get(&from_key).map(Value::py_repr).unwrap_or_default();
+        return Err(CompileError(format!(
+            "{where_}: 'timeout_ms' 'from' must be a path string, got {got}."
+        )));
+    };
+    let path = electricity_value::pycompat::py_strip(path).to_string();
+    validate_reference_path(
+        &path,
+        &format!("{capitalized} effect '{name}' timeout_ms"),
+        effect_path,
+        loop_names,
+    )?;
+    let default = match raw.get(&default_key) {
+        None => None,
+        Some(value) if is_positive_integer(value) => Some(py_int(value)),
+        Some(value) => {
+            return Err(CompileError(format!(
+                "{where_}: 'timeout_ms' 'default' must be a positive integer, got {}.",
+                value.py_repr()
+            )));
+        }
+    };
+    Ok(Some(TimeoutMs::From(TimeoutFrom { path, default })))
+}
+
 fn optional_str(dict: &Dict, key: &str) -> Option<String> {
     match dict.get(&Value::Str(key.to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
@@ -62,6 +135,7 @@ pub(crate) fn compile_prompt(
     name: &str,
     effect_path: &str,
     origin: &DocumentOrigin,
+    loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
     let prompt_type_raw = get_truthy(effect, "prompt_type")
         .map(Value::py_str)
@@ -221,7 +295,7 @@ pub(crate) fn compile_prompt(
     // Sign kept through compilation -- a negative `timeout_ms` is still
     // Python-truthy (`if self.defn.timeout_ms:`), resolved at run time
     // (issue #536).
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
+    let timeout_ms = compile_timeout_ms(effect, "prompt", name, effect_path, loop_names)?;
     let deterministic = get_bool_default(effect, "deterministic", false);
 
     let inputs = match effect.get(&Value::Str("inputs".to_string())) {
@@ -345,7 +419,7 @@ pub(crate) fn compile_tool(
 
     let model = optional_str(effect, "model");
     // Sign kept through compilation -- see the `PromptOp` branch above.
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
+    let timeout_ms = compile_timeout_ms(effect, "tool", name, effect_path, loop_names)?;
     let on_error = normalize_on_error_default(effect);
     let description = optional_str(effect, "description");
     let retries = compile_retries(effect).unwrap_or_default();

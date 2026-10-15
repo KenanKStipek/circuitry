@@ -22,6 +22,7 @@ fields:
     note: "A Mustache template rendered to text and parsed as JSON, deep-merged over params (params_json wins on conflicts). Use it to send a runtime-built array/object (e.g. a list from a prior step) instead of a Mustache-rendered string — e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'. A bad template or non-JSON result is a hard failure."
   timeout_ms:
     type: integer
+    note: "Per-effect timeout in milliseconds. Or {from: <path>, default: <positive integer>} to read it from state (input./prime./runtime. or an enclosing loop binding) when each attempt is dispatched; the value must be a positive integer, and a missing path takes the default or fails the effect."
   retries:
     type: object
     properties:

@@ -1,0 +1,10 @@
+name: c564-tool-timeout-from-state-default
+effects:
+  - type: tool
+    name: result
+    provider: shell
+    timeout_ms: {from: input.budget_ms, default: 300}
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--sleep"]

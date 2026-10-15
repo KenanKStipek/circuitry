@@ -33,6 +33,27 @@ impl Default for RetryPolicy {
     }
 }
 
+/// `core/timeout_ref.py::TimeoutFrom` -- a `timeout_ms: {from: <path>,
+/// default: <int>}` (issue #564). Field names are the Python
+/// dataclass's own (`path`, `default`), so a projection of either side
+/// reads the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TimeoutFrom {
+    pub path: String,
+    /// A positive integer when present (checked at compile time).
+    pub default: Option<i64>,
+}
+
+/// `PromptDefinition.timeout_ms`/`ToolDefinition.timeout_ms`
+/// (`int | TimeoutFrom | None`): an integer literal, or a reference
+/// read from state at each attempt's dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum TimeoutMs {
+    Literal(i64),
+    From(TimeoutFrom),
+}
+
 /// `AssetRefDef`. `reference` carries Python's `ref` field — renamed
 /// since `ref` is a Rust keyword.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -108,7 +129,7 @@ pub struct PromptOp {
     /// `params` — the adapter's own model parameters, not a tool's
     /// `params:` (that's [`ToolOp::params`]).
     pub model_params: Option<ParamNode>,
-    pub timeout_ms: Option<i64>,
+    pub timeout_ms: Option<TimeoutMs>,
     /// Default `false`.
     pub deterministic: bool,
     pub inputs: Option<ParamNode>,
@@ -138,7 +159,7 @@ pub struct ToolOp {
     pub params_json: Option<TemplateText>,
     pub prompt: Option<TemplateText>,
     pub model: Option<String>,
-    pub timeout_ms: Option<i64>,
+    pub timeout_ms: Option<TimeoutMs>,
     pub retries: RetryPolicy,
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,

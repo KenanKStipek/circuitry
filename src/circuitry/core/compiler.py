@@ -37,6 +37,7 @@ from .state_ns import (
     validate_reference_path,
 )
 from .templates import template_syntax_error
+from .timeout_ref import compile_timeout_ms
 from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_as, reference_path, validate_reference_as
 from .yield_effect import YieldDefinition
@@ -655,7 +656,7 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_prompt(effect, effect_path=effect_path)
+        return _compile_prompt(effect, effect_path=effect_path, loop_names=loop_names)
 
     if effect_type == "dynamic":
         if name is None:
@@ -1256,9 +1257,13 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
-    timeout_ms = effect.get("timeout_ms")
-    if timeout_ms is not None:
-        timeout_ms = int(timeout_ms)
+    timeout_ms = compile_timeout_ms(
+        effect.get("timeout_ms"),
+        effect_type="tool",
+        name=str(name),
+        effect_path=effect_path,
+        loop_names=loop_names,
+    )
 
     on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
     on_error: Literal["fail", "skip", "continue"] = (
@@ -1474,7 +1479,12 @@ def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefiniti
     )
 
 
-def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefinition:
+def _compile_prompt(
+    effect: dict[str, Any],
+    *,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
+) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
     if not name:
@@ -1564,9 +1574,13 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
     if params is not None and not isinstance(params, dict):
         params = None
 
-    timeout_ms = effect.get("timeout_ms")
-    if timeout_ms is not None:
-        timeout_ms = int(timeout_ms)
+    timeout_ms = compile_timeout_ms(
+        effect.get("timeout_ms"),
+        effect_type="prompt",
+        name=str(name),
+        effect_path=effect_path,
+        loop_names=loop_names,
+    )
 
     deterministic = bool(effect.get("deterministic", False))
 

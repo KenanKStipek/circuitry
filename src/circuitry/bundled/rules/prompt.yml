@@ -56,7 +56,7 @@ fields:
     note: "Retry policy for this call. Usually omitted — runner/config policy, not author-facing."
   timeout_ms:
     type: integer
-    note: "Per-attempt budget, capped by the adapter's timeout_seconds; rounded up to whole seconds."
+    note: "Per-attempt budget, capped by the adapter's timeout_seconds; rounded up to whole seconds. Or {from: <path>, default: <positive integer>} to read it from state (input./prime./runtime. or an enclosing loop binding) when each attempt is dispatched; the value must be a positive integer, and a missing path takes the default or fails the effect."
   on_error:
     enum: [fail, skip, continue]
     default: fail

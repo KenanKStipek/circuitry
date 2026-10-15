@@ -534,6 +534,45 @@ pub(crate) fn effect_timeout_seconds(timeout_ms: i64) -> u32 {
     ceil_seconds.clamp(1, i64::from(u32::MAX)) as u32
 }
 
+/// `core/timeout_ref.py::resolve_timeout_ms` (issue #564): an effect's
+/// `timeout_ms` for one attempt -- a literal as written, a
+/// `{from: <path>, default: <int>}` read from *ctx* now. A path that is
+/// missing (or holds `null`) takes the `default`, or fails without one;
+/// anything but a positive integer fails, naming the path. *effect_label*
+/// is the failure text's prefix (`Tool effect 'name'`).
+pub(crate) fn resolve_timeout_ms<R: crate::params::ParamsCtx>(
+    timeout_ms: Option<&electricity_bytecode::effects::TimeoutMs>,
+    ctx: &R,
+    effect_label: &str,
+) -> Result<Option<i64>, String> {
+    use electricity_bytecode::effects::TimeoutMs;
+    let from = match timeout_ms {
+        None => return Ok(None),
+        Some(TimeoutMs::Literal(ms)) => return Ok(Some(*ms)),
+        Some(TimeoutMs::From(from)) => from,
+    };
+    let resolved = ctx.resolve_from(&from.path);
+    match &resolved {
+        None | Some(Value::None) => match from.default {
+            Some(default) => Ok(Some(default)),
+            None => Err(format!(
+                "{effect_label}: timeout_ms '{{from: {}}}' did not resolve to a value and has no default.",
+                from.path
+            )),
+        },
+        // A positive integer too big for `i64` saturates, like a literal's.
+        Some(Value::Int(ms)) if !ms.is_zero() && !ms.is_negative() => Ok(Some(match ms {
+            electricity_value::int_value::IntValue::Small(n) => *n,
+            electricity_value::int_value::IntValue::Big(_) => i64::MAX,
+        })),
+        Some(other) => Err(format!(
+            "{effect_label}: timeout_ms '{{from: {}}}' resolved to {}; expected a positive integer.",
+            from.path,
+            other.py_repr()
+        )),
+    }
+}
+
 #[cfg(test)]
 mod effect_timeout_seconds_tests {
     use super::effect_timeout_seconds;
@@ -557,6 +596,123 @@ mod effect_timeout_seconds_tests {
     #[test]
     fn a_negative_sub_second_timeout_ms_still_floors_to_one() {
         assert_eq!(effect_timeout_seconds(-500), 1);
+    }
+}
+
+#[cfg(test)]
+mod resolve_timeout_ms_tests {
+    use super::resolve_timeout_ms;
+    use electricity_bytecode::effects::{TimeoutFrom, TimeoutMs};
+    use electricity_value::{Dict, Value};
+
+    fn from(path: &str, default: Option<i64>) -> Option<TimeoutMs> {
+        Some(TimeoutMs::From(TimeoutFrom {
+            path: path.to_string(),
+            default,
+        }))
+    }
+
+    fn ctx(ms: Value) -> Value {
+        let mut input = Dict::new();
+        input.insert(Value::from("ms"), ms);
+        let mut root = Dict::new();
+        root.insert(Value::from("input"), Value::Dict(input));
+        Value::Dict(root)
+    }
+
+    #[test]
+    fn no_timeout_and_a_literal_never_read_the_context() {
+        assert_eq!(
+            resolve_timeout_ms(None, &Value::None, "Tool effect 't'"),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve_timeout_ms(
+                Some(&TimeoutMs::Literal(-5000)),
+                &Value::None,
+                "Tool effect 't'"
+            ),
+            Ok(Some(-5000))
+        );
+    }
+
+    #[test]
+    fn a_positive_integer_is_read_from_state() {
+        let timeout_ms = from("input.ms", Some(9));
+        assert_eq!(
+            resolve_timeout_ms(
+                timeout_ms.as_ref(),
+                &ctx(Value::from(2500)),
+                "Tool effect 't'"
+            ),
+            Ok(Some(2500))
+        );
+    }
+
+    #[test]
+    fn a_missing_or_null_path_takes_the_default() {
+        let timeout_ms = from("input.nope", Some(7000));
+        assert_eq!(
+            resolve_timeout_ms(timeout_ms.as_ref(), &ctx(Value::from(1)), "Tool effect 't'"),
+            Ok(Some(7000))
+        );
+        let timeout_ms = from("input.ms", Some(7000));
+        assert_eq!(
+            resolve_timeout_ms(timeout_ms.as_ref(), &ctx(Value::None), "Tool effect 't'"),
+            Ok(Some(7000))
+        );
+    }
+
+    #[test]
+    fn a_missing_path_without_a_default_names_the_path() {
+        let timeout_ms = from("input.nope", None);
+        assert_eq!(
+            resolve_timeout_ms(
+                timeout_ms.as_ref(),
+                &ctx(Value::from(1)),
+                "Prompt effect 'p'"
+            ),
+            Err(
+                "Prompt effect 'p': timeout_ms '{from: input.nope}' did not resolve to a value \
+                 and has no default."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn anything_but_a_positive_integer_fails_naming_the_path_and_the_value() {
+        let timeout_ms = from("input.ms", Some(7000));
+        for (value, shown) in [
+            (Value::from("5000"), "'5000'"),
+            (Value::Float(2.5), "2.5"),
+            (Value::Bool(true), "True"),
+            (Value::from(0), "0"),
+            (Value::from(-5000), "-5000"),
+            (Value::List(vec![Value::from(1)]), "[1]"),
+        ] {
+            assert_eq!(
+                resolve_timeout_ms(timeout_ms.as_ref(), &ctx(value), "Tool effect 't'"),
+                Err(format!(
+                    "Tool effect 't': timeout_ms '{{from: input.ms}}' resolved to {shown}; \
+                     expected a positive integer."
+                )),
+            );
+        }
+    }
+
+    #[test]
+    fn an_integer_too_big_for_i64_saturates_like_a_literal() {
+        let huge = electricity_value::IntValue::parse_decimal(&"9".repeat(30)).unwrap();
+        let timeout_ms = from("input.ms", None);
+        assert_eq!(
+            resolve_timeout_ms(
+                timeout_ms.as_ref(),
+                &ctx(Value::Int(huge)),
+                "Tool effect 't'"
+            ),
+            Ok(Some(i64::MAX))
+        );
     }
 }
 

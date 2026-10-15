@@ -220,7 +220,8 @@ fn allowed_adapters(runtime_config: &Value) -> Option<Vec<String>> {
     }
 }
 
-/// `_attempt_timeout_seconds`.
+/// `_attempt_timeout_seconds`. *timeout_ms* is the effect's own
+/// `timeout_ms` already resolved for this attempt (issue #564).
 fn attempt_timeout_seconds(
     adapter_name: &str,
     timeout_ms: Option<i64>,
@@ -450,6 +451,7 @@ async fn generate_with_fallbacks(
     meta_node: &NodeRef,
     store: &Store,
     option_warnings: &[String],
+    timeout_ms: Option<i64>,
     run_ctx: &RunContext<'_>,
     call_path: &EffectPath,
     token: &CancellationToken,
@@ -516,7 +518,7 @@ async fn generate_with_fallbacks(
             }
         };
 
-        let timeout_seconds = attempt_timeout_seconds(adapter_name, prompt.timeout_ms, run_ctx);
+        let timeout_seconds = attempt_timeout_seconds(adapter_name, timeout_ms, run_ctx);
         let call = crate::adapter::CallContext {
             path: call_path,
             timeout_seconds,
@@ -1132,6 +1134,33 @@ pub(crate) async fn execute_prompt(
             }
         }
 
+        // Per attempt, from the state this attempt sees (issue #564). A
+        // reference that can't resolve fails the effect outright instead
+        // of retrying: a retry reads the same state.
+        let timeout_ms = match super::resolve_timeout_ms(
+            prompt.timeout_ms.as_ref(),
+            &render_root,
+            &format!("Prompt effect '{name}'"),
+        ) {
+            Ok(timeout_ms) => timeout_ms,
+            Err(message) => {
+                return finish_failure(
+                    store,
+                    &meta_node,
+                    &effect_node,
+                    op,
+                    &effect_path,
+                    instance,
+                    observer,
+                    attempts_meta_outer,
+                    attempt_index,
+                    message,
+                    electricity_tools::PyExc::ValueError,
+                    electricity_tools::ErrorCause::None,
+                );
+            }
+        };
+
         let acquire_future = run_ctx
             .limiter
             .acquire_reporting(prompt.group.as_deref(), |event| match event {
@@ -1188,6 +1217,7 @@ pub(crate) async fn execute_prompt(
             &meta_node,
             store,
             &option_warnings,
+            timeout_ms,
             run_ctx,
             &call_path,
             token,

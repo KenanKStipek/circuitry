@@ -10,7 +10,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            params?: MAP,                                 — string values Mustache-rendered; a {from: PATH} leaf passes a native value; wins over prompt/model
            params_json?: TEMPLATE,                       — rendered, parsed as JSON, deep-merged over params
            group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
-           timeout_ms?: INT, on_error?: 'fail'|'skip'|'continue', description?: STRING }
+           timeout_ms?: INT | {from: PATH, default?: INT}, on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
 
 A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, sending a Slack message, running ffmpeg — each fits the same monadic shape as a prompt, writes to the same deterministic path, and participates in control flow indistinguishably from one. An `if` can branch on a tool's result; a loop can iterate it; a prompt can read it.

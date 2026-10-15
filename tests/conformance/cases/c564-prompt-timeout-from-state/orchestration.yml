@@ -1,0 +1,14 @@
+name: c564-prompt-timeout-from-state
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: spec
+    provider: json
+    params:
+      mode: parse
+      input: '{"ms": 30000}'
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    timeout_ms: {from: prime.spec.value.ms, default: 1000}

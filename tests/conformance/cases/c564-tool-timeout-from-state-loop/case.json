@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `timeout_ms` reference resolves against the loop's own binding on each iteration: the first job's 60 s budget lets the quick child finish, the second job's 300 ms kills the child that ignores SIGTERM after the rounded-up 1 s.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

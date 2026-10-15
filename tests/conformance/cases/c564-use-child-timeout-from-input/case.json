@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `use` child reads its effect's `timeout_ms` from its own inputs: `{from: input.budget_ms}` resolves against the child's `input`, which the parent filled from an earlier step.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

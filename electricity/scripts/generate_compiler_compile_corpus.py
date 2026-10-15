@@ -1141,6 +1141,54 @@ add(doc(text=(
 CASES[-1]["name"] = "dynamic_max_concurrency_zero_is_kept_not_absent"
 
 
+# --- Issue #564: `timeout_ms: {from: <path>, default: <int>}` ----------
+
+
+def _timeout_case(name: str, effect_type: str, timeout_ms: str, *, loop: bool = False) -> None:
+    body = (
+        "    name: x\n    provider: shell\n" if effect_type == "tool" else "    name: x\n    template: hi\n"
+    )
+    effect = f"  - type: {effect_type}\n{body}    timeout_ms: {timeout_ms}\n"
+    if loop:
+        effect = (
+            "  - type: loop\n"
+            "    name: each_job\n"
+            "    each: {in: input.jobs, as: job}\n"
+            "    body:\n"
+            + "".join("  " + line + "\n" for line in effect.splitlines())
+        )
+    add(doc(text="effects:\n" + effect))
+    CASES[-1]["name"] = name
+
+
+for _type in ("tool", "prompt"):
+    _timeout_case(f"{_type}_timeout_ms_from_state", _type, "{from: prime.spec.value.ms}")
+    _timeout_case(
+        f"{_type}_timeout_ms_from_state_trims_the_path_and_keeps_the_default",
+        _type,
+        "{from: '  input.ms  ', default: 3600000}",
+    )
+    _timeout_case(
+        f"{_type}_timeout_ms_from_a_loop_binding", _type, "{from: job.ms, default: 5}", loop=True
+    )
+    for _label, _raw in (
+        ("a_path_without_a_root", "{from: ms}"),
+        ("a_state_prefixed_path", "{from: state.input.ms}"),
+        ("an_empty_path", "{from: ''}"),
+        ("a_non_string_path", "{from: 5}"),
+        ("no_from", "{default: 5}"),
+        ("an_extra_key", "{from: input.ms, other: 1}"),
+        ("a_string_default", "{from: input.ms, default: '5000'}"),
+        ("a_float_default", "{from: input.ms, default: 1.5}"),
+        ("a_zero_default", "{from: input.ms, default: 0}"),
+        ("a_negative_default", "{from: input.ms, default: -3}"),
+        ("a_bool_default", "{from: input.ms, default: true}"),
+        ("a_null_default", "{from: input.ms, default: null}"),
+    ):
+        _timeout_case(f"{_type}_timeout_ms_{_label}", _type, _raw)
+    _timeout_case(f"{_type}_timeout_ms_binding_outside_its_loop", _type, "{from: job.ms}")
+
+
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 

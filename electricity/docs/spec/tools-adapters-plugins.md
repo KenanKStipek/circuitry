@@ -74,7 +74,10 @@ class ToolResult:
 ### 1.3 Timeouts
 
 `ToolRuntime._resolve_timeout_seconds` (`src/circuitry/core/tool.py:472-499`): the effect's own
-`timeout_ms` (rounded **up** to whole seconds, `max(1, ceil(ms/1000))`) wins when set; otherwise
+`timeout_ms` (rounded **up** to whole seconds, `max(1, ceil(ms/1000))`) wins when set — a literal, or
+`{from: <path>, default: <int>}` read from state at each attempt's dispatch, after `params` render and
+before the plugin is built (issue #564; resolution rules in runtime-semantics §5.1's prompt `timeout_ms`
+note); otherwise
 `runtime.tools.timeout_seconds` from config; otherwise `DEFAULT_TOOL_TIMEOUT_SECONDS = 300`
 (`:396`). This is deliberately independent of the run's model-adapter timeout
 (`runtime.adapters.<name>.timeout_seconds`) — a tool on the no-op adapter must not inherit a

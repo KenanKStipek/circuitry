@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A tool's `timeout_ms: {from: <path>, default: <int>}` is read from state when the effect is dispatched: an earlier step's output says 300 ms, so the child that ignores SIGTERM is killed after the rounded-up 1 s, not after the 60 s default.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

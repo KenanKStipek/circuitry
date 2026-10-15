@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `timeout_ms` reference with no usable value is not retried -- a retry reads the same state -- so a tool with `retries` fails once: `meta.error` names the path and `meta.retries_used` is absent.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

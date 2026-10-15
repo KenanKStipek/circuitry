@@ -14,7 +14,7 @@ Prompt ::= { type: 'prompt', name: NAME,
              model?: STRING, provider?: STRING, provider_fallbacks?: STRING*,
              params?: MAP, inputs?: MAP,
              assets?: Asset*, retries?: Retry,
-             timeout_ms?: INT, deterministic?: BOOL,
+             timeout_ms?: INT | {from: PATH, default?: INT}, deterministic?: BOOL,
              group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
              on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
