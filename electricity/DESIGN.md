@@ -988,7 +988,9 @@ by re-running from the top and skipping whatever the loaded state says already f
   effect isn't resumed whole, every later sibling in that same chain reruns too, regardless of
   what its own node might (misleadingly) show from a stale prior run;
 - a named loop resumes at the first gap in its own `meta.completed_passes` contiguous-from-0
-  prefix — chain flow only; a tree-flow `each` or an unnamed loop always reruns whole;
+  prefix — chain flow only; a tree-flow `each` or an unnamed loop always reruns whole; that pass
+  continues inside its saved `iter_<N>` node, and an unfinished named `if` inside the branch its
+  saved `meta.branch` names when its condition selects it again (runtime-semantics §8.5, #573);
   `finally:` is **never** skipped by resume;
 - `document_content_digest` guards against resuming against a changed document, refusing unless
   `--force` is passed (CLI) or the embedding caller explicitly opts in (library);
