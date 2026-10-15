@@ -321,11 +321,15 @@ def test_cancel_parallel_loop_stops_promptly(
         assert not _pid_alive(pid), f"pid {pid} survived cancellation"
 
     state = json.loads(out_path.read_text(encoding="utf-8"))
-    # The loop itself never reached a completed node; the cleanup step
-    # declared after it (chain flow, main dynamic) never ran either —
-    # exactly the usual "an interrupted step's own parent never advances"
-    # shape (#270 F6).
-    assert state["prime"]["lp"]["meta"]["completed_at"] is None
+    # The loop records the interrupt the way it records a failure (#574):
+    # no pass was merged, and a non-empty meta.error keeps it unfinished
+    # for `cof run --resume`. The cleanup step declared after it (chain
+    # flow, main dynamic) never ran — exactly the usual "an interrupted
+    # step's own parent never advances" shape (#270 F6).
+    lp_meta = state["prime"]["lp"]["meta"]
+    assert lp_meta["completed_at"]
+    assert lp_meta["error"].startswith("Interrupted (")
+    assert lp_meta["completed_passes"] == []
     assert "cleanup" not in state["prime"]
     assert state["runtime"]["last_run"]["completed_at"]
 

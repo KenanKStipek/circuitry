@@ -167,19 +167,17 @@ pub(crate) async fn execute_loop(
     )
     .await;
 
-    // `core/loop.py::LoopRuntime.execute`'s own outer `except Exception`
-    // (never `BaseException`): a cancellation propagates raw, with no
-    // `value`/`meta` write and no `effect_complete` at all -- the same
-    // convention `exec::conditional`/`exec::dynamic` already use.
-    // `VmError::Refused` (#462, lane I) is fatal for *control* only
-    // (`VmError::is_fatal`'s own doc comment, ruling R1 on
-    // PR #462): it still falls through to the ordinary write below,
-    // recorded on this loop's own node exactly like any other failure.
-    if let Err(VmError::Cancelled) = &outcome {
-        return outcome;
-    }
-
-    let error_text: Option<String> = outcome.as_ref().err().map(VmError::to_string);
+    // `core/loop.py::LoopRuntime.execute`'s own outer `except
+    // BaseException` (#574): a cancellation is recorded exactly like any
+    // other failure -- `completed_passes`, `completed_at`, and the
+    // interrupt text as `meta.error` -- so `--resume` keeps the passes
+    // that finished, then propagates unchanged. `VmError::Refused` (#462,
+    // lane I) is fatal for *control* only (`VmError::is_fatal`'s own doc
+    // comment, ruling R1 on PR #462): it falls through to the same write.
+    let error_text: Option<String> = outcome.as_ref().err().map(|err| match err {
+        VmError::Cancelled => super::interrupted_text(token),
+        other => other.to_string(),
+    });
 
     if let (Some(node), Some(meta)) = (&node, &meta) {
         let termination = build_termination(&state, error_text.as_deref());
@@ -243,10 +241,8 @@ pub(crate) async fn execute_loop(
 
     if is_named {
         // Issue #513's totals hook: every named loop counts (any mode,
-        // so CEL adds 0) -- reached here only when `meta.completed_at`
-        // is actually set, since the one path that leaves it `None`
-        // (`VmError::Cancelled`) already returned above, before this
-        // point.
+        // so CEL adds 0) -- `meta.completed_at` is always set by here,
+        // a cancellation included (#574).
         if let Some(m) = &meta {
             observer.record_totals(&store.snapshot(m));
         }

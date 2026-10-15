@@ -12,6 +12,7 @@ from ..output import console as _console
 from .answers import parse_boolean_answer
 from .disabled import is_enabled
 from .effect_identity import model_call
+from .resume import effect_completed_ok
 from .scope import local_writes, scope_ctx
 from .store import Store
 from .templates import render_template
@@ -109,6 +110,7 @@ class ConditionalRuntime:
         progress_display: bool = False,
         depth: int = 0,
         ancestors: list | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -124,6 +126,10 @@ class ConditionalRuntime:
         self.progress_display = progress_display
         self.depth = depth
         self._ancestors = ancestors or []
+        # ``cof run --resume`` (#573): a named conditional whose saved node
+        # records the branch it took (``meta.branch``) continues inside that
+        # branch when its condition, evaluated again, selects it again.
+        self.resume = resume
         # Raw reply from the last `mode: model` evaluation, success or
         # failure — set inside _evaluate_model and read back in execute()
         # to record meta["answer"] alongside the parsed result. Token counts
@@ -146,6 +152,7 @@ class ConditionalRuntime:
             if not isinstance(meta, dict):
                 meta = {}
                 node["meta"] = meta
+            saved_branch = meta.get("branch") if self.resume else None
             meta["created_at"] = _now_iso()
             # Clear a previous call's own completed_at/error before this one
             # runs — this node is reused across a --state/persistence
@@ -165,7 +172,11 @@ class ConditionalRuntime:
             store.fire_effect_start(self.defn.name, node)
             try:
                 self._decide_and_run(
-                    child_store=child_store, node=node, meta=meta, ctx=ctx
+                    child_store=child_store,
+                    node=node,
+                    meta=meta,
+                    ctx=ctx,
+                    saved_branch=saved_branch,
                 )
             finally:
                 # Balances the start on every exit: a taken branch, an
@@ -181,8 +192,17 @@ class ConditionalRuntime:
         node: dict[str, Any] | None,
         meta: dict[str, Any] | None,
         ctx: dict[str, Any],
+        saved_branch: Any = None,
     ) -> None:
-        """Evaluate the condition and run the branch it selects."""
+        """Evaluate the condition and run the branch it selects.
+
+        When it selects *saved_branch* (the branch a resumed run's saved
+        node took, #573), the branch continues by the same positional rule
+        as a chain ``dynamic``: effects whose saved node finished without
+        error are reused until the first one that didn't, which runs —
+        itself resumed, when it is a container or a ``use`` — along with
+        everything after it. The other branch runs from its start.
+        """
         from .dynamic import DynamicDefinition, DynamicRuntime
         from .loop import LoopDefinition, LoopRuntime
         from .prompt import PromptDefinition, PromptRuntime
@@ -258,6 +278,7 @@ class ConditionalRuntime:
         # never from the previous overlay — see loop.py's _execute_body for
         # why layering copies on copies is the wrong move.
         base_ctx = ctx
+        resume_active = saved_branch is not None and saved_branch == branch
 
         try:
             from .dynamic import (
@@ -291,6 +312,26 @@ class ConditionalRuntime:
                         base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
                     )
                     continue
+
+                if (
+                    resume_active
+                    and name != "?"
+                    and effect_completed_ok(child_store.state.get(name))
+                ):
+                    if self.verbose and not is_prompt:
+                        _console.print(
+                            f"{branch_indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
+                            f" {name} [dim](resumed)[/dim]"
+                        )
+                    executed_effects.append(effect_record)
+                    ctx = scope_ctx(
+                        base_ctx, local_writes(child_store.state, branch_baseline, branch_names)
+                    )
+                    continue
+                # The first branch effect that isn't reused continues inside
+                # itself when it can; every effect after it runs whole.
+                effect_resume = resume_active
+                resume_active = False
 
                 if self.verbose and not is_prompt:
                     _console.print(
@@ -327,6 +368,7 @@ class ConditionalRuntime:
                             progress_display=self.progress_display,
                             depth=self.depth + 2,
                             ancestors=self._ancestors,
+                            resume=effect_resume,
                         ).execute(store=child_store, ctx_override=ctx)
 
                     elif isinstance(effect, ConditionalDefinition):
@@ -342,6 +384,7 @@ class ConditionalRuntime:
                             progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
+                            resume=effect_resume,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, LoopDefinition):
@@ -357,6 +400,7 @@ class ConditionalRuntime:
                             progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
+                            resume=effect_resume,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, ReflectorDefinition):
@@ -399,6 +443,7 @@ class ConditionalRuntime:
                             progress_display=self.progress_display,
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
+                            resume=effect_resume,
                         ).execute(store=child_store, ctx=ctx)
 
                     elif isinstance(effect, YieldDefinition):

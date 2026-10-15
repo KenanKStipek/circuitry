@@ -841,14 +841,18 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   already-finished-branch case for electricity's fix to carve out specially: the fix changes which
   branches ever *run* (none that hadn't started when the signal arrived), not which already-done
   ones get merged (none, on either engine, before or after the fix).
-- **an interrupted `dynamic` must not look finished to `--resume`; a `loop`/`if`/`use` already
-  don't.** Only `dynamic` catches a bare interrupt at all (`except BaseException`, so it can still
-  run its own `finally:` and record the failure) — a `loop`, a conditional, and `use` each catch
-  only `except Exception`, so a real interrupt passes straight through every one of those three
-  untouched, leaving in place the `completed_at: None`/`error: None` pair each already wrote when
-  it started. `--resume` already reruns an interrupted `loop`/`if`/`use` correctly today, on both
-  engines, and that does not change. The fix below is scoped to the one container that does catch
-  the interrupt: a named `dynamic` still on the call stack when the signal arrives gets its own
+- **an interrupted `dynamic` must not look finished to `--resume`; an `if`/`use` already
+  don't.** A conditional catches only `except Exception`, so a real interrupt passes
+  straight through it untouched; `use` has an `except BaseException` handler (#570) that saves
+  the child's record but writes neither `completed_at` nor `error`. Either way the
+  `completed_at: None`/`error: None` pair each wrote when it started stays in place, and
+  `--resume` reruns them. A named `loop` catches the
+  interrupt too (#574): it records it exactly like a failure — `completed_passes`, `completed_at`,
+  and the interrupt text below as `meta.error` and `value.termination.detail` — so `--resume`
+  keeps the passes it finished, then re-raises it unchanged (electricity: `VmError::Cancelled`
+  gets the same write in `exec/loop_.rs`). The fix below is scoped to `dynamic`, which catches the
+  interrupt (`except BaseException`) so it can still run its own `finally:` and record the
+  failure: a named `dynamic` still on the call stack when the signal arrives gets its own
   `meta.completed_at` set, same as today, but its own `meta.error` must be set to the *same*
   literal interrupt text `RunResult.error` gets (§6.6 below: `"Interrupted (Ctrl-C/SIGINT)"`,
   `"Interrupted (SIGTERM)"` or `"Interrupted (SIGHUP)"`), never left empty. This is a deliberate fix, not a reproduction: the
@@ -986,7 +990,9 @@ by re-running from the top and skipping whatever the loaded state says already f
   effect isn't resumed whole, every later sibling in that same chain reruns too, regardless of
   what its own node might (misleadingly) show from a stale prior run;
 - a named loop resumes at the first gap in its own `meta.completed_passes` contiguous-from-0
-  prefix — chain flow only; a tree-flow `each` or an unnamed loop always reruns whole;
+  prefix — chain flow only; a tree-flow `each` or an unnamed loop always reruns whole; that pass
+  continues inside its saved `iter_<N>` node, and an unfinished named `if` inside the branch its
+  saved `meta.branch` names when its condition selects it again (runtime-semantics §8.5, #573);
   `finally:` is **never** skipped by resume;
 - `document_content_digest` guards against resuming against a changed document, refusing unless
   `--force` is passed (CLI) or the embedding caller explicitly opts in (library);
