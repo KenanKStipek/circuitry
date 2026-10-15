@@ -1,23 +1,25 @@
-//! Nesting must be bounded by the five caps `nesting.rs` tracks
+//! Nesting must be bounded by the seven caps `nesting.rs` tracks
 //! (`MAX_PAREN_CALL_NESTING_DEPTH`, `MAX_LIST_MAP_NESTING_DEPTH`,
-//! `MAX_CHAIN_NESTING_DEPTH`, `MAX_LOGICAL_UNARY_NESTING_DEPTH`,
-//! `MAX_ACCESSOR_NESTING_DEPTH`), enforced before parsing (`nesting.rs`'s
-//! module docs), not by whatever the test harness's own thread stack
-//! happens to be. Every test here runs on an explicit 2 MiB stack -- a
-//! deliberately conservative floor, not a measured figure for how this
-//! crate is actually run: `electricity-cli`'s own `main.rs` evaluates
-//! CEL on the process's main thread, under a
+//! `MAX_CHAIN_NESTING_DEPTH`, `MAX_INDEX_NESTING_DEPTH`,
+//! `MAX_LOGICAL_UNARY_NESTING_DEPTH`, `MAX_ACCESSOR_NESTING_DEPTH`,
+//! `MAX_METHOD_CALL_NESTING_DEPTH`), enforced before parsing
+//! (`nesting.rs`'s module docs), not by whatever the test harness's own
+//! thread stack happens to be. Every test here runs on an explicit 2
+//! MiB stack -- a deliberately conservative floor, not a measured
+//! figure for how this crate is actually run: `electricity-cli`'s own
+//! `main.rs` evaluates CEL on the process's main thread, under a
 //! `tokio::runtime::Builder::new_current_thread()`, whose stack is the
 //! OS default (far bigger than 2 MiB), not a spawned thread at all. In
 //! a debug build, this 2 MiB floor needs `Cargo.toml`'s
 //! `[profile.dev.package.cel]`/`[profile.dev.package.antlr4rust]`
-//! override to stay safe at all (see that file's own comment, and
-//! `nesting.rs`'s module docs, for the measurements behind both).
+//! override to stay safe at all -- see that file's own comment for the
+//! measurement behind it (the primary source for that number; not
+//! re-measured here).
 
 use electricity_cel::{
-    CelError, MAX_ACCESSOR_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH, MAX_LIST_MAP_NESTING_DEPTH,
-    MAX_LOGICAL_UNARY_NESTING_DEPTH, MAX_PAREN_CALL_NESTING_DEPTH, evaluate_condition,
-    validate_syntax,
+    CelError, MAX_ACCESSOR_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH, MAX_INDEX_NESTING_DEPTH,
+    MAX_LIST_MAP_NESTING_DEPTH, MAX_LOGICAL_UNARY_NESTING_DEPTH, MAX_METHOD_CALL_NESTING_DEPTH,
+    MAX_PAREN_CALL_NESTING_DEPTH, evaluate_condition, validate_syntax,
 };
 use electricity_value::{Dict, Value};
 
@@ -232,12 +234,12 @@ fn equality_chain_exactly_at_the_limit_and_one_past_it_on_a_2mib_stack() {
 
 #[test]
 fn index_chain_exactly_at_the_limit_and_one_past_it_on_a_2mib_stack() {
-    let expr = format!("state{}", "[0]".repeat(MAX_CHAIN_NESTING_DEPTH));
+    let expr = format!("state{}", "[0]".repeat(MAX_INDEX_NESTING_DEPTH));
     let result =
         run_on_2mib_stack(move || evaluate_condition(&expr, &Value::Dict(Dict::new()), false));
     assert_not_rejected_for_nesting(&result);
 
-    let expr = format!("state{}", "[0]".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
+    let expr = format!("state{}", "[0]".repeat(MAX_INDEX_NESTING_DEPTH + 1));
     let result =
         run_on_2mib_stack(move || evaluate_condition(&expr, &Value::Dict(Dict::new()), false));
     assert_rejected_for_nesting(&result);
@@ -271,15 +273,25 @@ fn select_chain_one_past_the_accessor_limit_is_also_rejected_calling_evaluate_co
 }
 
 #[test]
-fn method_call_chain_exactly_at_the_accessor_limit_and_one_past_it_at_compile_time() {
-    // A method-call chain counts via `accessor` too (the leading `.` of
-    // each link), the same as a plain select chain -- its own `(`/`)`
-    // are not counted separately (`nesting.rs`'s module docs).
-    let expr = format!("state{}", ".f()".repeat(MAX_ACCESSOR_NESTING_DEPTH));
+fn method_call_chain_exactly_at_the_limit_and_one_past_it_on_a_2mib_stack() {
+    // A method-call chain counts via its own `method_call` bucket, not
+    // `accessor` -- its own `(`/`)` are not counted separately, but a
+    // chain containing a call fails Circuitry at evaluation time, far
+    // below `MAX_ACCESSOR_NESTING_DEPTH`, since Circuitry's own
+    // `_dotted_chain` gives up on a chain with any call in it rather
+    // than hitting the member-access shape's compile-time mechanism
+    // (`nesting.rs`'s module docs).
+    let expr = format!("state{}", ".f()".repeat(MAX_METHOD_CALL_NESTING_DEPTH));
     assert_eq!(validate_syntax(&expr), Ok(()));
+    let result =
+        run_on_2mib_stack(move || evaluate_condition(&expr, &Value::Dict(Dict::new()), false));
+    assert_not_rejected_for_nesting(&result);
 
-    let expr = format!("state{}", ".f()".repeat(MAX_ACCESSOR_NESTING_DEPTH + 1));
-    assert!(validate_syntax(&expr).is_err());
+    let expr = format!("state{}", ".f()".repeat(MAX_METHOD_CALL_NESTING_DEPTH + 1));
+    assert_eq!(validate_syntax(&expr), Ok(()));
+    let result =
+        run_on_2mib_stack(move || evaluate_condition(&expr, &Value::Dict(Dict::new()), false));
+    assert_rejected_for_nesting(&result);
 }
 
 #[test]

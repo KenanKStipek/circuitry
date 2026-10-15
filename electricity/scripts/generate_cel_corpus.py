@@ -845,18 +845,15 @@ def build_corpus() -> list[dict]:
         condition("{'a':" * 47 + "1" + "}" * 47, {}, pad=_DEEPEST_CONTEXT_PAD),
         condition("{'a':" * 48 + "1" + "}" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
         condition("{'a':" * 49 + "1" + "}" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
-        # Arithmetic (`+`)/relational (`<`) chains: Circuitry's own floor
-        # (241-242 depending on context) is *looser* than electricity's
-        # own `MAX_CHAIN_NESTING_DEPTH` (238) -- that cap is shared with
-        # the index-chain shape below, whose own floor is tighter (238
-        # exactly), so electricity is deliberately, safely stricter than
-        # Circuitry for pure arithmetic/relational chains specifically
-        # between 239 and 241 terms (`nesting.rs`'s module docs) -- a
-        # known, narrow divergence, not pinned here (the old, single
-        # shared bracket cap had the same kind of gap for parentheses
-        # before this pass split bracket kinds apart; this one is the
-        # chain-side counterpart, now that index needed the tighter
-        # number). 238 is pinned as accepted by both; 250 as rejected by
+        # Arithmetic (`+`)/relational (`<`) chains: `MAX_CHAIN_NESTING_DEPTH`
+        # (241) now matches Circuitry's own floor for this family exactly
+        # (finding P2-2: index got its own, tighter cap below instead of
+        # sharing this one, so this cap no longer needs to be stricter
+        # than Circuitry just to stay safe for the index shape too). 238
+        # is pinned as accepted by both -- comfortably inside the real
+        # boundary (241), not at it, matching this generator's own
+        # practice below of never pinning a case exactly at a boundary
+        # the padding can't reproduce with certainty; 250 as rejected by
         # both, comfortably past Circuitry's own floor too.
         condition("0" + "+1" * 238, {}, pad=_DEEPEST_CONTEXT_PAD),
         condition("0" + "+1" * 250, {}, pad=_DEEPEST_CONTEXT_PAD),
@@ -867,33 +864,43 @@ def build_corpus() -> list[dict]:
         # despite `cel`'s own grammar never recursing for them at all
         # (`nesting.rs`'s module docs) -- `MAX_LOGICAL_UNARY_NESTING_DEPTH`
         # (484) matches Circuitry's own floor in every context measured.
-        # 484 accepted, 509 rejected (well past the boundary; this
-        # generator's own pad does not reproduce Circuitry's real,
-        # CLI-measured 484/485 boundary closely enough to pin 485 itself
-        # as a reject case without risking a false reading).
-        condition(" && ".join(["true"] * 485), {}, pad=_DEEPEST_CONTEXT_PAD),
+        # 400, clearly inside 484, is pinned as accepted (never exactly
+        # at the real boundary: this generator's own pad does not
+        # reproduce Circuitry's real, CLI-measured 484/485 boundary
+        # closely enough to pin a case right at it without risking a
+        # false reading); 510/601 are rejected, well past the boundary.
+        condition(" && ".join(["true"] * 401), {}, pad=_DEEPEST_CONTEXT_PAD),
         condition(" && ".join(["true"] * 510), {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("!" * 484 + "true", {}, pad=_DEEPEST_CONTEXT_PAD),
+        condition("!" * 400 + "true", {}, pad=_DEEPEST_CONTEXT_PAD),
         condition("!" * 601 + "true", {}, pad=_DEEPEST_CONTEXT_PAD),
-        # Member-access (`.`) and index (`[]`) chains: a plain select
-        # chain fails Circuitry at *compile* time, not evaluation time,
-        # with a bare, uncaught exception rather than a
-        # `CelEvaluationError` (`nesting.rs`'s module docs) -- not a case
-        # this generator's `evaluate_cel`-based helpers can safely build
-        # (a deep enough one would crash the generator itself, the same
-        # way it crashes a real `cof check`); see
+        # Member-access (`.`) chains: a plain select chain fails
+        # Circuitry at *compile* time, not evaluation time, with a bare,
+        # uncaught exception rather than a `CelEvaluationError`
+        # (`nesting.rs`'s module docs) -- not a case this generator's
+        # `evaluate_cel`-based helpers can safely build (a deep enough
+        # one would crash the generator itself, the same way it crashes
+        # a real `cof check`); see
         # `tests/conformance/cases/cel-member-access-too-deep` instead,
         # which exercises exactly that failure on both engines through a
-        # real document. Only a shallow, well inside both caps, accepted
-        # case is pinned here, with a real matching state so the
-        # expression actually evaluates rather than hitting the
-        # absent-path rule; 20, not the full depth, so the corpus
-        # fixture's own tagged JSON encoding of a matching state value
-        # stays well under `serde_json`'s own default recursion limit
-        # when parsed back on the Rust side (this crate's own
-        # dependencies may never add `serde_json`'s `unbounded_depth`
-        # feature to work around that).
+        # real document. Only a shallow, well inside
+        # `MAX_ACCESSOR_NESTING_DEPTH`, accepted case is pinned here,
+        # with a real matching state so the expression actually
+        # evaluates rather than hitting the absent-path rule; 20, not
+        # the full depth, so the corpus fixture's own tagged JSON
+        # encoding of a matching state value stays well under
+        # `serde_json`'s own default recursion limit when parsed back on
+        # the Rust side (this crate's own dependencies may never add
+        # `serde_json`'s `unbounded_depth` feature to work around that).
         condition("state" + ".a" * 20, _nested_dict(20)),
+        # Index (`[]`) chains: a *separate*, tighter cap from the
+        # operator chains above (`MAX_INDEX_NESTING_DEPTH`, 238,
+        # finding P2-2), a clean, caught evaluation failure (not the
+        # member-access shape's bare one) once the path it indexes into
+        # resolves to real data -- confirmed on both engines through a
+        # real document at the exact boundary (239 links) in
+        # `tests/conformance/cases/cel-nesting-caps-fail-the-run`,
+        # not duplicated here. Only a shallow, accepted case, well inside
+        # the cap, for the same reasons as the member-access one above.
         condition("state" + "[0]" * 20, _nested_list(20)),
         # Nested function calls (`size(size(...))`): governed by the
         # same paren/call-nesting cap as parentheses/global calls above,

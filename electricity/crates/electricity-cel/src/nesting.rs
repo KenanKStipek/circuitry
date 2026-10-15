@@ -40,48 +40,85 @@
 //! regardless of which of these three families it is in grammar terms,
 //! unlike the Rust side above -- `&&`/`||`/unary `!`/`-` chains fail in
 //! Circuitry too, just at a much larger N (below) than a bracket or
-//! binary-operator chain. This module tracks five numbers rather than
-//! one, matching the five boundaries measured (below), not the two or
+//! binary-operator chain. This module tracks seven numbers rather than
+//! one, matching the seven boundaries measured (below), not the two or
 //! three the grammar alone would suggest:
 //!
 //! - **`paren_call`** -- simultaneous grouping-`(`/global-call-`(`
-//!   nesting (never a method call's own `(`, which [`MAX_CHAIN_NESTING_DEPTH`]`-family
-//!   accounting handles instead -- see `accessor` below).
+//!   nesting (never a method call's own `(`, which `method_call`
+//!   accounting handles instead -- see below).
 //! - **`list_map`** -- simultaneous list-literal-`[`/map-literal-`{`
-//!   nesting (never an index's own `[`, which `chain` handles instead).
+//!   nesting (never an index's own `[`, which `index` handles instead).
 //! - **`chain`** -- a running count of binary arithmetic (`+ - * / %`),
-//!   relational/equality (`< <= > >= == !=`) and `in` operators, and an
-//!   index's `[` (as opposed to a list literal's own opening `[`).
+//!   relational/equality (`< <= > >= == !=`) and `in` operators.
+//! - **`index`** -- a running count of an index's own `[` (`a[0][0]...`,
+//!   as opposed to a list literal's own opening `[`) -- tracked
+//!   separately from `chain` even though both recurse through the same
+//!   `member`/`calc`/`relation` grammar rules in `cel`'s own parser,
+//!   because Circuitry's own measured floor for the two differs (finding
+//!   P2-2: 238 for an index chain, 241 for the operator shapes `chain`
+//!   covers -- sharing one counter at the tighter of the two, as an
+//!   earlier version of this module did, rejected an operator chain
+//!   Circuitry itself still accepted).
 //! - **`logical_unary`** -- a running count of `&&`/`||` operators and
 //!   individual prefix `!`/`-` occurrences (one per character, not one
 //!   per run -- each costs Circuitry its own stack frame even though
 //!   `cel`'s own grammar collapses a whole run into one visit).
 //! - **`accessor`** -- a running count of member-access `.` links
-//!   (never a float literal's decimal point) and method-call links
-//!   (`.method(...)`, whose own `(` is not counted separately -- see
-//!   below).
+//!   (never a float literal's decimal point, and never a `.` that is
+//!   part of a method call -- see `method_call` below) in a chain with
+//!   *no* method call anywhere in it. Counts dots (link boundaries), not
+//!   the identifiers between them: `state.input` plus 610 further `.a`
+//!   links is 611 dots total, 610 of them past the initial root, and
+//!   [`MAX_ACCESSOR_NESTING_DEPTH`] (610) counts the latter -- the links
+//!   added after the root, matching how every measurement below built
+//!   its own probe expression (module docs' per-shape detail).
+//! - **`method_call`** -- a running count of every link (`.field` *and*
+//!   `.method(...)`) in a member-access chain that includes *at least
+//!   one* method call anywhere in it -- the *whole* chain, not just the
+//!   links from the call onward: Circuitry's own `_dotted_chain` gives
+//!   up on a chain the moment it sees any call in it, at any position,
+//!   so the whole thing loses the plain-select mechanism `accessor`
+//!   models and falls back to the real evaluator's own recursion
+//!   instead (mechanism section below).
 //!
-//! `chain` and `accessor` are only ever reset to zero at a `&&`, `||`,
-//! `,`, `?` or `:` (points where nothing stacks across them, in both
-//! `cel`'s own grammar and Circuitry's), and whenever the *other* one is
-//! incremented (an operator or index link breaks a run that was purely
-//! `accessor` so far, and vice versa) -- so a long chain of many
+//! `chain`/`index`/`accessor`/`method_call` are only ever reset to zero
+//! at a `&&`, `||`, `,`, `?` or `:` *at the top level* (never inside an
+//! open bracket -- see below), and whenever one of the other three is
+//! incremented (a link of one family breaks a run that was purely
+//! another family's so far, and vice versa) -- so a long chain of many
 //! independent, shallow terms (many `&&`-joined comparisons, many list
 //! elements) is never penalized for its length, and a pure accessor
 //! chain is judged against `accessor`'s own, much larger cap rather than
-//! `chain`'s tighter one. `logical_unary` is reset only at `,`/`?`/`:`
-//! (an independent subexpression boundary), never at `&&`/`||`
-//! themselves -- those are exactly what it counts.
+//! `chain`'s tighter one. `logical_unary` is reset only at a top-level
+//! `,`/`?`/`:` (an independent subexpression boundary), never at
+//! `&&`/`||` themselves -- those are exactly what it counts.
 //!
-//! ## The five measured boundaries
+//! The *top-level-only* qualifier matters for `method_call` specifically
+//! (and, for the same reason, every other reset): `.map(x, x)`'s own `,`
+//! separates that one link's *arguments*, not independent elements of
+//! the outer chain the call is one link of -- a `.map(x, x).map(x, x)...`
+//! chain must count every one of its links, not reset to 1 at every
+//! single link's own internal comma (a regression this module once had,
+//! not a hypothetical: `open_brackets` already tracks exactly this, so
+//! every reset site below checks `open_brackets.is_empty()` first).
+//! `chain`/`paren_call` already never reset across a bracket boundary at
+//! all by construction (the group-wrapped-chain test below), so this
+//! makes the other three consistent with that, for the same underlying
+//! reason: whatever a bracket's own contents do to `cel`'s real parser
+//! stack, the run that contains the bracket is still on that stack too.
+//!
+//! ## The seven measured boundaries
 //!
 //! | shape | Circuitry's own boundary (tightest of the three contexts) | kind |
 //! |---|---|---|
 //! | nested parentheses, nested global calls (`int(int(...))`) | 53 | clean `CelEvaluationError` |
 //! | nested list literals, nested map literals | 48 | clean |
-//! | `+`/`-`/`*`/`/`/`%`/`<`/`<=`/`>`/`>=`/`==`/`!=` chains, an index chain (`state.input.a[0][0]...`, the path resolved) | 238-241 | clean |
+//! | `+`/`-`/`*`/`/`/`%`/`<`/`<=`/`>`/`>=`/`==`/`!=`/`in` chains | 241 | clean |
+//! | an index chain (`state.input.a[0][0]...`, the path resolved to real data) | 238 | clean |
 //! | `&&`/`||` chains, a run of prefix `!` or prefix `-` | 484 | clean |
-//! | a member-access chain (`state.input.a.a...`) | 610 | **bare**, uncaught `RecursionError` -- see below |
+//! | a member-access chain (`state.input.a.a...`), with or without real resolved data at every level | 610 | **bare**, uncaught `RecursionError` -- see below |
+//! | a member-access chain that includes a method call anywhere in it (`[1].map(x, x).map(x, x)...`) | 295 | clean |
 //!
 //! Each cap below sits at or just under the tightest of the three
 //! contexts for its shape (never rejecting something Circuitry accepted
@@ -102,6 +139,20 @@
 //! uncaught exception rather than a caught one (next section) --
 //! [`MAX_ACCESSOR_NESTING_DEPTH`] is set to the tightest of the three
 //! (610) specifically because that range is real, not measurement noise.
+//! Re-measured with a nested-dict `state` resolving every level of the
+//! chain (not just an absent/empty one): the same 610-613 range, because
+//! the failing mechanism (`_collect_state_paths`'s own parse-tree walk,
+//! next section) runs before any value is ever read, so whether the path
+//! resolves to real data never affects it (finding P1-4, first half).
+//!
+//! The method-call shape is different again: a chain containing a call
+//! is governed by the *real evaluator's* own recursion (next section),
+//! not by `_collect_state_paths`'s structural walk, and that evaluator's
+//! own per-link cost turned out considerably higher than a plain select
+//! -- 295, not 610-613 -- confirmed directly via `cof run` in all three
+//! contexts (finding P1-4, second half: this shape was entirely
+//! unmeasured before, assumed to share `accessor`'s own number and
+//! phase, which both turned out wrong once actually measured).
 //!
 //! ## Why a member-access chain is different: it fails before the document ever runs
 //!
@@ -133,35 +184,75 @@
 //! the same parse tree before ever reading a value, so it shares the
 //! member-access chain's own compile-time mechanism and magnitude (measured
 //! directly at 608 in that case) rather than the index chain's normal one.
-//! This crate's own index cap (238, folded into `chain`) already rejects
-//! anything that deep long before either boundary, so the unresolved case
-//! needs no separate handling.
+//! This crate's own index cap ([`MAX_INDEX_NESTING_DEPTH`], 238) already
+//! rejects anything that deep long before either boundary, so the
+//! unresolved case needs no separate handling.
+//!
+//! A method-call chain fails by a *third* mechanism, different from
+//! both: Circuitry's own `_dotted_chain` (`core/cel_eval.py`) walks a
+//! member-access chain to decide whether it is a plain `state.`-rooted
+//! path at all, and gives up -- returns `None`, same as for a chain
+//! rooted at anything else `_dotted_chain` doesn't recognize -- the
+//! moment it finds a `Call` node anywhere in the chain, not just a
+//! `Select`. A chain `_dotted_chain` gives up on is never added to
+//! `_collect_state_paths`'s own result, so the structural, compile-time
+//! walk that fails a plain select at 610 never even looks at it; the
+//! document compiles cleanly regardless of depth. It still has to be
+//! *evaluated*, though, and `cel-python`'s own expression evaluator
+//! (a separate, ordinary recursive-descent walk over the same parse
+//! tree, inside `evaluate_cel`'s normal `try`/`except`) recurses once
+//! per link the same way -- just with enough of its own stack cost per
+//! frame that it fails far sooner, at 295, as a clean, caught
+//! `CelEvaluationError` indistinguishable in shape from the four parity
+//! families below.
 //!
 //! This crate matches the *phase* as well as the boundary for this one
 //! shape: [`validate_syntax`] (the compile-time check, run before a
-//! document is ever accepted) rejects a member-access chain past
-//! [`MAX_ACCESSOR_NESTING_DEPTH`] with [`CelSyntaxError::TooDeeplyNestedAccessor`],
-//! whose own `Display` is the bare `"maximum recursion depth exceeded"`
-//! text (no `"CEL evaluation failed for"` wrapper, no effect path) --
-//! the simpler of the two forms Circuitry itself produces, picked because
+//! document is ever accepted) and [`crate::check_stack_safety`] (the
+//! same check, for a caller reaching [`crate::evaluate_condition`]/
+//! [`crate::evaluate_expect`] directly, bypassing the compiler) both
+//! reject a member-access chain past [`MAX_ACCESSOR_NESTING_DEPTH`] --
+//! as [`CelSyntaxError::TooDeeplyNestedAccessor`] from the former,
+//! bare `"maximum recursion depth exceeded"` text from the latter (no
+//! `"CEL evaluation failed for"` wrapper, no effect path) -- the
+//! simpler of the two forms Circuitry itself produces, picked because
 //! it is the one seen from a top-level `if`, the shallowest and most
-//! common real context. Every other shape's cap is checked only at
-//! *evaluation* time ([`crate::check_nesting_depth`], called from
-//! [`crate::evaluate_condition`]/[`crate::evaluate_expect`]), worded with
-//! the usual `"CEL evaluation failed for '<expr>': ..."` form, matching
-//! Circuitry's own runtime `CelEvaluationError` -- a document using one of
-//! those shapes this deep compiles and starts running in Circuitry too,
-//! only failing once the effect actually evaluates, which `on_error:` can
-//! catch.
+//! common real context. Every other shape's cap -- including
+//! `method_call`'s, despite failing by the third mechanism above -- is
+//! checked only at *evaluation* time ([`crate::check_parity_nesting`],
+//! called from [`crate::evaluate_condition`]/[`crate::evaluate_expect`]
+//! -- in `evaluate_condition`'s case, only *after* the unset-path
+//! short-circuit below has already passed, never before: Circuitry's
+//! own evaluation of one of these shapes, the only place any of them
+//! can raise this, never runs once that check has already decided the
+//! condition is `false`), worded with the usual, and now deliberately
+//! *identical regardless of shape*, `"CEL evaluation failed for
+//! '<expr>': maximum recursion depth exceeded"` text -- Circuitry's own
+//! uncaught `RecursionError` never says which operator or how deep
+//! either, so which of the five caps tripped and at what depth is
+//! carried in [`crate::NestingCapDetail`] instead of the message. A
+//! document using one of those shapes this deep compiles and starts
+//! running in Circuitry too, only failing once the effect actually
+//! evaluates, which `on_error:` can catch.
 //!
-//! [`validate_syntax`] additionally applies [`MAX_SAFETY_CHAIN_DEPTH`], a
-//! much larger, safety-only cap on the raw combined scan (every link
-//! counted together, ignoring which of the five buckets it fell into) --
-//! not a parity boundary, just insurance against this crate's own
-//! `env.compile` (which does the real ANTLR-visitor recursion the module
-//! docs above describe) ever being asked to compile something deep
-//! enough to overflow a 2 MiB stack for real before any of the tighter,
-//! shape-specific checks would have caught it. Brackets need no such
+//! [`validate_syntax`] and [`crate::check_stack_safety`] both apply
+//! [`MAX_SAFETY_CHAIN_DEPTH`] too, a much larger, safety-only cap on
+//! the *live* sum of the five quantities that actually recurse in
+//! `cel`'s own ANTLR visitor at any one scan position --
+//! `paren_call`/`list_map`/`chain`/`index`/`accessor` together,
+//! deliberately excluding `logical_unary` (`cel`'s grammar never
+//! recurses for `&&`/`||`/unary runs at all, so no length of one
+//! threatens this crate's own stack, module docs above) and
+//! `method_call` (a chain with a call in it never reaches
+//! `env.compile`'s own ANTLR-visitor recursion concern this backstop
+//! insures against at all -- it fails, if it fails, in the real
+//! evaluator afterward, a separate call `validate_syntax` itself never
+//! makes) -- not a parity boundary,
+//! just insurance against this crate's own `env.compile` (which does
+//! the real ANTLR-visitor recursion the module docs above describe)
+//! ever being asked to compile something deep enough to overflow a 2
+//! MiB stack for real before any of the tighter, shape-specific checks
+//! would have caught it. Brackets need no such
 //! backstop: `cel`'s own parser has a hard-coded `max_recursion_depth` of
 //! **96** (`cel-0.15.0/src/parser/parser.rs`, confirmed directly: a bare
 //! `cel::Env`, nothing from this crate involved, accepts up to 95 levels
@@ -184,22 +275,57 @@
 //! measured floor) treats every chain shape the same way the scan itself
 //! already does.
 //!
-//! ## Known imprecision
+//! ## Known imprecision: mixed shapes
 //!
-//! Tracking `chain`/`accessor`/`logical_unary` independently, rather than
-//! their sum against one combined cap, is not a safety argument for a
-//! *mixed* shape (for example, parentheses wrapped around a long
-//! arithmetic chain): a combined expression can fail Circuitry's own
-//! evaluator well under the sum of the relevant caps, because Python's
-//! recursion budget is one shared resource regardless of which grammar
-//! rule is consuming it. Tracking independently is safe for *this*
-//! crate's own stack only, because the margins are generous enough that
-//! it doesn't matter (worked example in the tests below,
-//! `a_group_that_is_the_leftmost_operand_adds_to_the_outer_chain`). A
-//! mixed expression this crate's own pre-scan accepts but Circuitry would
-//! reject is a known, accepted residual divergence -- this crate being
-//! *more* lenient, never less, on a shape this far outside anything an
-//! ordinary orchestration writes -- not a gap either side needs to close.
+//! Tracking `paren_call`/`list_map`/`chain`/`index`/`logical_unary`/
+//! `accessor`/`method_call` independently, rather than their sum against
+//! one combined cap, is not a safety argument for a *mixed* shape (two
+//! or more of the seven stacked at once) -- and, unlike the module's
+//! earlier drafts claimed, the resulting divergence from Circuitry runs
+//! in **both** directions, not just the lenient one:
+//!
+//! - **This crate can be more lenient.** A combined expression can fail
+//!   Circuitry's own evaluator well under the sum of the relevant caps,
+//!   because Python's recursion budget is one shared resource regardless
+//!   of which grammar rule is consuming it -- this crate's own caps,
+//!   tracked independently, don't model that shared cost at all. Example,
+//!   confirmed directly: 48 nested `size()` calls wrapping a map literal
+//!   fails Circuitry (well under any single cap: `size` is a plain
+//!   global call, so its own nesting counts against `paren_call`, whose
+//!   cap is 53) but this crate's own pre-scan accepts it.
+//! - **This crate can also be *stricter*.** [`crate::MAX_EXPR_LENGTH`]
+//!   aside, a mixed shape can run into a boundary of `cel`'s own parser
+//!   this module's docs above don't otherwise discuss: its hard-coded
+//!   `max_recursion_depth` of 96 counts *every* `expr` grammar
+//!   production on the path to the deepest node, not brackets alone --
+//!   so 50 grouping parens wrapped around a 48-deep nested list literal
+//!   (98 total `expr` productions on that path, each individually within
+//!   both this crate's own caps, 53 and 48) fails to *parse* at all in
+//!   this crate (`cel`'s own guard, not a cap this module tracks), where
+//!   Circuitry still compiles it and only fails once it evaluates.
+//!
+//! A mixed shape this far outside anything an ordinary orchestration
+//! writes is a known, accepted residual divergence in both directions,
+//! not a gap either side needs to close -- this crate's own stack stays
+//! safe regardless (the lenient direction's own worked example is in the
+//! tests below, `a_group_that_is_the_leftmost_operand_adds_to_the_outer_chain`,
+//! and the margin to a real overflow, module docs above, is many times
+//! either cap). A combined, cross-shape weighted budget that would close
+//! both directions at once is not required (and not attempted here).
+//!
+//! Related, in `electricity-compiler` rather than this module:
+//! `crate::state_paths`'s own [`crate::check_stack_safety`] call (not
+//! [`crate::check_parity_nesting`], module docs above on why) can reject
+//! a chain shape this module itself would accept were it checked in
+//! isolation, once mixed with enough of another shape to cross
+//! [`MAX_SAFETY_CHAIN_DEPTH`] -- `state_ns.rs`'s own `validate_cel_expr`
+//! deliberately swallows that `Err` (any parse/safety failure there is
+//! `validate_syntax`'s problem to report, not this check's), which is
+//! correct for this module's own safety-only rejections but means a
+//! `state.<namespace>` grammar violation inside such an expression goes
+//! unchecked by that one pass -- `validate_syntax` itself still runs
+//! separately and still rejects the expression, just not for the
+//! `state.<namespace>` reason.
 //!
 //! This scan can both over- and undercount the true worst-case recursion
 //! depth for a handful of tree shapes a single left-to-right pass cannot
@@ -224,14 +350,23 @@ pub const MAX_PAREN_CALL_NESTING_DEPTH: usize = 53;
 /// (module docs): 48.
 pub const MAX_LIST_MAP_NESTING_DEPTH: usize = 48;
 
-/// The deepest operator/index chain ([`max_nesting_depths`]'s `chain`)
-/// an expression may reach before it is rejected -- shared by every
-/// arithmetic, relational, equality and index shape, at or below the
-/// tightest of the per-shape floors Circuitry's own evaluator was
-/// measured accepting in every of the three real contexts (module
-/// docs): 238 (an index chain's own floor; the arithmetic/relational/
-/// equality shapes reach 241 or 242).
-pub const MAX_CHAIN_NESTING_DEPTH: usize = 238;
+/// The deepest arithmetic/relational/equality/`in` operator chain
+/// ([`max_nesting_depths`]'s `chain`) an expression may reach before
+/// it is rejected -- the tightest of the three real contexts measured
+/// (module docs): 241. An index chain (`a[0][0]...`) has its own,
+/// tighter cap, [`MAX_INDEX_NESTING_DEPTH`] -- not this one, even
+/// though both recurse through the same `member`/`calc`/`relation`
+/// grammar rules in `cel`'s own parser (finding P2-2: measured
+/// independently once an operator chain's real floor turned out
+/// looser than an index chain's).
+pub const MAX_CHAIN_NESTING_DEPTH: usize = 241;
+
+/// The deepest index chain (`a[0][0]...`, [`max_nesting_depths`]'s
+/// `index`) an expression may reach before it is rejected -- the
+/// tightest of the three real contexts measured (module docs): 238,
+/// three terms tighter than [`MAX_CHAIN_NESTING_DEPTH`]'s own 241 for
+/// the operator shapes it shares a grammar rule with.
+pub const MAX_INDEX_NESTING_DEPTH: usize = 238;
 
 /// The deepest run of `&&`/`||` operators or prefix `!`/`-` occurrences
 /// ([`max_nesting_depths`]'s `logical_unary`) an expression may reach
@@ -241,40 +376,68 @@ pub const MAX_CHAIN_NESTING_DEPTH: usize = 238;
 /// never recurses for these at all (module docs).
 pub const MAX_LOGICAL_UNARY_NESTING_DEPTH: usize = 484;
 
-/// The deepest member-access chain ([`max_nesting_depths`]'s
+/// The deepest member-access-only chain ([`max_nesting_depths`]'s
 /// `accessor`) an expression may reach before it is rejected -- the
-/// tightest of the three real contexts measured (module docs): 610.
-/// Checked only at *compile* time ([`crate::validate_syntax`]), not at
-/// evaluation time, because this is the one shape where Circuitry
-/// itself fails before a document ever starts running (module docs).
+/// tightest of the three real contexts measured, confirmed unchanged
+/// against a chain that resolves to real data (module docs): 610.
+/// Checked only at *compile* time ([`crate::validate_syntax`]/
+/// [`crate::check_stack_safety`]), not at evaluation time, because this
+/// is the one shape where Circuitry itself fails before a document
+/// ever starts running (module docs) -- but only for a chain with *no*
+/// method call anywhere in it; one that has any is
+/// [`MAX_METHOD_CALL_NESTING_DEPTH`]'s own concern instead, a
+/// different shape in Circuitry's own terms (module docs).
 pub const MAX_ACCESSOR_NESTING_DEPTH: usize = 610;
 
+/// The deepest member-access chain that includes at least one method
+/// call ([`max_nesting_depths`]'s `method_call`) an expression may
+/// reach before it is rejected -- the tightest of the three real
+/// contexts measured (module docs): 295. Checked only at *evaluation*
+/// time ([`crate::check_parity_nesting`]), the same phase and uniform
+/// text as [`MAX_PAREN_CALL_NESTING_DEPTH`]/[`MAX_LIST_MAP_NESTING_DEPTH`]/
+/// [`MAX_CHAIN_NESTING_DEPTH`]/[`MAX_LOGICAL_UNARY_NESTING_DEPTH`] --
+/// unlike a pure member-access chain, Circuitry's own `_dotted_chain`
+/// gives up on a chain containing any call at all (module docs), so no
+/// structural, compile-time check ever applies to it; only the real
+/// evaluator's own recursion can fail it, caught normally.
+pub const MAX_METHOD_CALL_NESTING_DEPTH: usize = 295;
+
 /// A safety-only cap on the raw, combined scan (every link counted
-/// together, regardless of which of the five buckets above it would
+/// together, regardless of which of the six buckets above it would
 /// fall into) -- not a parity boundary, insurance for [`crate::validate_syntax`]'s
 /// own call into `env.compile` against this crate's own real overflow
 /// floor (module docs: 1,620-1,640 terms on a 2 MiB stack). Comfortably
 /// under that floor; every shape-specific cap above is tighter than
 /// this one for its own shape, so this one only ever matters for a
-/// shape none of the five caps bounds as tightly -- there is no such
+/// shape none of the six caps bounds as tightly -- there is no such
 /// shape today, but a future one should still be caught here rather
 /// than reaching `env.compile` at a dangerous depth.
 pub const MAX_SAFETY_CHAIN_DEPTH: usize = 1_000;
 
-/// [`max_nesting_depths`]'s own result -- five numbers tracked
-/// independently (module docs explain why, and why not six or two).
+/// [`max_nesting_depths`]'s own result -- seven numbers tracked
+/// independently (module docs explain why, and why not eight or two).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NestingDepths {
     /// Deepest simultaneous grouping-`(`/global-call-`(` nesting reached.
     pub paren_call: usize,
     /// Deepest simultaneous list-literal-`[`/map-literal-`{` nesting reached.
     pub list_map: usize,
-    /// Deepest operator/index chain reached.
+    /// Deepest arithmetic/relational/equality/`in` operator chain reached.
     pub chain: usize,
+    /// Deepest index chain reached ([`MAX_INDEX_NESTING_DEPTH`]'s own
+    /// input, a different, tighter cap from `chain` above -- module
+    /// docs, finding P2-2).
+    pub index: usize,
     /// Deepest run of `&&`/`||`/prefix-`!`/prefix-`-` reached.
     pub logical_unary: usize,
-    /// Deepest member-access chain reached.
+    /// Deepest member-access chain reached that never includes a
+    /// method call.
     pub accessor: usize,
+    /// Deepest member-access chain reached that includes at least one
+    /// method call ([`MAX_METHOD_CALL_NESTING_DEPTH`]'s own input, a
+    /// different shape in Circuitry's own terms from `accessor` above
+    /// -- module docs).
+    pub method_call: usize,
     /// Deepest point of the raw, combined scan (every link counted
     /// together) -- [`MAX_SAFETY_CHAIN_DEPTH`]'s own input, not a
     /// parity number.
@@ -317,15 +480,24 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
     let mut paren_call_depth: usize = 0;
     let mut list_map_depth: usize = 0;
     let mut chain: usize = 0;
+    let mut index: usize = 0;
     let mut logical_unary: usize = 0;
     let mut accessor: usize = 0;
-    let mut raw_combined: usize = 0;
+    // Whether the member-access run `accessor` is currently counting
+    // has included a method call (`.f(...)`) anywhere in it yet --
+    // decided only when the run *ends* (module docs on why a run
+    // containing any call is judged, in full, against
+    // `MAX_METHOD_CALL_NESTING_DEPTH` instead of `MAX_ACCESSOR_NESTING_DEPTH`,
+    // never split at the call).
+    let mut accessor_run_has_call = false;
 
     let mut max_paren_call: usize = 0;
     let mut max_list_map: usize = 0;
     let mut max_chain: usize = 0;
+    let mut max_index: usize = 0;
     let mut max_logical_unary: usize = 0;
     let mut max_accessor: usize = 0;
+    let mut max_method_call: usize = 0;
     let mut max_raw_combined: usize = 0;
 
     // Whether the token just scanned could be the left operand of a
@@ -353,18 +525,68 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
     let n = chars.len();
     let mut i = 0;
 
+    // Recomputed (not accumulated) at every call site below, right
+    // after whichever of `paren_call_depth`/`list_map_depth`/`chain`/
+    // `accessor` just changed -- the live sum of the four quantities
+    // that actually recurse in `cel`'s own ANTLR visitor (module docs),
+    // so `max_raw_combined` tracks the deepest point the real parser
+    // stack would reach, not the total number of links scanned so far.
+    // `logical_unary` is deliberately excluded: `cel`'s grammar never
+    // recurses for `&&`/`||`/unary runs at all (module docs), so they
+    // contribute nothing to this safety backstop regardless of how
+    // long the run is.
     macro_rules! bump_raw {
         () => {
-            raw_combined += 1;
-            if raw_combined > max_raw_combined {
-                max_raw_combined = raw_combined;
+            let live = paren_call_depth + list_map_depth + chain + index + accessor;
+            if live > max_raw_combined {
+                max_raw_combined = live;
             }
         };
     }
+    // Commits the member-access run `accessor` has been counting to
+    // whichever of `max_accessor`/`max_method_call` it belongs to --
+    // decided now, not at each `.`, because whether a run belongs to
+    // the tighter `method_call` bucket depends on whether *any* `(` the
+    // run ever saw was a method call, which this single left-to-right
+    // pass can only know once the run ends (module docs).
+    macro_rules! commit_accessor_run {
+        () => {
+            if accessor_run_has_call {
+                if accessor > max_method_call {
+                    max_method_call = accessor;
+                }
+            } else if accessor > max_accessor {
+                max_accessor = accessor;
+            }
+        };
+    }
+    macro_rules! end_accessor_run {
+        () => {
+            commit_accessor_run!();
+            accessor = 0;
+            accessor_run_has_call = false;
+        };
+    }
+    // Only resets at the *top* level (`open_brackets` empty): inside
+    // any open bracket -- most importantly a method call's own `(...)`
+    // -- a `,`/`&&`/`||` is scoping an *argument* of that call, not
+    // ending the member-access run the call itself is one link of.
+    // `[1].map(x, x).map(x, x)` must count all 297 links of a 297-deep
+    // chain, not just 1, even though every single link's own call has
+    // an internal `,` between `x` and `x` -- resetting there would
+    // otherwise throw away everything counted before it, every single
+    // link (a genuine regression this scan once had, not hypothetical).
+    // `chain`/`paren_call` already never reset across a bracket
+    // boundary at all (module docs on `a_group_that_is_the_leftmost_
+    // operand_adds_to_the_outer_chain`); this makes `accessor`/
+    // `logical_unary` consistent with that, for the same reason.
     macro_rules! reset_chain_and_accessor {
         () => {
-            chain = 0;
-            accessor = 0;
+            if open_brackets.is_empty() {
+                chain = 0;
+                index = 0;
+                end_accessor_run!();
+            }
         };
     }
 
@@ -430,7 +652,8 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                     if chain > max_chain {
                         max_chain = chain;
                     }
-                    accessor = 0;
+                    index = 0;
+                    end_accessor_run!();
                     prev_value_end = false;
                     prev_was_identifier = false;
                 } else {
@@ -444,17 +667,20 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                 continue;
             }
             '[' if prev_value_end => {
-                // Index continuation (`x[i]`), not a list literal's own
-                // opening bracket: counted via `chain`, the same as an
-                // operator link, so a sequential `x[0][0][0]...` chain
-                // (brackets never simultaneously open) still costs one
-                // level per link.
-                chain += 1;
+                // Index continuation (`x[i]`) -- its own counter, not
+                // `chain` (module docs on why: measured independently
+                // at a tighter floor, 238 against the operator chain's
+                // own 241) -- not a list literal's own opening
+                // bracket. A sequential `x[0][0][0]...` chain (brackets
+                // never simultaneously open) still costs one level per
+                // link.
+                index += 1;
                 bump_raw!();
-                if chain > max_chain {
-                    max_chain = chain;
+                if index > max_index {
+                    max_index = index;
                 }
-                accessor = 0;
+                chain = 0;
+                end_accessor_run!();
                 open_brackets.push(OpenBracket::NotCounted);
                 prev_value_end = false;
                 prev_was_identifier = false;
@@ -463,7 +689,12 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                 // A method call's `(` (`x.f(...)`) -- its link was
                 // already counted via `accessor` when `.` was scanned;
                 // counting this `(` too would double-count every link
-                // of a `.f().f().f()...` chain.
+                // of a `.f().f().f()...` chain. Marks the whole
+                // *current* accessor run as a method-call run
+                // (`end_accessor_run!`'s own doc comment on why the
+                // whole run, not just the links from here on, is
+                // judged against the tighter cap).
+                accessor_run_has_call = true;
                 open_brackets.push(OpenBracket::NotCounted);
                 prev_value_end = false;
                 prev_was_identifier = false;
@@ -532,7 +763,9 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
             }
             ',' | '?' | ':' => {
                 reset_chain_and_accessor!();
-                logical_unary = 0;
+                if open_brackets.is_empty() {
+                    logical_unary = 0;
+                }
                 prev_value_end = false;
                 prev_was_identifier = false;
             }
@@ -548,7 +781,8 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                     if chain > max_chain {
                         max_chain = chain;
                     }
-                    accessor = 0;
+                    index = 0;
+                    end_accessor_run!();
                 } else if c == '!' {
                     // Prefix unary-not -- costs Circuitry its own stack
                     // frame per character (module docs), unlike `cel`'s
@@ -574,7 +808,8 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                     if chain > max_chain {
                         max_chain = chain;
                     }
-                    accessor = 0;
+                    index = 0;
+                    end_accessor_run!();
                 } else if c == '-' {
                     // Prefix unary-minus -- same per-character cost as
                     // unary-not (module docs). A unary `+` does not
@@ -594,7 +829,8 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                 if chain > max_chain {
                     max_chain = chain;
                 }
-                accessor = 0;
+                index = 0;
+                end_accessor_run!();
                 prev_value_end = false;
                 prev_was_identifier = false;
             }
@@ -603,13 +839,14 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
                 // branch above already consumed any `.` directly
                 // between two digit runs. A standalone `.` is always a
                 // member-access dot (plain select or the lead-in to a
-                // method call, counted the same way).
+                // method call, counted the same way) -- which of
+                // `max_accessor`/`max_method_call` this run's peak
+                // belongs to isn't decided here, only once the run ends
+                // (`end_accessor_run!`'s own doc comment).
                 accessor += 1;
                 bump_raw!();
-                if accessor > max_accessor {
-                    max_accessor = accessor;
-                }
                 chain = 0;
+                index = 0;
                 prev_value_end = false;
                 prev_was_identifier = false;
                 after_dot = true;
@@ -622,12 +859,18 @@ pub fn max_nesting_depths(expr: &str) -> NestingDepths {
         }
         i += 1;
     }
+    // A run still open when the expression ends (`a.b.c`, with nothing
+    // after it to trigger `end_accessor_run!`) still needs committing --
+    // no need to also reset, since nothing reads `accessor` again.
+    commit_accessor_run!();
     NestingDepths {
         paren_call: max_paren_call,
         list_map: max_list_map,
         chain: max_chain,
+        index: max_index,
         logical_unary: max_logical_unary,
         accessor: max_accessor,
+        method_call: max_method_call,
         raw_combined: max_raw_combined,
     }
 }
@@ -696,6 +939,12 @@ mod tests {
     fn accessor(expr: &str) -> usize {
         max_nesting_depths(expr).accessor
     }
+    fn method_call(expr: &str) -> usize {
+        max_nesting_depths(expr).method_call
+    }
+    fn index(expr: &str) -> usize {
+        max_nesting_depths(expr).index
+    }
 
     #[test]
     fn scalar_has_zero_depth() {
@@ -735,10 +984,13 @@ mod tests {
 
     #[test]
     fn method_call_parens_are_not_double_counted() {
-        // `.f()` -- the link is counted once via `accessor` (the `.`),
-        // not again via the `(`.
+        // `.f()` -- the link is counted once via `method_call` (the
+        // `.`), not again via the `(`. The whole run belongs to
+        // `method_call`, not `accessor`, because it includes a call
+        // (`end_accessor_run!`'s own doc comment).
         assert_eq!(paren_call("state.f().f().f()"), 0);
-        assert_eq!(accessor("state.f().f().f()"), 3);
+        assert_eq!(accessor("state.f().f().f()"), 0);
+        assert_eq!(method_call("state.f().f().f()"), 3);
     }
 
     #[test]
@@ -781,10 +1033,31 @@ mod tests {
                 paren_call: 2,
                 chain: 1,
                 logical_unary: 1,
-                raw_combined: 5,
+                // The live sum of `paren_call`/`list_map`/`chain`/
+                // `accessor` peaks once both the outer group and the
+                // `+` inside it are open at once (`paren_call: 2` +
+                // `chain: 1`, module docs on why `logical_unary` is
+                // excluded) -- not the total number of links scanned.
+                raw_combined: 3,
                 ..NestingDepths::default()
             }
         );
+    }
+
+    #[test]
+    fn raw_combined_is_the_deepest_live_sum_not_a_running_total_of_links_scanned() {
+        // Regression guard for the bug this field used to have: a long
+        // but flat `||` chain, each term resetting `chain`/`accessor`
+        // to zero before the next one begins, must never grow
+        // `raw_combined` past a handful regardless of how many terms
+        // there are -- `||` never recurses in `cel`'s own grammar at
+        // all (module docs), so no length of one threatens this
+        // crate's own stack.
+        let expr = (0..2000)
+            .map(|i| format!("a.b == {i}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        assert!(max_nesting_depths(&expr).raw_combined < 10);
     }
 
     #[test]
@@ -885,10 +1158,11 @@ mod tests {
 
     #[test]
     fn exactly_at_the_limit_and_one_past_it_for_an_index_chain() {
-        let expr = format!("state{}", "[0]".repeat(MAX_CHAIN_NESTING_DEPTH));
-        assert_eq!(chain(&expr), MAX_CHAIN_NESTING_DEPTH);
-        let expr = format!("state{}", "[0]".repeat(MAX_CHAIN_NESTING_DEPTH + 1));
-        assert_eq!(chain(&expr), MAX_CHAIN_NESTING_DEPTH + 1);
+        let expr = format!("state{}", "[0]".repeat(MAX_INDEX_NESTING_DEPTH));
+        assert_eq!(index(&expr), MAX_INDEX_NESTING_DEPTH);
+        assert_eq!(chain(&expr), 0);
+        let expr = format!("state{}", "[0]".repeat(MAX_INDEX_NESTING_DEPTH + 1));
+        assert_eq!(index(&expr), MAX_INDEX_NESTING_DEPTH + 1);
     }
 
     #[test]
@@ -939,9 +1213,46 @@ mod tests {
     }
 
     #[test]
-    fn method_call_chain_counts_once_per_link_via_accessor() {
-        let expr = format!("state{}", ".f()".repeat(MAX_ACCESSOR_NESTING_DEPTH));
-        assert_eq!(accessor(&expr), MAX_ACCESSOR_NESTING_DEPTH);
+    fn method_call_chain_counts_once_per_link_via_method_call_not_accessor() {
+        let expr = format!("state{}", ".f()".repeat(MAX_METHOD_CALL_NESTING_DEPTH));
+        assert_eq!(method_call(&expr), MAX_METHOD_CALL_NESTING_DEPTH);
+        assert_eq!(accessor(&expr), 0);
+    }
+
+    #[test]
+    fn exactly_at_the_limit_and_one_past_it_for_a_method_call_chain() {
+        let expr = format!("state{}", ".f()".repeat(MAX_METHOD_CALL_NESTING_DEPTH));
+        assert_eq!(method_call(&expr), MAX_METHOD_CALL_NESTING_DEPTH);
+        let expr = format!("state{}", ".f()".repeat(MAX_METHOD_CALL_NESTING_DEPTH + 1));
+        assert_eq!(method_call(&expr), MAX_METHOD_CALL_NESTING_DEPTH + 1);
+    }
+
+    #[test]
+    fn a_calls_own_internal_comma_does_not_reset_the_chain_it_is_one_link_of() {
+        // Regression guard: `.map(x, x)`'s own `,` must not reset the
+        // outer method-call run it is a part of -- every one of the
+        // call's own 297 links must still count, not just the first
+        // one, even though each link has its own internal `,`.
+        let expr = format!(
+            "[1]{}",
+            ".map(x, x)".repeat(MAX_METHOD_CALL_NESTING_DEPTH + 2)
+        );
+        assert_eq!(method_call(&expr), MAX_METHOD_CALL_NESTING_DEPTH + 2);
+    }
+
+    #[test]
+    fn a_single_trailing_call_puts_the_whole_run_in_method_call_not_accessor() {
+        // `_dotted_chain` gives up on the *whole* chain the moment any
+        // link in it is a call, not just from that point on (module
+        // docs) -- a long plain-select prefix followed by one call at
+        // the end must count entirely against `method_call`, none of
+        // it against `accessor`.
+        let expr = format!(
+            "state{}.f()",
+            ".a".repeat(MAX_METHOD_CALL_NESTING_DEPTH - 1)
+        );
+        assert_eq!(accessor(&expr), 0);
+        assert_eq!(method_call(&expr), MAX_METHOD_CALL_NESTING_DEPTH);
     }
 
     #[test]
@@ -1021,5 +1332,38 @@ mod tests {
         let d = max_nesting_depths(expr);
         assert_eq!(d.paren_call, 1);
         assert_eq!(d.chain, 3 + 4);
+    }
+
+    #[test]
+    fn mixed_shape_48_nested_size_calls_is_a_known_lenient_divergence() {
+        // Known imprecision (module docs): confirmed directly that cof
+        // fails this (every single `size(` is a plain global call,
+        // `paren_call`'s own concern, individually within its 53 cap --
+        // Circuitry's own shared recursion budget still exhausts well
+        // under the sum). This crate's own independent per-shape caps
+        // accept it; pinned here as a known, accepted lenient gap, not
+        // a target to close.
+        let expr = format!("{}{{}}{}", "size(".repeat(48), ")".repeat(48));
+        assert_eq!(crate::validate_syntax(&expr), Ok(()));
+    }
+
+    #[test]
+    fn mixed_shape_50_parens_around_48_list_brackets_is_a_known_stricter_divergence() {
+        // Known imprecision (module docs): 98 total `expr` grammar
+        // productions (50 parens + 48 list brackets) on one path trips
+        // `cel`'s own hard-coded 96-production parser guard, even
+        // though each half is individually within this crate's own
+        // caps (53, 48) -- a compile-time *parse* failure here, where
+        // Circuitry itself still compiles this and only fails once it
+        // evaluates. Pinned as a known, accepted stricter gap.
+        let expr = format!(
+            "{}{}1{}{}",
+            "(".repeat(50),
+            "[".repeat(48),
+            "]".repeat(48),
+            ")".repeat(50)
+        );
+        let err = crate::validate_syntax(&expr).unwrap_err();
+        assert!(err.is_parse_error());
     }
 }

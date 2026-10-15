@@ -1589,18 +1589,24 @@ regardless of which underlying crate is used:
   parser (not the crate's separate, feature-gated `PrattParser`, off by default and not enabled
   here), whose visitor recurses once per level of bracket nesting (`(`/`[`/`{`) *and* once per
   link of a binary-operator chain (arithmetic, comparison, equality, `in`) or a member/index/call
-  chain (`.field`, `[i]`, `.method(...)`). `electricity-cel` pre-scans an expression for five
+  chain (`.field`, `[i]`, `.method(...)`). `electricity-cel` pre-scans an expression for seven
   shapes *independently* before ever parsing it — grouping parentheses/global calls
   (`MAX_PAREN_CALL_NESTING_DEPTH`, 53), list/map literals (`MAX_LIST_MAP_NESTING_DEPTH`, 48),
-  arithmetic/relational/equality/index chains (`MAX_CHAIN_NESTING_DEPTH`, 238),
-  `&&`/`||`/unary-`!`/unary-`-` chains (`MAX_LOGICAL_UNARY_NESTING_DEPTH`, 484), and member-access/
-  method-call chains (`MAX_ACCESSOR_NESTING_DEPTH`, 610) — each rejecting with its own kind. None
-  is §3.1's shared `MAX_DEPTH` (512), because they bound expression *syntax*, not a `Value` tree.
+  arithmetic/relational/equality/`in` chains (`MAX_CHAIN_NESTING_DEPTH`, 241), index chains
+  (`MAX_INDEX_NESTING_DEPTH`, 238 — its own, tighter cap from the operator chains above, even
+  though both recurse through the same grammar rule in `cel`'s own parser; sharing one counter
+  at the tighter of the two, an earlier version of this crate's design, rejected an operator
+  chain Circuitry itself still accepted), `&&`/`||`/unary-`!`/unary-`-` chains
+  (`MAX_LOGICAL_UNARY_NESTING_DEPTH`, 484), member-access chains with no method call anywhere in
+  them (`MAX_ACCESSOR_NESTING_DEPTH`, 610), and member-access chains that include at least one
+  method call (`MAX_METHOD_CALL_NESTING_DEPTH`, 295 — a different shape from the previous one in
+  Circuitry's own terms, below) — each rejecting with its own kind. None is §3.1's shared
+  `MAX_DEPTH` (512), because they bound expression *syntax*, not a `Value` tree.
   `electricity-cel`'s own `convert` module bounds *that* — a run-time-built `value`/`meta`/`state`
   argument — by the shared `MAX_DEPTH` instead, rejecting with the same `CelError` kind rather
   than recursing further.
 
-  All five caps were measured directly against Circuitry's own evaluator (`cel-python`, pinned),
+  All seven caps were measured directly against Circuitry's own evaluator (`cel-python`, pinned),
   not guessed, by running the worktree's own `cof run` on a minimal orchestration per shape, in
   three real contexts: a top-level `if`, a `while` loop condition, and an `if` inside a `use`
   child's own orchestration (`electricity-cel`'s `nesting.rs` module docs have the full method and
@@ -1608,27 +1614,48 @@ regardless of which underlying crate is used:
   three contexts (for example, an arithmetic chain: 241 accepted in the `if`/`use` contexts, 242 in
   `while`) — narrow enough that electricity uses one fixed number, the tightest of the three, and
   documents it as such rather than as a genuinely unstable range. The one exception is the
-  member-access/method-call shape, where the three contexts disagree by more (610-613) *and* the
-  failure itself is Circuitry's own bare, uncaught `RecursionError` rather than a caught
-  `CelEvaluationError` — confirmed directly: `cof check` on the same file fails identically, so the
-  document never runs at all, and the visible text has neither the usual `"CEL evaluation failed
-  for ..."` wording nor the failing effect's own path, just Python's own exception text, which
-  itself varies with which further recursion the exception's own formatting triggers while
-  escaping. `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the three contexts, chosen
-  because that range is real variation, not measurement noise.
+  member-access shape (with no method call in it), where the three contexts disagree by more
+  (610-613) *and* the failure itself is Circuitry's own bare, uncaught `RecursionError` rather
+  than a caught `CelEvaluationError` — confirmed directly: `cof check` on the same file fails
+  identically, so the document never runs at all, and the visible text has neither the usual
+  `"CEL evaluation failed for ..."` wording nor the failing effect's own path, just Python's own
+  exception text, which itself varies with which further recursion the exception's own
+  formatting triggers while escaping. `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the
+  three contexts, chosen because that range is real variation, not measurement noise — confirmed
+  unchanged when re-measured against a chain that resolves to real data at every level rather
+  than an absent/empty one, since the failing mechanism (below) runs before any value is ever
+  read. A member-access chain that includes a method call anywhere in it fails by a *third*
+  mechanism, and at a markedly tighter floor (295): Circuitry's own path-collection walk
+  (`_dotted_chain`) gives up on such a chain entirely rather than hitting the mechanism below, so
+  it compiles cleanly at any depth and instead fails during ordinary evaluation, once the real
+  evaluator's own, costlier-per-frame recursion exhausts Python's budget — a clean, caught
+  failure like the four parity shapes below, not the bare one.
 
-  electricity-cel matches the *phase* as well as the boundary for that one shape: a member-access
-  chain past `MAX_ACCESSOR_NESTING_DEPTH` is rejected at compile time (`validate_syntax`, called
-  from `electricity-compiler`'s own document-compile pass), with the bare
-  `"maximum recursion depth exceeded"` text and no effect-path framing — matching the simpler of
-  Circuitry's own two forms, from a top-level `if`. A document using any of the other four shapes
-  this deep still compiles and starts running in Circuitry, only failing once the effect actually
-  evaluates (a runtime `CelEvaluationError`, which `on_error:` can catch) — so those four are
-  checked only at evaluation time (`evaluate_condition`/`evaluate_expect`), worded in Circuitry's
-  own `"CEL evaluation failed for ..."` form, never at compile time. A compile-time call also
-  applies a much larger, safety-only cap (`MAX_SAFETY_CHAIN_DEPTH`, 1,000) on the raw, combined
-  scan — not a parity boundary, just insurance against this crate's own `env.compile` genuinely
-  overflowing a 2 MiB stack before any shape-specific check would have caught it.
+  electricity-cel matches the *phase* as well as the boundary for the plain member-access shape:
+  a chain with no method call past `MAX_ACCESSOR_NESTING_DEPTH` is rejected at compile time
+  (`validate_syntax`, called from `electricity-compiler`'s own document-compile pass), with the
+  bare `"maximum recursion depth exceeded"` text and no effect-path framing — matching the
+  simpler of Circuitry's own two forms, from a top-level `if`. A document using any of the other
+  five shapes this deep (including a method-call chain, despite failing by the third mechanism
+  above) still compiles and starts running in Circuitry, only failing once the effect actually
+  evaluates (a runtime `CelEvaluationError`, which `on_error:` can catch) — so those five are
+  checked only at evaluation time (`evaluate_condition`/`evaluate_expect`, and in
+  `evaluate_condition`'s case only *after* its own unset-state-path short-circuit has already run,
+  never before: Circuitry's own evaluation, the only place any of the five can raise this, never
+  runs once that check has already decided the condition is `false`), worded with the usual, and
+  deliberately *identical regardless of which of the five tripped*, `"CEL evaluation failed for
+  '<expr>': maximum recursion depth exceeded"` text — Circuitry's own uncaught `RecursionError`
+  never says which operator or how deep either, so which cap tripped and at what depth is carried
+  as structured data (`CelError::nesting_cap`) rather than folded into the message. A compile-time
+  call also applies a much larger, safety-only cap (`MAX_SAFETY_CHAIN_DEPTH`, 1,000) on the live
+  sum, at each scan position, of the five quantities that actually recurse in `cel`'s own parser
+  (paren/call, list/map, chain, index, accessor — never `logical_unary`, which never recurses in
+  that parser at all, and never `method_call`, which never reaches `env.compile`'s own recursion
+  concern in the first place) — not a parity boundary, just insurance against this crate's own
+  `env.compile` genuinely overflowing a 2 MiB stack before any shape-specific check would have
+  caught it; this same stack-safety pair (the accessor cap plus this backstop) is also what runs
+  *before* `compile()` inside `evaluate_condition`/`evaluate_expect` themselves, ahead of the five
+  parity caps.
 
   Measured directly, on a 2 MiB thread stack (`[profile.dev.package.cel]`/
   `[profile.dev.package.antlr4rust]`'s `opt-level = 2` overrides keep a debug build's much larger
@@ -1637,13 +1664,26 @@ regardless of which underlying crate is used:
   which rejects *gracefully* from 96 through at least 50,000 levels, never a crash — so bracket
   nesting in this crate never risks a real stack overflow at all, independent of either pre-scan
   cap; `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
-  between 1,620 and 1,640 terms — a wide margin over `MAX_CHAIN_NESTING_DEPTH` (238) and over
+  between 1,620 and 1,640 terms — a wide margin over `MAX_CHAIN_NESTING_DEPTH` (241) and over
   `MAX_SAFETY_CHAIN_DEPTH` (1,000) alike. Chained unary `!`/`-` and a long `&&`/`||` chain cost
   nothing on electricity's own side, because `cel`'s own grammar collects a run of either into one
   node visited once, and `conditionalAnd`/`conditionalOr` are themselves flat, non-recursive
   productions — Circuitry's own evaluator still recurses once per character/operator for these,
   though, which is why `MAX_LOGICAL_UNARY_NESTING_DEPTH` exists at all despite electricity's own
   side never needing it for safety.
+
+  **Known, accepted mixed-shape divergence, in both directions** (not a gap either side needs to
+  close, given the margin to a real stack overflow above): tracking the seven shapes
+  independently rather than against one combined budget is not a safety argument once two or
+  more of them stack inside the same expression. electricity can be *more lenient* than
+  Circuitry — 48 nested `size()` calls wrapping a map literal fails Circuitry's own shared
+  recursion budget well under any single cap here (confirmed directly) but electricity accepts
+  it — and electricity can also be *stricter*: `cel`'s own parser guard (96, above) counts every
+  grammar production on the deepest path, not one bracket kind at a time, so 50 grouping parens
+  wrapped around a 48-deep list literal (98 productions total, each half individually within
+  this crate's own 53/48 caps) fails to parse at all here, where Circuitry still compiles it and
+  only fails once it evaluates (confirmed directly). A combined, cross-shape weighted budget that
+  would close both directions at once is not required.
 
 ### 7.3 Regex engines
 
@@ -2618,6 +2658,8 @@ divergence.
 | Q11 | A tree branch's/tree-loop pass's mid-run `--live-state` overlay (issue #465) shows a branch's own in-progress effect node (`meta.completed_at` still `null`) as soon as it starts, since every electricity effect type writes an in-progress `meta` node at attempt start, the same as a plain chain effect already does — cof's own overlay (`core/store/store.py::Store.parallel_branches`) only republishes a branch once that branch's own `Store.on_write` has fired at least once, which for a `tool` effect specifically only happens once it completes, so a `tool`/`shell` branch that has started but not finished stays invisible in cof's own mid-run `--live-state`, visible in electricity's. | **Keep electricity's own richer view, not cof's staler one.** Matching cof's gap would mean snapshotting a branch on every write instead of lazily at the mirror's own coalesced publish, which issue #465's own performance ruling forbids; both engines already show an in-progress *chain* effect's node the same way, so this keeps a tree branch consistent with electricity's own non-tree behavior rather than copying a staleness that is an artifact of cof's own per-effect-type write timing, not a documented contract. | No — a deliberate, performance-driven divergence; settled on PR #549's review. |
 | — | **Regex engine gap**: `fancy-regex`/`regex` do not cover the full Python `re` grammar (true backreference-plus-lookaround combinations, some lookbehind forms). | **Accept the gap for v1**, documented via tools-adapters-plugins §7 case 8 rather than hidden; revisit with an embedded PCRE/Oniguruma binding only if a production document's pattern actually needs it. | **No**: no production regex pattern uses lookaround or backreferences; re-scan if a future document adds one. |
 | — | **CEL crate gap**: the `cel` crate has ~820 skipped conformance cases upstream (mostly proto/extension-related) and is not independently verified against cel-python's own (non-spec-exact) behavior. | **Use `cel` behind the strict/non-strict layer, validated by a differential corpus** (§12) against cel-python on every expression the production documents actually use; keep `cel-core` as a documented fallback if a gap surfaces. | No — this is the research's own recommended mitigation, not an open call. |
+| — | **CEL nesting-too-deep text carries a Python-specific, frame-dependent suffix** (§7.2, #403): cof's own `RecursionError.__str__` sometimes appends extra text depending on exactly which further recursion its own formatting triggers while escaping — `", while calling a Python object"` for a parenthesized/call-nested expression, `" in comparison"` observed for some operator chains, none at all for others — varying by context (`if`/`while`/`use`) for the *same* expression, not just by shape. | **Not reproduced.** electricity's own five evaluation-time parity caps (§7.2) always emit the bare `"maximum recursion depth exceeded"` suffix, uniformly, regardless of shape or context; every conformance case pinning one of these failures compares by location/substring (`error_compare: "location"`), never byte-for-byte, exactly like every other third-party-library text in this table. | No — accepted; reproducing Python's own exception-formatting side effects exactly is not a goal. |
+| — | **Mixed CEL nesting shapes diverge from Circuitry in both directions** (§7.2, #403 finding P2-5): electricity's seven nesting caps are tracked independently, not against one shared recursion budget the way Circuitry's own interpreter has. | **Accept, documented, in both directions** — electricity can be more lenient (48 nested `size()` calls wrapping a map literal) or stricter (50 parens around a 48-deep list literal, which trips `cel`'s own 96-production parser guard before Circuitry's own floor) than Circuitry on a shape this far outside anything an ordinary orchestration writes; full detail and both worked examples in §7.2 and `electricity-cel/src/nesting.rs`'s own module docs. | No — a known, accepted residual gap; a combined, cross-shape weighted budget that would close it is not required. |
 | — | **Error-string parity scope**: how much of `meta.error`/schema/YAML error text must match byte-for-byte. | **Resolved** (Decisions, §1): Circuitry's own messages word-for-word, third-party library text only "fails in the same place." Listed here for completeness, not as open. | No — already decided. |
 | — | **`trust_orchestration_runtime` / untrusted-document `runtime:` filtering.** | **Collapse to "always trusted"** per the explicit-config decision (§11) — but confirm no production document's `runtime:` block relies on being *filtered* (i.e., assumes an untrusted key is silently dropped rather than applied). | **No**: no production document's `runtime:` block sets anything beyond `state.record_children`. |
 | — | **A `use` document naming `ref:`** (library lookup) rather than `path:`. | **Reject with a clear "library refs not supported; use `path:`" error** rather than attempting a partial library-resolution feature (§4 step 4) — electricity's `use` scope is filesystem-path children only (Decisions, §1). | **No**: no `use` child in the production document sets names a library `ref:` at all. |
