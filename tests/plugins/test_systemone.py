@@ -541,6 +541,18 @@ def test_a_refused_connection_names_the_url_and_is_retryable() -> None:
     assert classify_exception(excinfo.value).retryable is True
 
 
+def test_a_timeout_names_the_url_and_the_seconds_and_is_retryable() -> None:
+    with socket.socket() as silent:
+        silent.bind(("127.0.0.1", 0))
+        silent.listen(1)
+        url = f"http://127.0.0.1:{silent.getsockname()[1]}"
+        with pytest.raises(RuntimeError) as excinfo:
+            SystemOnePlugin(base_url=url).execute(params=_params(), timeout_seconds=1)
+
+    assert str(excinfo.value) == f"systemone request to {url} timed out after 1s"
+    assert classify_exception(excinfo.value).retryable is True
+
+
 def test_a_refused_connection_is_retried_by_the_tool_effect() -> None:
     url = f"http://127.0.0.1:{_closed_port()}"
     runtime, store = _tool_runtime(url, retries=2)
@@ -1109,11 +1121,15 @@ def _compile_error(orch: dict[str, Any]) -> str:
     return str(excinfo.value)
 
 
-def test_a_valid_effect_compiles() -> None:
+def test_a_valid_effect_compiles(tmp_path: Path) -> None:
     compile_orchestration(orch=_doc())
-    compile_orchestration(orch=_doc(state=_DROP, state_file="/data/a.json", within="/data"))
+    on_disk = {"document_dir": tmp_path, "confinement_root": tmp_path}
     compile_orchestration(
-        orch=_doc(state=_DROP, state_file={"from": "input.f"}, within={"from": "input.dir"})
+        orch=_doc(state=_DROP, state_file="/data/a.json", within="/data"), **on_disk
+    )
+    compile_orchestration(
+        orch=_doc(state=_DROP, state_file={"from": "input.f"}, within={"from": "input.dir"}),
+        **on_disk,
     )
     compile_orchestration(orch=_doc(state={"from": "input.doc"}, questions={"from": "input.q"}))
 
@@ -1475,3 +1491,393 @@ def test_a_use_child_is_confined_to_its_own_project(
     limited = _run(parent, config, trust_document=False, adapter=adapter)
     assert limited.ok is False
     assert "document's own project" in (limited.error or "")
+
+
+# ---------------------------------------------------------------------------
+# YAML keys: a boolean or integer key is the string the request carries
+# ---------------------------------------------------------------------------
+
+NOUL_WITH_BOOLEAN_KEYS = """\
+spam:
+  type: noul
+  instructions: Is it spam?
+  criteria:
+    true: It is spam.
+    false: It is not spam.
+"""
+
+CHOICE_WITH_BOOLEAN_KEYS = """\
+accept:
+  type: choice
+  instructions: Accept it?
+  criteria:
+    yes: Accept.
+    no: Decline.
+"""
+
+CHOICE_WITH_INTEGER_KEYS = """\
+rating:
+  type: choice
+  instructions: How many stars?
+  criteria:
+    1: One star.
+    2: Two stars.
+    3: Three stars.
+    4: Four stars.
+    5: Five stars.
+"""
+
+
+def _noul_answers(qid: str) -> dict[str, Any]:
+    return {qid: {"type": "noul", "noul": 0.2}}
+
+
+def _choice_answers(qid: str, chosen: str, options: list[str]) -> dict[str, Any]:
+    share = 1 / len(options)
+    return {
+        qid: {
+            "type": "choice",
+            "choice": chosen,
+            "probabilities": dict.fromkeys(options, share),
+        }
+    }
+
+
+def test_unquoted_boolean_noul_keys_pass_the_check_and_round_trip(server: FakeServer) -> None:
+    questions = yaml.safe_load(NOUL_WITH_BOOLEAN_KEYS)
+    assert set(questions["spam"]["criteria"]) == {True, False}
+    compile_orchestration(orch=_doc(questions=questions))
+
+    server.reply_answers(_noul_answers("spam"))
+    result = _plugin(server).execute(params=_params(questions=questions), timeout_seconds=10)
+
+    assert result.ok, result.stderr
+    sent = server.requests[0].json()["questions"]["spam"]["criteria"]
+    assert sent == {"true": "It is spam.", "false": "It is not spam."}
+
+
+@pytest.mark.parametrize(
+    ("text", "qid", "options"),
+    [
+        (CHOICE_WITH_BOOLEAN_KEYS, "accept", ["true", "false"]),
+        (CHOICE_WITH_INTEGER_KEYS, "rating", ["1", "2", "3", "4", "5"]),
+    ],
+)
+def test_unquoted_boolean_and_integer_choice_options_round_trip_as_json_writes_them(
+    server: FakeServer, text: str, qid: str, options: list[str]
+) -> None:
+    questions = yaml.safe_load(text)
+    assert not any(isinstance(key, str) for key in questions[qid]["criteria"])
+    compile_orchestration(orch=_doc(questions=questions))
+
+    server.reply_answers(_choice_answers(qid, options[0], options))
+    result = _plugin(server).execute(params=_params(questions=questions), timeout_seconds=10)
+
+    assert result.ok, result.stderr
+    assert list(server.requests[0].json()["questions"][qid]["criteria"]) == options
+    assert result.value[qid]["choice"] == options[0]
+
+
+def test_an_answer_naming_the_yaml_spelling_of_a_boolean_option_is_refused(server: FakeServer) -> None:
+    questions = yaml.safe_load(CHOICE_WITH_BOOLEAN_KEYS)
+    server.reply_answers(_choice_answers("accept", "yes", ["yes", "no"]))
+    result = _plugin(server).execute(params=_params(questions=questions), timeout_seconds=10)
+    assert result.ok is False
+    assert result.raw["error_kind"] == "invalid_answer"
+
+
+def test_a_key_that_repeats_another_once_written_is_refused() -> None:
+    questions = {
+        "q": {"type": "choice", "instructions": "?", "criteria": {1: "a", "1": "b"}}
+    }
+    message = _compile_error(_doc(questions=questions))
+    assert "repeats another option" in message
+
+
+def test_cof_check_accepts_unquoted_boolean_keys_from_a_yaml_file(tmp_path: Path) -> None:
+    pytest.importorskip("typer")
+    from typer.testing import CliRunner
+
+    from circuitry.cli.app import app
+
+    text = "effects:\n  - type: tool\n    name: decide\n    provider: systemone\n    params:\n"
+    text += "      model: m\n      state: s\n      questions:\n"
+    for line in (NOUL_WITH_BOOLEAN_KEYS + CHOICE_WITH_BOOLEAN_KEYS).splitlines():
+        text += f"        {line}\n"
+    doc = tmp_path / "decide.yml"
+    doc.write_text(text, encoding="utf-8")
+
+    checked = CliRunner().invoke(app, ["check", str(doc), "--skip-preflight"])
+
+    assert checked.exit_code == 0, checked.output
+
+
+# ---------------------------------------------------------------------------
+# What the server sends back never carries the key
+# ---------------------------------------------------------------------------
+
+
+def test_the_key_is_scrubbed_from_the_value_and_raw_of_a_success(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYSTEMONE_TEST_KEY", KEY)
+    answers = json.loads(json.dumps(ANSWERS))
+    answers["quality"]["legend"] = {"0": f"bad {KEY}", "1": "ok", "2": "good"}
+    answers["spam"]["extra"] = [f"seen {KEY}", {f"k-{KEY}": KEY}]
+    server.reply(
+        200,
+        {
+            "model": f"typesafe-{KEY}",
+            "answers": answers,
+            "usage": {**USAGE, "note": f"billed to {KEY}"},
+        },
+    )
+
+    result = _plugin(server, api_key_env="SYSTEMONE_TEST_KEY").execute(
+        params=_params(), timeout_seconds=10
+    )
+
+    assert result.ok, result.stderr
+    assert KEY not in json.dumps(result.value)
+    assert KEY not in json.dumps(result.raw)
+    assert result.value["quality"]["legend"]["0"] == "bad [redacted]"
+    assert result.raw["model"] == "typesafe-[redacted]"
+    assert result.value["spam"]["noul"] == 0.1
+
+
+def test_the_key_is_scrubbed_from_retry_after_and_a_failure_raw(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYSTEMONE_TEST_KEY", KEY)
+    server.reply(429, {"error": "slow down"}, headers={"Retry-After": f"5 {KEY}"})
+    result = _plugin(server, api_key_env="SYSTEMONE_TEST_KEY").execute(
+        params=_params(), timeout_seconds=10
+    )
+    assert result.ok is False
+    assert KEY not in json.dumps(result.raw)
+    assert result.raw["headers"]["retry-after"] == "5 [redacted]"
+
+
+def test_the_key_is_scrubbed_from_a_reply_with_the_wrong_answers(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYSTEMONE_TEST_KEY", KEY)
+    server.reply(200, {"model": KEY, "answers": {KEY: {}}, "usage": {"x": KEY}})
+    result = _plugin(server, api_key_env="SYSTEMONE_TEST_KEY").execute(
+        params=_params(), timeout_seconds=10
+    )
+    assert result.ok is False
+    assert KEY not in (result.stderr or "")
+    assert KEY not in json.dumps(result.raw)
+
+
+# ---------------------------------------------------------------------------
+# A document with no file of its own cannot use state_file
+# ---------------------------------------------------------------------------
+
+NO_FILE_OF_ITS_OWN = "'file:' cannot be used here"
+
+
+def test_a_document_with_no_file_cannot_use_state_file() -> None:
+    message = _compile_error(_doc(state=_DROP, state_file="/data/a.json", within="/data"))
+    assert NO_FILE_OF_ITS_OWN in message
+    assert "params.state_file" in message
+
+
+def test_a_document_with_no_file_may_still_use_state() -> None:
+    compile_orchestration(orch=_doc(state={"from": "input.doc"}))
+
+
+def test_a_use_inline_child_cannot_use_state_file(tmp_path: Path) -> None:
+    child = yaml.dump(
+        _doc(state=_DROP, state_file=str(tmp_path / "a.txt"), within=str(tmp_path))
+    )
+    parent = tmp_path / "parent.yml"
+    parent.write_text(
+        yaml.dump({"effects": [{"type": "use", "name": "sub", "inline": child}]}),
+        encoding="utf-8",
+    )
+    adapter = MagicMock()
+    adapter.name = "mock"
+
+    result = _run(parent, CircuitryConfig(), trust_document=True, adapter=adapter)
+
+    assert result.ok is False
+    assert NO_FILE_OF_ITS_OWN in (result.error or "")
+    assert "state_file" in (result.error or "")
+
+
+def test_a_use_inline_child_may_use_state(server: FakeServer, tmp_path: Path) -> None:
+    child = yaml.dump(_doc(state="inline text"))
+    parent = tmp_path / "parent.yml"
+    parent.write_text(
+        yaml.dump({"effects": [{"type": "use", "name": "sub", "inline": child}]}),
+        encoding="utf-8",
+    )
+    config = CircuitryConfig(runtime={"plugins": {"systemone": {"base_url": server.url}}})
+    adapter = MagicMock()
+    adapter.name = "mock"
+
+    server.reply_answers()
+    result = _run(parent, config, trust_document=True, adapter=adapter)
+
+    assert result.ok, result.error
+    assert server.requests[0].json()["state"] == "inline text"
+
+
+def test_a_reflector_plan_cannot_use_state_file(tmp_path: Path) -> None:
+    from circuitry.core.dynamic import DynamicRuntime
+
+    plan = {
+        "effects": _doc(state=_DROP, state_file=str(tmp_path / "a.txt"), within=str(tmp_path))[
+            "effects"
+        ],
+    }
+    adapter = MagicMock()
+    adapter.name = "mock"
+    reply = MagicMock()
+    reply.text = yaml.dump(plan)
+    reply.raw = {}
+    reply.tokens_sent = 1
+    reply.tokens_received = 1
+    adapter.generate.return_value = reply
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "max_effects": 5,
+                "effects": [{"type": "prompt", "name": "propose_steps", "template": "Plan."}],
+            }
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="generated_exec_failed") as excinfo:
+        DynamicRuntime(compile_orchestration(orch=orch), adapter=adapter, model="m").execute(
+            store=Store(state={})
+        )
+
+    assert NO_FILE_OF_ITS_OWN in str(excinfo.value)
+    assert "state_file" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# A library child is always limited; a path child inherits its parent's trust
+# ---------------------------------------------------------------------------
+
+
+def _library_child_setup(tmp_path: Path, server: FakeServer) -> tuple[Path, Path, CircuitryConfig]:
+    """A root and a library child whose ``within`` is outside the child's project."""
+    library = tmp_path / "library"
+    shared = tmp_path / "shared"
+    library.mkdir()
+    shared.mkdir()
+    (shared / "doc.md").write_text("shared text", encoding="utf-8")
+    _write_doc(
+        library / "child.yml",
+        {
+            "model": "m",
+            "state_file": str(shared / "doc.md"),
+            "within": str(shared),
+            "questions": QUESTIONS,
+        },
+    )
+    root = tmp_path / "root"
+    root.mkdir()
+    config = CircuitryConfig(
+        default_model="m",
+        runtime={
+            "library": {"sources": [{"type": "folder", "name": "local", "path": str(library)}]},
+            "plugins": {"systemone": {"base_url": server.url}},
+        },
+    )
+    return root, library, config
+
+
+def _use_parent(root: Path, **child: str) -> Path:
+    parent = root / "parent.yml"
+    parent.write_text(
+        yaml.dump({"effects": [{"type": "use", "name": "sub", **child}]}), encoding="utf-8"
+    )
+    return parent
+
+
+def test_a_library_child_is_limited_under_a_trusted_root(
+    server: FakeServer, tmp_path: Path
+) -> None:
+    root, library, config = _library_child_setup(tmp_path, server)
+    adapter = MagicMock()
+    adapter.name = "mock"
+
+    consent = frozenset({"network"})
+    by_ref = _run(
+        _use_parent(root, ref="local:child"),
+        config,
+        trust_document=True,
+        adapter=adapter,
+        allow_capabilities=consent,
+    )
+    assert by_ref.ok is False
+    assert "own project" in (by_ref.error or "")
+    assert server.requests == []
+
+    server.reply_answers()
+    by_path = _run(
+        _use_parent(root, path=str(library / "child.yml")),
+        config,
+        trust_document=True,
+        adapter=adapter,
+        allow_capabilities=consent,
+    )
+    assert by_path.ok, by_path.error
+    assert server.requests[0].json()["state"] == "shared text"
+
+
+# ---------------------------------------------------------------------------
+# cof check knows a limited document's project
+# ---------------------------------------------------------------------------
+
+
+def test_a_limited_documents_literal_within_is_checked_against_its_project(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    inside = _doc(state=_DROP, state_file=str(project / "a.txt"), within=str(project))
+    outside = _doc(state=_DROP, state_file=str(tmp_path / "a.txt"), within=str(tmp_path))
+    on_disk = {"document_dir": project, "confinement_root": project}
+
+    compile_orchestration(orch=inside, limited=True, **on_disk)
+    with pytest.raises(ValueError, match=r"params\.within: must lie inside the document's own project"):
+        compile_orchestration(orch=outside, limited=True, **on_disk)
+    compile_orchestration(orch=outside, limited=False, **on_disk)
+
+
+def test_a_within_taken_from_input_is_left_to_the_run(tmp_path: Path) -> None:
+    orch = _doc(state=_DROP, state_file={"from": "input.f"}, within={"from": "input.dir"})
+    compile_orchestration(
+        orch=orch, document_dir=tmp_path, confinement_root=tmp_path, limited=True
+    )
+
+
+def test_validate_checks_within_for_a_document_the_caller_did_not_name(tmp_path: Path) -> None:
+    from circuitry.cli.runtime_shim import validate
+
+    project = tmp_path / "project"
+    project.mkdir()
+    doc = _write_doc(
+        project / "decide.yml",
+        {
+            "model": "m",
+            "state_file": str(tmp_path / "a.txt"),
+            "within": str(tmp_path),
+            "questions": QUESTIONS,
+        },
+    )
+
+    named = validate(doc, trust_document=True, skip_preflight=True)
+    assert named["ok"] is True, named
+
+    unnamed = validate(doc, trust_document=False, skip_preflight=True)
+    assert unnamed["ok"] is False
+    assert any("document's own project" in e for e in unnamed["errors"])

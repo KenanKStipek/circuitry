@@ -1059,6 +1059,7 @@ class UseRuntime:
                     # whatever directory was already in effect.
                     child_document_dir: Path | None = None
                     child_confinement_root: Path | None = None
+                    child_limited = False
                     if not meta["inline"]:
                         child_document_dir = Path(identity).parent
                         child_runtime_config["_orchestration_dir"] = str(child_document_dir)
@@ -1067,10 +1068,11 @@ class UseRuntime:
                         if parent_scope is not None:
                             # A child resolved through the library is someone
                             # else's document, whatever the parent's trust.
+                            child_limited = parent_scope.limited or self._pin is not None
                             install_document_scope(
                                 child_runtime_config,
                                 DocumentScope(
-                                    limited=parent_scope.limited or self._pin is not None,
+                                    limited=child_limited,
                                     project_root=child_confinement_root,
                                 ),
                             )
@@ -1080,6 +1082,7 @@ class UseRuntime:
                         root_name="prime",
                         document_dir=child_document_dir,
                         confinement_root=child_confinement_root,
+                        limited=child_limited,
                     )
                     # "A child document run with `use` sees only its own
                     # declared prompts" (#396) — set fresh here rather than

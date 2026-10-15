@@ -76,16 +76,16 @@ _RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"
 #: through every container-compiling function's signature. ``None`` means
 #: this document has no file of its own (generated at run time, or no path
 #: at all) — see ``core.prompt_files``.
-_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None]] = ContextVar(
-    "circuitry_document_location", default=(None, None)
+_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None, bool]] = ContextVar(
+    "circuitry_document_location", default=(None, None, False)
 )
 
 
 @contextmanager
 def _document_location(
-    document_dir: Path | None, confinement_root: Path | None
+    document_dir: Path | None, confinement_root: Path | None, limited: bool = False
 ) -> Iterator[None]:
-    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root))
+    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root, limited))
     try:
         yield
     finally:
@@ -98,6 +98,10 @@ def _current_document_dir() -> Path | None:
 
 def _current_confinement_root() -> Path | None:
     return _DOCUMENT_LOCATION.get()[1]
+
+
+def _current_document_limited() -> bool:
+    return _DOCUMENT_LOCATION.get()[2]
 
 
 def _scope_child(scope_path: str, child_name: str) -> str:
@@ -374,6 +378,7 @@ def compile_orchestration(
     root_name: str = "prime",
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    limited: bool = False,
 ) -> DynamicDefinition:
     """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
     carrying its own declared prompts (#396).
@@ -388,8 +393,14 @@ def compile_orchestration(
     ``core.prompt_compose.RUNTIME_CONFIG_KEY`` itself, fresh for every
     ``use`` child, so "a child document sees only its own declared prompts"
     needs no special-casing at the ``use`` boundary.
+
+    A document with no file of its own cannot name a ``state_file`` either
+    (the ``systemone`` tool). *limited* is ``True`` when the caller knows the
+    document is one the caller did not name by path (see
+    :mod:`circuitry.document_scope`); a tool that reads a path the document
+    names is then checked against *confinement_root* here, not only at run time.
     """
-    with _document_location(document_dir, confinement_root):
+    with _document_location(document_dir, confinement_root, limited):
         # Support both 'effects' (spec) and 'steps' (legacy)
         effects = orch.get("effects") or orch.get("steps") or []
         # Bare {{name}} refs to this document's declared interface inputs are a
@@ -1264,6 +1275,10 @@ def _compile_tool(
         problems = static_param_errors(
             {**({"model": model} if model else {}), **params},
             has_params_json=params_json is not None,
+            has_document_file=_current_document_dir() is not None,
+            limited_project=(
+                _current_confinement_root() if _current_document_limited() else None
+            ),
         )
         if problems:
             raise ValueError(

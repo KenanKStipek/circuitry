@@ -767,6 +767,7 @@ def run(req: RunRequest) -> RunResult:
         from .library_sources import confinement_root_for_document
 
         _document_dir = req.orchestration_path.resolve().parent
+        _document_limited = not (document_trust_document or cfg.trust_orchestration_runtime)
         _project_root = confinement_root_for_document(
             req.orchestration_path,
             _document_dir,
@@ -779,6 +780,7 @@ def run(req: RunRequest) -> RunResult:
             root_name="prime",
             document_dir=_document_dir,
             confinement_root=_project_root,
+            limited=_document_limited,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
@@ -787,7 +789,7 @@ def run(req: RunRequest) -> RunResult:
         install_document_scope(
             runtime_config,
             DocumentScope(
-                limited=not (document_trust_document or cfg.trust_orchestration_runtime),
+                limited=_document_limited,
                 project_root=_project_root,
             ),
         )
@@ -1419,6 +1421,11 @@ def validate(
                 _document_dir,
                 library_registry=library_registry,
                 is_cache_path=document_is_cache_path,
+            ),
+            # `run()`'s own rule: a document the caller did not name by path
+            # is limited unless the host trusts documents' runtime.
+            limited=not (
+                trust_document or (config is not None and config.trust_orchestration_runtime)
             ),
         )
 

@@ -78,7 +78,21 @@ Give exactly one of `state` and `state_file`.
 present, `criteria` shaped for the type, at most 255 options, 2 to 10 levels. A
 `{from: …}` value is accepted as it stands and checked when the effect runs.
 
+**Quote the keys of `criteria` in YAML.** YAML reads an unquoted `true`, `false`,
+`yes`, `no`, `on` or `off` key as a boolean and `1:` as a number. The request
+carries the string JSON would write for it, and answers are checked against that
+string: an unquoted `yes:` option is sent as `"true"` (and `no:` as `"false"`),
+never `"yes"`. `true:` and `false:` in a `noul`'s `criteria`, and options `1:` to
+`5:`, work as written; to offer the options `yes` and `no`, write `"yes":` and
+`"no":`. Two keys that become the same string (`1:` and `"1":`) are an error.
+
 ### `state_file` and `within`
+
+A document with no file of its own cannot use `state_file`: a `use: inline`
+child, a reflector or decomposition plan, and a document read from stdin or
+passed to the SDK as a string. That is a compile error (`'file:' cannot be used
+here`, naming `params.state_file`), the same as for a `{file: …}` prompt source.
+Give such a document its text with `state`.
 
 `within` is a literal absolute path or `{from: input.<name>}`; a `{{ … }}`
 template, a path read from another part of state and a `params_json` value are
@@ -88,9 +102,30 @@ resolved against the working directory.
 A **limited** document must also name a `within` inside its own project: the
 directory of the nearest `config.json` at or above the document, or the
 document's own directory (the same project a `{file: …}` prompt is confined to).
-A `use` child found through the library is limited whatever its parent is, and a
-child run by path has its own project. A document you run by path may name any
-`within`.
+A document you run by path may name any `within`.
+
+`cof check` (and MCP's validate) checks a literal `within` against the project
+when it knows the document is limited, for example a document inside a library
+source's cache. It cannot know that for a `use: ref:` child (that is only settled
+when the run reaches it) or for a `within` taken from `input`, so those are
+checked when the effect runs. A document run by path is trusted, so `cof check`
+on it does not apply the project rule.
+
+### Trust and `use`
+
+- A child run by `use: {path: …}` has its parent's trust and its own project. A
+  child found through the library (`use: {ref: …}`) is limited whatever its
+  parent is, also under a trusted root.
+- A `use: {path: …}` that points into a library cache inherits the parent's
+  trust: the path names the file, not the library. Name library documents with
+  `ref:` to get them limited.
+- With `trust_orchestration_runtime: true`, a document run by library name as
+  the root is unlimited, while the same document as a `use: {ref: …}` child is
+  limited.
+- In a `use` child, `input.<name>` is whatever the parent maps to it, which can
+  be another effect's output. A limited child's `within` is still held to its own
+  project, but a trusted child that takes `within` from `input` takes it from the
+  parent's mapping.
 
 ```yaml
 - type: tool
@@ -153,7 +188,8 @@ Nothing is compressed.
 
 | Outcome | Retried | `meta.raw.error_kind` |
 | --- | --- | --- |
-| Connection refused, DNS failure, timeout | yes — `systemone server not reachable at <base_url>` | — |
+| Connection refused or DNS failure | yes — `systemone server not reachable at <base_url>` | — |
+| Timeout | yes — `systemone request to <base_url> timed out after Ns` | — |
 | 408, 429, 529 and 5xx (honouring `Retry-After`) | yes | `timeout`, `rate_limited`, `overloaded`, `server_error` |
 | 400 with `max_tokens_exceeded` in the body | no | `context_exceeded` |
 | 400, 422 | no | `invalid` |
@@ -173,9 +209,9 @@ the key is only ever sent to `base_url`.
 ## Security
 
 - The key is read from the variable named by `api_key_env` at dispatch. It
-  appears nowhere in params, `meta`, events, logs or errors: an error body the
-  server sends back is redacted, and the key itself is replaced if the server
-  echoes it. `api_key_env` must be a variable name; a key pasted there is
+  appears nowhere in params, `meta`, events, logs or errors. Anything the server
+  sends back has the key replaced by `[redacted]` if it echoes it: an error body,
+  `value`, `meta.raw.model`, `meta.raw.usage` and `Retry-After`. `api_key_env` must be a variable name; a key pasted there is
   refused without being printed.
 - `systemone` is tagged `network` for [capability consent](../threat-model.md).
 - A `state_file` is read only after `within` is proven: symlinks are resolved

@@ -121,6 +121,70 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def json_key(key: Any) -> Any:
+    """*key* as ``json.dumps`` writes an object key, when that is a string.
+
+    YAML reads an unquoted ``true``, ``no`` or ``on`` key as a boolean and
+    ``1:`` as an integer; the request carries ``"true"``, ``"false"`` and
+    ``"1"``. A key this does not know how to write is returned unchanged.
+    """
+    if isinstance(key, str):
+        return key
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(key)
+    if isinstance(key, float) and math.isfinite(key):
+        return float.__repr__(key)
+    return key
+
+
+class _RepeatedKey:
+    """A key that, written as JSON, repeats an earlier one (``1`` after ``"1"``).
+
+    Not a string, so validation reports it instead of the request silently
+    carrying two entries under one name.
+    """
+
+    def __init__(self, key: Any) -> None:
+        self.key = key
+
+    def __repr__(self) -> str:
+        return repr(self.key)
+
+
+def _json_keys(mapping: dict[Any, Any]) -> dict[Any, Any]:
+    """*mapping* with every key written as ``json_key`` does."""
+    out: dict[Any, Any] = {}
+    for key, value in mapping.items():
+        written = json_key(key)
+        out[_RepeatedKey(key) if written in out else written] = value
+    return out
+
+
+def normalize_questions(questions: Any) -> Any:
+    """*questions* with every question id and criteria key as the request writes it.
+
+    The one place a document's non-string keys become strings, called before
+    both the static check and dispatch, so the answers are validated against
+    the very keys the server receives. Anything that is not a map is returned
+    as it is for validation to report.
+    """
+    if not isinstance(questions, dict):
+        return questions
+    out: dict[Any, Any] = {}
+    for qid, question in _json_keys(questions).items():
+        if isinstance(question, dict) and isinstance(question.get("criteria"), dict):
+            out[qid] = {**question, "criteria": _json_keys(question["criteria"])}
+        else:
+            out[qid] = question
+    return out
+
+
 def _is_json_text(value: Any) -> bool:
     """A string, object or array: what the API takes as free-form text."""
     return isinstance(value, (str, dict, list))
@@ -190,6 +254,14 @@ def _criteria_errors(where: str, qtype: str, criteria: Any) -> list[str]:
     if qtype == "choice":
         if not isinstance(criteria, dict):
             return [f"{where}: criteria for a choice question must be a map of option to description"]
+        unwritable = [key for key in criteria if not isinstance(key, str)]
+        if unwritable:
+            return [
+                (
+                    f"{where}: option {unwritable[0]!r} is not text, or repeats another "
+                    "option once written as JSON"
+                )
+            ]
         if len(criteria) > MAX_CHOICE_OPTIONS:
             return [
                 (
@@ -220,7 +292,13 @@ def _criteria_errors(where: str, qtype: str, criteria: Any) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool = False) -> list[str]:
+def static_param_errors(
+    params: Mapping[str, Any],
+    *,
+    has_params_json: bool = False,
+    has_document_file: bool = True,
+    limited_project: Path | None = None,
+) -> list[str]:
     """Problems ``cof check`` can see in a systemone effect's literal params.
 
     *params* is the effect's ``params`` block with the effect-level ``model``
@@ -228,6 +306,14 @@ def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool = Fa
     accepted where a value is expected. With *has_params_json* a missing
     ``model``, ``questions`` or state may arrive in the rendered overlay, so
     only what the literal params do say is checked.
+
+    *has_document_file* is ``False`` for a document with no file of its own
+    (generated at run time, stdin, an SDK string, a ``use: inline`` child),
+    which cannot use ``state_file``. *limited_project* is the project of a
+    document known to be limited (see :mod:`circuitry.document_scope`); a
+    literal ``within`` is then checked against it. ``None`` skips that check:
+    whether a document is limited is only known to a caller that knows its
+    trust, and a ``use: ref:`` child's trust is only known at run time.
     """
     errors = [
         f"params.{key} is a host setting; set it under runtime.plugins.systemone in config.json"
@@ -245,7 +331,10 @@ def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool = Fa
         if not has_params_json:
             errors.append("params.questions is required")
     else:
-        errors.extend(f"params.questions: {e}" for e in question_errors(params["questions"], static=True))
+        errors.extend(
+            f"params.questions: {e}"
+            for e in question_errors(normalize_questions(params["questions"]), static=True)
+        )
 
     has_state = "state" in params
     has_file = "state_file" in params
@@ -255,6 +344,12 @@ def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool = Fa
         errors.append("give exactly one of params.state and params.state_file")
 
     if has_file:
+        if not has_document_file:
+            errors.append(
+                "params.state_file: 'file:' cannot be used here — this document has no "
+                "file of its own (it was generated at run time, or has no path: stdin, "
+                "an SDK string, a 'use: inline' child); give the text in params.state."
+            )
         state_file = params["state_file"]
         if param_reference(state_file) is None and not (
             isinstance(state_file, str) and state_file.strip()
@@ -263,10 +358,32 @@ def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool = Fa
         if "within" not in params:
             errors.append("params.state_file requires params.within")
         else:
-            errors.extend(_within_errors(params["within"]))
+            within_errors = _within_errors(params["within"])
+            errors.extend(within_errors)
+            if (
+                not within_errors
+                and limited_project is not None
+                and param_reference(params["within"]) is None
+                and not _is_inside(Path(params["within"]), limited_project)
+            ):
+                errors.append(f"params.within: {_OUTSIDE_PROJECT}")
     elif "within" in params and not has_params_json:
         errors.append("params.within only applies to params.state_file")
     return errors
+
+
+#: Why a limited document may not name this ``within``.
+_OUTSIDE_PROJECT = (
+    "must lie inside the document's own project (a document the caller did not "
+    "name by path is confined to it)"
+)
+
+
+def _is_inside(path: Path, root: Path) -> bool:
+    """Whether *path* is *root* or under it once symlinks are resolved."""
+    resolved = path.resolve(strict=False)
+    base = root.resolve(strict=False)
+    return resolved == base or resolved.is_relative_to(base)
 
 
 def _within_errors(within: Any) -> list[str]:
@@ -425,12 +542,8 @@ def _read_state_file(path_text: str, within_text: Any, scope: DocumentScope | No
             raise ValueError(
                 "systemone: this document has no project, so it cannot name a params.within"
             )
-        project = scope.project_root.resolve(strict=False)
-        if within != project and not within.is_relative_to(project):
-            raise ValueError(
-                "systemone: params.within must lie inside the document's own project "
-                "(a document the caller did not name by path is confined to it)"
-            )
+        if not _is_inside(within, scope.project_root):
+            raise ValueError(f"systemone: params.within {_OUTSIDE_PROJECT}")
 
     try:
         resolved = Path(path_text).resolve(strict=True)
@@ -582,7 +695,7 @@ class SystemOnePlugin:
         model = params.get("model")
         if not isinstance(model, str) or not model.strip():
             raise ValueError("systemone: params.model is required as a non-empty string")
-        questions = params.get("questions")
+        questions = normalize_questions(params.get("questions"))
         problems = question_errors(questions, static=False)
         if problems:
             raise ValueError("systemone: " + "; ".join(problems))
@@ -645,6 +758,16 @@ class SystemOnePlugin:
         def scrub(text: str) -> str:
             return text.replace(key, "[redacted]") if key else text
 
+        def scrubbed(value: Any) -> Any:
+            """*value* with the key removed from every string in it, keys included."""
+            if isinstance(value, str):
+                return scrub(value)
+            if isinstance(value, dict):
+                return {scrubbed(k): scrubbed(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrubbed(item) for item in value]
+            return value
+
         status = 0
         headers: dict[str, str] = {}
         body = b""
@@ -678,7 +801,7 @@ class SystemOnePlugin:
         raw["status"] = status
         retry_after = headers.get("retry-after")
         if retry_after:
-            raw["headers"] = {"retry-after": retry_after[:100]}
+            raw["headers"] = {"retry-after": scrub(retry_after[:100])}
         text = body.decode("utf-8", errors="replace")
 
         if not 200 <= status < 300:
@@ -695,18 +818,18 @@ class SystemOnePlugin:
                     message = f"{message}: {excerpt}"
             return ToolResult(value=None, raw=raw, stderr=scrub(message), ok=False)
 
-        return self._answers(raw, questions, text, scrub)
+        return self._answers(raw, questions, text, scrubbed)
 
     def _answers(
         self,
         raw: dict[str, Any],
         questions: dict[str, Any],
         text: str,
-        scrub: Callable[[str], str],
+        scrubbed: Callable[[Any], Any],
     ) -> ToolResult:
         def invalid(kind: str, message: str) -> ToolResult:
             raw["error_kind"] = kind
-            return ToolResult(value=None, raw=raw, stderr=scrub(message), ok=False)
+            return ToolResult(value=None, raw=raw, stderr=scrubbed(message), ok=False)
 
         try:
             reply = json.loads(text)
@@ -716,9 +839,9 @@ class SystemOnePlugin:
             return invalid("invalid_response", "systemone response has no 'answers'")
 
         if isinstance(reply.get("model"), str):
-            raw["model"] = reply["model"]
+            raw["model"] = scrubbed(reply["model"])
         usage = reply.get("usage")
-        raw["usage"] = usage if isinstance(usage, dict) else None
+        raw["usage"] = scrubbed(usage) if isinstance(usage, dict) else None
 
         problems = answer_errors(questions, reply["answers"])
         if problems:
@@ -729,7 +852,7 @@ class SystemOnePlugin:
             return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
         return ToolResult(
-            value=reply["answers"],
+            value=scrubbed(reply["answers"]),
             raw=raw,
             stdout=None,
             stderr=None,
