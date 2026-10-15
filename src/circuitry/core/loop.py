@@ -23,6 +23,7 @@ from .cancellation import (
 )
 from .disabled import is_disabled_node, is_enabled
 from .effect_identity import model_call, nested_container
+from .resume import effect_completed_ok
 from .scope import local_writes as _local_writes_state
 from .scope import scope_ctx as _scope_ctx
 from .store import Store
@@ -245,7 +246,9 @@ class LoopRuntime:
         # unfinished pass, keeping whatever contiguous prefix of passes
         # ``meta.completed_passes`` (this loop's own record of which passes
         # it actually finished, not a guess from what an ``iter_<N>`` node
-        # happens to contain) already covers — see ``execute``. An unnamed
+        # happens to contain) already covers — see ``execute``. That first
+        # unfinished pass continues inside its body when its ``iter_<N>``
+        # node was saved (#573). An unnamed
         # loop has no ``iter_<N>`` record to resume from (each pass
         # overwrites the last at the same path) and a tree-flow each loop's
         # passes finish out of order, so neither is "sound" to resume
@@ -369,6 +372,13 @@ class LoopRuntime:
         # (full rerun) for an unnamed loop, a tree-flow each loop, or a plain
         # (non-resumed) run.
         resume_from = 0
+        # ``cof run --resume`` (#573): the pass at ``resume_from`` when the
+        # saved state holds its ``iter_<N>`` node — the pass the saved run
+        # stopped in. It continues inside its body (``_execute_body``'s
+        # ``resume``) instead of from its first effect, and a ``while``
+        # loop runs it without asking its condition again: the condition
+        # held when the pass started. None when there is no such pass.
+        resume_pass: int | None = None
         if (
             self.resume
             and is_named
@@ -415,6 +425,8 @@ class LoopRuntime:
                 prev_writes = _local_writes_state(
                     node[f"iter_{last_completed}"], frozenset(), self._body_names()
                 )
+            if isinstance(node.get(f"iter_{resume_from}"), dict):
+                resume_pass = resume_from
 
         # Build ancestor context for children (this loop is now a parent)
         from .dynamic import _EFFECT_STYLE as _ES
@@ -848,6 +860,7 @@ class LoopRuntime:
                                     iteration=idx,
                                     baseline=baseline,
                                     iter_label=f"[{idx}]",
+                                    resume=idx == resume_pass,
                                 )
                                 iterations_effects.append(iter_effects)
                                 iteration_count += 1
@@ -957,6 +970,12 @@ class LoopRuntime:
                         # would otherwise make — and throw away — a model call.
                         if iteration_count < self.defn.min_iterations:
                             should_continue = True
+                        elif iteration_count == resume_pass:
+                            # The pass the saved run stopped in (#573): its
+                            # condition held when it started, and asking
+                            # again against a half-updated state could end
+                            # the loop with the pass half done.
+                            should_continue = True
                         else:
                             # Check continuation condition. A CEL expression that
                             # cannot be evaluated raises (see ``cel_eval``) rather
@@ -1039,6 +1058,7 @@ class LoopRuntime:
                                 iteration=iteration_count,
                                 baseline=baseline,
                                 iter_label=f"[{iteration_count}]",
+                                resume=iteration_count == resume_pass,
                             )
                             iterations_effects.append(iter_effects)
                             last_completed = iteration_count
@@ -1426,12 +1446,20 @@ Should the loop continue? Answer (yes/no):"""
         parallel: bool = False,
         tracker: _LoopIterTracker | None = None,
         iter_label: str | None = None,
+        resume: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Execute all effects in the loop body for one iteration.
 
         Returns the iteration's effect record and the nodes it wrote, the
         latter so a while-condition can be evaluated against the pass that
         just finished.
+
+        *resume* (``cof run --resume``, #573) continues the pass the saved
+        run stopped in, by the same positional rule as a chain
+        ``dynamic``: body effects whose saved node finished without error
+        are reused until the first one that didn't, which runs — itself
+        resumed, when it is a container or a ``use`` — along with
+        everything after it.
         """
         # A cancelled run (#356) must not start a new iteration — chain flow
         # calls this once per pass from the main thread (where a real
@@ -1464,6 +1492,7 @@ Should the loop continue? Answer (yes/no):"""
 
         body_indent = "  " * (self.depth + 1)
         executed: list[dict[str, Any]] = []
+        resume_active = resume
         # Overlays are always rebuilt from the context the iteration started
         # with, never from the previous overlay — layering copies on copies
         # would freeze whatever the enclosing scope looked like one step ago.
@@ -1504,6 +1533,24 @@ Should the loop continue? Answer (yes/no):"""
                 # as a produced one (see the sibling merge below).
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
+
+            if (
+                resume_active
+                and name != "?"
+                and effect_completed_ok(iter_store.state.get(name))
+            ):
+                if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
+                    _console.print(
+                        f"{body_indent}[ok]↻[/ok] [{color}]{icon}[/{color}]"
+                        f" {name} [dim](resumed)[/dim]"
+                    )
+                executed.append(effect_record)
+                ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
+                continue
+            # The first body effect that isn't reused continues inside
+            # itself when it can; every effect after it runs whole.
+            effect_resume = resume_active
+            resume_active = False
 
             if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield:
                 _console.print(
@@ -1571,6 +1618,7 @@ Should the loop continue? Answer (yes/no):"""
                         depth=self.depth + 2,
                         ancestors=self._child_ancestors,
                         label_prefix=self._label_prefix,
+                        resume=effect_resume,
                     ).execute(store=iter_store, ctx_override=ctx)
 
                 elif isinstance(effect, ConditionalDefinition):
@@ -1586,6 +1634,7 @@ Should the loop continue? Answer (yes/no):"""
                         progress_display=self.progress_display,
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
+                        resume=effect_resume,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, LoopDefinition):
@@ -1602,6 +1651,7 @@ Should the loop continue? Answer (yes/no):"""
                         depth=self.depth + 1,
                         ancestors=self._child_ancestors,
                         label_prefix=self._label_prefix,
+                        resume=effect_resume,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, ReflectorDefinition):
@@ -1673,6 +1723,7 @@ Should the loop continue? Answer (yes/no):"""
                         cb_error=_cb_error,
                         display_name=use_display_name,
                         ancestors=self._child_ancestors if tracker is None else None,
+                        resume=effect_resume,
                     ).execute(store=iter_store, ctx=ctx)
 
                 elif isinstance(effect, YieldDefinition):
