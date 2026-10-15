@@ -408,9 +408,10 @@ def compile_orchestration(
 
     A document with no file of its own cannot name a ``state_file`` either
     (the ``systemone`` tool). For a limited document (*trusted* false) that
-    tool's effect records *confinement_root* as ``ToolDefinition.confine_to``,
-    which its ``within`` must stay inside, checked here for a literal ``within``
-    and at dispatch for one read from ``input``.
+    tool's effect records ``ToolDefinition.limited`` and *confinement_root* as
+    ``ToolDefinition.confine_to``, which its ``within`` must stay inside,
+    checked here for a literal ``within`` and at dispatch for one read from
+    ``input``. A limited document with no project reads no file at all.
     """
     with _document_location(document_dir, confinement_root, trusted):
         # Support both 'effects' (spec) and 'steps' (legacy)
@@ -1302,14 +1303,17 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
+    limited = False
     confine_to: str | None = None
     if provider.strip().lower() == "systemone":
         from ..plugins.systemone import static_param_errors
 
         # Same rule as a prompt's `file: {from: ...}` (#578): a limited
         # document's `within` stays inside its project.
+        # A limited document with no project is still limited: it reads no file.
+        limited = not _current_document_trusted()
         project = _current_confinement_root()
-        if project is not None and not _current_document_trusted():
+        if limited and project is not None:
             confine_to = str(project)
 
         # The effect-level `model:` is merged under params at dispatch.
@@ -1317,6 +1321,7 @@ def _compile_tool(
             {**({"model": model} if model else {}), **params},
             has_params_json=params_json is not None,
             has_document_file=_current_document_dir() is not None,
+            limited=limited,
             confine_to=confine_to,
         )
         if problems:
@@ -1364,6 +1369,7 @@ def _compile_tool(
         retries=retries,
         expect=expect,
         group=group,
+        limited=limited,
         confine_to=confine_to,
     )
 

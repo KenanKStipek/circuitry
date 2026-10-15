@@ -434,6 +434,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "expect": project_expect(&tool.expect),
             "enabled": op.enabled,
             "group": tool.group,
+            "limited": false,
             "confine_to": Json::Null,
         }),
         LeafKind::Use(use_op) => {

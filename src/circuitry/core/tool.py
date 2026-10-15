@@ -430,10 +430,17 @@ class ToolDefinition:
     # actually held; see #274.
     group: str | None = None
 
-    #: For a limited document's ``systemone`` effect: the project its
-    #: ``within`` must stay inside (the same root a ``{file: ...}`` prompt is
-    #: confined to, as ``DispatchFileSource.confine_to``); ``None`` for a
-    #: trusted document and every other provider.
+    #: For a ``systemone`` effect: ``True`` when its document is not trusted
+    #: (not run by path, see ``compile_orchestration``'s *trusted*). A limited
+    #: effect reads a ``state_file`` only inside :attr:`confine_to`, and none
+    #: at all when that is ``None`` (the document has no project). ``False``
+    #: means unconfined: a trusted document, and every other provider.
+    limited: bool = False
+
+    #: The project a limited ``systemone`` effect's ``within`` must stay inside
+    #: (the same root a ``{file: ...}`` prompt is confined to, as
+    #: ``DispatchFileSource.confine_to``); ``None`` when not limited, or when
+    #: the document has no project.
     confine_to: str | None = None
 
 
@@ -776,8 +783,8 @@ class ToolRuntime:
                     plugin_name=self.defn.provider,
                     runtime=self.runtime_config,
                     **(
-                        {"confine_to": self.defn.confine_to}
-                        if self.defn.confine_to is not None
+                        {"limited": True, "confine_to": self.defn.confine_to}
+                        if self.defn.limited
                         else {}
                     ),
                 )

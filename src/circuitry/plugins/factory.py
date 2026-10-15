@@ -625,7 +625,11 @@ SUPPORTED_PLUGINS = tuple(_supported_names())
 
 
 def build_plugin(
-    *, plugin_name: str, runtime: dict[str, Any], confine_to: str | None = None
+    *,
+    plugin_name: str,
+    runtime: dict[str, Any],
+    limited: bool = False,
+    confine_to: str | None = None,
 ) -> ToolPlugin:
     """
     Build a plugin instance from configuration.
@@ -652,5 +656,5 @@ def build_plugin(
     cfg = plugins_cfg.get(plugin_name) or {}
     if plugin_name == "systemone":
         # The one plugin that reads a path the document names.
-        return _systemone_mod.build(cfg, confine_to)
+        return _systemone_mod.build(cfg, limited=limited, confine_to=confine_to)
     return builder(cfg)

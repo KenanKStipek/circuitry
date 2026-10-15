@@ -48,6 +48,7 @@
     "expect",
     "enabled",
     "group",
+    "limited",
     "confine_to"
   ],
   "ExpectDef": [

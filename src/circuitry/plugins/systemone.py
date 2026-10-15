@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.prompt_files import path_is_inside
+from ..core.prompt_files import _WITHIN_INPUT_PATH, path_is_inside
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
 
@@ -208,7 +208,13 @@ def question_errors(questions: Any, *, static: bool) -> list[str]:
         return ["must be a map of question id to {type, instructions, criteria}"]
     errors: list[str] = []
     for qid, question in questions.items():
-        errors.extend(_question_errors(str(qid), question, static=static))
+        if not isinstance(qid, str):
+            errors.append(
+                f"question {qid!r}: the id is not text, or repeats another id once "
+                "written as JSON"
+            )
+            continue
+        errors.extend(_question_errors(qid, question, static=static))
     return errors
 
 
@@ -297,6 +303,7 @@ def static_param_errors(
     *,
     has_params_json: bool = False,
     has_document_file: bool = True,
+    limited: bool = False,
     confine_to: str | None = None,
 ) -> list[str]:
     """Problems ``cof check`` can see in a systemone effect's literal params.
@@ -309,9 +316,11 @@ def static_param_errors(
 
     *has_document_file* is ``False`` for a document with no file of its own
     (generated at run time, stdin, an SDK string, a ``use: inline`` child),
-    which cannot use ``state_file``. *confine_to* is the project of a limited
-    document (``ToolDefinition.confine_to``); a literal ``within`` is checked
-    against it. ``None`` skips that check: a trusted document may name any
+    which cannot use ``state_file`` or name a ``within``. *limited* and
+    *confine_to* are ``ToolDefinition.limited`` and ``.confine_to``: a literal
+    ``within`` of a limited document is checked against its project. A limited
+    document with no project (*confine_to* ``None``) cannot read a file at all,
+    so its ``within`` is not checked here; a trusted document may name any
     ``within``.
     """
     errors = [
@@ -342,31 +351,35 @@ def static_param_errors(
     elif not has_state and not has_file and not has_params_json:
         errors.append("give exactly one of params.state and params.state_file")
 
+    has_within = "within" in params
+    if not has_document_file:
+        errors.extend(
+            f"params.{key}: 'file:' cannot be used here — this document has no "
+            "file of its own (it was generated at run time, or has no path: stdin, "
+            "an SDK string, a 'use: inline' child); give the text in params.state."
+            for key in ("state_file", "within")
+            if key in params
+        )
+    if has_within:
+        within_errors = _within_errors(params["within"])
+        errors.extend(within_errors)
+        if (
+            not within_errors
+            and limited
+            and confine_to is not None
+            and param_reference(params["within"]) is None
+            and not _is_inside(Path(params["within"]), Path(confine_to))
+        ):
+            errors.append(f"params.within: {_OUTSIDE_PROJECT}")
     if has_file:
-        if not has_document_file:
-            errors.append(
-                "params.state_file: 'file:' cannot be used here — this document has no "
-                "file of its own (it was generated at run time, or has no path: stdin, "
-                "an SDK string, a 'use: inline' child); give the text in params.state."
-            )
         state_file = params["state_file"]
         if param_reference(state_file) is None and not (
             isinstance(state_file, str) and state_file.strip()
         ):
             errors.append("params.state_file must be a non-empty path string")
-        if "within" not in params:
+        if not has_within:
             errors.append("params.state_file requires params.within")
-        else:
-            within_errors = _within_errors(params["within"])
-            errors.extend(within_errors)
-            if (
-                not within_errors
-                and confine_to is not None
-                and param_reference(params["within"]) is None
-                and not _is_inside(Path(params["within"]), Path(confine_to))
-            ):
-                errors.append(f"params.within: {_OUTSIDE_PROJECT}")
-    elif "within" in params and not has_params_json:
+    elif has_within and not has_params_json:
         errors.append("params.within only applies to params.state_file")
     return errors
 
@@ -386,8 +399,7 @@ def _is_inside(path: Path, root: Path) -> bool:
 def _within_errors(within: Any) -> list[str]:
     reference = param_reference(within)
     if reference is not None:
-        root, _, rest = reference.path.partition(".")
-        if root != "input" or not rest:
+        if not _WITHIN_INPUT_PATH.fullmatch(reference.path.strip()):
             return ["params.within must be a literal absolute path or {from: input.<name>}"]
         return []
     if not isinstance(within, str) or not within.strip() or "{{" in within or "}}" in within:
@@ -524,7 +536,9 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"{name} is not a finite number")
 
 
-def _read_state_file(path_text: str, within_text: Any, confine_to: str | None) -> Any:
+def _read_state_file(
+    path_text: str, within_text: Any, limited: bool, confine_to: str | None
+) -> Any:
     """The state a ``state_file`` holds, once it is proven to lie inside *within*."""
     if not isinstance(within_text, str) or not within_text.strip():
         raise ValueError("systemone: params.within is required with params.state_file")
@@ -534,8 +548,13 @@ def _read_state_file(path_text: str, within_text: Any, confine_to: str | None) -
         raise ValueError("systemone: params.state_file must not contain a null byte")
 
     within = Path(within_text).resolve(strict=False)
-    if confine_to is not None and not _is_inside(within, Path(confine_to)):
-        raise ValueError(f"systemone: params.within {_OUTSIDE_PROJECT}")
+    if limited:
+        if confine_to is None:
+            raise ValueError(
+                "systemone: this document has no project, so it cannot read a params.state_file"
+            )
+        if not _is_inside(within, Path(confine_to)):
+            raise ValueError(f"systemone: params.within {_OUTSIDE_PROJECT}")
 
     try:
         resolved = Path(path_text).resolve(strict=True)
@@ -593,9 +612,12 @@ class SystemOnePlugin:
     base_url: str | None = None
     api_key_env: str | None = None
     allow_remote: bool = False
-    #: The project a limited document's ``within`` must stay inside
-    #: (``ToolDefinition.confine_to``); ``None`` for a trusted document or a
-    #: plugin called outside a run.
+    #: ``ToolDefinition.limited``: the document is not trusted. A limited
+    #: plugin reads a ``state_file`` only inside :attr:`confine_to`, and none
+    #: at all without one. ``False`` (trusted, or called outside a run) is
+    #: unconfined.
+    limited: bool = False
+    #: The project a limited document's ``within`` must stay inside.
     confine_to: str | None = None
 
     # -- host settings ------------------------------------------------------
@@ -669,7 +691,7 @@ class SystemOnePlugin:
         path_text = params["state_file"]
         if not isinstance(path_text, str) or not path_text.strip():
             raise ValueError("systemone: params.state_file must be a non-empty path string")
-        return _read_state_file(path_text, params.get("within"), self.confine_to)
+        return _read_state_file(path_text, params.get("within"), self.limited, self.confine_to)
 
     def execute(
         self,
@@ -873,11 +895,14 @@ class SystemOnePlugin:
         return CheckResult(ok=True, missing=[])
 
 
-def build(cfg: Mapping[str, Any], confine_to: str | None = None) -> SystemOnePlugin:
-    """The plugin for ``runtime.plugins.systemone`` (*cfg*), confining ``within`` to *confine_to*."""
+def build(
+    cfg: Mapping[str, Any], *, limited: bool = False, confine_to: str | None = None
+) -> SystemOnePlugin:
+    """The plugin for ``runtime.plugins.systemone`` (*cfg*); see ``SystemOnePlugin.limited``."""
     return SystemOnePlugin(
         base_url=cfg.get("base_url"),
         api_key_env=cfg.get("api_key_env"),
         allow_remote=_as_bool(cfg.get("allow_remote"), default=False),
+        limited=limited,
         confine_to=confine_to,
     )

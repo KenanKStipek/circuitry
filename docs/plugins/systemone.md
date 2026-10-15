@@ -88,21 +88,26 @@ never `"yes"`. `true:` and `false:` in a `noul`'s `criteria`, and options `1:` t
 
 ### `state_file` and `within`
 
-A document with no file of its own cannot use `state_file`: a `use: inline`
-child, a reflector or decomposition plan, and a document read from stdin or
-passed to the SDK as a string. That is a compile error (`'file:' cannot be used
-here`, naming `params.state_file`), the same as for a `{file: …}` prompt source.
-Give such a document its text with `state`.
+A document with no file of its own cannot use `state_file` or name a `within`:
+a `use: inline` child, a reflector or decomposition plan, and a document read
+from stdin or passed to the SDK as a string. Either is a compile error (`'file:'
+cannot be used here`, naming `params.state_file` or `params.within`), the same as
+for a `{file: …}` prompt source, so such a document can never read a file, even
+if `params_json` supplies a `state_file`. Give it its text with `state`.
 
-`within` is a literal absolute path or `{from: input.<name>}`; a `{{ … }}`
-template, a path read from another part of state and a `params_json` value are
-refused, because each can carry generated text. A relative `state_file` is
+`within` is a literal absolute path or `{from: input.<name>}` (exactly one name,
+as for a prompt's `file: {from: …}`); a `{{ … }}` template, a path read from
+another part of state and a `params_json` value are refused, because each can
+carry generated text. `cof check` checks the shape of `within` whenever it is
+set, also when `state_file` arrives through `params_json`. A relative `state_file` is
 resolved against the working directory.
 
-A **limited** document must also name a `within` inside its own project: the
+A **limited** document (one not run by path) must also name a `within` inside its own project: the
 directory of the nearest `config.json` at or above the document, or the
 document's own directory (the same project a `{file: …}` prompt is confined to).
-A document you run by path may name any `within`.
+A document you run by path may name any `within`. A limited effect that has no
+project to stay inside reads no file at all, so a missing project is never the
+same as no limit.
 
 `cof check` (and MCP's validate) checks a literal `within` against the project
 when it knows the document is limited, for example a document inside a library

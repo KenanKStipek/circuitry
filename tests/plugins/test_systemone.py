@@ -825,7 +825,7 @@ def test_a_limited_document_confines_within_to_its_project(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "b.txt").write_text("out", encoding="utf-8")
-    plugin = _plugin(server, confine_to=str(project))
+    plugin = _plugin(server, limited=True, confine_to=str(project))
 
     server.reply_answers()
     assert plugin.execute(
@@ -1211,6 +1211,7 @@ def test_a_host_setting_as_an_effect_param_is_a_check_error(name: str) -> None:
         "{{ input.dir }}",
         {"from": "prime.something"},
         {"from": "input"},
+        {"from": "input.a.b"},
         {"from": "decide.value"},
         "",
     ],
@@ -1917,3 +1918,110 @@ def test_validate_checks_within_for_a_document_the_caller_did_not_name(tmp_path:
     unnamed = validate(doc, trust_document=False, skip_preflight=True)
     assert unnamed["ok"] is False
     assert any("document's own project" in e for e in unnamed["errors"])
+
+
+# ---------------------------------------------------------------------------
+# params_json cannot smuggle a state_file past the checks on within
+# ---------------------------------------------------------------------------
+
+_SMUGGLE = {"state": _DROP, "within": "/", "params_json": '{"state_file": "/any/file"}'}
+
+
+def _smuggling_doc(**params: Any) -> dict[str, Any]:
+    """A doc whose literal params name ``within`` and whose ``params_json`` adds ``state_file``."""
+    doc = _doc(**{**_SMUGGLE, **params})
+    effect = doc["effects"][0]
+    effect["params_json"] = effect["params"].pop("params_json")
+    return doc
+
+
+def test_a_document_with_no_file_cannot_name_within_for_a_params_json_state_file() -> None:
+    message = _compile_error(_smuggling_doc())
+    assert NO_FILE_OF_ITS_OWN in message
+    assert "params.within" in message
+
+    reference = _compile_error(_smuggling_doc(within={"from": "input.dir"}))
+    assert NO_FILE_OF_ITS_OWN in reference
+    assert "params.within" in reference
+
+
+def test_a_use_inline_child_cannot_smuggle_a_state_file_through_params_json(
+    tmp_path: Path,
+) -> None:
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret", encoding="utf-8")
+    smuggle = _smuggling_doc(within="/")
+    smuggle["effects"][0]["params_json"] = json.dumps({"state_file": str(secret)})
+    parent = tmp_path / "parent.yml"
+    parent.write_text(
+        yaml.dump({"effects": [{"type": "use", "name": "sub", "inline": yaml.dump(smuggle)}]}),
+        encoding="utf-8",
+    )
+    adapter = MagicMock()
+    adapter.name = "mock"
+
+    result = _run(parent, CircuitryConfig(), trust_document=True, adapter=adapter)
+
+    assert result.ok is False
+    assert NO_FILE_OF_ITS_OWN in (result.error or "")
+
+
+def test_a_document_with_a_file_still_checks_within_when_params_json_adds_state_file(
+    tmp_path: Path,
+) -> None:
+    on_disk = {"document_dir": tmp_path, "confinement_root": tmp_path, "trusted": False}
+    for within in ("{{prime.llm.value}}", {"from": "prime.x.value"}, "relative"):
+        message = _compile_error_in(_smuggling_doc(within=within), **on_disk)
+        assert "params.within" in message
+    outside = _smuggling_doc(within=str(tmp_path.parent))
+    assert "own project" in _compile_error_in(outside, **on_disk)
+    compile_orchestration(orch=_smuggling_doc(within=str(tmp_path)), **on_disk)
+    compile_orchestration(
+        orch=_smuggling_doc(within=str(tmp_path.parent)), **{**on_disk, "trusted": True}
+    )
+
+
+def _compile_error_in(orch: dict[str, Any], **location: Any) -> str:
+    with pytest.raises(ValueError) as excinfo:
+        compile_orchestration(orch=orch, **location)
+    return str(excinfo.value)
+
+
+def test_a_limited_effect_with_no_project_reads_no_file(
+    server: FakeServer, tmp_path: Path
+) -> None:
+    """Fail closed: limited without a confinement root is not unconfined."""
+    doc = tmp_path / "a.txt"
+    doc.write_text("x", encoding="utf-8")
+    defn = ToolDefinition(
+        name="decide",
+        provider="systemone",
+        params=_file_params(doc, tmp_path),
+        limited=True,
+        confine_to=None,
+    )
+    runtime = ToolRuntime(
+        defn, runtime_config={"plugins": {"systemone": {"base_url": server.url}}}
+    )
+    with pytest.raises(ValueError, match="no project"):
+        runtime.execute(store=Store({}), ctx={})
+    assert server.requests == []
+
+    with pytest.raises(ValueError, match="no project"):
+        _plugin(server, limited=True).execute(
+            params=_file_params(doc, tmp_path), timeout_seconds=10
+        )
+
+
+def test_a_compiled_limited_document_with_no_project_is_limited_without_a_root() -> None:
+    root = compile_orchestration(orch=_doc(state="s"), trusted=False)
+    tool = root.effects[0]
+    assert (tool.limited, tool.confine_to) == (True, None)
+    trusted = compile_orchestration(orch=_doc(state="s"), trusted=True).effects[0]
+    assert (trusted.limited, trusted.confine_to) == (False, None)
+
+
+def test_question_ids_that_collide_once_written_are_reported() -> None:
+    question = {"type": "noul", "instructions": "?"}
+    message = _compile_error(_doc(questions={1: question, "1": question}))
+    assert "repeats another id" in message

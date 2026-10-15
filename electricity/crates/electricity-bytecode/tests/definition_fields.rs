@@ -146,6 +146,12 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("ToolDefinition", "group", "effects::ToolOp::group");
     add(
         "ToolDefinition",
+        "limited",
+        "documented divergence: no IR field -- only the cof-only systemone \
+         plugin reads it, and electricity refuses that plugin",
+    );
+    add(
+        "ToolDefinition",
         "confine_to",
         "documented divergence: no IR field -- only the cof-only systemone \
          plugin reads it, and electricity refuses that plugin",
