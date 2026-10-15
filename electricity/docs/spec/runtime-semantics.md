@@ -1727,7 +1727,16 @@ contiguous-from-0 prefix (not by eyeballing whether `iter_<N>` merely *looks*
 finished — a pass that died partway through writing its own node must not
 be mistaken for complete) — chain flow only (every `while`, or an `each` not
 running `flow: tree`); a tree-flow `each` loop and an unnamed loop always
-rerun whole. A `finally:` effect is **never** skipped by resume (§6.4).
+rerun whole. The loop writes that record on success, on failure, and on an
+interrupt (#574): `core/loop.py`'s outer handler is `except BaseException`,
+so Ctrl-C/SIGTERM/SIGHUP or a cancelled run gets the failure path's own
+writes — `completed_passes`, `completed_at`, `value.termination` `{"reason":
+"error", "detail": ...}` and `meta.error` — with the interrupt text of §6.5
+(`"Interrupted (Ctrl-C/SIGINT)"`, `"Interrupted (SIGTERM)"`, `"Interrupted
+(SIGHUP)"`) as both the error and the detail, never the empty `str()` of the
+exception; then it re-raises the same exception, so exit code, cleanup and
+`finally:` are unchanged. electricity's `exec/loop_.rs` does the same for
+`VmError::Cancelled`. A `finally:` effect is **never** skipped by resume (§6.4).
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
 `_SavedChildRun`) reruns its child from the start in a fresh state, unless
