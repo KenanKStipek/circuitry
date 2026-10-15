@@ -83,14 +83,18 @@ def _redact_adapter_env(adapters: Any) -> Any:
 
     ``env`` is the environment an adapter alias gives its CLI (a config
     directory, a profile name, ...): whatever it holds, none of it belongs in
-    an artifact. The variable names stay, so a reader can see what is set.
+    an artifact. The variable names stay, so a reader can see what is set. An
+    ``env`` that is not a mapping (a config error preflight rejects, but the
+    snapshot is written first) is replaced whole.
     """
     if not isinstance(adapters, dict):
         return redact(adapters)
     out: dict[Any, Any] = {}
     for name, entry in adapters.items():
-        if isinstance(entry, dict) and isinstance(entry.get("env"), dict):
-            out[name] = redact({**entry, "env": dict.fromkeys(entry["env"], REDACTED)})
+        if isinstance(entry, dict) and "env" in entry:
+            env = entry["env"]
+            blanked = dict.fromkeys(env, REDACTED) if isinstance(env, dict) else REDACTED
+            out[name] = redact({**entry, "env": blanked})
         else:
             out[name] = redact(entry)
     return out
@@ -101,7 +105,8 @@ def redact(value: Any) -> Any:
 
     - Dict values are redacted when the key matches the sensitive-name pattern.
     - Every value of an ``env`` mapping under an ``adapters`` key is redacted
-      (``runtime.adapters.<alias>.env``).
+      (``runtime.adapters.<alias>.env``); an ``env`` that is not a mapping is
+      replaced whole.
     - String values are redacted when they look like a JWT, an API key, or a
       URL with userinfo.
     - Lists and nested dicts are walked.

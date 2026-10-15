@@ -464,6 +464,23 @@ def test_redact_blanks_env_values_under_adapters_and_keeps_the_names() -> None:
     }
 
 
+def test_redact_replaces_an_env_that_is_not_a_mapping_whole() -> None:
+    for bad in (f"A={MARKER}", [f"A={MARKER}"], 5):
+        value = {"adapters": {"a": {"adapter": "pi", "env": bad}}}
+        assert redact(value) == {"adapters": {"a": {"adapter": "pi", "env": REDACTED}}}
+
+
+def test_a_malformed_env_is_not_saved_in_the_out_file(tmp_path: Path) -> None:
+    runtime = _runtime(a={"adapter": "pi", "env": f"A={MARKER}"})
+    out = tmp_path / "o.json"
+    result = _run(_doc(tmp_path, [_prompt("a", "a")]), runtime, out_path=out)
+    assert not result.ok
+    text = out.read_text(encoding="utf-8")
+    assert MARKER not in text and MARKER not in str(result.error)
+    snapshot = json.loads(text)["runtime"]["effective_settings"]["runtime"]["adapters"]
+    assert snapshot["a"]["env"] == REDACTED
+
+
 # ---------- trust ----------
 
 

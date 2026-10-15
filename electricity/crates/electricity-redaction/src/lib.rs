@@ -203,7 +203,7 @@ fn redact_string(value: &str) -> String {
 
 /// `cli/redaction.py::_redact_adapter_env` -- a `runtime.adapters` block
 /// with every `<adapter>.env` value replaced by [`REDACTED`] (the
-/// variable names stay), and the rest redacted as usual.
+/// variable names stay; an `env` that is not a mapping is replaced whole), and the rest redacted as usual.
 fn redact_adapter_env(mut adapters: Value) -> Value {
     let Value::Dict(dict) = &mut adapters else {
         return redact(adapters);
@@ -213,10 +213,16 @@ fn redact_adapter_env(mut adapters: Value) -> Value {
     for (name, mut entry) in taken {
         if let Value::Dict(entry_dict) = &mut entry {
             let env_key = Value::Str("env".to_string());
-            if let Some(Value::Dict(env)) = entry_dict.get_mut(&env_key) {
-                for value in env.values_mut() {
-                    *value = Value::Str(REDACTED.to_string());
+            match entry_dict.get_mut(&env_key) {
+                Some(Value::Dict(env)) => {
+                    for value in env.values_mut() {
+                        *value = Value::Str(REDACTED.to_string());
+                    }
                 }
+                // Not a mapping (a config error preflight rejects, but the
+                // snapshot is written first): replaced whole.
+                Some(other) => *other = Value::Str(REDACTED.to_string()),
+                None => {}
             }
         }
         out.insert(name, redact(entry));
@@ -348,6 +354,34 @@ mod tests {
             dict(vec![("claude_alt", expected_entry)]),
         )]);
         assert_eq!(redact(input), expected);
+    }
+
+    #[test]
+    fn an_env_that_is_not_a_mapping_is_replaced_whole() {
+        for bad in [
+            Value::from("A=secret"),
+            Value::List(vec![Value::from("A=secret")]),
+            Value::from(5i64),
+        ] {
+            let input = dict(vec![(
+                "adapters",
+                dict(vec![(
+                    "alt",
+                    dict(vec![("adapter", Value::from("pi")), ("env", bad)]),
+                )]),
+            )]);
+            let expected = dict(vec![(
+                "adapters",
+                dict(vec![(
+                    "alt",
+                    dict(vec![
+                        ("adapter", Value::from("pi")),
+                        ("env", Value::from(REDACTED)),
+                    ]),
+                )]),
+            )]);
+            assert_eq!(redact(input), expected);
+        }
     }
 
     #[test]
