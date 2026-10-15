@@ -7,7 +7,10 @@
 must ship its own fake under `fakes/<binary>`, unless its own configured
 `binary` is a deliberately-missing `circuitry-test-missing-*` name: on a
 machine with a logged-in Claude Code or pi, a case or test without either
-would start the real CLI and spend a real request.
+would start the real CLI and spend a real request. An alias of either
+(`runtime.adapters.<alias>.adapter`, #579, defined in the case's own config
+or document) runs the same CLI, so it counts as that adapter, with its own
+`binary` when it sets one.
 """
 
 from __future__ import annotations
@@ -43,16 +46,43 @@ def _case_ids() -> list[str]:
     return [d.name for d in CASE_DIRS]
 
 
-def _config_adapter_cfg(case_dir: Path, metadata: dict, adapter_name: str) -> dict:
+def _adapter_entries(case_dir: Path, metadata: dict) -> dict[str, dict]:
+    """Every `runtime.adapters.<name>` entry the case's own config and
+    document set, the config's under the document's (a document's own
+    `runtime:` block applies only to a by-path run, but a guard errs on
+    the side of treating its aliases as live)."""
+    entries: dict[str, dict] = {}
+    sources: list[dict] = []
     config_name = metadata.get("config")
-    if not config_name:
-        return {}
-    config_path = case_dir / config_name
-    if not config_path.is_file():
-        return {}
-    data = json.loads(config_path.read_text(encoding="utf-8"))
-    cfg = ((data.get("runtime") or {}).get("adapters") or {}).get(adapter_name)
-    return cfg if isinstance(cfg, dict) else {}
+    if config_name and (case_dir / config_name).is_file():
+        sources.append(json.loads((case_dir / config_name).read_text(encoding="utf-8")))
+    try:
+        sources.append(load_orchestration_file(case_dir / metadata["orchestration"]))
+    except Exception:
+        pass
+    for source in sources:
+        runtime = source.get("runtime") if isinstance(source, dict) else None
+        adapters = runtime.get("adapters") if isinstance(runtime, dict) else None
+        for name, cfg in (adapters or {}).items():
+            if isinstance(cfg, dict):
+                entries[name] = {**entries.get(name, {}), **cfg}
+    return entries
+
+
+def _agent_cli_base(case_dir: Path, metadata: dict, name: str | None) -> str | None:
+    """`claude_code`/`pi` for those two names and for an alias of either
+    (one hop: an alias of an alias is a config error, never run)."""
+    if name in AGENT_CLI_DEFAULT_BINARY:
+        return name
+    entry = _adapter_entries(case_dir, metadata).get(name or "")
+    base = entry.get("adapter") if entry else None
+    if isinstance(base, str) and base.strip().lower() in AGENT_CLI_DEFAULT_BINARY:
+        return base.strip().lower()
+    return None
+
+
+def _config_adapter_cfg(case_dir: Path, metadata: dict, adapter_name: str) -> dict:
+    return _adapter_entries(case_dir, metadata).get(adapter_name, {})
 
 
 def _configured_binary(case_dir: Path, metadata: dict, adapter_name: str) -> str | None:
@@ -75,7 +105,9 @@ def _configured_binary(case_dir: Path, metadata: dict, adapter_name: str) -> str
         return binary
     if binary:
         return None
-    return AGENT_CLI_DEFAULT_BINARY[adapter_name]
+    base = _agent_cli_base(case_dir, metadata, adapter_name)
+    assert base is not None
+    return AGENT_CLI_DEFAULT_BINARY[base]
 
 
 def _config_default_adapter(case_dir: Path, metadata: dict) -> str | None:
@@ -124,12 +156,14 @@ def _profile_adapter_overrides(case_dir: Path, metadata: dict) -> set[str]:
             continue
         token = override.get("provider")
         name = _provider_token_to_adapter(token) if isinstance(token, str) else None
-        if name in AGENT_CLI_DEFAULT_BINARY:
+        if name is not None and _agent_cli_base(case_dir, metadata, name):
             names.add(name)
     return names
 
 
-def _use_child_adapter_refs(case_dir: Path, orch_path: Path, orch: dict) -> set[str]:
+def _use_child_adapter_refs(
+    case_dir: Path, metadata: dict, orch_path: Path, orch: dict
+) -> set[str]:
     """Adapter names referenced by any `use` child statically reachable
     from *orch* (`path:`/`ref:`/`inline:`, `core.cycle_check.iter_use_
     children`'s own walk) -- a child's own top-level `adapter:` is dead
@@ -141,7 +175,7 @@ def _use_child_adapter_refs(case_dir: Path, orch_path: Path, orch: dict) -> set[
         child_adapters, _child_tools = walk_orchestration_refs(
             child, include_document_adapter=False
         )
-        names |= {name for name in child_adapters if name in AGENT_CLI_DEFAULT_BINARY}
+        names |= {name for name in child_adapters if _agent_cli_base(case_dir, metadata, name)}
     return names
 
 
@@ -155,13 +189,13 @@ def _referenced_agent_cli_adapters(case_dir: Path, metadata: dict) -> set[str]:
         # dispatch any adapter at all -- nothing to check here.
         return set()
     adapter_refs, _tool_refs = walk_orchestration_refs(orch)
-    names = {name for name in adapter_refs if name in AGENT_CLI_DEFAULT_BINARY}
-    names |= _use_child_adapter_refs(case_dir, orch_path, orch)
+    names = {name for name in adapter_refs if _agent_cli_base(case_dir, metadata, name)}
+    names |= _use_child_adapter_refs(case_dir, metadata, orch_path, orch)
     default_adapter = _config_default_adapter(case_dir, metadata)
-    if default_adapter in AGENT_CLI_DEFAULT_BINARY:
+    if default_adapter is not None and _agent_cli_base(case_dir, metadata, default_adapter):
         names.add(default_adapter)
     cli_adapter = _cli_args_adapter_override(metadata)
-    if cli_adapter in AGENT_CLI_DEFAULT_BINARY:
+    if cli_adapter is not None and _agent_cli_base(case_dir, metadata, cli_adapter):
         names.add(cli_adapter)
     names |= _profile_adapter_overrides(case_dir, metadata)
     return names

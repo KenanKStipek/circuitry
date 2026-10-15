@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: adapter:claude_alt: not ready \u2014 missing ['binary:circuitry-test-missing-claude'] \u2014 adapter 'claude_alt' unavailable; required by effects ['ask'] (circuitry-test-missing-claude is not on PATH: install it and log in, or set runtime.adapters.claude_alt.binary.). Re-run with --skip-preflight to bypass."
+}

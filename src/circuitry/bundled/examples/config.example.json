@@ -2,7 +2,7 @@
   "default_adapter": "ollama",
   "default_model": "llama3.1:8b",
   "environment": "dev",
-  "enabled_adapters": ["ollama", "openai", "anthropic"],
+  "enabled_adapters": ["ollama", "openai", "anthropic", "claude_alt"],
   "enabled_tools": ["shell", "python_eval", "regex", "http"],
   "runtime": {
     "adapters": {
@@ -20,6 +20,13 @@
         "default_model": "claude-sonnet-4-20250514",
         "max_tokens": 4096,
         "timeout_seconds": 120
+      },
+      "claude_alt": {
+        "adapter": "claude_code",
+        "env": {
+          "CLAUDE_CONFIG_DIR": "~/.claude-alt"
+        },
+        "timeout_seconds": 1800
       }
     },
     "plugins": {

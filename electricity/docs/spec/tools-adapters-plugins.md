@@ -1001,7 +1001,7 @@ coercion (`py_int`, floats truncating toward zero; `NaN`/infinity raise).
 
 **Config** (`runtime.adapters.<name>`): `binary` (default `claude`/`pi`), `default_model`
 (default `""`), `thinking` (pi only, default `""`), `unset_env` (default the two names above;
-`null`/absent means the default, `[]` stays empty), `extra_args` (default `[]`). `unset_env`/
+`null`/absent means the default, `[]` stays empty), `extra_args` (default `[]`), `env` (default `{}`; `null`/absent means none). `unset_env`/
 `extra_args` must be a list of strings or the build fails with `ValueError`
 (`runtime.adapters.<name>.<key> must be a list of strings, got <repr>`), never `RuntimeError` —
 preflight treats a `RuntimeError` at build time as "deferred (runtime-injected)" and passes it,
@@ -1016,6 +1016,40 @@ plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>
 -- distinct wording from the tool plugins' own binary-missing check (`none of <candidates> found
 on PATH. Install one of them...`, `subprocess_tool.rs::check_binary`), since there is exactly
 one binary name here, never a candidate list.
+
+**`env` and aliases** (issue #579, `adapters/factory.py::_env_pairs`/`_build_alias`,
+`electricity-adapters::config::env_pairs`, `electricity_vm::adapter::AdapterRegistry::build`). The
+child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus `unset_env`, then
+`env` applied last (`electricity_tools::process::RunOpts::env_set`, set after `env_remove`), so a
+variable in both `unset_env` and `env` gets the `env` value. Values must be strings; a leading
+`~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the password database),
+nothing else is expanded. A `runtime.adapters.<name>` entry that sets `adapter` is an **alias**:
+`adapter` must name `claude_code` or `pi` (normalized like any adapter name), every other key is
+that base's own setting, and the alias is built by the base's own builder from *those keys only*
+(never the base's own entry, never another alias's) and reports the alias name as `name()`, so
+`meta.adapter`, the ignored-options warning and `check()`'s own message name it. An alias is selected by name wherever a provider token
+or `adapter:` names an adapter, including `<alias>:<model>`. Every error is a `ValueError` naming
+the alias and never showing an `env` value:
+
+- `runtime.adapters.<alias>.adapter must be claude_code or pi, got <repr>` (an unknown base, any
+  other adapter, a non-string; `, which is itself an alias` is appended when the base is a name
+  that is not in Circuitry's registry and whose own entry sets `adapter`);
+- `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a
+  name of its own` (a name in Circuitry's full registry, whether or not this build can build it);
+- `runtime.adapters.<alias>.env must be a mapping of variable names to strings, got <type>`;
+- `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name matches
+  [A-Za-z_][A-Za-z0-9_]*`;
+- `runtime.adapters.<alias>.env.<NAME> must be a string, got <type>`.
+
+`unset_env`/`extra_args` errors name the alias too. Preflight builds adapters from *config*'s
+`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases`: a
+trusted document's alias is found, nothing else of its `runtime:` is), and a failing alias is
+soft or hard like any known adapter only when it builds (`is_known_adapter`). Every `env` value
+is replaced by `***REDACTED***` (names stay) in `electricity-redaction::redact` for any
+`adapters` mapping, so `runtime.effective_settings` never holds one, and `Debug` shows names only.
+Ported with five `c579-*` conformance cases (two `claude_code` aliases, a `pi` alias and both
+bases in one run through fakes that report a plain `ALIAS_PROBE` variable, a default-adapter alias,
+every config error's exact text, and an alias's missing binary hard and soft).
 
 **Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
 failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt

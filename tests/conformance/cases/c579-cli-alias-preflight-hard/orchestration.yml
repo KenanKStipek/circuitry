@@ -1,0 +1,7 @@
+name: c579-cli-alias-preflight-hard
+adapter: claude_alt
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

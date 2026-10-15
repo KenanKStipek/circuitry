@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
-from ..adapters.factory import ADAPTER_REGISTRY, configured_timeout_seconds
+from ..adapters.factory import alias_names, configured_timeout_seconds, is_known_adapter
 from ..allowlist_gate import AllowlistError, install_allowlists, require_adapter
 from ..capability_gate import install_capability_ceiling
 from ..core.cancellation import RunCancelledBySignal, get_token
@@ -871,11 +871,15 @@ def run(req: RunRequest) -> RunResult:
         # library-ref preflight still run; an injected adapter is not a
         # license to skip everything else (#265 part 4).
         if not req.skip_preflight and not req.dry_run and req.config is not None:
+            preflight_runtime = with_document_aliases(req.config.runtime, effective.runtime)
             preflight_results = preflight(
-                req.orchestration_path, req.config, skip_adapter_check=req.adapter is not None
+                req.orchestration_path,
+                req.config,
+                skip_adapter_check=req.adapter is not None,
+                runtime=preflight_runtime,
             )
             hard_results, soft_results = classify_preflight_results(
-                req.orchestration_path, preflight_results
+                req.orchestration_path, preflight_results, preflight_runtime
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -1490,11 +1494,15 @@ def validate(
         # ``skip_preflight`` lets offline / structure-only contexts (CI
         # smoke tests, ``cof check --skip-preflight``) bypass it.
         if config is not None and not skip_preflight:
+            preflight_runtime = with_document_aliases(config.runtime, merged_runtime)
             preflight_results = preflight(
-                orchestration_path, config, skip_adapter_check=skip_adapter_check
+                orchestration_path,
+                config,
+                skip_adapter_check=skip_adapter_check,
+                runtime=preflight_runtime,
             )
             hard_results, soft_results = classify_preflight_results(
-                orchestration_path, preflight_results
+                orchestration_path, preflight_results, preflight_runtime
             )
             preflight_errors = format_preflight_errors(hard_results)
             if preflight_errors:
@@ -1510,11 +1518,31 @@ def validate(
         return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
 
 
+def with_document_aliases(
+    config_runtime: dict[str, Any] | None, run_runtime: dict[str, Any] | None
+) -> dict[str, Any]:
+    """*config_runtime* plus the adapter aliases *run_runtime* defines.
+
+    Preflight builds adapters from the config alone, not from the run's merge
+    of config and a trusted document's ``runtime:``. An alias that only the
+    document defines (``runtime.adapters.<alias>.adapter``) would be an
+    unknown adapter there, so those entries are carried over; nothing else of
+    the document's ``runtime:`` is.
+    """
+    base = dict(config_runtime or {})
+    adapters = (run_runtime or {}).get("adapters") or {}
+    aliases = {name: adapters[name] for name in alias_names(run_runtime)}
+    if aliases:
+        base["adapters"] = {**(base.get("adapters") or {}), **aliases}
+    return base
+
+
 def preflight(
     orchestration_path: Path,
     config: CircuitryConfig,
     *,
     skip_adapter_check: bool = False,
+    runtime: dict[str, Any] | None = None,
 ) -> list[tuple[str, CheckResult]]:
     """Walk an orchestration's referenced extensions and call ``check()`` on
     each. Returns an ordered list of ``(label, CheckResult)`` tuples.
@@ -1539,6 +1567,9 @@ def preflight(
     document-level default, never for a prompt effect's own named provider,
     which is built from config and actually called at run time regardless
     (``PromptRuntime._resolve_adapter``) (#265 part 9).
+
+    *runtime*: the runtime config adapters and tools are built from, when it
+    is not ``config.runtime``: see :func:`with_document_aliases`.
     """
     orch = load_orchestration_file(orchestration_path)
     adapter_refs, tool_refs = walk_orchestration_refs(orch)
@@ -1547,7 +1578,7 @@ def preflight(
         if skip_adapter_check
         else adapter_refs
     )
-    runtime_cfg = config.runtime or {}
+    runtime_cfg = (config.runtime if runtime is None else runtime) or {}
     results: list[tuple[str, CheckResult]] = []
 
     # `use ref:` entries served by a source that was never refreshed fail here,
@@ -1711,6 +1742,7 @@ def format_preflight_errors(
 def classify_preflight_results(
     orchestration_path: Path,
     results: list[tuple[str, CheckResult]],
+    runtime: dict[str, Any] | None = None,
 ) -> tuple[list[tuple[str, CheckResult]], list[tuple[str, CheckResult]]]:
     """Split raw ``preflight()`` results into ``(hard, soft)``.
 
@@ -1721,7 +1753,8 @@ def classify_preflight_results(
     (already-ok results, tool/runtime_plugin/library_ref results, an unknown
     adapter name, and adapters with at least one non-tolerant usage) stays
     hard: an adapter that doesn't exist is a configuration mistake, not a
-    missing credential the run can degrade past.
+    missing credential the run can degrade past. An alias
+    (``runtime.adapters.<alias>.adapter``) in *runtime* is known when it builds.
     """
     orch = load_orchestration_file(orchestration_path)
     usages = collect_adapter_usages(orch)
@@ -1733,7 +1766,7 @@ def classify_preflight_results(
             continue
         adapter_name = label.split(":", 1)[1]
         if (
-            adapter_name.strip().lower() not in ADAPTER_REGISTRY
+            not is_known_adapter(adapter_name, runtime)
             or is_hard_adapter_dependency(adapter_name, usages)
         ):
             # Name the non-skippable effect(s) when we have that detail —

@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c579-cli-alias-env (issue #579): answers with the value
+of the plain test variable `ALIAS_PROBE` in its own environment (or
+`unset`) and the `--model` it was given -- never a path, so the expected
+files hold nothing machine-specific."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    model = argv[argv.index("--model") + 1] if "--model" in argv else "none"
+    report = f"ALIAS_PROBE={os.environ.get('ALIAS_PROBE', 'unset')} MODEL={model}"
+    message = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": report}],
+        "stopReason": "stop",
+    }
+    for event in (
+        {"type": "session", "id": "sess-1"},
+        {"type": "message_end", "message": message},
+    ):
+        print(json.dumps(event))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

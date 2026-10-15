@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #579 (aliases of the CLI adapters), preflight",
+  "description": "An alias whose own `binary` is not on `PATH`: preflight's hard failure names the alias and its binary, while the base adapter's own binary is never looked at.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

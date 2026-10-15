@@ -2,7 +2,8 @@
 //! tool a raw document references from *config*'s own runtime block
 //! (never the merged `effective.runtime` -- a document-level
 //! `runtime.adapters.scripted.replies_file` is invisible to preflight
-//! but used by the run), and awaits/calls `check()`. The pure half
+//! but used by the run; only a document's adapter aliases are carried
+//! over, [`with_document_aliases`]), and awaits/calls `check()`. The pure half
 //! (`classify_preflight_results`, the two formatters,
 //! `collect_adapter_usages`) lives in `electricity_config::preflight`,
 //! which cannot reach `electricity_vm::adapter::Adapter` without a
@@ -166,6 +167,75 @@ pub fn unbuildable_known_tool_plugin(document: &Value) -> Option<String> {
         electricity_tools::plugin_names::PLUGIN_NAMES.contains(&normalized.as_str())
             && !buildable.contains(&normalized)
     })
+}
+
+/// `cli/runtime_shim.py::with_document_aliases` -- *config_runtime* plus
+/// the adapter aliases (`runtime.adapters.<alias>.adapter`) *run_runtime*
+/// defines. An alias only the document defines would otherwise be an
+/// unknown adapter to preflight; nothing else of the document's
+/// `runtime:` is carried over.
+pub fn with_document_aliases(
+    config_runtime: Option<&Value>,
+    run_runtime: Option<&Value>,
+    adapters: &AdapterRegistry,
+) -> Option<Value> {
+    let adapters_key = Value::Str("adapters".to_string());
+    let run_value = run_runtime.cloned().unwrap_or(Value::None);
+    let run_adapters = run_runtime
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&adapters_key))
+        .and_then(Value::as_dict);
+    let aliases: Vec<(&Value, &Value)> = run_adapters
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| matches!(name, Value::Str(name) if adapters.is_alias(name, &run_value)))
+        .collect();
+    if aliases.is_empty() {
+        return config_runtime.cloned();
+    }
+    let mut runtime = config_runtime
+        .and_then(Value::as_dict)
+        .cloned()
+        .unwrap_or_default();
+    let mut merged = match runtime.get(&adapters_key) {
+        Some(Value::Dict(dict)) => dict.clone(),
+        _ => electricity_value::Dict::new(),
+    };
+    for (name, entry) in aliases {
+        merged.insert(name.clone(), entry.clone());
+    }
+    runtime.insert(adapters_key, Value::Dict(merged));
+    Some(Value::Dict(runtime))
+}
+
+/// `cli/runtime_shim.py::classify_preflight_results`'s own
+/// `is_known_adapter`, for the names *results* failed on: Circuitry's
+/// full registry plus each alias in *runtime* that builds. A name
+/// that is neither is hard, never skippable.
+pub fn known_adapter_names(
+    results: &[PreflightResult],
+    runtime: Option<&Value>,
+    adapters: &AdapterRegistry,
+) -> Vec<String> {
+    let runtime_value = runtime.cloned().unwrap_or(Value::None);
+    let mut known: Vec<String> = electricity_vm::adapter_names::ADAPTER_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for (label, result) in results {
+        let Some(name) = label.strip_prefix("adapter:") else {
+            continue;
+        };
+        let normalized = electricity_value::pycompat::py_strip(name).to_lowercase();
+        if !result.ok
+            && !known.contains(&normalized)
+            && adapters.is_alias(&normalized, &runtime_value)
+            && adapters.build(&normalized, &runtime_value).is_ok()
+        {
+            known.push(normalized);
+        }
+    }
+    known
 }
 
 /// `cli/runtime_shim.py::preflight`, narrowed to what this milestone
@@ -405,6 +475,150 @@ mod tests {
         dict.insert(Value::Str("type".to_string()), Value::from("tool"));
         dict.insert(Value::Str("provider".to_string()), Value::from(provider));
         Value::Dict(dict)
+    }
+
+    fn dict_of(pairs: Vec<(&str, Value)>) -> Value {
+        let mut dict = Dict::new();
+        for (k, v) in pairs {
+            dict.insert(Value::Str(k.to_string()), v);
+        }
+        Value::Dict(dict)
+    }
+
+    fn adapters_of(runtime: &Value) -> &Dict {
+        runtime
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("adapters".to_string()))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+    }
+
+    #[test]
+    fn with_document_aliases_merges_only_the_aliases_the_run_defines() {
+        let registry = electricity_adapters::build_registry();
+        let config = dict_of(vec![
+            (
+                "adapters",
+                dict_of(vec![(
+                    "claude_code",
+                    dict_of(vec![("binary", Value::from("from-config"))]),
+                )]),
+            ),
+            ("max_concurrency", Value::from(3i64)),
+        ]);
+        let run = dict_of(vec![
+            (
+                "adapters",
+                dict_of(vec![
+                    (
+                        "claude_alt",
+                        dict_of(vec![
+                            ("adapter", Value::from("claude_code")),
+                            ("binary", Value::from("alt-bin")),
+                        ]),
+                    ),
+                    // an entry that sets no `adapter` is not an alias
+                    (
+                        "scripted",
+                        dict_of(vec![("replies_file", Value::from("document.yaml"))]),
+                    ),
+                    // overrides the config's own claude_code entry: not an alias
+                    (
+                        "claude_code",
+                        dict_of(vec![("binary", Value::from("from-document"))]),
+                    ),
+                ]),
+            ),
+            ("max_concurrency", Value::from(99i64)),
+            ("persistence", dict_of(vec![("enabled", Value::from(true))])),
+        ]);
+
+        let merged = with_document_aliases(Some(&config), Some(&run), &registry).unwrap();
+        let merged_dict = merged.as_dict().unwrap();
+        // nothing but `adapters` comes from the document's runtime
+        assert_eq!(
+            merged_dict.get(&Value::Str("max_concurrency".to_string())),
+            Some(&Value::from(3i64))
+        );
+        assert!(!merged_dict.contains_key(&Value::Str("persistence".to_string())));
+        let adapters = adapters_of(&merged);
+        let mut names: Vec<&str> = adapters.keys().filter_map(Value::as_str).collect();
+        names.sort();
+        assert_eq!(names, vec!["claude_alt", "claude_code"]);
+        // the alias is carried over whole; the config's own entry is untouched
+        assert_eq!(
+            adapters.get(&Value::Str("claude_alt".to_string())),
+            run.as_dict()
+                .unwrap()
+                .get(&Value::Str("adapters".to_string()))
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(&Value::Str("claude_alt".to_string()))
+        );
+        assert_eq!(
+            adapters
+                .get(&Value::Str("claude_code".to_string()))
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(&Value::Str("binary".to_string())),
+            Some(&Value::from("from-config"))
+        );
+    }
+
+    #[test]
+    fn with_document_aliases_without_an_alias_returns_the_config_runtime_unchanged() {
+        let registry = electricity_adapters::build_registry();
+        let config = dict_of(vec![("max_concurrency", Value::from(3i64))]);
+        let run = dict_of(vec![(
+            "adapters",
+            dict_of(vec![(
+                "scripted",
+                dict_of(vec![("replies_file", Value::from("document.yaml"))]),
+            )]),
+        )]);
+        assert_eq!(
+            with_document_aliases(Some(&config), Some(&run), &registry),
+            Some(config.clone())
+        );
+        assert_eq!(with_document_aliases(None, None, &registry), None);
+    }
+
+    #[tokio::test]
+    async fn preflight_finds_an_alias_only_the_document_defines() {
+        let registry = electricity_adapters::build_registry();
+        let document = doc_with_adapter("claude_alt", vec![]);
+        let run = dict_of(vec![(
+            "adapters",
+            dict_of(vec![(
+                "claude_alt",
+                dict_of(vec![
+                    ("adapter", Value::from("claude_code")),
+                    ("binary", Value::from("circuitry-test-missing-claude")),
+                ]),
+            )]),
+        )]);
+        let runtime = with_document_aliases(None, Some(&run), &registry);
+        let results = run_preflight(&document, runtime.as_ref(), &registry).await;
+        let (label, result) = &results[0];
+        assert_eq!(label, "adapter:claude_alt");
+        assert_eq!(
+            result.missing,
+            vec!["binary:circuitry-test-missing-claude".to_string()]
+        );
+        // without the carry-over it is an unknown adapter
+        let results = run_preflight(&document, None, &registry).await;
+        assert!(
+            results[0]
+                .1
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("Unknown adapter: 'claude_alt'")
+        );
     }
 
     #[tokio::test]

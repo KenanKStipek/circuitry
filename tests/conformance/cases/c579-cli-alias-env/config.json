@@ -1,0 +1,23 @@
+{
+  "runtime": {
+    "adapters": {
+      "claude_alpha": {
+        "adapter": "claude_code",
+        "env": {"ALIAS_PROBE": "alpha"}
+      },
+      "claude_beta": {
+        "adapter": "claude_code",
+        "env": {"ALIAS_PROBE": "beta"},
+        "unset_env": ["ALIAS_PROBE"]
+      },
+      "claude_bare": {
+        "adapter": "claude_code",
+        "unset_env": ["ALIAS_PROBE"]
+      },
+      "pi_gamma": {
+        "adapter": "pi",
+        "env": {"ALIAS_PROBE": "gamma"}
+      }
+    }
+  }
+}

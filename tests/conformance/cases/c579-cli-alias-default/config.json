@@ -1,0 +1,13 @@
+{
+  "runtime": {
+    "adapters": {
+      "claude_alt": {
+        "adapter": "claude_code",
+        "timeout_seconds": 900,
+        "env": {
+          "ALIAS_PROBE": "alt"
+        }
+      }
+    }
+  }
+}

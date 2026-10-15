@@ -175,7 +175,25 @@ Every other adapter needs an API key or a local model server. `pi` and `claude_c
 }
 ```
 
-The model is the CLI's own name for it: a Claude Code model for `claude_code`, pi's `provider/id` (`claude-bridge/claude-sonnet-4-5`) for `pi` — so a prompt can pick either with `provider: "pi:claude-bridge/claude-sonnet-4-5"`. The CLI runs with your environment minus two things: the variables that would make it think it is part of a parent pi or Claude Code session — Circuitry may well be running inside one — and `unset_env`, by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so an exported key does not quietly replace the login you meant to use. Give it a generous `timeout_seconds`: a CLI retries a failing request on its own before it reports the error, and a timeout or a cancelled run stops the CLI and everything it started. `cof doctor` reports a CLI that is not installed as `binary:pi` or `binary:claude`; an auth failure or a CLI too old for the model fails the prompt with the CLI's own message. `prompt_type: json` works on both, and on `claude_code` the schema goes to the CLI itself (a schema that is not an object, such as `prompt_type: array`'s, is wrapped in one and unwrapped again). Tokens land in `meta` as usual, and the cost the CLI reports in `meta.cost_usd`. The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key.
+The model is the CLI's own name for it: a Claude Code model for `claude_code`, pi's `provider/id` (`claude-bridge/claude-sonnet-4-5`) for `pi` — so a prompt can pick either with `provider: "pi:claude-bridge/claude-sonnet-4-5"`. The CLI runs with your environment minus two things: the variables that would make it think it is part of a parent pi or Claude Code session — Circuitry may well be running inside one — and `unset_env`, by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so an exported key does not quietly replace the login you meant to use. Give it a generous `timeout_seconds`: a CLI retries a failing request on its own before it reports the error, and a timeout or a cancelled run stops the CLI and everything it started. `cof doctor` reports a CLI that is not installed as `binary:pi` or `binary:claude`; an auth failure or a CLI too old for the model fails the prompt with the CLI's own message. `prompt_type: json` works on both, and on `claude_code` the schema goes to the CLI itself (a schema that is not an object, such as `prompt_type: array`'s, is wrapped in one and unwrapped again). Tokens land in `meta` as usual, and the cost the CLI reports in `meta.cost_usd`. A CLI often picks its account from an environment variable, and a `prompt` effect has no `env`. To send some effects through another login, define an **alias**: a `runtime.adapters` entry whose `adapter` names `claude_code` or `pi`, with `env` and any of that adapter's own settings.
+
+```json
+{
+  "runtime": {
+    "adapters": {
+      "claude_alt": {
+        "adapter": "claude_code",
+        "env": { "CLAUDE_CONFIG_DIR": "~/.claude-alt" },
+        "timeout_seconds": 1800
+      }
+    }
+  }
+}
+```
+
+`provider: claude_alt` (or `provider: "claude_alt:claude-sonnet-4-5"`) then runs Claude Code with that variable set, in that one child process; `meta.adapter` says `claude_alt`, and an effect that names `claude_code` is unaffected. `env` is applied after `unset_env`, a leading `~/` is the home directory, and its values are kept out of saved state, events and error messages. An alias is host configuration like any adapter setting: a document run by path may define one (it is listed in "Applied host settings"), a limited document's is ignored. `cof doctor` checks an alias's own binary under its name.
+
+The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key, and [Aliases of the CLI adapters](../orchestration-reference.md#aliases-of-the-cli-adapters) the rules.
 
 ## Profiles
 
