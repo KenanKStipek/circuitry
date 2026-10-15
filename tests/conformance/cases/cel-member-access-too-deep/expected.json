@@ -1,0 +1,3 @@
+{
+  "error": "maximum recursion depth exceeded while getting the str of an object"
+}

@@ -6660,7 +6660,7 @@
     "strict": false
   },
   {
-    "expr": "((((((((((1))))))))))",
+    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6673,7 +6673,7 @@
     "strict": false
   },
   {
-    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "(((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6686,7 +6686,7 @@
     "strict": false
   },
   {
-    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -6699,7 +6699,46 @@
     "strict": false
   },
   {
-    "expr": "[[[[[[[[[[1]]]]]]]]]]",
+    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6738,20 +6777,7 @@
     "strict": false
   },
   {
-    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false
-  },
-  {
-    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}",
+    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6790,20 +6816,7 @@
     "strict": false
   },
   {
-    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false
-  },
-  {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6816,7 +6829,46 @@
     "strict": false
   },
   {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false
+  },
+  {
+    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -6829,7 +6881,7 @@
     "strict": false
   },
   {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -6842,24 +6894,11 @@
     "strict": false
   },
   {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false
-  },
-  {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
-      "result": false
+      "result": true
     },
     "state": {
       "t": "dict",
@@ -6868,33 +6907,7 @@
     "strict": false
   },
   {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": false
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false
-  },
-  {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false
-  },
-  {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
     "mode": "condition",
     "outcome": {
       "kind": "error",

@@ -14,11 +14,11 @@
 //! limit themselves, before reaching here), unlike every *other*
 //! recursive path in this crate (the `cel`-crate-owned parse tree, and
 //! this crate's own `paths`/`equality`/`ordering` walks over it), which
-//! is a `cel`-crate-owned structure already bounded by
-//! `nesting::MAX_NESTING_DEPTH` -- not just its *bracket* nesting, but
-//! every binary-operator and member/index/call chain within it too
-//! (`nesting.rs`'s own module docs explain why bracket nesting alone
-//! was not enough).
+//! is a `cel`-crate-owned structure already bounded by the five caps
+//! `nesting::max_nesting_depths` tracks -- not just bracket nesting, but
+//! every binary-operator, `&&`/`||`/unary, and member/index/call chain
+//! within it too (`nesting.rs`'s own module docs explain why bracket
+//! nesting alone was not enough).
 
 use std::collections::HashMap;
 use std::fmt;

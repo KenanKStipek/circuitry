@@ -149,7 +149,10 @@ use std::sync::{Arc, OnceLock};
 use cel::{Context, Env};
 use electricity_value::Value;
 
-pub use nesting::{MAX_BRACKET_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH};
+pub use nesting::{
+    MAX_ACCESSOR_NESTING_DEPTH, MAX_CHAIN_NESTING_DEPTH, MAX_LIST_MAP_NESTING_DEPTH,
+    MAX_LOGICAL_UNARY_NESTING_DEPTH, MAX_PAREN_CALL_NESTING_DEPTH, MAX_SAFETY_CHAIN_DEPTH,
+};
 
 /// Python's `repr()` of a `str`, used to match `core/cel_eval.py`'s own
 /// `{expr!r}`/`{unresolved!r}` messages word for word: a message
@@ -201,12 +204,11 @@ impl CelError {
         self.overflow
     }
 
-    /// Whether this is a nesting-too-deep failure: either the expression
-    /// itself nested more than [`MAX_BRACKET_NESTING_DEPTH`] levels of
-    /// brackets, or more than [`MAX_CHAIN_NESTING_DEPTH`] operator/
-    /// accessor links, deep (rejected before parsing, `nesting.rs`'s
-    /// module docs), or a `value`/`meta`/`state` argument nested more
-    /// than [`electricity_value::MAX_DEPTH`] levels deep (rejected while
+    /// Whether this is a nesting-too-deep failure: the expression itself
+    /// nested past one of the five shape-specific caps `nesting.rs`
+    /// tracks (rejected before parsing, that module's own docs), or a
+    /// `value`/`meta`/`state` argument nested more than
+    /// [`electricity_value::MAX_DEPTH`] levels deep (rejected while
     /// converting it, `convert.rs`'s module docs) — never a
     /// parse/compile/evaluation failure against well-formed, bounded
     /// input.
@@ -248,32 +250,58 @@ fn check_length(expr: &str) -> Result<(), CelError> {
     Ok(())
 }
 
-/// Rejects an expression whose bracket nesting ([`MAX_BRACKET_NESTING_DEPTH`])
-/// or operator/accessor chain ([`MAX_CHAIN_NESTING_DEPTH`]) runs too
-/// deep, *before* handing it to `cel`'s own parser — see `nesting.rs`'s
-/// module docs for why this crate needs its own limits, measured
-/// independently of [`electricity_value::MAX_DEPTH`], and the
-/// measurements behind the specific numbers.
-///
-/// Worded the same way a genuine parse/evaluation failure is
+/// Rejects an expression whose bracket nesting ([`MAX_PAREN_CALL_NESTING_DEPTH`],
+/// [`MAX_LIST_MAP_NESTING_DEPTH`]) or chain shape ([`MAX_CHAIN_NESTING_DEPTH`],
+/// [`MAX_LOGICAL_UNARY_NESTING_DEPTH`]) runs too deep, *before* handing it to `cel`'s own parser — see
+/// `nesting.rs`'s module docs for why this crate needs five separate
+/// limits rather than one, and the measurements behind each number.
+/// Worded the same way a genuine evaluation failure is
 /// (`"CEL evaluation failed for {expr!r}: ..."`, matching
-/// `core/cel_eval.py`'s own form for the cases Circuitry itself
-/// reports as an evaluation failure, not a bare, uncaught exception
-/// — see `nesting.rs`'s module docs on why Circuitry's own deeper
-/// boundary isn't a single, stable number this crate can reproduce
-/// exactly), rather than this crate's own prior, bespoke wording.
+/// `core/cel_eval.py`'s own `CelEvaluationError` form), matching
+/// Circuitry's own behavior for every shape checked here except
+/// [`MAX_ACCESSOR_NESTING_DEPTH`]: the document still compiles and
+/// starts running for the other four shapes, and this is a runtime
+/// failure on the effect that evaluated it, which `on_error:` can
+/// catch. A member-access chain past [`MAX_ACCESSOR_NESTING_DEPTH`]
+/// fails Circuitry's own `evaluate_cel` too when called directly
+/// (bypassing the compiler's own `validate_cel_syntax`, which
+/// [`validate_syntax`] mirrors) -- `evaluate_cel` calls the same
+/// `_compile` that raises the bare, uncaught `RecursionError`
+/// (`nesting.rs`'s module docs), so this function rejects it the same
+/// bare way too, for a caller reaching [`evaluate_condition`]/
+/// [`evaluate_expect`] directly rather than through a compiled document.
 fn check_nesting_depth(expr: &str) -> Result<(), CelError> {
     let depths = nesting::max_nesting_depths(expr);
-    if depths.bracket > MAX_BRACKET_NESTING_DEPTH {
+    if depths.accessor > MAX_ACCESSOR_NESTING_DEPTH {
+        return Err(CelError {
+            too_deeply_nested: true,
+            ..CelError::new(expr, "maximum recursion depth exceeded".to_string())
+        });
+    }
+    if depths.paren_call > MAX_PAREN_CALL_NESTING_DEPTH {
         return Err(CelError {
             too_deeply_nested: true,
             ..CelError::new(
                 expr,
                 format!(
-                    "CEL evaluation failed for {}: expression nesting too deep ({} levels of brackets, max {}).",
+                    "CEL evaluation failed for {}: expression nesting too deep ({} levels of parentheses/calls, max {}).",
                     py_repr(expr),
-                    depths.bracket,
-                    MAX_BRACKET_NESTING_DEPTH
+                    depths.paren_call,
+                    MAX_PAREN_CALL_NESTING_DEPTH
+                ),
+            )
+        });
+    }
+    if depths.list_map > MAX_LIST_MAP_NESTING_DEPTH {
+        return Err(CelError {
+            too_deeply_nested: true,
+            ..CelError::new(
+                expr,
+                format!(
+                    "CEL evaluation failed for {}: expression nesting too deep ({} levels of list/map literals, max {}).",
+                    py_repr(expr),
+                    depths.list_map,
+                    MAX_LIST_MAP_NESTING_DEPTH
                 ),
             )
         });
@@ -284,10 +312,24 @@ fn check_nesting_depth(expr: &str) -> Result<(), CelError> {
             ..CelError::new(
                 expr,
                 format!(
-                    "CEL evaluation failed for {}: expression nesting too deep ({} operator/accessor links, max {}).",
+                    "CEL evaluation failed for {}: expression nesting too deep ({} operator/index links, max {}).",
                     py_repr(expr),
                     depths.chain,
                     MAX_CHAIN_NESTING_DEPTH
+                ),
+            )
+        });
+    }
+    if depths.logical_unary > MAX_LOGICAL_UNARY_NESTING_DEPTH {
+        return Err(CelError {
+            too_deeply_nested: true,
+            ..CelError::new(
+                expr,
+                format!(
+                    "CEL evaluation failed for {}: expression nesting too deep ({} `&&`/`||`/unary links, max {}).",
+                    py_repr(expr),
+                    depths.logical_unary,
+                    MAX_LOGICAL_UNARY_NESTING_DEPTH
                 ),
             )
         });
@@ -514,15 +556,26 @@ pub fn evaluate_expect(
 pub enum CelSyntaxError {
     Empty,
     TooLong(usize),
-    /// Not reachable from `core/cel_eval.py` parity (Python's own
-    /// `validate_cel_syntax` has no nesting-depth check) -- a Rust-only
-    /// safety addition, the same reason [`CelError::is_too_deeply_nested`]
-    /// exists, so a compile-time syntax check can't itself stack-overflow
-    /// on deeply nested input. Bracket nesting past
-    /// [`MAX_BRACKET_NESTING_DEPTH`] and an operator/accessor chain past
-    /// [`MAX_CHAIN_NESTING_DEPTH`] are reported the same way.
-    TooDeeplyNestedBrackets(usize),
-    TooDeeplyNestedChain(usize),
+    /// A member-access chain ([`nesting::max_nesting_depths`]'s
+    /// `accessor`) past [`MAX_ACCESSOR_NESTING_DEPTH`] -- the one shape
+    /// where Circuitry itself fails before a document ever starts
+    /// running (`nesting.rs`'s module docs), so this crate matches the
+    /// phase as well as the boundary: checked only here, at compile
+    /// time, never by [`check_nesting_depth`]. Its own `Display` is
+    /// deliberately the bare text Circuitry's own uncaught exception
+    /// shows (`nesting.rs`'s module docs), not the usual
+    /// `"CEL evaluation failed for ..."` wrapper -- see
+    /// [`CelSyntaxError::is_parse_error`], which this variant does *not*
+    /// match, and `electricity-compiler`'s own `state_ns::validate_cel_syntax`,
+    /// which skips its usual effect-path prefix for this one variant too.
+    TooDeeplyNestedAccessor(usize),
+    /// Not reachable from `core/cel_eval.py` parity at all -- a Rust-only
+    /// safety backstop ([`nesting::MAX_SAFETY_CHAIN_DEPTH`]'s own module
+    /// docs) so a compile-time syntax check can't itself stack-overflow
+    /// on a bracket/chain/logical shape deep enough to threaten this
+    /// crate's own 2 MiB stack, even though Circuitry has no comparable
+    /// boundary at compile time for those shapes to match.
+    TooDeeplyNestedForSafety(usize),
     Parse(String),
 }
 
@@ -531,13 +584,13 @@ impl CelSyntaxError {
     /// {expr!r}"` suffix (`core/cel_eval.py`'s own `validate_cel_syntax`
     /// only appends it for an expression that fails to parse, not for
     /// the empty/too-long cases, which already show the whole problem
-    /// without quoting the expression back).
+    /// without quoting the expression back). [`CelSyntaxError::TooDeeplyNestedAccessor`]
+    /// is deliberately excluded too -- Circuitry's own uncaught
+    /// exception for that shape has no such suffix either.
     pub fn is_parse_error(&self) -> bool {
         matches!(
             self,
-            CelSyntaxError::Parse(_)
-                | CelSyntaxError::TooDeeplyNestedBrackets(_)
-                | CelSyntaxError::TooDeeplyNestedChain(_)
+            CelSyntaxError::Parse(_) | CelSyntaxError::TooDeeplyNestedForSafety(_)
         )
     }
 }
@@ -550,13 +603,13 @@ impl fmt::Display for CelSyntaxError {
                 f,
                 "expression is too long ({len} chars, max {MAX_EXPR_LENGTH})."
             ),
-            CelSyntaxError::TooDeeplyNestedBrackets(depth) => write!(
+            CelSyntaxError::TooDeeplyNestedAccessor(_depth) => {
+                write!(f, "maximum recursion depth exceeded")
+            }
+            CelSyntaxError::TooDeeplyNestedForSafety(depth) => write!(
                 f,
-                "expression nesting too deep ({depth} levels of brackets, max {MAX_BRACKET_NESTING_DEPTH})."
-            ),
-            CelSyntaxError::TooDeeplyNestedChain(depth) => write!(
-                f,
-                "expression nesting too deep ({depth} operator/accessor links, max {MAX_CHAIN_NESTING_DEPTH})."
+                "expression nesting too deep ({depth} links, max {} for compile-time safety).",
+                nesting::MAX_SAFETY_CHAIN_DEPTH
             ),
             CelSyntaxError::Parse(msg) => write!(f, "expression does not parse ({msg})."),
         }
@@ -578,8 +631,9 @@ impl std::error::Error for CelSyntaxError {}
 /// [`CelSyntaxError::Parse`] mirror Python's own three raises, in the
 /// same order (empty is checked before length, matching
 /// `core/cel_eval.py`'s own `if not expr ... ; if len(expr) > ...`).
-/// [`CelSyntaxError::TooDeeplyNestedBrackets`]/[`CelSyntaxError::TooDeeplyNestedChain`]
-/// have no Python counterpart (see their own docs).
+/// [`CelSyntaxError::TooDeeplyNestedAccessor`] has a real, if uncaught
+/// and unstably-worded, Python counterpart; [`CelSyntaxError::TooDeeplyNestedForSafety`]
+/// has none at all (see their own docs).
 pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
     if expr.trim().is_empty() {
         return Err(CelSyntaxError::Empty);
@@ -589,11 +643,19 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
         return Err(CelSyntaxError::TooLong(len));
     }
     let depths = nesting::max_nesting_depths(expr);
-    if depths.bracket > MAX_BRACKET_NESTING_DEPTH {
-        return Err(CelSyntaxError::TooDeeplyNestedBrackets(depths.bracket));
+    // The one shape Circuitry itself rejects before a document ever
+    // runs (`nesting.rs`'s module docs) -- checked here, not in
+    // `check_nesting_depth`, to match that phase.
+    if depths.accessor > MAX_ACCESSOR_NESTING_DEPTH {
+        return Err(CelSyntaxError::TooDeeplyNestedAccessor(depths.accessor));
     }
-    if depths.chain > MAX_CHAIN_NESTING_DEPTH {
-        return Err(CelSyntaxError::TooDeeplyNestedChain(depths.chain));
+    // A safety-only backstop against this call's own `env.compile`
+    // genuinely overflowing this crate's stack -- not a parity check;
+    // every shape it could otherwise catch is already far tighter at
+    // runtime (`check_nesting_depth`) or, for brackets, by `cel`'s own
+    // parser guard (`nesting.rs`'s module docs).
+    if depths.raw_combined > nesting::MAX_SAFETY_CHAIN_DEPTH {
+        return Err(CelSyntaxError::TooDeeplyNestedForSafety(depths.raw_combined));
     }
     let env = stdlib_env();
     env.compile(expr)
@@ -948,6 +1010,40 @@ mod tests {
         let err = validate_syntax("state.a ==").unwrap_err();
         assert!(matches!(err, CelSyntaxError::Parse(_)));
         assert!(err.to_string().starts_with("expression does not parse ("));
+        assert!(err.is_parse_error());
+    }
+
+    #[test]
+    fn validate_syntax_rejects_a_too_deep_member_chain_with_circuitrys_own_bare_text() {
+        let expr = format!("state{}", ".a".repeat(MAX_ACCESSOR_NESTING_DEPTH + 1));
+        let err = validate_syntax(&expr).unwrap_err();
+        assert!(matches!(err, CelSyntaxError::TooDeeplyNestedAccessor(_)));
+        assert_eq!(err.to_string(), "maximum recursion depth exceeded");
+        assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn validate_syntax_accepts_a_member_chain_at_the_accessor_limit() {
+        let expr = format!("state{}", ".a".repeat(MAX_ACCESSOR_NESTING_DEPTH));
+        assert_eq!(validate_syntax(&expr), Ok(()));
+    }
+
+    #[test]
+    fn validate_syntax_accepts_an_operator_chain_well_past_evaluations_own_cap() {
+        // Circuitry's own compile-time budget for this shape is far
+        // looser than its evaluation-time one (`nesting.rs`'s module
+        // docs): a document using an arithmetic chain this deep still
+        // compiles in Circuitry, only failing once it runs, so
+        // `validate_syntax` must accept it too.
+        let expr = format!("0{}", "+1".repeat(MAX_CHAIN_NESTING_DEPTH * 2));
+        assert_eq!(validate_syntax(&expr), Ok(()));
+    }
+
+    #[test]
+    fn validate_syntax_rejects_a_chain_past_the_compile_time_safety_backstop() {
+        let expr = format!("0{}", "+1".repeat(nesting::MAX_SAFETY_CHAIN_DEPTH + 1));
+        let err = validate_syntax(&expr).unwrap_err();
+        assert!(matches!(err, CelSyntaxError::TooDeeplyNestedForSafety(_)));
         assert!(err.is_parse_error());
     }
 

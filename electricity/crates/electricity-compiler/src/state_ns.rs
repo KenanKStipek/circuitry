@@ -247,6 +247,14 @@ pub(crate) fn validate_cel_syntax(
     }
     match electricity_cel::validate_syntax(expr) {
         Ok(()) => Ok(()),
+        // Circuitry's own uncaught exception for this one shape has no
+        // effect-path/expression framing at all, just Python's own bare
+        // text (`electricity_cel`'s `nesting.rs` module docs) -- matched
+        // here by skipping this function's usual `where_`/`Expression:`
+        // wrapping entirely, not just the latter.
+        Err(err @ electricity_cel::CelSyntaxError::TooDeeplyNestedAccessor(_)) => {
+            Err(CompileError(err.to_string()))
+        }
         Err(err) if err.is_parse_error() => Err(CompileError(format!(
             "{where_}: {err} Expression: {}",
             Value::Str(expr.to_string()).py_repr()
