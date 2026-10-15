@@ -776,10 +776,11 @@ pub(crate) async fn execute_prompt(
             cause_class: None,
         })?;
 
-    let render_result = render_prompt(prompt, &render_root, run_ctx);
-    let (messages, prompt_sent) = match render_result {
-        Ok(pair) => pair,
-        Err(message) => {
+    let render_result = render_prompt(prompt, &render_root, run_ctx, name);
+    let (messages, prompt_sent, template_files) = match render_result {
+        Ok(rendered) => rendered,
+        Err(failure) => {
+            let RenderFailure { message, py_class } = failure;
             set_leaf(store, &meta_node, "created_at", now_iso());
             set_leaf(store, &meta_node, "error", Value::Str(redact_str(&message)));
             set_leaf(store, &meta_node, "completed_at", now_iso());
@@ -796,7 +797,7 @@ pub(crate) async fn execute_prompt(
             observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Raised {
-                    py_class: electricity_tools::PyExc::TemplateError,
+                    py_class,
                     message,
                     cause: electricity_tools::ErrorCause::None,
                     cause_class: None,
@@ -892,7 +893,16 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "warnings");
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
+    pop_leaf(&meta_node, "template_files");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
+    if !template_files.is_empty() {
+        set_leaf(
+            store,
+            &meta_node,
+            "template_files",
+            Value::List(template_files),
+        );
+    }
     // `_score_and_route` (`prompt.py:546-556`, issue #516/M1-K2), right
     // after `meta.waiting_for` is set and before `effect_start` fires:
     // scores the effect when scoring is on, and may replace
@@ -1414,16 +1424,68 @@ fn chat_messages(messages: &[(Role, String)]) -> Vec<crate::adapter::ChatMessage
         .collect()
 }
 
-/// `_render_messages` + `_materialize_input`: `template` wins whenever
-/// the IR carries it (the compiler already resolved that truthiness
-/// check); otherwise the rendered messages, flattened as `meta.
-/// prompt_sent`. Returns the *typed* messages (for [`chat_messages`])
-/// alongside the flattened text.
-fn render_prompt<R: electricity_template::ScopeRoot>(
+/// A prompt that failed to render or read: the message and the Python class
+/// it would have raised.
+struct RenderFailure {
+    message: String,
+    py_class: electricity_tools::PyExc,
+}
+
+impl From<String> for RenderFailure {
+    fn from(message: String) -> Self {
+        RenderFailure {
+            message,
+            py_class: electricity_tools::PyExc::TemplateError,
+        }
+    }
+}
+
+/// One `file: {from: ...}` source read at dispatch (issue #578): its text,
+/// and its `meta.template_files` record.
+fn read_dispatch_file<R: crate::params::ParamsCtx>(
+    source: &electricity_bytecode::DispatchFile,
+    root: &R,
+    field: &str,
+    prompt_name: &str,
+) -> Result<(String, Value), RenderFailure> {
+    let raw_path = root.resolve_from(&source.path_from);
+    let within_value = source
+        .within_from
+        .as_deref()
+        .and_then(|path| root.resolve_from(path));
+    let read = electricity_compiler::prompt_files::read_dispatch_file(
+        source,
+        raw_path.as_ref(),
+        within_value.as_ref(),
+        field,
+        &format!("Prompt effect '{prompt_name}'"),
+    )
+    .map_err(|message| RenderFailure {
+        message,
+        py_class: electricity_tools::PyExc::PromptFileError,
+    })?;
+    let mut record = Dict::new();
+    record.insert(key("field"), Value::Str(field.to_string()));
+    record.insert(key("path"), Value::Str(read.path));
+    record.insert(key("sha256"), Value::Str(read.sha256));
+    record.insert(key("chars"), Value::from(read.chars as i64));
+    Ok((read.text, Value::Dict(record)))
+}
+
+/// `_read_dispatch_files` + `_render_messages` + `_materialize_input`:
+/// `template` wins whenever the IR carries it (the compiler already
+/// resolved that truthiness check); otherwise the rendered messages,
+/// flattened as `meta.prompt_sent`. Returns the *typed* messages (for
+/// [`chat_messages`]) alongside the flattened text, and one
+/// `meta.template_files` record per file read at dispatch (a
+/// `file: {from: ...}` source's text is used verbatim, never rendered).
+#[allow(clippy::type_complexity)]
+fn render_prompt<R: crate::params::ParamsCtx>(
     prompt: &PromptOp,
     root: &R,
     run_ctx: &RunContext<'_>,
-) -> Result<(Vec<(Role, String)>, String), String> {
+    prompt_name: &str,
+) -> Result<(Vec<(Role, String)>, String, Vec<Value>), RenderFailure> {
     match &prompt.content {
         PromptContent::Template(text) => {
             let rendered = crate::compose::render_with_composition(
@@ -1435,26 +1497,50 @@ fn render_prompt<R: electricity_template::ScopeRoot>(
                 &electricity_template::PlainCtx,
                 false,
             )?;
-            Ok((Vec::new(), rendered))
+            Ok((Vec::new(), rendered, Vec::new()))
+        }
+        PromptContent::TemplateFile(source) => {
+            let (text, record) = read_dispatch_file(source, root, "template", prompt_name)?;
+            Ok((Vec::new(), text, vec![record]))
         }
         PromptContent::Messages(messages) => {
+            // Every file is read before any message renders, like Python's
+            // `_read_dispatch_files`, so a bad file fails the effect first.
+            let mut files: Vec<Option<String>> = Vec::with_capacity(messages.len());
+            let mut records = Vec::new();
+            for (index, message) in messages.iter().enumerate() {
+                match &message.file {
+                    Some(source) => {
+                        let field = format!("messages[{index}].content");
+                        let (text, record) = read_dispatch_file(source, root, &field, prompt_name)?;
+                        files.push(Some(text));
+                        records.push(record);
+                    }
+                    None => files.push(None),
+                }
+            }
             let mut rendered = Vec::with_capacity(messages.len());
             let mut flattened = Vec::with_capacity(messages.len());
             for (index, message) in messages.iter().enumerate() {
-                let label = format!("messages[{index}].content");
-                let content = crate::compose::render_with_composition(
-                    &message.content.source,
-                    root,
-                    run_ctx.declared_prompts,
-                    run_ctx.effect_names,
-                    &label,
-                    &electricity_template::PlainCtx,
-                    false,
-                )?;
+                let content = match files[index].take() {
+                    Some(text) => text,
+                    None => {
+                        let label = format!("messages[{index}].content");
+                        crate::compose::render_with_composition(
+                            &message.content.source,
+                            root,
+                            run_ctx.declared_prompts,
+                            run_ctx.effect_names,
+                            &label,
+                            &electricity_template::PlainCtx,
+                            false,
+                        )?
+                    }
+                };
                 flattened.push(format!("{}: {content}", role_str(message.role)));
                 rendered.push((message.role, content));
             }
-            Ok((rendered, flattened.join("\n\n")))
+            Ok((rendered, flattened.join("\n\n"), records))
         }
     }
 }

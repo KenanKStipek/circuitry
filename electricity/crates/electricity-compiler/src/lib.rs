@@ -202,10 +202,37 @@ pub enum DocumentOrigin {
         document_dir: PathBuf,
         confinement_root: PathBuf,
     },
+    /// A document with a real file of its own that is *limited*, not run
+    /// by path: a `use` child. It resolves `{file: ...}` exactly like
+    /// [`DocumentOrigin::File`]; the one difference is a prompt's
+    /// `file: {from: ...}` (issue #578), whose `within` must stay inside
+    /// `confinement_root` here.
+    LimitedFile {
+        document_dir: PathBuf,
+        confinement_root: PathBuf,
+    },
     /// Generated at run time (a reflector/decompose plan, a `use:
     /// inline` child) or with no path at all — `file:` is a compile
     /// error against this origin.
     Generated,
+}
+
+impl DocumentOrigin {
+    /// The document's own directory and the project a `{file: ...}` must stay
+    /// inside, for any origin with a file of its own.
+    pub fn file_dirs(&self) -> Option<(&std::path::Path, &std::path::Path)> {
+        match self {
+            DocumentOrigin::File {
+                document_dir,
+                confinement_root,
+            }
+            | DocumentOrigin::LimitedFile {
+                document_dir,
+                confinement_root,
+            } => Some((document_dir, confinement_root)),
+            DocumentOrigin::Generated => None,
+        }
+    }
 }
 
 /// A compile-time error from [`compile_document`] — Circuitry's own

@@ -778,6 +778,10 @@ def run(req: RunRequest) -> RunResult:
                 is_cache_path=document_is_cache_path,
                 remote_library_source=req.remote_library_source,
             ),
+            # The same trust the document's `runtime:` block gets: a document
+            # run by path can name any `within` for a prompt's
+            # `file: {from: ...}`; a limited one stays inside its project.
+            trusted=document_trust_document or cfg.trust_orchestration_runtime,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
@@ -1410,6 +1414,7 @@ def validate(
                 library_registry=library_registry,
                 is_cache_path=document_is_cache_path,
             ),
+            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
 
         # Same merge `run()` applies (document `runtime:` key by key over

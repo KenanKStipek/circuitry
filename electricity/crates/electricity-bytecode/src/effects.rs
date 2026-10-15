@@ -71,11 +71,31 @@ pub enum Role {
     Tool,
 }
 
+/// `core/prompt_files.py::DispatchFileSource` -- a prompt's `template`/
+/// message `content` of `{file: {from: <state path>}, within: <dir>}`
+/// (issue #578), read when the effect dispatches. Field names are the
+/// Python dataclass's own, so a projection of either side reads the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DispatchFile {
+    /// The state path holding the file's path.
+    pub path_from: String,
+    /// A literal absolute `within` directory.
+    pub within: Option<String>,
+    /// `input.<name>`, when `within` is read from the run's inputs.
+    pub within_from: Option<String>,
+    /// For a limited document, the project the resolved `within` must stay
+    /// inside; `None` for a trusted one.
+    pub confine_to: Option<String>,
+}
+
 /// `MessageDef`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub role: Role,
     pub content: TemplateText,
+    /// `MessageDef.file`: `content` is read from this file at dispatch (and
+    /// is then empty).
+    pub file: Option<DispatchFile>,
 }
 
 /// `PromptDefinition.prompt_type`. `"image"` is refused at compile time
@@ -110,6 +130,9 @@ pub enum RoutingOverride {
 #[derive(Debug, Clone, Serialize)]
 pub enum PromptContent {
     Template(TemplateText),
+    /// `PromptDefinition.template_file` (`template` is then `None`): the
+    /// template is read from this file at dispatch (issue #578).
+    TemplateFile(Box<DispatchFile>),
     Messages(Vec<Message>),
 }
 

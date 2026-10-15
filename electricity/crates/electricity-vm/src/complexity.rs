@@ -99,6 +99,9 @@ fn definition_value(prompt: &PromptOp) -> Value {
                 Value::Str(template.source.clone()),
             );
         }
+        // `template` is `None` on the Python definition: the text is read at
+        // dispatch (issue #578), and a rendered prompt is what gets scored.
+        PromptContent::TemplateFile(_) => {}
         PromptContent::Messages(messages) => {
             let items = messages
                 .iter()
@@ -391,6 +394,7 @@ mod tests {
                 true,
                 electricity_bytecode::Escape::None,
             ),
+            file: None,
         }]);
         op.prompt_type = PromptType::Json;
         let mut schema = Dict::new();

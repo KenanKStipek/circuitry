@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #578: trust boundary",
+  "description": "A `use` child is a limited document: a prompt's `file: {from: ...}` literal `within` outside the child's project is a compile error at the point the child loads, failing the `use` effect (`on_error: continue` records it).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

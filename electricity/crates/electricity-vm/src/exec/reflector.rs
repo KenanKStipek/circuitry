@@ -558,7 +558,9 @@ fn prepend_prime_to_plan_prompt(region: &Region, plan_from_step: &str, prime_tex
                         if let LeafKind::Prompt(prompt_op) = leaf.as_ref() {
                             let old_source = match &prompt_op.content {
                                 PromptContent::Template(t) => t.source.clone(),
-                                PromptContent::Messages(_) => String::new(),
+                                PromptContent::TemplateFile(_) | PromptContent::Messages(_) => {
+                                    String::new()
+                                }
                             };
                             let mut new_prompt = prompt_op.clone();
                             new_prompt.content = PromptContent::Template(TemplateText::new(

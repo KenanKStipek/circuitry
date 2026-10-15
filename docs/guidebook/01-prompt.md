@@ -188,6 +188,8 @@ prime.<name>.meta.prompt_type
 prime.<name>.meta.prompt_sent            # the rendered prompt, post-interpolation
 prime.<name>.meta.prompt_sent_sha256     # SHA-256 of the whole rendered prompt (UTF-8)
 prime.<name>.meta.prompt_chars           # its length in characters
+prime.<name>.meta.template_files          # present only when a template or message was read from a file at
+                                         # dispatch: {field, path, sha256, chars} per file
 prime.<name>.meta.tokens_sent / tokens_received            # the winning attempt's own cost
 prime.<name>.meta.tokens_sent_total / tokens_received_total # every attempt this execution made
 prime.<name>.meta.error                  # null, or the failure
@@ -216,6 +218,18 @@ effects:
 ```
 
 The adapter still receives the whole text, and retries, fallback and complexity scoring still see it. [The reference](../orchestration-reference.md#recording-the-prompt-text-runtimestateprompt_sent) has the details.
+
+**A prompt built at run time.** When a tool writes one prompt file per item, the file's text should not travel through state twice. `file: {from: <state path>}` with a `within:` directory reads it when the effect dispatches, and sends it exactly as written, `{{` and all:
+
+```yaml
+- type: prompt
+  name: edit
+  template:
+    file: {from: prime.prep.value.prompt_file}
+    within: {from: input.work_dir}
+```
+
+`within` is a literal absolute path or `{from: input.<name>}`; the file must stay inside it. `meta.template_files` records the path, SHA-256 and length of each file read, and with `runtime.state.prompt_sent: sha256` no copy of the text stays in state. The file is run data, not part of the document, so `--resume` after a failure reads whatever the file holds then. [The reference](../orchestration-reference.md#reading-a-prompt-file-at-dispatch-file-from-state-path) has the trust rules and the errors.
 
 Inside a `dynamic` the path gains the container's name (`prime.context.search.value`); inside a loop it gains the pass (`prime.diagnoses.iter_0.diagnose.value`). The rule never changes: the path is derived from the names above it, and nothing else.
 

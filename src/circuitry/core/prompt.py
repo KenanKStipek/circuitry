@@ -39,6 +39,7 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .prompt_files import DispatchFileSource, read_dispatch_file
 from .prompt_record import PromptSentSetting, prompt_sent_fields, prompt_sent_setting
 from .store import Store
 from .templates import render_template
@@ -254,6 +255,9 @@ class MessageDef:
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str
+    #: ``content: {file: {from: ...}, within: ...}`` (#578): the text is read
+    #: from this file when the effect dispatches; *content* is then ``""``.
+    file: DispatchFileSource | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +291,9 @@ class PromptDefinition:
 
     # Primary input form (exactly one must be provided)
     template: str | None = None
+    #: ``template: {file: {from: ...}, within: ...}`` (#578): the text is read
+    #: from this file when the effect dispatches; *template* is then ``None``.
+    template_file: DispatchFileSource | None = None
     messages: Sequence[MessageDef] | None = None
 
     # Typing and decoding
@@ -486,9 +493,12 @@ class PromptRuntime:
         # Materialize prompt input. A template that fails to render is this
         # effect's failure, under its own on_error — never the raw text sent
         # to the model as if it had rendered.
+        # A ``file: {from: ...}`` source is read here, once, before the first
+        # attempt: retries and fallback reuse its text (#578).
         try:
-            messages = self._render_messages(effective_ctx)
-            prompt_sent = self._materialize_input(effective_ctx, messages)
+            file_texts, file_records = self._read_dispatch_files(effective_ctx)
+            messages = self._render_messages(effective_ctx, file_texts)
+            prompt_sent = self._materialize_input(effective_ctx, messages, file_texts)
         except Exception as e:
             meta["created_at"] = _now_iso()
             meta["error"] = redact(str(e))
@@ -551,9 +561,11 @@ class PromptRuntime:
         meta.pop("answer", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
-        for key in ("finish_reason", "warnings", "assets", "cost_usd"):
+        for key in ("finish_reason", "warnings", "assets", "cost_usd", "template_files"):
             meta.pop(key, None)
         meta["waiting_for"] = None
+        if file_records:
+            meta["template_files"] = file_records
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -1434,29 +1446,72 @@ class PromptRuntime:
         parts.append(label)
         return " → ".join(parts)
 
-    def _render_messages(self, ctx: dict[str, Any]) -> tuple[ChatMessage, ...]:
-        """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template."""
-        if self.defn.template or not self.defn.messages:
+    def _read_dispatch_files(
+        self, ctx: dict[str, Any]
+    ) -> tuple[dict[str, str], list[dict[str, Any]]]:
+        """Read each ``file: {from: ...}`` source this prompt will use (#578).
+
+        Returns ``({field: text}, [meta.template_files record, ...])``, in the
+        order the fields are used: the template, else each message's content.
+        A source the prompt will not use (``messages`` next to a ``template``)
+        is not read.
+        """
+        sources: list[tuple[str, DispatchFileSource]] = []
+        if self.defn.template:
+            pass
+        elif self.defn.template_file is not None:
+            sources.append(("template", self.defn.template_file))
+        else:
+            for index, msg in enumerate(self.defn.messages or ()):
+                if msg.file is not None:
+                    sources.append((f"messages[{index}].content", msg.file))
+        texts: dict[str, str] = {}
+        records: list[dict[str, Any]] = []
+        for field, source in sources:
+            read = read_dispatch_file(
+                source, ctx, field=field, effect_label=f"Prompt effect '{self.defn.name}'"
+            )
+            texts[field] = read.text
+            records.append(read.record)
+        return texts, records
+
+    def _render_messages(
+        self, ctx: dict[str, Any], file_texts: dict[str, str] | None = None
+    ) -> tuple[ChatMessage, ...]:
+        """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template.
+
+        A message whose content is a ``file: {from: ...}`` takes its text from
+        *file_texts* verbatim, unrendered.
+        """
+        if self.defn.template or self.defn.template_file is not None or not self.defn.messages:
             return ()
         declared = declared_prompts(self.runtime_config)
         known_names = known_effect_names(self.runtime_config)
+        file_texts = file_texts or {}
         return tuple(
             ChatMessage(
                 role=msg.role,
-                content=render_with_composition(
-                    msg.content,
-                    ctx,
-                    declared=declared,
-                    known_effect_names=known_names,
-                    label=f"messages[{index}].content",
-                    escape=False,
+                content=(
+                    file_texts[f"messages[{index}].content"]
+                    if msg.file is not None
+                    else render_with_composition(
+                        msg.content,
+                        ctx,
+                        declared=declared,
+                        known_effect_names=known_names,
+                        label=f"messages[{index}].content",
+                        escape=False,
+                    )
                 ),
             )
             for index, msg in enumerate(self.defn.messages)
         )
 
     def _materialize_input(
-        self, ctx: dict[str, Any], messages: tuple[ChatMessage, ...] = ()
+        self,
+        ctx: dict[str, Any],
+        messages: tuple[ChatMessage, ...] = (),
+        file_texts: dict[str, str] | None = None,
     ) -> str:
         """The prompt as one string: the rendered template, or the turns
         flattened as ``role: content``.
@@ -1474,6 +1529,9 @@ class PromptRuntime:
                 label="template",
                 escape=False,
             )
+
+        if self.defn.template_file is not None:
+            return (file_texts or {})["template"]
 
         if messages:
             return "\n\n".join(f"{msg.role}: {msg.content}" for msg in messages)

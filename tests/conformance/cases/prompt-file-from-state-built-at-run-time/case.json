@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #578 with issue #577: a prompt built in a file leaves no copy of its text in state",
+  "description": "A tool writes the prompt text (which contains `{{...}}`) to a file at run time and prints its path; the prompt reads it at dispatch with `runtime.state.prompt_sent: sha256`, so `meta.prompt_sent` is null and `meta.template_files` carries the file's path, SHA-256 and length. The tool's own `value` is the path, not the text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": [
+    "-e", "work_dir=__CASE_DIR__",
+    "-e", "body=Review {{this}} and {{#that}}x{{/that}}. h\u00e9llo"
+  ],
+  "expect": "success"
+}

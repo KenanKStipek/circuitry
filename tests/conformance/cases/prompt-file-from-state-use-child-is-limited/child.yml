@@ -1,0 +1,6 @@
+effects:
+  - type: prompt
+    name: ask
+    template:
+      file: {from: input.prompt_file}
+      within: /nowhere/outside/the/project

@@ -1,0 +1,1 @@
+WARNING: prompt 'from_message_file': adapter 'scripted' ignored: messages (roles flattened into one prompt)

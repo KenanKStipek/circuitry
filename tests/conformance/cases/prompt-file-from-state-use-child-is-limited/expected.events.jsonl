@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-15T18:43:30.127Z","ev":"run_start","run_id":"f75948d6-353a-4d9d-af11-fb9ae6c52f30","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":58380}
+{"v":1,"seq":1,"ts":"2026-10-15T18:43:30.131Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-15T18:43:30.131Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-10-15T18:43:30.132Z","ev":"end","id":1,"path":"prime.child","ok":false,"ms":2,"error":"prime.effects[0].template: 'within' '/nowhere/outside/the/project' resolves outside the project (<CASE_DIR>) \u2014 a limited document's 'within' must stay inside it."}
+{"v":1,"seq":4,"ts":"2026-10-15T18:43:30.132Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-10-15T18:43:30.132Z","ev":"run_end","ok":true}

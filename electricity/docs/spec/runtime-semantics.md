@@ -300,7 +300,7 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
-  assets?`.
+  assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
   params_rendered (redacted), stdout, stderr, exit_code, binary? (process
   plugins), status_code? (HTTP-family only), raw (redacted + size-capped),
@@ -940,6 +940,35 @@ non-string included, is a configuration error with the message
 positive integer), got <repr>.` — raised by `cof check` after the
 concurrency-configuration errors, and by a run right after the complexity
 block. Attempt and fallback records never carry prompt text.
+
+**`file: {from: <state path>}, within: <dir>`** (issue #578,
+`core/prompt_files.py`): a `prompt` effect's `template`, and a message's
+`content`, may read their text when the effect dispatches rather than when the
+document loads. It is *not* allowed in a `yield` or the top-level `prompts:`
+map (a compile error naming the field). `within` is required: a literal
+absolute path, or `{from: input.<name>}` (anything else, an effect's output
+included, is a compile error). The state value is the file's path; a relative
+one resolves against `within`, and after symlinks are resolved the file must
+be inside it. The file is read once per execution of the effect, before the
+first attempt (retries and fallback reuse the text), and used **verbatim**:
+bytes decoded as UTF-8, no newline translation, no Mustache. Size cap 1 MiB
+(1,048,576 bytes). Each failure — a state value that is not a path string
+(`None` included), a `within` that is not an absolute directory, no such
+file, not a regular file, outside `within`, unreadable, not UTF-8, too large —
+fails the effect (`PromptFileError`, a `ValueError`) with
+`Prompt effect '<name>': <field>: <problem>`, where `<field>` is `template` or
+`messages[<i>].content`, so `on_error` applies. Success records
+`meta.template_files`, a list with one `{field, path, sha256, chars}` per file
+read (`path` the resolved path, `sha256` of the bytes, `chars` in code
+points), appended after `waiting_for` and absent when nothing was read. The
+file's content is run data, not part of the document digest.
+
+Trust (`DocumentOrigin`): a document run by path (`File`) can name any
+`within`. A `use` child (`LimitedFile`) is limited: a literal `within` must
+resolve inside its confinement root (a compile error otherwise), and a
+`within` taken from `input` is held to the same rule at dispatch. A
+generated document (`Generated`) cannot use the form at all: the same
+`'file:' cannot be used here` compile error `{file: <path>}` gives.
 
 **Routing/scoring/decomposition** — see §5.8.
 

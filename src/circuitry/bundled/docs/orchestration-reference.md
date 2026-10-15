@@ -93,7 +93,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 |-------|------|----------|---------|-------------|
 | `type` | `"prompt"` | yes | — | |
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
-| `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
+| `template` | string or `{file: …}` | one-of | — | Mustache template; mutually exclusive with `messages`. Or `{file: <path>}` to load it from a file when the document loads, or `{file: {from: <state path>}, within: <dir>}` to read it when the effect dispatches — see [Prompt files](#prompt-files-file-path) |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template`. Sent as real conversation turns (a system message, then user/assistant turns) to adapters that take them — see [Generation options](#generation-options-messages-and-images) |
 | `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse; `provider_fallbacks` (see below), when configured, is tried before `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
@@ -164,6 +164,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
 - `meta.cost_usd` — the winning attempt's cost in US dollars, when its adapter reports one (`pi`, `claude_code`). The run's `runtime.last_run.totals.cost_usd` sums it.
 - `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
+- `meta.template_files` — one `{field, path, sha256, chars}` per `file: {from: ...}` source read at dispatch. See [Reading a prompt file at dispatch](#reading-a-prompt-file-at-dispatch-file-from-state-path).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
 
 **Example — an image to a local vision model:**
@@ -1310,6 +1311,29 @@ effects:
     template:
       file: prompts/draft.md
 ```
+
+#### Reading a prompt file at dispatch (`file: {from: <state path>}`)
+
+Some runs build their prompt texts at run time: a tool writes one prompt file per item, because the text is too large or too specific to template from state. Passing each text through state saves it twice (in the tool's `value` and in the prompt's `meta.prompt_sent`) and makes a text that contains `{{` (source code, another template language) survive mustache rendering. A `prompt` effect's `template`, and a message's `content`, can instead name the file in state and read it when the effect dispatches:
+
+```yaml
+- type: prompt
+  name: edit
+  template:
+    file: {from: prime.prep.value.prompt_file}
+    within: {from: input.work_dir}
+```
+
+This form is for a `prompt` effect's `template` and `messages[].content` only: not a `yield`, and not the top-level `prompts:` map (both are compile errors).
+
+- **When it is read.** The state path's value is a file path. The file is read when the effect dispatches, not when the document loads, once per execution of the effect and before its first attempt; retries and `provider_fallbacks` reuse that text. The file's content is run data: it is not part of the document hash `--resume` checks, so changing the file after a failed run does not refuse a resume, and the resumed effect reads the new text.
+- **Used verbatim.** The text is not rendered (no mustache, no `{{> name}}`), and its bytes are used as they are, newlines included. A run that wants rendering does it when it writes the file.
+- **`within` is required.** It is a literal absolute path, or `{from: input.<name>}`, so it comes from the document or the run's inputs and never from the output of an effect in the same run; `cof check` rejects any other form. A relative file path resolves against it, and after symlinks are resolved the file must be inside it.
+- **Trust.** The same rule as `{file: <path>}` for a limited document (a library entry, MCP, REST, a plan a model generated): a literal `within` can name only a directory inside the document's own project, and a `within` taken from `input` is held to the same rule when the effect dispatches. A document run by path can name any directory. A document generated at run time (a reflector or decompose plan, a `use: inline` child) cannot use it at all: a compile error. A `use` child is limited, whatever its parent is.
+- **Errors.** Each fails the effect, so `on_error` applies, with a message naming the effect, the field (`template` or `messages[<i>].content`) and the path: no such file; not a regular file; outside `within`; unreadable; not UTF-8; larger than 1 MiB (1,048,576 bytes, the same cap as `{file: <path>}`); the state value is not a string (a missing path included).
+- **Record.** `meta.template_files` lists one `{field, path, sha256, chars}` per file read — `path` the resolved path, `sha256` the hex SHA-256 of the file's bytes, `chars` the text's length in Unicode code points. A messages prompt can read several, so this is a list; the key is absent when the prompt read no file.
+
+With [`runtime.state.prompt_sent: sha256`](#recording-the-prompt-text-runtimestateprompt_sent), a prompt built in a file leaves no copy of its text in state.
 
 ---
 

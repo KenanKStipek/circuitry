@@ -36,6 +36,11 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     );
     add(
         "PromptDefinition",
+        "template_file",
+        "effects::PromptContent::TemplateFile",
+    );
+    add(
+        "PromptDefinition",
         "messages",
         "effects::PromptContent::Messages",
     );
@@ -95,6 +100,7 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "effects::Message::role (effects::Role)",
     );
     add("MessageDef", "content", "effects::Message::content");
+    add("MessageDef", "file", "effects::Message::file");
 
     // AssetRefDef -> effects::AssetRef (ref renamed: Rust keyword)
     add("AssetRefDef", "kind", "effects::AssetRef::kind");

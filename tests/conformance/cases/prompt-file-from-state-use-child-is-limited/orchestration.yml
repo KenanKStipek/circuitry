@@ -1,0 +1,8 @@
+name: prompt-file-from-state-use-child-is-limited
+adapter: scripted
+model: m
+effects:
+  - type: use
+    name: child
+    path: child.yml
+    on_error: continue

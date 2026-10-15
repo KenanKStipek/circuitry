@@ -587,7 +587,10 @@ async fn load_child<R: ParamsCtx>(
                 identity,
                 digest,
                 document_dir: document_dir.clone(),
-                origin: electricity_compiler::DocumentOrigin::File {
+                // A child is limited, whatever its parent is: a prompt's
+                // `file: {from: ...}` `within` stays inside the child's
+                // project (issue #578), as in `core/use.py`.
+                origin: electricity_compiler::DocumentOrigin::LimitedFile {
                     document_dir,
                     confinement_root,
                 },
