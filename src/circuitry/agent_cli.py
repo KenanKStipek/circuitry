@@ -8,7 +8,8 @@ the command without re-implementing the rest:
    the variables that make a CLI think it runs inside a parent session
    (:data:`PARENT_SESSION_ENV`, always removed) and minus ``unset_env``
    (by default :data:`DEFAULT_UNSET_ENV`, so the CLI uses its own login
-   rather than an API key that happens to be exported).
+   rather than an API key that happens to be exported), then plus the
+   variables an adapter alias sets in ``env``.
 2. :func:`pi_command` / :func:`claude_command` — the argv for one headless
    call. Tools are off and nothing is saved unless the caller asks.
 3. :func:`run_agent_cli` — runs the command in its own process group,
@@ -112,12 +113,17 @@ def child_env(
     unset_env: Sequence[str] = DEFAULT_UNSET_ENV,
     *,
     base: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """``base`` (default ``os.environ``) without :data:`PARENT_SESSION_ENV`
-    and without ``unset_env``; every other variable is kept."""
+    and without ``unset_env``, then with ``env`` applied last (so a variable
+    in both ``unset_env`` and ``env`` gets the ``env`` value); every other
+    variable is kept."""
     removed = set(PARENT_SESSION_ENV) | set(unset_env)
     source = os.environ if base is None else base
-    return {key: value for key, value in source.items() if key not in removed}
+    result = {key: value for key, value in source.items() if key not in removed}
+    result.update(env or {})
+    return result
 
 
 def pi_command(
