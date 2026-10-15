@@ -9,12 +9,12 @@ fields:
     note: "snake_case, unique among siblings. iter_N is reserved."
   template:
     type: string
-    note: "Mustache template. {{input.<name>}} for caller-supplied input, {{prime.<name>.value}} for effect outputs."
+    note: "Mustache template. {{input.<name>}} for caller-supplied input, {{prime.<name>.value}} for effect outputs. Or {file: <path>} to load it from a file next to the document, or {file: {from: <state path>}, within: <dir>} to read a file built at run time when the effect dispatches: the state value is the file's path, `within` is required (a literal absolute path or {from: input.<name>}, never an effect's output) and the file must stay inside it. That text is sent verbatim, never rendered, and recorded in meta.template_files. Not for a yield or a top-level prompts: entry."
     conflicts_with: messages
   messages:
     type: array
     items: "{role: system|user|assistant|tool, content: string}"
-    note: "Role-based message array, sent as real conversation turns (system message included) where the adapter takes them. Mutually exclusive with template."
+    note: "Role-based message array, sent as real conversation turns (system message included) where the adapter takes them. A content may be {file: <path>} or {file: {from: <state path>}, within: <dir>}, as for template. Mutually exclusive with template."
     conflicts_with: template
   prompt_type:
     type: string

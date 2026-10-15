@@ -324,6 +324,7 @@ fn compile_effect(
                 &valid_name,
                 effect_path,
                 loop_names,
+                &ctx.origin,
             )
         }
         "yield" => {

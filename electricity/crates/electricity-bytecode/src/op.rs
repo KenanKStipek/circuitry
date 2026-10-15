@@ -173,6 +173,7 @@ mod python_type_name_tests {
         );
         assert_eq!(
             op(NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+                parent_trusted: false,
                 source: UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,

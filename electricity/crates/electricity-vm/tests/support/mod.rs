@@ -127,6 +127,7 @@ pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
                 true,
@@ -164,6 +165,7 @@ pub fn use_leaf(
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            parent_trusted: false,
             source,
             inputs,
             outputs,
@@ -507,6 +509,10 @@ impl RunObserver for CancelOnStart<'_> {
 
     fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[electricity_vm::NodeRef]) {
         self.inner.clear_tree_branches(node_path, branches);
+    }
+
+    fn record_totals(&self, meta: &Value) {
+        self.inner.record_totals(meta);
     }
 }
 

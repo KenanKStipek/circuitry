@@ -295,12 +295,12 @@ Per-effect-type `meta` (confirmed field sets from live runs):
 
 - **prompt** (`core/prompt.py:453` docstring, confirmed live):
   `adapter, model, model_reason ("explicit"|"router"|"default"), prompt_type,
-  prompt_sent, tokens_sent, tokens_received, tokens_sent_total,
-  tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
+  prompt_sent, prompt_sent_sha256, prompt_chars, tokens_sent, tokens_received,
+  tokens_sent_total, tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
-  assets?`.
+  assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
   params_rendered (redacted), stdout, stderr, exit_code, binary? (process
   plugins), status_code? (HTTP-family only), raw (redacted + size-capped),
@@ -924,6 +924,68 @@ written **before** the first dispatch attempt — confirmed live (`adapter`,
 before any network/adapter call). This is what makes a complexity score (and
 the fully-rendered prompt) visible on a prompt that then fails.
 
+**`runtime.state.prompt_sent`** (issue #577, `core/prompt_record.py`): shapes
+only the `meta.prompt_sent` record; the text in memory (what the adapter
+receives, retries, fallback, complexity scoring, token estimates) is never
+touched. `full` (default) records the whole text; `sha256` records `null`;
+`head:<N>` (N >= 1) records the first N Unicode code points followed by
+`"\n[… <M> more characters not recorded]"` (`M` = code points left out; a text of
+N code points or fewer is kept whole, no marker). In every mode
+`meta.prompt_sent_sha256` (lowercase hex SHA-256 of the UTF-8 bytes) and
+`meta.prompt_chars` (code points of the whole text, `len(text)` /
+`text.chars().count()`) follow `prompt_sent` in key order. A `messages`
+prompt records the flattened form. Any other value, `head:0` and a
+non-string included, is a configuration error with the message
+`runtime.state.prompt_sent must be 'full', 'sha256' or 'head:<N>' (N a
+positive integer), got <repr>.` — raised by `cof check` after the
+concurrency-configuration errors, and by a run right after the complexity
+block. Attempt and fallback records never carry prompt text.
+
+**`file: {from: <state path>}, within: <dir>`** (issue #578,
+`core/prompt_files.py`): a `prompt` effect's `template`, and a message's
+`content`, may read their text when the effect dispatches rather than when the
+document loads. It is *not* allowed in a `yield` or the top-level `prompts:`
+map (a compile error naming the field). `within` is required: a literal
+absolute path, or `{from: input.<name>}` (anything else, an effect's output
+included, is a compile error). The state value is the file's path; a relative
+one resolves against `within`, and after symlinks are resolved the file must
+be inside it. The file is read once per execution of the effect, before the
+first attempt (retries and fallback reuse the text), and used **verbatim**:
+bytes decoded as UTF-8, no newline translation, no Mustache. Size cap 1 MiB
+(1,048,576 bytes). Each failure — a state value that is not a path string
+(`None` included), a `within` that is not an absolute directory, no such
+file, not a regular file, outside `within`, unreadable, not UTF-8, too large —
+fails the effect (`PromptFileError`, a `ValueError`) with
+`Prompt effect '<name>': <field>: <problem>`, where `<field>` is `template` or
+`messages[<i>].content`, so `on_error` applies. Success records
+`meta.template_files`, a list with one `{field, path, sha256, chars}` per file
+read (`path` the resolved path, `sha256` of the bytes, `chars` in code
+points), appended after `waiting_for` and absent when nothing was read. The
+file's content is run data, not part of the document digest.
+
+Trust (`DocumentOrigin`): a document run by path (`File`) can name any
+`within`. A limited document (`LimitedFile`) is limited: a literal `within`
+must resolve inside its confinement root (a compile error otherwise), and a
+`within` taken from `input` is held to the same rule at dispatch. A
+generated document (`Generated`) cannot use the form at all: the same
+`'file:' cannot be used here` compile error `{file: <path>}` gives.
+
+A `use` child named by `path:` has its parent's trust, which the compiled
+`use` carries as `parent_trusted` (true when the document it is compiled in is
+`File`): a child of a trusted parent loads as `File`, a child of a limited one
+as `LimitedFile`. A `use: inline` child is `Generated`, so its own `use`
+children are limited. Circuitry additionally limits a child it resolves
+through the library; electricity has no library (`ref:` is a compile error), so
+no child here is ever limited that way. In a child, `input.<name>` is whatever
+the parent maps to it, which can be another effect's output, so the parent's
+author decides what a trusted child may read.
+
+A reflector builds its planning prompt from the plan prompt's own text, so a
+plan prompt (the top-level `prompt` named `plan_from_step`) whose `template` or
+a message's `content` is `file: {from: ...}` is a compile error naming the
+reflector, the prompt and the field: `Reflector effect '<name>' at '<path>':
+its plan prompt '<prompt>' reads <field> from a file named in state ...`.
+
 **Routing/scoring/decomposition** — see §5.8.
 
 **Confirmed live node** (`prompt_type: text`, no retries/fallbacks/scoring):
@@ -932,6 +994,7 @@ the fully-rendered prompt) visible on a prompt that then fails.
   "meta": {
     "adapter": "scripted", "model": "test-model", "model_reason": "default",
     "prompt_type": "text", "prompt_sent": "hi world",
+    "prompt_sent_sha256": "<hex sha-256 of \"hi world\">", "prompt_chars": 8,
     "tokens_sent": 10, "tokens_received": 5,
     "tokens_sent_total": 10, "tokens_received_total": 5,
     "dry_run": false, "error": null, "waiting_for": null,
@@ -1727,7 +1790,32 @@ contiguous-from-0 prefix (not by eyeballing whether `iter_<N>` merely *looks*
 finished — a pass that died partway through writing its own node must not
 be mistaken for complete) — chain flow only (every `while`, or an `each` not
 running `flow: tree`); a tree-flow `each` loop and an unnamed loop always
-rerun whole. A `finally:` effect is **never** skipped by resume (§6.4).
+rerun whole. The loop writes that record on success, on failure, and on an
+interrupt (#574): `core/loop.py`'s outer handler is `except BaseException`,
+so Ctrl-C/SIGTERM/SIGHUP or a cancelled run gets the failure path's own
+writes — `completed_passes`, `completed_at`, `value.termination` `{"reason":
+"error", "detail": ...}` and `meta.error` — with the interrupt text of §6.5
+(`"Interrupted (Ctrl-C/SIGINT)"`, `"Interrupted (SIGTERM)"`, `"Interrupted
+(SIGHUP)"`) as both the error and the detail, never the empty `str()` of the
+exception; then it re-raises the same exception, so exit code, cleanup and
+`finally:` are unchanged. electricity's `exec/loop_.rs` does the same for
+`VmError::Cancelled`. A `finally:` effect is **never** skipped by resume (§6.4).
+
+The first unfinished pass of such a loop continues **inside** its body when
+the saved state holds its `iter_<N>` node (`core/loop.py` `resume_pass`,
+`_execute_body(resume=True)`, #573): body effects are skipped by the same
+positional rule as a chain `dynamic`'s `effects:` until the first one that
+isn't resumed whole, which runs with resume on (so a nested `dynamic`,
+loop, `if` or `use` resumes inside itself), and every later body effect
+reruns. A `while` loop runs that pass **without evaluating its condition**:
+it held when the pass started. Every later pass, and a first unfinished pass
+with no saved `iter_<N>`, runs from its start, condition first. An
+unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
+`meta.branch` before anything else, evaluates its condition again (a model
+condition asks again), and, when the condition selects that branch again,
+runs the branch by the same positional rule; the other branch runs from its
+start. An unnamed `if` and a `reflector` rerun whole. electricity has no
+`--resume` yet (M2-G), so this is reference behaviour only.
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
 `_SavedChildRun`) reruns its child from the start in a fresh state, unless
@@ -1742,7 +1830,9 @@ current digest and resolved inputs, and the saved `meta.expect.result` is
 not false (a check that judged the output false would just fail again);
 otherwise the record is dropped and the child runs from its start. Only the
 first attempt resumes — a `retries` retry reruns the child whole. A `use`
-in a loop pass, an `if` branch, or a tree-flow branch still reruns whole.
+that is the first unfinished effect of a resumed loop pass or `if` branch
+resumes inside its child the same way; one in a tree-flow branch, or in a
+pass or branch that runs from its start, reruns whole.
 
 ### 8.6 Config keys that affect a run
 

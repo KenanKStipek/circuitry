@@ -495,7 +495,7 @@ def _build_surrealdb(cfg: dict[str, Any]) -> ToolPlugin:
 # systemone reads base_url / api_key_env / allow_remote from
 # runtime.plugins.systemone; the key itself comes from the named environment
 # variable at dispatch, so nothing secret can reach config or saved state.
-# build_plugin also hands it the run's document scope (see below).
+# build_plugin also hands it the effect's project confinement (see below).
 def _build_systemone(cfg: dict[str, Any]) -> ToolPlugin:
     return _systemone_mod.build(cfg)
 
@@ -624,9 +624,15 @@ def _supported_names() -> tuple[str, ...]:
 SUPPORTED_PLUGINS = tuple(_supported_names())
 
 
-def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
+def build_plugin(
+    *, plugin_name: str, runtime: dict[str, Any], confine_to: str | None = None
+) -> ToolPlugin:
     """
     Build a plugin instance from configuration.
+
+    *confine_to* is the project a limited document's tool effect must keep
+    the paths it names inside (``ToolDefinition.confine_to``); only
+    ``systemone`` reads one.
 
     Plugins register themselves in PLUGIN_REGISTRY: a dict from canonical
     lower-case name to a builder callable that takes the per-plugin config
@@ -645,7 +651,6 @@ def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
 
     cfg = plugins_cfg.get(plugin_name) or {}
     if plugin_name == "systemone":
-        # The one plugin that reads a path the document names, so it needs to
-        # know whose document that is (see circuitry.document_scope).
-        return _systemone_mod.build(cfg, runtime)
+        # The one plugin that reads a path the document names.
+        return _systemone_mod.build(cfg, confine_to)
     return builder(cfg)

@@ -430,6 +430,12 @@ class ToolDefinition:
     # actually held; see #274.
     group: str | None = None
 
+    #: For a limited document's ``systemone`` effect: the project its
+    #: ``within`` must stay inside (the same root a ``{file: ...}`` prompt is
+    #: confined to, as ``DispatchFileSource.confine_to``); ``None`` for a
+    #: trusted document and every other provider.
+    confine_to: str | None = None
+
 
 #: Fallback when neither the effect's ``timeout_ms`` nor
 #: ``runtime.tools.timeout_seconds`` in config is set. Tools get their own
@@ -769,6 +775,11 @@ class ToolRuntime:
                 plugin = build_plugin(
                     plugin_name=self.defn.provider,
                     runtime=self.runtime_config,
+                    **(
+                        {"confine_to": self.defn.confine_to}
+                        if self.defn.confine_to is not None
+                        else {}
+                    ),
                 )
                 target = _plugin_target(plugin, mtag)
 

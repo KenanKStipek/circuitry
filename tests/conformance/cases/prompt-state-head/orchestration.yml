@@ -1,0 +1,26 @@
+name: prompt-state-head
+adapter: scripted
+model: m
+runtime:
+  state:
+    prompt_sent: "head:12"
+effects:
+  - type: prompt
+    name: long_text
+    template: "The quick brown fox jumps over the lazy dog."
+  - type: prompt
+    name: exact_fit
+    template: "twelve chars"
+  - type: prompt
+    name: short_text
+    template: "short"
+  - type: prompt
+    name: multibyte
+    template: "héllo 🙂 wörld 🙂 and more text"
+  - type: prompt
+    name: from_messages
+    messages:
+      - role: system
+        content: "Be brief."
+      - role: user
+        content: "Say hello."

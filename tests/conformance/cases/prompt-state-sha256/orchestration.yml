@@ -1,0 +1,21 @@
+name: prompt-state-sha256
+adapter: scripted
+model: m
+runtime:
+  state:
+    prompt_sent: sha256
+effects:
+  - type: prompt
+    name: from_template
+    template: "Summarize: {{input.topic}} -- héllo 🙂"
+  - type: prompt
+    name: from_messages
+    messages:
+      - role: system
+        content: "Be brief about {{input.topic}}."
+      - role: user
+        content: "Go."
+  - type: prompt
+    name: fails_then_continues
+    template: "No reply is scripted for {{input.topic}}."
+    on_error: continue

@@ -29,7 +29,6 @@ from circuitry.core.compiler import compile_orchestration
 from circuitry.core.prompt import RetryPolicyDef
 from circuitry.core.store import Store
 from circuitry.core.tool import ToolDefinition, ToolRuntime
-from circuitry.document_scope import DocumentScope
 from circuitry.plugins import build_plugin
 from circuitry.plugins import systemone as systemone_module
 from circuitry.plugins.base import validate_tool_result
@@ -826,8 +825,7 @@ def test_a_limited_document_confines_within_to_its_project(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "b.txt").write_text("out", encoding="utf-8")
-    scope = DocumentScope(limited=True, project_root=project)
-    plugin = _plugin(server, scope=scope)
+    plugin = _plugin(server, confine_to=str(project))
 
     server.reply_answers()
     assert plugin.execute(
@@ -841,23 +839,13 @@ def test_a_limited_document_confines_within_to_its_project(
     assert len(server.requests) == 1
 
 
-def test_a_limited_document_with_no_project_cannot_name_within(
-    server: FakeServer, tmp_path: Path
-) -> None:
-    doc = tmp_path / "a.txt"
-    doc.write_text("x", encoding="utf-8")
-    plugin = _plugin(server, scope=DocumentScope(limited=True, project_root=None))
-    with pytest.raises(ValueError, match="no project"):
-        plugin.execute(params=_file_params(doc, tmp_path), timeout_seconds=10)
-
-
 def test_a_trusted_document_may_name_any_within(server: FakeServer, tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "b.txt").write_text("out", encoding="utf-8")
-    plugin = _plugin(server, scope=DocumentScope(limited=False, project_root=project))
+    plugin = _plugin(server)
     server.reply_answers()
     assert plugin.execute(
         params=_file_params(elsewhere / "b.txt", elsewhere), timeout_seconds=10
@@ -1123,7 +1111,7 @@ def _compile_error(orch: dict[str, Any]) -> str:
 
 def test_a_valid_effect_compiles(tmp_path: Path) -> None:
     compile_orchestration(orch=_doc())
-    on_disk = {"document_dir": tmp_path, "confinement_root": tmp_path}
+    on_disk = {"document_dir": tmp_path, "confinement_root": tmp_path, "trusted": True}
     compile_orchestration(
         orch=_doc(state=_DROP, state_file="/data/a.json", within="/data"), **on_disk
     )
@@ -1446,13 +1434,6 @@ def test_a_trusted_run_may_name_a_within_outside_its_project(
     result = _scoped_run(tmp_path, server, trust_document=True, within=tmp_path / "shared")
     assert result.ok, result.error
     assert server.requests[0].json()["state"] == "shared"
-
-
-def test_the_document_scope_is_not_saved_in_state(server: FakeServer, tmp_path: Path) -> None:
-    server.reply_answers()
-    result = _scoped_run(tmp_path, server, trust_document=False, within=tmp_path / "project")
-    assert result.ok, result.error
-    assert '"_document_scope"' not in json.dumps(result.state)
 
 
 def test_a_use_child_is_confined_to_its_own_project(
@@ -1833,6 +1814,61 @@ def test_a_library_child_is_limited_under_a_trusted_root(
     assert server.requests[0].json()["state"] == "shared text"
 
 
+def test_a_path_child_inside_an_inline_child_is_limited(
+    server: FakeServer, tmp_path: Path
+) -> None:
+    """An inline child is limited, so a path grandchild takes that, not the root's trust."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "doc.md").write_text("shared text", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    child = _write_doc(
+        project / "child.yml",
+        {
+            "model": "m",
+            "state_file": str(shared / "doc.md"),
+            "within": str(shared),
+            "questions": QUESTIONS,
+        },
+    )
+    direct = _use_parent(project, path=str(child))
+    inline = project / "inline.yml"
+    inline.write_text(
+        yaml.dump(
+            {
+                "effects": [
+                    {
+                        "type": "use",
+                        "name": "middle",
+                        "inline": yaml.dump(
+                            {"effects": [{"type": "use", "name": "leaf", "path": str(child)}]}
+                        ),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = CircuitryConfig(runtime={"plugins": {"systemone": {"base_url": server.url}}})
+    adapter = MagicMock()
+    adapter.name = "mock"
+    consent = frozenset({"network"})
+
+    server.reply_answers()
+    trusted = _run(
+        direct, config, trust_document=True, adapter=adapter, allow_capabilities=consent
+    )
+    assert trusted.ok, trusted.error
+
+    limited = _run(
+        inline, config, trust_document=True, adapter=adapter, allow_capabilities=consent
+    )
+    assert limited.ok is False
+    assert "own project" in (limited.error or "")
+    assert len(server.requests) == 1
+
+
 # ---------------------------------------------------------------------------
 # cof check knows a limited document's project
 # ---------------------------------------------------------------------------
@@ -1847,16 +1883,16 @@ def test_a_limited_documents_literal_within_is_checked_against_its_project(
     outside = _doc(state=_DROP, state_file=str(tmp_path / "a.txt"), within=str(tmp_path))
     on_disk = {"document_dir": project, "confinement_root": project}
 
-    compile_orchestration(orch=inside, limited=True, **on_disk)
+    compile_orchestration(orch=inside, trusted=False, **on_disk)
     with pytest.raises(ValueError, match=r"params\.within: must lie inside the document's own project"):
-        compile_orchestration(orch=outside, limited=True, **on_disk)
-    compile_orchestration(orch=outside, limited=False, **on_disk)
+        compile_orchestration(orch=outside, trusted=False, **on_disk)
+    compile_orchestration(orch=outside, trusted=True, **on_disk)
 
 
 def test_a_within_taken_from_input_is_left_to_the_run(tmp_path: Path) -> None:
     orch = _doc(state=_DROP, state_file={"from": "input.f"}, within={"from": "input.dir"})
     compile_orchestration(
-        orch=orch, document_dir=tmp_path, confinement_root=tmp_path, limited=True
+        orch=orch, document_dir=tmp_path, confinement_root=tmp_path, trusted=False
     )
 
 

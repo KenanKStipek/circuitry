@@ -27,6 +27,7 @@
                             "escape": "None",
                             "source": "sys"
                           },
+                          "file": null,
                           "role": "System"
                         },
                         {
@@ -35,6 +36,7 @@
                             "escape": "None",
                             "source": "hi {{input.name}}"
                           },
+                          "file": null,
                           "role": "User"
                         }
                       ]

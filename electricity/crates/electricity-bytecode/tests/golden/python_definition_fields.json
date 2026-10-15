@@ -2,6 +2,7 @@
   "PromptDefinition": [
     "name",
     "template",
+    "template_file",
     "messages",
     "prompt_type",
     "schema",
@@ -22,7 +23,8 @@
   ],
   "MessageDef": [
     "role",
-    "content"
+    "content",
+    "file"
   ],
   "AssetRefDef": [
     "kind",
@@ -45,7 +47,8 @@
     "retries",
     "expect",
     "enabled",
-    "group"
+    "group",
+    "confine_to"
   ],
   "ExpectDef": [
     "mode",
@@ -65,7 +68,8 @@
     "description",
     "retries",
     "expect",
-    "enabled"
+    "enabled",
+    "parent_trusted"
   ],
   "YieldDefinition": [
     "name",

@@ -15,7 +15,6 @@ from typing import Any, Literal
 
 from ..adapters import Adapter
 from ..adapters._retry import RetryInfo, next_backoff_delay_ms
-from ..document_scope import DocumentScope, document_scope, install_document_scope
 from ..output import console as _console
 from .cancellation import get_token
 from .document_check import structural_errors
@@ -463,6 +462,12 @@ class UseDefinition:
 
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
+
+    #: Whether the document that carries this effect is trusted (run by path),
+    #: set from its compile context. A child named by ``path:`` gets this trust,
+    #: so a prompt's ``file: {from: ...}`` there may name any ``within`` (#578);
+    #: a child resolved through the library is always limited.
+    parent_trusted: bool = False
 
 
 class UseRuntime:
@@ -1059,30 +1064,26 @@ class UseRuntime:
                     # whatever directory was already in effect.
                     child_document_dir: Path | None = None
                     child_confinement_root: Path | None = None
-                    child_limited = False
                     if not meta["inline"]:
                         child_document_dir = Path(identity).parent
                         child_runtime_config["_orchestration_dir"] = str(child_document_dir)
                         child_confinement_root = self._confinement_root_for(child_document_dir)
-                        parent_scope = document_scope(self.runtime_config)
-                        if parent_scope is not None:
-                            # A child resolved through the library is someone
-                            # else's document, whatever the parent's trust.
-                            child_limited = parent_scope.limited or self._pin is not None
-                            install_document_scope(
-                                child_runtime_config,
-                                DocumentScope(
-                                    limited=child_limited,
-                                    project_root=child_confinement_root,
-                                ),
-                            )
 
+                    # A child the caller names by path is part of the code the
+                    # caller runs, so it gets its parent's trust; a library
+                    # child is someone else's document, and a generated
+                    # (inline) one is limited like any plan.
+                    child_trusted = (
+                        self.defn.parent_trusted
+                        and not meta["inline"]
+                        and self._pin is None
+                    )
                     child_root = compile_orchestration(
                         orch=child_orch,
                         root_name="prime",
                         document_dir=child_document_dir,
                         confinement_root=child_confinement_root,
-                        limited=child_limited,
+                        trusted=child_trusted,
                     )
                     # "A child document run with `use` sees only its own
                     # declared prompts" (#396) — set fresh here rather than

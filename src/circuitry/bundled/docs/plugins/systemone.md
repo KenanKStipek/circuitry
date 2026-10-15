@@ -113,9 +113,16 @@ on it does not apply the project rule.
 
 ### Trust and `use`
 
-- A child run by `use: {path: …}` has its parent's trust and its own project. A
-  child found through the library (`use: {ref: …}`) is limited whatever its
+These are the same rules as a prompt's `file: {from: …}` source, and one
+mechanism decides them: a document's trust is fixed when it compiles.
+
+- A document run by path is trusted. A child run by `use: {path: …}` has its
+  parent's trust and its own project, so a limited parent's path child is
+  confined to that child's project.
+- A child found through the library (`use: {ref: …}`) is limited whatever its
   parent is, also under a trusted root.
+- A `use: inline` child is limited, so a `use: {path: …}` grandchild inside it
+  is limited too. A reflector or decomposition plan is limited the same way.
 - A `use: {path: …}` that points into a library cache inherits the parent's
   trust: the path names the file, not the library. Name library documents with
   `ref:` to get them limited.

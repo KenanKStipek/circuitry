@@ -22,6 +22,7 @@
         {
           "name": "greet",
           "template": "Hello, {{input.name}}!",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -83,14 +84,17 @@
         {
           "name": "chat",
           "template": null,
+          "template_file": null,
           "messages": [
             {
               "role": "system",
-              "content": "You are helpful."
+              "content": "You are helpful.",
+              "file": null
             },
             {
               "role": "user",
-              "content": "Hi {{input.name}}"
+              "content": "Hi {{input.name}}",
+              "file": null
             }
           ],
           "prompt_type": "text",
@@ -153,6 +157,7 @@
         {
           "name": "extract",
           "template": "Extract JSON",
+          "template_file": null,
           "messages": null,
           "prompt_type": "json",
           "schema": {
@@ -238,7 +243,8 @@
             "template": null
           },
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -298,7 +304,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -356,7 +363,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -415,7 +423,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -475,7 +484,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -530,7 +540,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -628,6 +639,7 @@
               {
                 "name": "propose_steps",
                 "template": "propose",
+                "template_file": null,
                 "messages": null,
                 "prompt_type": "text",
                 "schema": null,
@@ -712,6 +724,7 @@
             {
               "name": "a",
               "template": "a",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -733,6 +746,7 @@
             {
               "name": "b",
               "template": "b",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -757,6 +771,7 @@
             {
               "name": "cleanup",
               "template": "done",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -839,6 +854,7 @@
             {
               "name": "yes_branch",
               "template": "yes",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -862,6 +878,7 @@
             {
               "name": "no_branch",
               "template": "no",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -942,6 +959,7 @@
             {
               "name": "yes_branch",
               "template": "yes",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -1015,6 +1033,7 @@
             {
               "name": "handle",
               "template": "item is {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -1096,6 +1115,7 @@
             {
               "name": "tick",
               "template": "tick {{_loop_index}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -1178,6 +1198,7 @@
             {
               "name": "handle",
               "template": "item is {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -1259,6 +1280,7 @@
             {
               "name": "handle",
               "template": "item is {{item}}",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -1336,6 +1358,7 @@
         {
           "name": "greet",
           "template": "line one\nline two {{input.name}}\n",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -2266,7 +2289,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -3208,7 +3232,8 @@
             "template": "Is it ok?\n"
           },
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -3911,6 +3936,7 @@
             {
               "name": "handle",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -4060,7 +4086,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4105,6 +4132,7 @@
         {
           "name": "x",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -4238,7 +4266,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4296,7 +4325,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4357,7 +4387,8 @@
               "retries": null,
               "expect": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "confine_to": null
             }
           ],
           "while_def": null,
@@ -4796,6 +4827,7 @@
         {
           "name": "x",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -4860,6 +4892,7 @@
         {
           "name": "x",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -4927,6 +4960,7 @@
             {
               "name": "x",
               "template": "hi",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -5363,6 +5397,971 @@
     }
   },
   {
+    "name": "prompt_template_file_from_state",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template:\n      file: {from: prime.prep.value.prompt_file}\n      within: {from: input.work_dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "edit",
+          "template": null,
+          "template_file": {
+            "path_from": "prime.prep.value.prompt_file",
+            "within": null,
+            "within_from": "input.work_dir",
+            "confine_to": null
+          },
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "edit"
+      ]
+    },
+    "definition_error": null,
+    "digest": "74b1afadfbda54e8bfd792a126adbabbe61221f51a5caa8ae0ea8be770855180",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_with_a_literal_within_and_a_trimmed_path",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template:\n      file: {from: '  input.prompt_file  '}\n      within: /srv/work\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "edit",
+          "template": null,
+          "template_file": {
+            "path_from": "input.prompt_file",
+            "within": "/srv/work",
+            "within_from": null,
+            "confine_to": null
+          },
+          "messages": null,
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "edit"
+      ]
+    },
+    "definition_error": null,
+    "digest": "cfa4e6204d6802d598e20dcae958b6f2be0b0a699a3ab144f595c6516e833784",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_message_content_file_from_state",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    messages:\n      - {role: system, content: 'Be brief about {{input.topic}}.'}\n      - role: user\n        content:\n          file: {from: input.user_file}\n          within: {from: input.work_dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "edit",
+          "template": null,
+          "template_file": null,
+          "messages": [
+            {
+              "role": "system",
+              "content": "Be brief about {{input.topic}}.",
+              "file": null
+            },
+            {
+              "role": "user",
+              "content": "",
+              "file": {
+                "path_from": "input.user_file",
+                "within": null,
+                "within_from": "input.work_dir",
+                "confine_to": null
+              }
+            }
+          ],
+          "prompt_type": "text",
+          "schema": null,
+          "model": null,
+          "provider": null,
+          "provider_fallbacks": null,
+          "routing_override": null,
+          "params": null,
+          "timeout_ms": null,
+          "deterministic": false,
+          "inputs": null,
+          "assets": null,
+          "retries": null,
+          "on_error": "fail",
+          "description": null,
+          "enabled": true,
+          "group": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "edit"
+      ]
+    },
+    "definition_error": null,
+    "digest": "7f4992ca5357683ad098b6b6bdc47ba3b0d6aa8834e5c19c44b89e4284534210",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_template_file_from_a_loop_binding",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: each_job\n    each: {in: input.jobs, as: job}\n    body:\n      - type: prompt\n        name: edit\n        template:\n          file: {from: job.path}\n          within: {from: input.work_dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "each_job",
+          "body": [
+            {
+              "name": "edit",
+              "template": null,
+              "template_file": {
+                "path_from": "job.path",
+                "within": null,
+                "within_from": "input.work_dir",
+                "confine_to": null
+              },
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "while_def": null,
+          "each_def": {
+            "in_path": "input.jobs",
+            "as_name": "job",
+            "truncate": false
+          },
+          "max_iterations": null,
+          "min_iterations": 0,
+          "on_error": "fail",
+          "collect": null,
+          "flow": "chain",
+          "max_concurrency": null,
+          "enabled": true,
+          "labels": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "each_job",
+        "edit"
+      ]
+    },
+    "definition_error": null,
+    "digest": "db93150939c6bcc2b37317032f10511cf0bd2a5bf47542a54612e1f9fa695a93",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_no_within_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "digest": "03ac0d8e8e65f176ab98ebc07d10d3feb622242039ba22996ee8638ecfb171c5",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_relative_within_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: relative/dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'.",
+    "digest": "29978374a6a6786a0c5c35169f298aefe0150b793ea55efeb5ee8c2c968ba7a3",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_within_with_a_template_tag_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: '/srv/{{x}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'.",
+    "digest": "ed4e7d97f43e0dfd661e17beca69bd710bed95e36e388f2cab02fc7e8a8be67b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_within_from_an_effect_output_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: {from: prime.prep.value}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}.",
+    "digest": "3ff07606d500c45cb74e9d18a9c47e2821c37b78feba7e577faf77572e11a383",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_within_from_a_nested_input_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: {from: input.a.b}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.a.b'}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.a.b'}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.a.b'}.",
+    "digest": "2903a44d818218085ad09f70d45887c04717f381d74547bd3aaf551b18a60857",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_within_from_with_an_extra_key_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: {from: input.d, x: 1}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.d', 'x': 1}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.d', 'x': 1}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'input.d', 'x': 1}.",
+    "digest": "7a061e26a1c7595c2a0bd3f43daa927c4555cfdf93e5e354a7f3b0f5f194fdde",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_non_string_within_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: 5}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got 5."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got 5.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got 5.",
+    "digest": "4f43d012c650512f41869dfb50372e4a4382e072b46f0dc8484f69b0b6684baf",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_an_empty_from_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: ''}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': ''}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': ''}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': ''}.",
+    "digest": "f9d9f75d619a6e383546a608b8ed24466db10fe38f2020be01e7bace97e79ff8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_non_string_from_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: 5}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 5}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 5}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 5}.",
+    "digest": "833b11d020759a34b073389e780af9b353972c38fbff2e7c4725fc7b99202377",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_an_empty_file_mapping_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {}.",
+    "digest": "5559dfe38c7a30f5a9fc72ce391386c5e15bef3b240c0cfb51fe44caee63a776",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_an_extra_key_in_file_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f, x: 1}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 'input.f', 'x': 1}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 'input.f', 'x': 1}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'file' must be a path, or {from: <state path>}; got {'from': 'input.f', 'x': 1}.",
+    "digest": "d835e13c545dbae60fe91260f0ff411dafe9c35cbfc243cda0a01b042f7fe32f",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_from_without_a_root_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: bare}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt prime.effects[0].template file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt prime.effects[0].template file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt prime.effects[0].template file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "70e29e837754750b505d6addce196759c3762b53cd7d65425cc608b83a2f14e2",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_a_state_prefixed_from_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: state.input.f}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt prime.effects[0].template file at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.f' instead of 'state.input.f'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt prime.effects[0].template file at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.f' instead of 'state.input.f'.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt prime.effects[0].template file at 'prime.effects[0]': 'state.' is a CEL-only binding; outside CEL, paths are root-relative. Write 'input.f' instead of 'state.input.f'.",
+    "digest": "34ffee5c0da00a36694e3ac31c174fb240302c9bc44e862dd4aadd472cc2f19e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "prompt_template_file_from_state_an_extra_top_level_key_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    template: {file: {from: input.f}, within: {from: input.d}, x: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].template: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}, 'x': 1} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].template: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}, 'x': 1} is not of type 'string')",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].template: 'file: {from: <path>}' takes only 'file' and 'within'; got ['x'].",
+    "digest": "107e9748cb5e136e00195ea3a4a6d3df3ae7c5f184876e9741e26416b460f031",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "prompt_message_file_from_state_no_within_names_the_message",
+    "files": {
+      "doc.yml": "effects:\n  - type: prompt\n    name: edit\n    messages:\n      - {role: user, content: hi}\n      - role: user\n        content: {file: {from: input.f}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].messages[1].content: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].messages[1].content: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].messages[1].content: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "digest": "28d91a41963f9032caa97748bd016f71db229cdec3714e1dd6ed6ecf74ee0bac",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "yield_template_file_from_state_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: yield\n    name: y\n    template:\n      file: {from: input.f}\n      within: {from: input.d}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].template: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].template: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}} is not of type 'string')",
+    "definition": null,
+    "definition_error": "PromptFileError: prime.effects[0].template: 'file: {from: <state path>}' reads a file when the effect dispatches, and is only for a prompt effect's 'template' and messages[].content.",
+    "digest": "681b865e88e60c4052c64ee70c5023f44e59aa34e272b4c97741390504abeea5",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "declared_prompt_file_from_state_is_a_check_error",
+    "files": {
+      "doc.yml": "prompts:\n  p:\n    file: {from: input.f}\n    within: {from: input.d}\neffects:\n  - type: prompt\n    name: a\n    template: '{{> p}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prompts.p: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}} is not of type 'string')"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - prompts.p: value is not valid under any of the given schemas ({'file': {'from': 'input.f'}, 'within': {'from': 'input.d'}} is not of type 'string')",
+    "definition": null,
+    "definition_error": "PromptFileError: prompts.p: 'file: {from: <state path>}' reads a file when the effect dispatches, and is only for a prompt effect's 'template' and messages[].content.",
+    "digest": "0b5ff0b90eb4707326d063165ea420444d62411f9d7c1d81aa10f350ba5ec1df",
+    "comparison": {
+      "validate_errors": [
+        "location_prefix"
+      ],
+      "run_error": "location_prefix"
+    }
+  },
+  {
+    "name": "reflector_plan_prompt_template_file_from_state_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: r\n    effects:\n      - type: prompt\n        name: propose_steps\n        template:\n          file: {from: input.f}\n          within: {from: input.d}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads template from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads template from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'.",
+    "definition": null,
+    "definition_error": "ValueError: Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads template from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'.",
+    "digest": "5a3bc47bea27fee10700e39049ff67da6d9147f2e67835ddbd607d8b0f266c04",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "reflector_plan_prompt_message_file_from_state_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: r\n    effects:\n      - type: prompt\n        name: propose_steps\n        messages:\n          - {role: system, content: plan}\n          - role: user\n            content:\n              file: {from: input.f}\n              within: {from: input.d}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads messages[1].content from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'."
+      ],
+      "warnings": []
+    },
+    "run_error": "Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads messages[1].content from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'.",
+    "definition": null,
+    "definition_error": "ValueError: Reflector effect 'r' at 'prime.effects[0]': its plan prompt 'propose_steps' reads messages[1].content from a file named in state ('file: {from: ...}'), but a reflector builds its planning prompt from the prompt's own text and would drop the file. Write the text in the prompt, or name the file with 'file: <path>'.",
+    "digest": "47c1c4a54bd59390c93af01eefe44744fc932d29d29b97eb1bafacded75e6eab",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "reflector_other_prompt_file_from_state_is_allowed",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: r\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: plan\n      - type: prompt\n        name: other\n        template:\n          file: {from: input.f}\n          within: {from: input.d}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "r",
+          "inner": {
+            "name": "inner",
+            "effects": [
+              {
+                "name": "propose_steps",
+                "template": "plan",
+                "template_file": null,
+                "messages": null,
+                "prompt_type": "text",
+                "schema": null,
+                "model": null,
+                "provider": null,
+                "provider_fallbacks": null,
+                "routing_override": null,
+                "params": null,
+                "timeout_ms": null,
+                "deterministic": false,
+                "inputs": null,
+                "assets": null,
+                "retries": null,
+                "on_error": "fail",
+                "description": null,
+                "enabled": true,
+                "group": null
+              },
+              {
+                "name": "other",
+                "template": null,
+                "template_file": {
+                  "path_from": "input.f",
+                  "within": null,
+                  "within_from": "input.d",
+                  "confine_to": null
+                },
+                "messages": null,
+                "prompt_type": "text",
+                "schema": null,
+                "model": null,
+                "provider": null,
+                "provider_fallbacks": null,
+                "routing_override": null,
+                "params": null,
+                "timeout_ms": null,
+                "deterministic": false,
+                "inputs": null,
+                "assets": null,
+                "retries": null,
+                "on_error": "fail",
+                "description": null,
+                "enabled": true,
+                "group": null
+              }
+            ],
+            "flow": "chain",
+            "finally_effects": [],
+            "max_concurrency": null,
+            "stop_on_error": false,
+            "on_error": "fail",
+            "labels": null,
+            "enabled": true,
+            "prompts": {},
+            "effect_names": []
+          },
+          "plan_from_step": "propose_steps",
+          "max_iterations": 1,
+          "generated_key": "generated",
+          "stop_on_done": true,
+          "prime_template": "<REFLECTOR_PRIME>",
+          "max_effects": 8,
+          "enabled": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "other",
+        "propose_steps",
+        "r"
+      ]
+    },
+    "definition_error": null,
+    "digest": "509adc0fce764ad8cb2440b44b8be9f8375e39e58ec5618afb9e98077e367dbd",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "prompt_template_from_file",
     "files": {
       "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: template.txt}\n",
@@ -5386,6 +6385,7 @@
         {
           "name": "greet",
           "template": "Hello, {{input.name}}!",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -5448,10 +6448,12 @@
         {
           "name": "chat",
           "template": null,
+          "template_file": null,
           "messages": [
             {
               "role": "user",
-              "content": "Hi {{input.name}}"
+              "content": "Hi {{input.name}}",
+              "file": null
             }
           ],
           "prompt_type": "text",
@@ -5741,6 +6743,7 @@
             {
               "name": "handle",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -5821,6 +6824,7 @@
             {
               "name": "handle",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -5898,6 +6902,7 @@
         {
           "name": "x",
           "template": "hi",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -6024,6 +7029,7 @@
             {
               "name": "handle",
               "template": "hi",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -6111,6 +7117,7 @@
               {
                 "name": "propose_steps",
                 "template": "x",
+                "template_file": null,
                 "messages": null,
                 "prompt_type": "text",
                 "schema": null,
@@ -6236,7 +7243,8 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": "io"
+          "group": "io",
+          "confine_to": null
         },
         {
           "name": "it",
@@ -6244,6 +7252,7 @@
             {
               "name": "ask",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -6290,6 +7299,7 @@
             {
               "name": "ask2",
               "template": "x",
+              "template_file": null,
               "messages": null,
               "prompt_type": "text",
               "schema": null,
@@ -6323,6 +7333,7 @@
               {
                 "name": "propose_steps",
                 "template": "x",
+                "template_file": null,
                 "messages": null,
                 "prompt_type": "text",
                 "schema": null,
@@ -6366,6 +7377,7 @@
         {
           "name": "cleanup",
           "template": "x",
+          "template_file": null,
           "messages": null,
           "prompt_type": "text",
           "schema": null,
@@ -6447,7 +7459,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6505,7 +7518,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6564,7 +7578,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6625,7 +7640,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6684,7 +7700,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6744,7 +7761,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6802,7 +7820,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",
@@ -6861,7 +7880,8 @@
           "description": null,
           "retries": null,
           "expect": null,
-          "enabled": true
+          "enabled": true,
+          "parent_trusted": true
         }
       ],
       "flow": "chain",

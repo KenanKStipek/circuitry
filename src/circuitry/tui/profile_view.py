@@ -331,6 +331,7 @@ class ProfileScreen(ViewScreen):
                 orch=orch,
                 document_dir=_document_dir,
                 confinement_root=default_project_root(_document_dir),
+                trusted=True,
             )
         except Exception as exc:
             self._choice = None

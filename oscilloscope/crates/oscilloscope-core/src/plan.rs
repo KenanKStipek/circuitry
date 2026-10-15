@@ -1332,6 +1332,7 @@ mod tests {
                     path: use_path,
                     name: Some("first".to_string()),
                     kind: NodeKind::Leaf(Box::new(LeafKind::Use(electricity_bytecode::UseOp {
+                        parent_trusted: false,
                         source: UseSource::Path("child.yml".to_string()),
                         inputs: None,
                         outputs: None,

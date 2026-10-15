@@ -1,0 +1,10 @@
+name: prompt-state-invalid
+adapter: scripted
+model: m
+runtime:
+  state:
+    prompt_sent: "head:0"
+effects:
+  - type: prompt
+    name: greeting
+    template: "hi"

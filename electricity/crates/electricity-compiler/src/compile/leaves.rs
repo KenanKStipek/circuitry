@@ -10,11 +10,12 @@ use crate::compile::containers::{compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
 use crate::compile::params::{build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
+use crate::prompt_files::compile_dispatch_file as compile_dispatch_file_dict;
 use crate::state_ns::validate_reference_path;
 use crate::{CompileError, DocumentOrigin, prompt_files};
 use electricity_bytecode::effects::{
-    AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role, TimeoutFrom,
-    TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
+    AssetRef, DispatchFile, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role,
+    TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
 };
 use electricity_bytecode::path::EffectPath;
 use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, ParamNode, Region};
@@ -122,6 +123,21 @@ fn compile_timeout_ms(
     Ok(Some(TimeoutMs::From(TimeoutFrom { path, default })))
 }
 
+/// [`prompt_files::compile_dispatch_file`] on a `template`/`content` *value*
+/// already known to be a mapping.
+fn compile_dispatch_file(
+    value: &Value,
+    field: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+    origin: &DocumentOrigin,
+) -> Result<DispatchFile, CompileError> {
+    let Value::Dict(dict) = value else {
+        unreachable!("is_dispatch_file already checked the value is a mapping");
+    };
+    compile_dispatch_file_dict(dict, field, effect_path, loop_names, origin)
+}
+
 fn optional_str(dict: &Dict, key: &str) -> Option<String> {
     match dict.get(&Value::Str(key.to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
@@ -152,7 +168,20 @@ pub(crate) fn compile_prompt(
     }
 
     let template_raw = effect.get(&Value::Str("template".to_string()));
+    // `template: {file: {from: ...}, within: ...}` (issue #578), read when
+    // the effect dispatches; `template` is then absent, as in Python.
+    let mut template_file: Option<DispatchFile> = None;
     let template = match template_raw {
+        Some(value) if prompt_files::is_dispatch_file(value) => {
+            template_file = Some(compile_dispatch_file(
+                value,
+                &format!("{effect_path}.template"),
+                effect_path,
+                loop_names,
+                origin,
+            )?);
+            None
+        }
         Some(value) if !value.is_none() => Some(prompt_files::resolve_text_or_file(
             value,
             &format!("{effect_path}.template"),
@@ -182,17 +211,29 @@ pub(crate) fn compile_prompt(
                     .get(&Value::Str("content".to_string()))
                     .cloned()
                     .unwrap_or_else(|| Value::Str(String::new()));
-                let content = prompt_files::resolve_text_or_file(
-                    &content_raw,
-                    &format!("{effect_path}.messages[{index}].content"),
-                    origin,
-                )?;
+                let content_field = format!("{effect_path}.messages[{index}].content");
+                let (content, file) = if prompt_files::is_dispatch_file(&content_raw) {
+                    let file = compile_dispatch_file(
+                        &content_raw,
+                        &content_field,
+                        effect_path,
+                        loop_names,
+                        origin,
+                    )?;
+                    (String::new(), Some(file))
+                } else {
+                    (
+                        prompt_files::resolve_text_or_file(&content_raw, &content_field, origin)?,
+                        None,
+                    )
+                };
                 messages.push(Message {
                     role,
                     // `composable: true`, `Escape::None` (prompt text,
                     // #397) -- the real syntax check runs a few lines
                     // below, against every message's `content` at once.
                     content: electricity_bytecode::TemplateText::new(content, true, Escape::None),
+                    file,
                 });
             }
         }
@@ -200,7 +241,7 @@ pub(crate) fn compile_prompt(
 
     let template_truthy = template.as_deref().is_some_and(|t| !t.is_empty());
     let messages_truthy = !messages.is_empty();
-    if !template_truthy && !messages_truthy {
+    if !template_truthy && template_file.is_none() && !messages_truthy {
         return Err(CompileError(format!(
             "Prompt '{name}' must have 'template' or 'messages'."
         )));
@@ -210,6 +251,9 @@ pub(crate) fn compile_prompt(
         check_templates(&Value::Str(template.clone()), effect_path, "template", true)?;
     }
     for (index, message) in messages.iter().enumerate() {
+        if message.file.is_some() {
+            continue;
+        }
         check_templates(
             &Value::Str(message.content.source.clone()),
             effect_path,
@@ -265,6 +309,8 @@ pub(crate) fn compile_prompt(
             true,
             Escape::None,
         )?)
+    } else if let Some(file) = template_file {
+        PromptContent::TemplateFile(Box::new(file))
     } else {
         PromptContent::Messages(messages)
     };
@@ -517,6 +563,7 @@ pub(crate) fn compile_use(
     name: &str,
     effect_path: &str,
     loop_names: &BTreeSet<String>,
+    origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
     let field_str = |key: &str| -> Option<String> {
         effect
@@ -616,6 +663,7 @@ pub(crate) fn compile_use(
     };
 
     let op = UseOp {
+        parent_trusted: matches!(origin, DocumentOrigin::File { .. }),
         source,
         inputs,
         outputs,
@@ -747,6 +795,37 @@ pub(crate) fn compile_reflector(
         &mut seen,
     )?;
 
+    let plan_from_step = get_truthy(effect, "plan_from_step")
+        .map(Value::py_str)
+        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
+    for inner_op in &compiled_inner {
+        if inner_op.name.as_deref() != Some(plan_from_step.as_str()) {
+            continue;
+        }
+        let NodeKind::Leaf(leaf) = &inner_op.kind else {
+            continue;
+        };
+        let LeafKind::Prompt(prompt) = leaf.as_ref() else {
+            continue;
+        };
+        let file_field = match &prompt.content {
+            PromptContent::TemplateFile(_) => Some("template".to_string()),
+            PromptContent::Messages(messages) => messages
+                .iter()
+                .position(|message| message.file.is_some())
+                .map(|index| format!("messages[{index}].content")),
+            PromptContent::Template(_) => None,
+        };
+        if let Some(field) = file_field {
+            return Err(CompileError(format!(
+                "Reflector effect '{name}' at '{effect_path}': its plan prompt \
+                 '{plan_from_step}' reads {field} from a file named in state \
+                 ('file: {{from: ...}}'), but a reflector builds its planning prompt from \
+                 the prompt's own text and would drop the file. Write the text in the \
+                 prompt, or name the file with 'file: <path>'."
+            )));
+        }
+    }
     let inner_region = match flow {
         electricity_bytecode::LoopFlow::Tree => Region::Parallel {
             branches: compiled_inner,
@@ -759,9 +838,6 @@ pub(crate) fn compile_reflector(
         },
     };
 
-    let plan_from_step = get_truthy(effect, "plan_from_step")
-        .map(Value::py_str)
-        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
     let max_iterations = get_truthy(effect, "max_iterations")
         .map(py_int)
         .unwrap_or(electricity_bytecode::defaults::REFLECTOR_MAX_ITERATIONS as i64)

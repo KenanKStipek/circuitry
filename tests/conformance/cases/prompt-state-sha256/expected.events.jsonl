@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-15T18:03:21.693Z","ev":"run_start","run_id":"e9794b34-6557-479d-bcb0-bf063f4afde8","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":447}
+{"v":1,"seq":1,"ts":"2026-10-15T18:03:21.695Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-15T18:03:21.696Z","ev":"start","id":1,"path":"prime.from_template"}
+{"v":1,"seq":3,"ts":"2026-10-15T18:03:21.696Z","ev":"end","id":1,"path":"prime.from_template","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-15T18:03:21.696Z","ev":"start","id":2,"path":"prime.from_messages"}
+{"v":1,"seq":5,"ts":"2026-10-15T18:03:21.696Z","ev":"end","id":2,"path":"prime.from_messages","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-15T18:03:21.697Z","ev":"start","id":3,"path":"prime.fails_then_continues"}
+{"v":1,"seq":7,"ts":"2026-10-15T18:03:21.697Z","ev":"end","id":3,"path":"prime.fails_then_continues","ok":false,"ms":0,"error":"All adapter attempts failed: [{'adapter': 'scripted', 'model': 'm', 'status': 'failed', 'error': \"scripted adapter: no reply configured for path 'prime.fails_then_continues'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":8,"ts":"2026-10-15T18:03:21.697Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":9,"ts":"2026-10-15T18:03:21.697Z","ev":"run_end","ok":true}

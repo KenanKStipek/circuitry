@@ -695,6 +695,7 @@ mod tests {
         leaf_op(
             path,
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1239,6 +1240,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1316,6 +1318,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1534,6 +1537,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1557,6 +1561,7 @@ mod tests {
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1694,6 +1699,7 @@ mod tests {
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,

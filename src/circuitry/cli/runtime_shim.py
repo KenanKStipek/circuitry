@@ -28,6 +28,7 @@ from ..core.concurrency import RunConcurrencyLimiter
 from ..core.document_check import structural_errors, unknown_key_warnings
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.prompt_record import prompt_sent_errors
 from ..core.runtime_plugins import (
     PLUGIN_CONTRACT_VERSION,
     PluginContext,
@@ -39,7 +40,6 @@ from ..core.saved_state import compact_last_aliases, link_last_refs
 from ..core.state_ns import migrate_legacy_state
 from ..core.store import Store, build_persistence_backend
 from ..core.store.persistence import PersistenceBackend
-from ..document_scope import DocumentScope, install_document_scope
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
 from .allowlist import (
@@ -767,32 +767,24 @@ def run(req: RunRequest) -> RunResult:
         from .library_sources import confinement_root_for_document
 
         _document_dir = req.orchestration_path.resolve().parent
-        _document_limited = not (document_trust_document or cfg.trust_orchestration_runtime)
-        _project_root = confinement_root_for_document(
-            req.orchestration_path,
-            _document_dir,
-            library_registry=library_registry,
-            is_cache_path=document_is_cache_path,
-            remote_library_source=req.remote_library_source,
-        )
         root_def = compile_orchestration(
             orch=orch,
             root_name="prime",
             document_dir=_document_dir,
-            confinement_root=_project_root,
-            limited=_document_limited,
+            confinement_root=confinement_root_for_document(
+                req.orchestration_path,
+                _document_dir,
+                library_registry=library_registry,
+                is_cache_path=document_is_cache_path,
+                remote_library_source=req.remote_library_source,
+            ),
+            # The same trust the document's `runtime:` block gets: a document
+            # run by path can name any `within` for a prompt's
+            # `file: {from: ...}`; a limited one stays inside its project.
+            trusted=document_trust_document or cfg.trust_orchestration_runtime,
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
-        # After the settings snapshot above, so the scope never reaches saved
-        # state; a tool that reads a path the document names reads it here.
-        install_document_scope(
-            runtime_config,
-            DocumentScope(
-                limited=_document_limited,
-                project_root=_project_root,
-            ),
-        )
 
         group_errors = unknown_concurrency_group_errors(
             root_def, concurrency_limiter.group_names
@@ -1422,11 +1414,7 @@ def validate(
                 library_registry=library_registry,
                 is_cache_path=document_is_cache_path,
             ),
-            # `run()`'s own rule: a document the caller did not name by path
-            # is limited unless the host trusts documents' runtime.
-            limited=not (
-                trust_document or (config is not None and config.trust_orchestration_runtime)
-            ),
+            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
 
         # Same merge `run()` applies (document `runtime:` key by key over
@@ -1455,6 +1443,13 @@ def validate(
             return {
                 "ok": False,
                 "errors": concurrency_config_errors,
+                "warnings": lint_warnings,
+            }
+        state_config_errors = prompt_sent_errors(merged_runtime)
+        if state_config_errors:
+            return {
+                "ok": False,
+                "errors": state_config_errors,
                 "warnings": lint_warnings,
             }
         group_name_errors = unknown_concurrency_group_errors(root_def, frozenset(groups))

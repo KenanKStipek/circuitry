@@ -16,9 +16,13 @@ completed from one that was only partway written when a run stopped (an
 unnamed ``if`` in the body whose condition raised before touching the
 node; any interruption between body effects). Instead the loop keeps its
 own authoritative record, ``meta.completed_passes`` — the indices
-``_execute_body`` actually returned successfully for, persisted on both
-its success and its failure path — and resumes at the first index missing
-from the contiguous prefix of that list. See ``LoopRuntime.execute``.
+``_execute_body`` actually returned successfully for, persisted on its
+success path, its failure path and an interrupt (#574) — and resumes at the
+first index missing from the contiguous prefix of that list. That pass
+continues inside its saved ``iter_<N>`` node by the same positional rule as
+a chain, and an unfinished named ``if`` continues inside the branch its
+saved node took when its condition selects it again (#573). See
+``LoopRuntime.execute`` and ``ConditionalRuntime``.
 """
 
 from __future__ import annotations

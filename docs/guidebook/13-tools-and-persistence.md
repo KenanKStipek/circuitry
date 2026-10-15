@@ -288,9 +288,11 @@ interrupted or failed run of the same document, reusing every effect whose
 node already finished without error (`meta.completed_at` set, no
 `meta.error`) and rerunning only the first unfinished/failed one and
 everything after it. A named loop in chain flow resumes at its first
-unfinished pass, keeping the finished `iter_<N>` passes, and with
-`runtime.state.record_children: true` an unfinished `use` continues inside
-its child the same way — see [Resuming a
+unfinished pass, keeping the finished `iter_<N>` passes and continuing that
+pass at its first unfinished body effect; an unfinished named `if` whose
+condition picks the same branch again continues inside that branch; and
+with `runtime.state.record_children: true` an unfinished `use` continues
+inside its child the same way — see [Resuming a
 Run](../orchestration-reference.md#resuming-a-run-cof-run---resume) in the
 reference for the full skip/rerun rule, the three state sources (`--state`,
 `--resume last`, `--resume <run-id>` via this section's persistence
