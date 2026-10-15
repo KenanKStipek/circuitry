@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import math
@@ -34,7 +33,7 @@ from .prompt_compose import (
 )
 from .store import Store
 from .timeout_ref import TimeoutFrom, resolve_timeout_ms
-from .use import _resolve_reference
+from .use import REFERENCE_AS_KEY, _resolve_reference, serialize_reference
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +129,12 @@ def _format_output(value: Any) -> str:
         return s
 
 
-#: The one or two keys of a by-reference ``params`` leaf: ``{from: <path>}``,
-#: optionally with a ``default:`` for when the path doesn't resolve (#234).
+#: The keys of a by-reference ``params`` leaf: ``{from: <path>}``, optionally
+#: with a ``default:`` for when the path doesn't resolve (#234) and an
+#: ``as:`` modifier naming the form the value takes (``json``, #566).
 PARAM_REFERENCE_KEY = "from"
 PARAM_DEFAULT_KEY = "default"
+PARAM_AS_KEY = REFERENCE_AS_KEY
 
 
 @dataclass(frozen=True)
@@ -141,30 +142,34 @@ class ParamReference:
     path: str
     has_default: bool = False
     default: Any = None
+    as_format: Any = None
 
 
 def param_reference(value: Any) -> ParamReference | None:
-    """A ``params`` leaf's ``{from: <path>}`` (optionally with ``default:``), or None.
+    """A ``params`` leaf's ``{from: <path>}`` (optionally ``default:``, ``as:``), or None.
 
-    Only a mapping with exactly the keys ``{"from"}`` or ``{"from", "default"}``,
+    Only a mapping whose keys are ``from`` plus any of ``default`` and ``as``,
     and a string ``from`` value, is a reference — any other mapping (including
     one with other keys mixed in) is passed through literally, same as before.
     ``params_json`` is the way to pass a literal one-key ``{from: ...}`` dict.
+    ``as_format`` is the ``as:`` value as written; ``cof check`` rejects any
+    other than ``json`` (``validate_reference_as``).
     """
     if not isinstance(value, dict):
         return None
-    keys = set(value.keys())
-    if keys == {PARAM_REFERENCE_KEY}:
-        path = value[PARAM_REFERENCE_KEY]
-        return ParamReference(path=path.strip()) if isinstance(path, str) else None
-    if keys == {PARAM_REFERENCE_KEY, PARAM_DEFAULT_KEY}:
-        path = value[PARAM_REFERENCE_KEY]
-        if isinstance(path, str):
-            return ParamReference(
-                path=path.strip(), has_default=True, default=value[PARAM_DEFAULT_KEY]
-            )
+    if PARAM_REFERENCE_KEY not in value:
         return None
-    return None
+    if not set(value) <= {PARAM_REFERENCE_KEY, PARAM_DEFAULT_KEY, PARAM_AS_KEY}:
+        return None
+    path = value[PARAM_REFERENCE_KEY]
+    if not isinstance(path, str):
+        return None
+    return ParamReference(
+        path=path.strip(),
+        has_default=PARAM_DEFAULT_KEY in value,
+        default=value.get(PARAM_DEFAULT_KEY),
+        as_format=value.get(PARAM_AS_KEY),
+    )
 
 
 def _render_params(
@@ -183,7 +188,10 @@ def _render_params(
     inputs (``core.use._render_inputs``). A path that doesn't resolve raises,
     naming the param's own path, unless the leaf also carries ``default:``,
     which is used as-is (mirroring how ``interface.inputs`` defaults fill an
-    unresolved/absent value). Any other value that fails to render also
+    unresolved/absent value). ``as: json`` serializes the value (the default
+    included) to compact JSON text instead, so a string-only param can carry
+    an object or array; a value JSON can't carry raises, naming its path (#566).
+    Any other value that fails to render also
     raises, naming its path, rather than handing the tool unrendered text.
     """
 
@@ -192,13 +200,18 @@ def _render_params(
         if ref is not None:
             resolved = _resolve_reference(ctx, ref.path)
             if resolved is None:
-                if ref.has_default:
-                    return copy.deepcopy(ref.default)
-                raise ValueError(
-                    f"Tool effect '{name}' param '{path}': "
-                    f"'{{from: {ref.path}}}' did not resolve to a value."
-                )
-            return copy.deepcopy(resolved)
+                if not ref.has_default:
+                    raise ValueError(
+                        f"Tool effect '{name}' param '{path}': "
+                        f"'{{from: {ref.path}}}' did not resolve to a value."
+                    )
+                resolved = ref.default
+            return serialize_reference(
+                resolved,
+                as_value=ref.as_format,
+                label=f"Tool effect '{name}' param '{path}'",
+                path=ref.path,
+            )
         if isinstance(v, str):
             return render_with_composition(
                 v, ctx, declared=declared, known_effect_names=known_names, label=path

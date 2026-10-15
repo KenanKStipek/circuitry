@@ -860,6 +860,303 @@ CASES: list[dict[str, Any]] = [
         },
         "entry": "doc.yml",
     },
+    # --- Issue #428: `core/lint.py`'s advisory warnings, one rule per
+    # case, then several together, then one next to an unknown-key
+    # warning and one next to the "Applied host settings" notice.
+    {
+        "name": "lint_deprecated_effect_type_alias",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: conditional\n"
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_deprecated_flow_alias_at_top_level",
+        "files": {
+            "doc.yml": (
+                "flow: cot\n"
+                "effects:\n"
+                f"  - {_TOOL_FLOW}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_deprecated_flow_alias_on_an_effect",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: poll\n"
+                "    flow: tot\n"
+                "    each: {in: 'input.xs'}\n"
+                f"    body: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_effect_named_after_its_own_type",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: tool\n"
+                "    name: tool\n"
+                "    provider: json\n"
+                "    params: {mode: stringify, input: 1}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_tool_args_yaml_scalar_gotchas",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: tool\n"
+                "    name: run_it\n"
+                "    provider: shell\n"
+                "    params: {command: echo, args: [0x1, off, -0, ~]}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_loop_fixed_iteration_reference",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: prompt\n"
+                "        name: first\n"
+                "        template: 'FIRST {{item}}'\n"
+                "      - type: prompt\n"
+                "        name: second\n"
+                "        template: 'iter0=[{{prime.outer.iter_0.first.value}}]'\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_loop_last_reference_inside_body",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: review\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: prompt\n"
+                "        name: refine\n"
+                "        template: 'Base it on {{prime.review.last.refine.value}}'\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_loop_sibling_path_never_resolves",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: prompt\n"
+                "        name: first\n"
+                "        template: 'FIRST {{item}}'\n"
+                "      - type: prompt\n"
+                "        name: second\n"
+                "        template: 'loopname=[{{prime.outer.first.value}}]'\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_min_iterations_on_each_loop_has_no_effect",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: l\n"
+                "    each: {in: 'input.items'}\n"
+                "    min_iterations: 5\n"
+                "    body: [{type: prompt, name: s, template: 'x'}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        "name": "lint_if_threshold_has_no_effect",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: if\n"
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then: [{type: prompt, name: t, template: 'y'}]\n"
+                "    threshold: 0.7\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # Several rules together, from one effect: a deprecated type
+        # alias, an effect named after a (different) type keyword, and
+        # a tool-args YAML scalar gotcha nested in its own `then:`.
+        "name": "lint_several_rules_together",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: conditional\n"
+                "    name: use\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: tool\n"
+                "        name: t\n"
+                "        provider: shell\n"
+                "        params: {command: echo, args: [off]}\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A lint rule beside an unrelated, ordinary unknown-key warning
+        # on the same effect.
+        "name": "lint_warning_next_to_unknown_key_warning",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: tool\n"
+                "    name: tool\n"
+                "    provider: json\n"
+                "    params: {mode: stringify, input: 1}\n"
+                "    owner: ops\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A lint rule beside the "Applied host settings" notice a
+        # trusted document's own `runtime:` block triggers.
+        "name": "lint_warning_next_to_host_settings_notice",
+        "files": {
+            "doc.yml": (
+                "runtime: {max_concurrency: 2}\n"
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: l\n"
+                "    each: {in: 'input.items'}\n"
+                "    min_iterations: 5\n"
+                "    body: [{type: prompt, name: s, template: 'x'}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A legacy top-level `steps:` document (path stays `effects[i]`),
+        # a top-level `finally:` block, nested loops with an inner body
+        # step naming the *outer* loop, a loop's own `while:` naming
+        # itself, and a repeated reference the `seen` set dedupes to one
+        # warning -- five branches no prior case reaches.
+        "name": "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
+        "files": {
+            "doc.yml": (
+                "steps:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: loop\n"
+                "        name: inner\n"
+                "        while: {mode: cel, expr: \"prime.inner.last.marker.value == ''\"}\n"
+                "        body:\n"
+                "          - type: prompt\n"
+                "            name: marker\n"
+                "            template: 'ref {{prime.outer.last.marker.value}} and {{prime.outer.last.marker.value}}'\n"
+                "finally:\n"
+                "  - type: conditional\n"
+                "    name: cleanup\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # Mixed-case/whitespace type and flow aliases (the message
+        # echoes the raw, unstripped flow), a `params.args` float that
+        # reads as a float (not an int), and `conditional` with
+        # `threshold` together -- exactly two warnings, in order.
+        "name": "lint_mixed_case_aliases_float_arg_and_conditional_threshold",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: Conditional\n"
+                "    name: route\n"
+                "    flow: ' COT '\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then:\n"
+                "      - type: tool\n"
+                "        name: t\n"
+                "        provider: shell\n"
+                "        params: {command: echo, args: [1.0e+3]}\n"
+                "  - type: conditional\n"
+                "    name: gate\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                "    then: [{type: tool, name: t2, provider: json, params: {mode: stringify, input: 1}}]\n"
+                "    threshold: 0.5\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # `_ITER_SEGMENT`'s `\d` must match a non-ASCII Unicode decimal
+        # digit (U+0661 ARABIC-INDIC DIGIT ONE), same as Python's own
+        # default `\d`.
+        "name": "lint_loop_fixed_iteration_reference_unicode_digit",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                "  - type: loop\n"
+                "    name: outer\n"
+                "    each: {in: 'input.items', as: 'item'}\n"
+                "    body:\n"
+                "      - type: prompt\n"
+                "        name: first\n"
+                "        template: 'FIRST {{item}}'\n"
+                "      - type: prompt\n"
+                "        name: second\n"
+                "        template: 'iter1=[{{prime.outer.iter_\u0661.first.value}}]'\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
+    {
+        # A C0 control character (`\x1c`, FS) Python's own `str.strip()`
+        # removes but Rust's `.trim()` does not -- without `py_strip`
+        # this `type:` value never normalizes to the deprecated alias.
+        "name": "lint_deprecated_type_alias_with_control_character_whitespace",
+        "files": {
+            "doc.yml": (
+                "effects:\n"
+                '  - type: "\\x1cconditional"\n'
+                "    name: c\n"
+                "    if: {mode: cel, expr: 'true'}\n"
+                f"    then: [{_TOOL_FLOW}]\n"
+            ),
+        },
+        "entry": "doc.yml",
+    },
     {
         # Issue #564: `timeout_ms` is an integer or `{from, default}`,
         # on both a tool and a prompt.

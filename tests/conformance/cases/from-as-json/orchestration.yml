@@ -1,0 +1,19 @@
+name: from-as-json
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params:
+      mode: parse
+      input: '{"zeta": 1, "alpha": [1, {"n": null}], "name": "caf\u00e9", "ok": true, "ratio": 0.5}'
+  - type: tool
+    name: show
+    provider: json
+    params:
+      mode: parse
+      input: {from: prime.seed.value, as: json}
+      args: ["record", "--meta", {from: prime.seed.value, as: json}, "--missing", {from: prime.missing.value, as: json, default: {}}]
+      nested:
+        deep: {from: prime.seed.value.alpha, as: json}
+        text: {from: prime.seed.value.name, as: json}
+        plain: {from: prime.seed.value.alpha}

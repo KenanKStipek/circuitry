@@ -4,7 +4,7 @@
 //! module doc comment, the full allowlist/host-pin-intersection rule
 //! included.
 
-use crate::subprocess_tool::{as_bool_param, run_binary};
+use crate::subprocess_tool::{as_bool_param, parse_json_stdout, parse_mode, run_binary};
 use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
 use electricity_value::Value;
@@ -116,6 +116,8 @@ impl ToolPlugin for ShellPlugin {
             });
         }
 
+        let parse_json = parse_mode(get("parse"), "shell")?;
+
         let args: &[Value] = match get("args") {
             Some(Value::List(items)) => items,
             // `params.get("args") or []` -- any *falsy* value (`None`,
@@ -156,7 +158,7 @@ impl ToolPlugin for ShellPlugin {
         let stdin = get("stdin").and_then(Value::as_str);
         let allow_nonzero = as_bool_param(get("allow_nonzero"));
 
-        run_binary(
+        let result = run_binary(
             &binary,
             args,
             cwd,
@@ -170,7 +172,11 @@ impl ToolPlugin for ShellPlugin {
             call.armed,
             call.token,
         )
-        .await
+        .await?;
+        if parse_json {
+            return parse_json_stdout(result, &binary);
+        }
+        Ok(result)
     }
 
     fn check(&self) -> CheckResult {

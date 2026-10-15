@@ -1,0 +1,9 @@
+name: from-as-json-unknown-as
+effects:
+  - type: tool
+    name: show
+    provider: json
+    params:
+      mode: parse
+      input: "null"
+      args: ["record", {from: input.meta, as: yaml}]

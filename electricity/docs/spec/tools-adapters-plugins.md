@@ -235,7 +235,7 @@ alphanumeric+`-_`, checked **before** PATH lookup, `:78-90`); `args` (list[str],
 if it contains `\x00` or `\n`, `_DANGEROUS_ARG_CHARS`, `:55`, `:137-143`); `allowed_commands`
 (optional per-effect override, default `_DEFAULT_ALLOWED = ("ls","cat","head","tail","wc",
 "echo","pwd","date")`, `:52-53`); `cwd` (str); `stdin` (str); `allow_nonzero` (bool via
-`_as_bool`).
+`_as_bool`); `parse` (`"json"` or omitted, see `parse: json` below).
 
 **Host pin**: `runtime.plugins.shell.allowed_commands` (`_build_shell`, `factory.py:263-271`,
 validated as `list[str]` → `tuple`) becomes `ShellPlugin.pinned_allowed_commands`. The effective
@@ -265,6 +265,17 @@ Non-zero exit raises `RuntimeError(f"{binary} failed (exit {code}): {err}")` unl
 
 Output: `value = stdout`; `raw = {"args": cmd[1:], "cwd": cwd, "binary": binary}`;
 `stdout`/`stderr`/`exit_code` populated.
+
+**`parse: json`** (`parse_mode`/`_parse_json_stdout`, `_subprocess.py`; shared by `shell` and
+`GenericSubprocessTool`): `parse` absent or null is off; a string equal to `json` after `strip()
+.lower()` turns it on; anything else raises `ValueError("{plugin}: params['parse'] must be 'json'
+(or omitted), got {value!r}.")` before the process runs (for `shell`, after the allowlist gate and
+before the `args` checks). When on, `value = json.loads(stdout)` (stdout stays on `stdout`),
+applied after the nonzero-exit check, so a nonzero exit still fails first unless `allow_nonzero`
+(then its stdout is parsed too). Whitespace-only stdout raises `ValueError("{binary} parse: json:
+stdout is empty (exit {code}).")`; a decode failure raises `ValueError("{binary} parse: json:
+stdout is not valid JSON (exit {code}): {json_error}; stdout begins {stdout[:200]!r}")`, with
+`...` appended when stdout is longer than 200 characters. `{binary}` is the resolved path.
 
 ### 2.2 `json`
 
@@ -327,7 +338,7 @@ Both are `GenericSubprocessTool` instances (`_subprocess.py:225-281`), differing
 `binary_candidates`: `awk` → `("awk", "gawk", "mawk")` (`plugins/awk.py:17-23`); `imagemagick`
 → `("magick", "convert")`, preferring ImageMagick 7's `magick` subcommand form over IM6's
 `convert` (`plugins/imagemagick.py:1-11,20-26`). Both take `args: list[str]` (required),
-`cwd`, `stdin`, `allow_nonzero`; `binary`/`env` come only from
+`cwd`, `stdin`, `allow_nonzero`, `parse` (as in §2.1); `binary`/`env` come only from
 `runtime.plugins.<name>.binary`/`.env` config, never from params ("a machine-specific
 executable path... belongs in config, not in orchestration YAML", `_subprocess.py:258-262`).
 `resolve_plugin_binary` (`:101-127`): a configured `binary` must be an absolute, existing,

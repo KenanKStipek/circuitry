@@ -39,7 +39,7 @@ from .state_ns import (
 from .templates import template_syntax_error
 from .timeout_ref import compile_timeout_ms
 from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
-from .use import UseDefinition, reference_path
+from .use import UseDefinition, reference_as, reference_path, validate_reference_as
 from .yield_effect import YieldDefinition
 
 EffectDef = (
@@ -1135,9 +1135,10 @@ def _check_param_leaves(
 ) -> None:
     """Walk a tool effect's ``params`` for malformed templates and bad ``{from:}`` roots.
 
-    A leaf matching ``{from: <path>}`` (optionally with ``default:``) is a
-    by-reference param (#234): its path is checked against the same rooting
-    rules as a ``use`` effect's own by-reference inputs, and — since it never
+    A leaf matching ``{from: <path>}`` (optionally with ``default:`` and
+    ``as:``) is a by-reference param (#234): its path is checked against the
+    same rooting rules as a ``use`` effect's own by-reference inputs, its
+    ``as:`` against the supported formats (#566), and — since it never
     renders — is not also walked as a template. Every other leaf is checked
     exactly as :func:`_check_templates` checks ``params`` today.
     """
@@ -1148,6 +1149,11 @@ def _check_param_leaves(
             label=f"Tool effect '{name}' param '{field}'",
             effect_path=effect_path,
             loop_names=loop_names,
+        )
+        validate_reference_as(
+            ref.as_format,
+            label=f"Tool effect '{name}' param '{field}'",
+            effect_path=effect_path,
         )
         return
     if isinstance(value, str):
@@ -1374,6 +1380,11 @@ def _compile_use(
                 label=f"Use effect '{name}' input '{input_name}'",
                 effect_path=effect_path,
                 loop_names=loop_names,
+            )
+            validate_reference_as(
+                reference_as(value),
+                label=f"Use effect '{name}' input '{input_name}'",
+                effect_path=effect_path,
             )
 
     # Canonical form is `name: {path: ...}`; the bare-string shorthand

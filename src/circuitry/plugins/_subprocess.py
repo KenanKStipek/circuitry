@@ -14,6 +14,7 @@ construct their own commands and call :func:`run_binary` directly.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -25,6 +26,42 @@ from typing import Any
 from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
+
+#: How much of an unparseable stdout ``parse: json`` quotes in its error.
+_PARSE_EXCERPT_CHARS = 200
+
+
+def parse_mode(params: dict[str, Any], *, plugin_name: str) -> bool:
+    """Read the optional ``parse`` param shared by ``shell`` and every
+    :class:`GenericSubprocessTool`: ``True`` for ``parse: json``, ``False``
+    when it's absent or null. Anything else is rejected before the process
+    runs, so a typo never costs a side effect."""
+    mode = params.get("parse")
+    if mode is None:
+        return False
+    if isinstance(mode, str) and mode.strip().lower() == "json":
+        return True
+    raise ValueError(
+        f"{plugin_name}: params['parse'] must be 'json' (or omitted), got {mode!r}."
+    )
+
+
+def _parse_json_stdout(stdout: str, *, binary: str, returncode: int) -> Any:
+    """``json.loads`` of a process's stdout for ``parse: json``, failing with
+    the exit code and the beginning of stdout on empty or invalid output."""
+    if not stdout.strip():
+        raise ValueError(
+            f"{binary} parse: json: stdout is empty (exit {returncode})."
+        )
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        excerpt = stdout[:_PARSE_EXCERPT_CHARS]
+        more = "..." if len(stdout) > _PARSE_EXCERPT_CHARS else ""
+        raise ValueError(
+            f"{binary} parse: json: stdout is not valid JSON (exit {returncode}): "
+            f"{exc}; stdout begins {excerpt!r}{more}"
+        ) from exc
 
 
 def _validate_args(args: Sequence[Any]) -> list[str]:
@@ -173,6 +210,7 @@ def run_binary(
     env: dict[str, str] | None = None,
     timeout_seconds: int = 300,
     allow_nonzero: bool = False,
+    parse_json: bool = False,
     not_found_hint: str | None = None,
 ) -> ToolResult:
     """Execute *binary* with *args* and return the result as a ToolResult.
@@ -181,7 +219,10 @@ def run_binary(
     is set (in which case the failure is captured on the result and the
     caller can branch on ``exit_code``). ``FileNotFoundError`` is
     re-raised as a clearer ``RuntimeError`` so the missing binary case
-    is unambiguous. ``not_found_hint``, when given, replaces the generic
+    is unambiguous. ``parse_json`` makes the result's ``value`` the parsed
+    JSON of stdout (raw stdout stays on ``stdout``); empty or invalid stdout
+    raises ``ValueError``, with a nonzero exit's stdout parsed the same way
+    under ``allow_nonzero``. ``not_found_hint``, when given, replaces the generic
     "override the plugin's binary path" suggestion with wording that
     names the caller's actual configuration setting.
     """
@@ -206,8 +247,12 @@ def run_binary(
             f"{binary} failed (exit {returncode}): {err}"
         )
 
+    value: Any = stdout
+    if parse_json:
+        value = _parse_json_stdout(stdout, binary=binary, returncode=returncode)
+
     return ToolResult(
-        value=stdout,
+        value=value,
         raw={"args": list(cmd[1:]), "cwd": cwd, "binary": binary},
         stdout=stdout,
         stderr=stderr,
@@ -227,6 +272,8 @@ class GenericSubprocessTool:
       - ``stdin`` (optional, str): piped to the process.
       - ``allow_nonzero`` (optional, bool): when true, non-zero exit is
         captured on the result instead of raising.
+      - ``parse`` (optional, ``"json"``): ``value`` is the parsed JSON of
+        stdout instead of the text (raw stdout stays on ``meta.stdout``).
 
     ``binary`` and ``env`` come from ``runtime.plugins.<name>`` config
     (see :func:`plugin_binary_override` / :func:`plugin_env_override`),
@@ -250,6 +297,7 @@ class GenericSubprocessTool:
             raise ValueError(
                 f"{self.name}: params['args'] must be a list of strings."
             )
+        parse_json = parse_mode(params, plugin_name=self.name)
         binary = resolve_plugin_binary(
             plugin_name=self.name,
             candidates=self.binary_candidates,
@@ -263,6 +311,7 @@ class GenericSubprocessTool:
             env=merged_env(self.env),
             timeout_seconds=timeout_seconds,
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
+            parse_json=parse_json,
             not_found_hint=f"set runtime.plugins.{self.name}.binary",
         )
 
