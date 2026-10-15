@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'Params by reference'",
+  "description": "A `{from: <path>, as: json}` param reference hands the value over as compact JSON text -- keys in stored order, non-ASCII kept as is, a `default:` applied before serialization -- at the top level, inside a list and inside a nested map, while a reference without `as` still passes the native value (electricity/docs/spec/runtime-semantics.md §3.5).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

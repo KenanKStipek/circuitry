@@ -1,0 +1,7 @@
+{
+  "spec_case": "orchestration-reference.md 'Params by reference'",
+  "description": "A `{from: <path>, as: <unknown>}` param reference is rejected at compile time, before the orchestration runs, on both engines: `json` is the only supported `as` value.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

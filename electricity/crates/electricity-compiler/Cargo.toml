@@ -18,6 +18,7 @@ electricity-json = { path = "../electricity-json" }
 electricity-template = { path = "../electricity-template" }
 electricity-cel = { path = "../electricity-cel" }
 electricity-schema = { path = "../electricity-schema" }
+electricity-pyre = { path = "../electricity-pyre" }
 electricity-bytecode = { path = "../electricity-bytecode" }
 electricity-config = { path = "../electricity-config" }
 # Only used by `schema_instance.rs` to build the `serde_json::Value`

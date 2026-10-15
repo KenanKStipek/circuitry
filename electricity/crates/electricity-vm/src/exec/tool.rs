@@ -1431,6 +1431,7 @@ mod tests {
             ParamNode::From {
                 path: "input.missing".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let op = Op {

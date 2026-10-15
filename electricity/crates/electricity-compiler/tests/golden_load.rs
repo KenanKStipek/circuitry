@@ -24,12 +24,8 @@ fn assert_check_report(case: &Case, root: &std::path::Path, entry: &std::path::P
     let options = case.check_options();
     let report = check_report(entry, &options);
 
-    // `case.validate.warnings` minus `case.lint_warnings`: `check_report`
-    // does not reproduce Circuitry's lint advisories (issue #428), only
-    // `unknown_key_warnings` and the host-settings notice.
     assert_eq!(
-        report.warnings,
-        case.non_lint_warnings(),
+        report.warnings, case.validate.warnings,
         "case {:?}: check_report warnings",
         case.name
     );
@@ -409,6 +405,91 @@ fn non_utf8_file_with_an_unsupported_suffix() {
 }
 
 #[test]
+fn lint_deprecated_effect_type_alias() {
+    run_case("lint_deprecated_effect_type_alias");
+}
+
+#[test]
+fn lint_deprecated_flow_alias_at_top_level() {
+    run_case("lint_deprecated_flow_alias_at_top_level");
+}
+
+#[test]
+fn lint_deprecated_flow_alias_on_an_effect() {
+    run_case("lint_deprecated_flow_alias_on_an_effect");
+}
+
+#[test]
+fn lint_effect_named_after_its_own_type() {
+    run_case("lint_effect_named_after_its_own_type");
+}
+
+#[test]
+fn lint_tool_args_yaml_scalar_gotchas() {
+    run_case("lint_tool_args_yaml_scalar_gotchas");
+}
+
+#[test]
+fn lint_loop_fixed_iteration_reference() {
+    run_case("lint_loop_fixed_iteration_reference");
+}
+
+#[test]
+fn lint_loop_last_reference_inside_body() {
+    run_case("lint_loop_last_reference_inside_body");
+}
+
+#[test]
+fn lint_loop_sibling_path_never_resolves() {
+    run_case("lint_loop_sibling_path_never_resolves");
+}
+
+#[test]
+fn lint_min_iterations_on_each_loop_has_no_effect() {
+    run_case("lint_min_iterations_on_each_loop_has_no_effect");
+}
+
+#[test]
+fn lint_if_threshold_has_no_effect() {
+    run_case("lint_if_threshold_has_no_effect");
+}
+
+#[test]
+fn lint_several_rules_together() {
+    run_case("lint_several_rules_together");
+}
+
+#[test]
+fn lint_warning_next_to_unknown_key_warning() {
+    run_case("lint_warning_next_to_unknown_key_warning");
+}
+
+#[test]
+fn lint_warning_next_to_host_settings_notice() {
+    run_case("lint_warning_next_to_host_settings_notice");
+}
+
+#[test]
+fn lint_legacy_steps_nested_loops_finally_and_seen_dedup() {
+    run_case("lint_legacy_steps_nested_loops_finally_and_seen_dedup");
+}
+
+#[test]
+fn lint_mixed_case_aliases_float_arg_and_conditional_threshold() {
+    run_case("lint_mixed_case_aliases_float_arg_and_conditional_threshold");
+}
+
+#[test]
+fn lint_loop_fixed_iteration_reference_unicode_digit() {
+    run_case("lint_loop_fixed_iteration_reference_unicode_digit");
+}
+
+#[test]
+fn lint_deprecated_type_alias_with_control_character_whitespace() {
+    run_case("lint_deprecated_type_alias_with_control_character_whitespace");
+}
+
+#[test]
 fn every_case_in_the_corpus_has_a_test() {
     let text = include_str!("golden/load.json");
     let cases: Vec<Case> = serde_json::from_str(text).expect("golden/load.json is valid JSON");
@@ -472,6 +553,23 @@ fn every_case_in_the_corpus_has_a_test() {
         "undeclared_extra_e_input_is_allowed",
         "missing_entry_file_with_an_unsupported_suffix",
         "non_utf8_file_with_an_unsupported_suffix",
+        "lint_deprecated_effect_type_alias",
+        "lint_deprecated_flow_alias_at_top_level",
+        "lint_deprecated_flow_alias_on_an_effect",
+        "lint_effect_named_after_its_own_type",
+        "lint_tool_args_yaml_scalar_gotchas",
+        "lint_loop_fixed_iteration_reference",
+        "lint_loop_last_reference_inside_body",
+        "lint_loop_sibling_path_never_resolves",
+        "lint_min_iterations_on_each_loop_has_no_effect",
+        "lint_if_threshold_has_no_effect",
+        "lint_several_rules_together",
+        "lint_warning_next_to_unknown_key_warning",
+        "lint_warning_next_to_host_settings_notice",
+        "lint_legacy_steps_nested_loops_finally_and_seen_dedup",
+        "lint_mixed_case_aliases_float_arg_and_conditional_threshold",
+        "lint_loop_fixed_iteration_reference_unicode_digit",
+        "lint_deprecated_type_alias_with_control_character_whitespace",
     ];
     for case in &cases {
         assert!(

@@ -1,0 +1,10 @@
+name: c-shell-parse-json-unknown-mode
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "{}"]
+      parse: yaml

@@ -1,0 +1,10 @@
+name: c-shell-parse-json-invalid
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "warning: not json"]
+      parse: json

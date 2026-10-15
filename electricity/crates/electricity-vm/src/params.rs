@@ -67,6 +67,13 @@ pub enum RenderParamsError {
         reference_path: String,
     },
     Template(String),
+    /// `{from: ..., as: json}` whose value JSON can't carry
+    /// (`core/use.py::serialize_reference`'s own failure).
+    NotSerializable {
+        label: String,
+        reference_path: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for RenderParamsError {
@@ -81,11 +88,48 @@ impl fmt::Display for RenderParamsError {
                 "Tool effect '{effect_name}' param '{path}': '{{from: {reference_path}}}' did not resolve to a value."
             ),
             RenderParamsError::Template(message) => write!(f, "{message}"),
+            RenderParamsError::NotSerializable {
+                label,
+                reference_path,
+                reason,
+            } => write!(
+                f,
+                "{label}: '{{from: {reference_path}, as: json}}' did not serialize to JSON: {reason}"
+            ),
         }
     }
 }
 
 impl std::error::Error for RenderParamsError {}
+
+/// `core/use.py::serialize_reference` for `as: json`: *value* as compact
+/// JSON text (`json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+/// allow_nan=False)`). `Err` carries the reason a value JSON can't carry
+/// (`NaN`/`inf`, bytes, a date) fails.
+pub fn serialize_as_json(value: &Value) -> Result<String, String> {
+    if contains_non_finite_float(value) {
+        return Err("Out of range float values are not JSON compliant".to_string());
+    }
+    electricity_json::dumps(
+        value,
+        WriteMode {
+            indent: None,
+            sort_keys: false,
+            ensure_ascii: false,
+            separators: Separators::Compact,
+        },
+    )
+    .map_err(|err| err.to_string())
+}
+
+fn contains_non_finite_float(value: &Value) -> bool {
+    match value {
+        Value::Float(f) => !f.is_finite(),
+        Value::List(items) => items.iter().any(contains_non_finite_float),
+        Value::Dict(dict) => dict.values().any(contains_non_finite_float),
+        _ => false,
+    }
+}
 
 /// Renders *params* (a tool effect's own `params:`, already compiled to
 /// [`ParamNode`]) against *ctx* (the materialized state snapshot
@@ -146,22 +190,38 @@ fn render_node<R: ParamsCtx>(
         ParamNode::From {
             path: reference_path,
             default,
-        } => match ctx.resolve_from(reference_path) {
-            // `core/tool.py::_render_params`'s own `_render_value` checks
-            // `if resolved is None:`, not `if ref is missing:` -- a path
-            // that resolves *to* `None` counts as unresolved exactly like
-            // one that doesn't resolve at all, so both fall through to
-            // `default:` (or the same error) rather than rendering `null`.
-            Some(value) if !matches!(value, Value::None) => Ok(value),
-            _ => match default {
-                Some(value) => Ok(value.clone()),
-                None => Err(RenderParamsError::UnresolvedReference {
-                    effect_name: effect_name.to_string(),
-                    path: path.to_string(),
-                    reference_path: reference_path.clone(),
-                }),
-            },
-        },
+            as_json,
+        } => {
+            let resolved = match ctx.resolve_from(reference_path) {
+                // `core/tool.py::_render_params`'s own `_render_value` checks
+                // `if resolved is None:`, not `if ref is missing:` -- a path
+                // that resolves *to* `None` counts as unresolved exactly like
+                // one that doesn't resolve at all, so both fall through to
+                // `default:` (or the same error) rather than rendering `null`.
+                Some(value) if !matches!(value, Value::None) => value,
+                _ => match default {
+                    Some(value) => value.clone(),
+                    None => {
+                        return Err(RenderParamsError::UnresolvedReference {
+                            effect_name: effect_name.to_string(),
+                            path: path.to_string(),
+                            reference_path: reference_path.clone(),
+                        });
+                    }
+                },
+            };
+            if *as_json {
+                serialize_as_json(&resolved)
+                    .map(Value::Str)
+                    .map_err(|reason| RenderParamsError::NotSerializable {
+                        label: format!("Tool effect '{effect_name}' param '{path}'"),
+                        reference_path: reference_path.clone(),
+                        reason,
+                    })
+            } else {
+                Ok(resolved)
+            }
+        }
         ParamNode::Map(entries) => {
             let mut map = IndexMap::with_capacity(entries.len());
             for (key, child) in entries {
@@ -452,6 +512,7 @@ mod tests {
             ParamNode::From {
                 path: "input.n".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("n", Value::from(5i64))]))]);
@@ -472,6 +533,7 @@ mod tests {
             ParamNode::From {
                 path: "input.items.1".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![(
@@ -502,6 +564,7 @@ mod tests {
             ParamNode::From {
                 path: "input.missing".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
@@ -522,6 +585,7 @@ mod tests {
             ParamNode::From {
                 path: "input.missing".to_string(),
                 default: Some(Value::from(7i64)),
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
@@ -545,6 +609,7 @@ mod tests {
             ParamNode::From {
                 path: "input.x".to_string(),
                 default: Some(Value::from(5i64)),
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
@@ -564,6 +629,7 @@ mod tests {
             ParamNode::From {
                 path: "input.x".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![("input", ctx_from(vec![("x", Value::None)]))]);
@@ -583,6 +649,7 @@ mod tests {
             ParamNode::From {
                 path: "input.items.-1".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let ctx = ctx_from(vec![(
@@ -603,6 +670,114 @@ mod tests {
             rendered.get(&Value::Str("last".to_string())),
             Some(&Value::from(3i64))
         );
+    }
+
+    fn as_json_leaf(path: &str, default: Option<Value>) -> ParamNode {
+        ParamNode::From {
+            path: path.to_string(),
+            default,
+            as_json: true,
+        }
+    }
+
+    fn render_one(node: ParamNode, ctx: &Value) -> Result<Value, RenderParamsError> {
+        let mut params = IndexMap::new();
+        params.insert(Value::Str("v".to_string()), node);
+        let (declared_prompts, effect_names) = empty_env();
+        render_params("call", &params, ctx, &declared_prompts, &effect_names)
+            .map(|mut rendered| rendered.shift_remove(&Value::Str("v".to_string())).unwrap())
+    }
+
+    #[test]
+    fn an_as_json_reference_is_compact_json_text_in_key_order() {
+        let mut meta = Dict::new();
+        meta.insert(Value::Str("zeta".to_string()), Value::from(1i64));
+        meta.insert(
+            Value::Str("alpha".to_string()),
+            Value::List(vec![Value::from(1i64), Value::None]),
+        );
+        meta.insert(Value::Str("name".to_string()), Value::from("caf\u{e9}"));
+        let ctx = ctx_from(vec![("input", ctx_from(vec![("meta", Value::Dict(meta))]))]);
+        let rendered = render_one(as_json_leaf("input.meta", None), &ctx).unwrap();
+        assert_eq!(
+            rendered,
+            Value::from("{\"zeta\":1,\"alpha\":[1,null],\"name\":\"caf\u{e9}\"}")
+        );
+    }
+
+    #[test]
+    fn an_as_json_reference_applies_the_default_before_serializing() {
+        let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
+        let rendered = render_one(
+            as_json_leaf("input.missing", Some(Value::Dict(Dict::new()))),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(rendered, Value::from("{}"));
+    }
+
+    #[test]
+    fn an_as_json_reference_inside_a_list_serializes_only_that_item() {
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("args".to_string()),
+            ParamNode::List(vec![
+                ParamNode::Literal(Value::from("record")),
+                as_json_leaf("input.meta", None),
+            ]),
+        );
+        let ctx = ctx_from(vec![(
+            "input",
+            ctx_from(vec![("meta", Value::List(vec![Value::from(1i64)]))]),
+        )]);
+        let (declared_prompts, effect_names) = empty_env();
+        let rendered =
+            render_params("call", &params, &ctx, &declared_prompts, &effect_names).unwrap();
+        assert_eq!(
+            rendered.get(&Value::Str("args".to_string())),
+            Some(&Value::List(vec![
+                Value::from("record"),
+                Value::from("[1]")
+            ]))
+        );
+    }
+
+    #[test]
+    fn an_as_json_reference_without_a_default_still_fails_when_unresolved() {
+        let ctx = ctx_from(vec![("input", ctx_from(vec![]))]);
+        let err = render_one(as_json_leaf("input.missing", None), &ctx).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Tool effect 'call' param 'params.v': '{from: input.missing}' did not resolve to a value."
+        );
+    }
+
+    #[test]
+    fn an_as_json_reference_to_an_unserializable_value_names_the_path() {
+        for (value, reason) in [
+            (
+                Value::Float(f64::NAN),
+                "Out of range float values are not JSON compliant",
+            ),
+            (
+                Value::List(vec![Value::Float(f64::INFINITY)]),
+                "Out of range float values are not JSON compliant",
+            ),
+            (
+                Value::Bytes(vec![1, 2]),
+                "Object of type bytes is not JSON serializable",
+            ),
+        ] {
+            let ctx = ctx_from(vec![("input", ctx_from(vec![("x", value)]))]);
+            let err = render_one(as_json_leaf("input.x", None), &ctx).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Tool effect 'call' param 'params.v': '{{from: input.x, as: json}}' \
+                     did not serialize to JSON: {reason}"
+                )
+            );
+        }
     }
 
     #[test]

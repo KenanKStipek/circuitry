@@ -1,0 +1,16 @@
+name: from-as-json-use
+effects:
+  - type: tool
+    name: seed
+    provider: json
+    params: {mode: parse, input: '{"b": [1, 2], "a": {"k": "v"}}'}
+  - type: use
+    name: child
+    path: child.yml
+    inputs:
+      text: {from: prime.seed.value, as: json}
+      missing: {from: prime.missing.value, as: json}
+      native: {from: prime.seed.value}
+    outputs:
+      echoed:
+        path: prime.step.value

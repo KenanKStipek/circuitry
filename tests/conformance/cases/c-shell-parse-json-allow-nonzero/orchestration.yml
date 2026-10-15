@@ -1,0 +1,11 @@
+name: c-shell-parse-json-allow-nonzero
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "{\"ok\": false}", "--exit", "7"]
+      allow_nonzero: true
+      parse: json

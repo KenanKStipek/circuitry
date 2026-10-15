@@ -15,7 +15,6 @@
       "errors": [],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": null,
     "definition": {
       "name": "prime",
@@ -79,7 +78,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration validation failed:\n  - top level: 'effects' is a required property",
     "definition": {
       "name": "prime",
@@ -121,7 +119,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
     "definition": null,
     "definition_error": "ValueError: Duplicate effect name 'step' in scope 'prime'. Seen at 'prime.effects[0]' and 'prime.effects[1]'.",
@@ -151,7 +148,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
     "definition": null,
     "definition_error": "ValueError: Unsupported orchestration format: .txt. Supported: .json, .toon, .yaml, .yml",
@@ -181,7 +177,6 @@
       ],
       "warnings": []
     },
-    "lint_warnings": [],
     "run_error": "Orchestration YAML must be a mapping/object at the root.",
     "definition": null,
     "definition_error": "ValueError: Orchestration YAML must be a mapping/object at the root.",

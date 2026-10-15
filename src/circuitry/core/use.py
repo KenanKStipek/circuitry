@@ -199,21 +199,66 @@ def _resolve_dot_path(state: dict[str, Any], dot_path: str) -> Any:
     return current
 
 
-#: The one key of a by-reference input: ``name: {from: <path>}``.
+#: The key of a by-reference input: ``name: {from: <path>}``.
 REFERENCE_KEY = "from"
+#: The optional modifier key on a by-reference value: ``{from: <path>, as: json}``.
+REFERENCE_AS_KEY = "as"
+#: Every ``as:`` value a by-reference value accepts.
+REFERENCE_AS_FORMATS: tuple[str, ...] = ("json",)
 
 
 def reference_path(value: Any) -> str | None:
     """The path of a by-reference input (``{from: <path>}``), or None for any other value.
 
-    Only a mapping with exactly the one key ``from`` and a string value is a
-    reference; every other mapping stays a literal, as before.
+    Only a mapping with the key ``from`` (a string), optionally with ``as``,
+    is a reference; every other mapping stays a literal, as before.
     """
-    if isinstance(value, dict) and len(value) == 1 and REFERENCE_KEY in value:
+    if (
+        isinstance(value, dict)
+        and REFERENCE_KEY in value
+        and set(value) <= {REFERENCE_KEY, REFERENCE_AS_KEY}
+    ):
         path = value[REFERENCE_KEY]
         if isinstance(path, str):
             return path.strip()
     return None
+
+
+def reference_as(value: Any) -> Any:
+    """The ``as:`` modifier of a by-reference input (None when it has none)."""
+    if reference_path(value) is None:
+        return None
+    return value.get(REFERENCE_AS_KEY)
+
+
+def validate_reference_as(as_value: Any, *, label: str, effect_path: str) -> None:
+    """Hard-error unless a by-reference value's ``as:`` names a supported format."""
+    if as_value is None or as_value in REFERENCE_AS_FORMATS:
+        return
+    formats = ", ".join(REFERENCE_AS_FORMATS)
+    raise ValueError(
+        f"{label} at '{effect_path}': unknown 'as: {as_value}' on a "
+        f"'{{from: ...}}' reference (supported: {formats})."
+    )
+
+
+def serialize_reference(value: Any, *, as_value: Any, label: str, path: str) -> Any:
+    """Apply a by-reference value's ``as:`` modifier to the resolved *value*.
+
+    ``as: json`` is compact JSON text, keys in their stored order and
+    non-ASCII text kept as is. A value JSON can't carry (``NaN``, bytes, a
+    non-scalar key, a cycle) raises, naming *label* and the reference *path*.
+    """
+    if as_value is None:
+        return copy.deepcopy(value)
+    if as_value not in REFERENCE_AS_FORMATS:
+        raise ValueError(f"{label}: unknown 'as: {as_value}' on '{{from: {path}}}'.")
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label}: '{{from: {path}, as: json}}' did not serialize to JSON: {exc}"
+        ) from exc
 
 
 def _resolve_reference(ctx: Mapping[str, Any], path: str) -> Any:
@@ -256,7 +301,17 @@ def _render_inputs(
     for key, value in inputs.items():
         path = reference_path(value)
         if path is not None:
-            rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
+            resolved = _resolve_reference(ctx, path)
+            as_value = reference_as(value)
+            if as_value is not None and resolved is not None:
+                rendered[key] = serialize_reference(
+                    resolved,
+                    as_value=as_value,
+                    label=f"inputs.{key}",
+                    path=path,
+                )
+            else:
+                rendered[key] = copy.deepcopy(resolved)
         elif isinstance(value, str):
             rendered[key] = render_with_composition(
                 value, ctx, declared=declared, known_effect_names=known_names, label=f"inputs.{key}"

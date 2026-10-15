@@ -66,6 +66,7 @@ fn stringify_from(path: EffectPath, name: &str, from: &str, default: &str) -> Op
         ParamNode::From {
             path: from.to_string(),
             default: Some(Value::Str(default.to_string())),
+            as_json: false,
         },
     );
     tool_op(path, name, params, None, RetryPolicy::default())
@@ -1872,6 +1873,7 @@ fn stringify_from_many(path: EffectPath, name: &str, fields: &[(&str, &str, &str
             ParamNode::From {
                 path: from.to_string(),
                 default: Some(Value::Str(default.to_string())),
+                as_json: false,
             },
         );
     }
