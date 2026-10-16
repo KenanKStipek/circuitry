@@ -431,6 +431,7 @@ pub(crate) async fn run_binary(
         stderr: Some(completed.stderr),
         exit_code: Some(completed.exit_code),
         ok: true,
+        stdout_parsed: false,
     })
 }
 
@@ -471,6 +472,7 @@ pub(crate) fn parse_json_stdout(
     match loads(&stdout) {
         Ok(parsed) => {
             result.value = parsed;
+            result.stdout_parsed = true;
             Ok(result)
         }
         Err(err) => {
@@ -603,6 +605,7 @@ mod tests {
             stderr: Some(String::new()),
             exit_code: Some(exit_code),
             ok: true,
+            stdout_parsed: false,
         }
     }
 
@@ -614,6 +617,7 @@ mod tests {
         assert_eq!(parsed.value, Value::Dict(expected));
         assert_eq!(parsed.stdout.as_deref(), Some("{\"ok\": true}\n"));
         assert_eq!(parsed.exit_code, Some(3));
+        assert!(parsed.stdout_parsed);
     }
 
     #[test]

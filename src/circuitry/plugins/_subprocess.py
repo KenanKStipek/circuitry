@@ -257,6 +257,7 @@ def run_binary(
         stdout=stdout,
         stderr=stderr,
         exit_code=returncode,
+        stdout_parsed=parse_json,
     )
 
 

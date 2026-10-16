@@ -1048,6 +1048,7 @@ fn finalize_response(
         stderr,
         exit_code: None,
         ok,
+        stdout_parsed: false,
     })
 }
 

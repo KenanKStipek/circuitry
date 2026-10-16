@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..core.parsed_stdout import parsed_stdout_errors
 from ..core.prompt_record import prompt_sent_errors
 from .complexity_config import (
     DEFAULT_COMPLEXITY_SETTINGS,
@@ -518,10 +519,11 @@ def resolve_effective_settings(
         cli_decompose=cli_decompose,
     )
     complexity = resolve_complexity_settings(runtime)
-    # `runtime.state.prompt_sent` (#577) is checked here too, so a bad value
-    # fails the run before any effect dispatches rather than leaving a prompt's
-    # text in state the document asked to keep it out of.
-    state_errors = prompt_sent_errors(runtime)
+    # `runtime.state.prompt_sent` (#577) and `runtime.state.parsed_stdout`
+    # (#592) are checked here too, so a bad value fails the run before any
+    # effect dispatches rather than leaving text in state the document asked
+    # to keep out of it.
+    state_errors = [*prompt_sent_errors(runtime), *parsed_stdout_errors(runtime)]
     if state_errors:
         raise ConfigError(state_errors[0])
     _record_complexity_sources(

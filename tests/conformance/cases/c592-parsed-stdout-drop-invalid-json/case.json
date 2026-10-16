@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #592: runtime.state.parsed_stdout",
+  "description": "A failed parse under `runtime.state.parsed_stdout: drop` is recorded exactly as under `full` (c-shell-parse-json-invalid): `meta.stdout` null, no `stdout_chars`/`stdout_sha256`, the same error.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

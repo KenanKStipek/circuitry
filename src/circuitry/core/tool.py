@@ -25,6 +25,7 @@ from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
+from .parsed_stdout import dropped_stdout_fields, drops_parsed_stdout
 from .prompt import RetryPolicyDef
 from .prompt_compose import (
     declared_prompts,
@@ -490,6 +491,10 @@ class ToolRuntime:
       (the resolved absolute executable path), when the plugin's result
       carries one.
 
+      Under ``runtime.state.parsed_stdout: drop`` (#592), a result whose
+      stdout parsed (``ToolResult.stdout_parsed``) records ``meta.stdout``
+      as ``None`` plus ``meta.stdout_chars`` and ``meta.stdout_sha256``.
+
       ``meta.tokens_sent``/``meta.tokens_received``/``meta.cost_usd`` are
       set, the same fields a ``prompt`` effect uses, when the plugin's
       ``ToolResult`` reports a value that isn't ``None`` — absent otherwise,
@@ -541,6 +546,7 @@ class ToolRuntime:
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
+        self._drop_parsed_stdout = drops_parsed_stdout(self.runtime_config)
 
     def _resolve_timeout_seconds(self, ctx: dict[str, Any]) -> int:
         """The tool's own timeout budget for one attempt, in whole seconds.
@@ -717,6 +723,8 @@ class ToolRuntime:
             meta.pop("tokens_sent_total", None)
             meta.pop("tokens_received_total", None)
             meta.pop("cost_usd", None)
+            meta.pop("stdout_chars", None)
+            meta.pop("stdout_sha256", None)
             meta["waiting_for"] = None
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
@@ -892,7 +900,10 @@ class ToolRuntime:
             assert result is not None
 
             node["value"] = result.value
-            meta["stdout"] = result.stdout
+            if self._drop_parsed_stdout and result.stdout_parsed and result.stdout is not None:
+                meta.update(dropped_stdout_fields(result.stdout))
+            else:
+                meta["stdout"] = result.stdout
             meta["stderr"] = result.stderr
             meta["exit_code"] = result.exit_code
             status_code: int | None = None

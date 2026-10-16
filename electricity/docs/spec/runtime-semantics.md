@@ -302,9 +302,10 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
   assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
-  params_rendered (redacted), stdout, stderr, exit_code, binary? (process
-  plugins), status_code? (HTTP-family only), raw (redacted + size-capped),
-  waiting_for, retries_used?, expect?`.
+  params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
+  stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
+  #592), binary? (process plugins), status_code? (HTTP-family only), raw
+  (redacted + size-capped), waiting_for, retries_used?, expect?`.
 - **use** (`core/use.py:271` `UseDefinition`, confirmed live): `orchestration,
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
@@ -1853,7 +1854,8 @@ discovery/trust system; the keys that matter for *parity of execution*
 `enabled_adapters`/`enabled_plugins`/`enabled_tools` (allowlists),
 `environment`, and the `runtime:` block (`adapters.<name>.*`,
 `plugins.<name>.*`, `max_concurrency`, `concurrency_groups`, `complexity.*`,
-`tools.timeout_seconds`, `state.record_children`, `persistence.*`). An
+`tools.timeout_seconds`, `state.record_children`, `state.prompt_sent`,
+`state.parsed_stdout`, `persistence.*`). An
 orchestration's **own** `runtime:` block may only ever set
 `ORCHESTRATION_RUNTIME_KEYS = {"complexity", "state"}`
 (`cli/effective_settings.py:62`) unless the whole document is **trusted**

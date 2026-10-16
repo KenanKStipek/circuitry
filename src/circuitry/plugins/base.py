@@ -90,6 +90,10 @@ class ToolResult:
     tokens_sent: int | None = None
     tokens_received: int | None = None
     cost_usd: float | None = None
+    #: ``True`` when ``value`` is the parsed JSON of ``stdout`` (``parse:
+    #: json`` on a subprocess-family plugin). ``runtime.state.parsed_stdout:
+    #: drop`` keeps such a ``stdout`` out of state (#592).
+    stdout_parsed: bool = False
 
 
 def _as_bool(value: Any, *, default: bool = False) -> bool:

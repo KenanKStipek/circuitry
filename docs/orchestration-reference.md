@@ -896,8 +896,10 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   that family) accept `parse: json`: `value` is then the parsed JSON of
   stdout (an object, array or scalar) instead of the text, so a later
   `{from: prime.<name>.value.ok}` or CEL expression reads real types. The raw
-  stdout stays on `meta.stdout`. Empty or invalid stdout fails the effect
-  with the exit code and the first 200 characters of stdout; with
+  stdout stays on `meta.stdout`, unless
+  [`runtime.state.parsed_stdout: drop`](#recording-parsed-stdout-runtimestateparsed_stdout)
+  keeps it out of state. Empty or invalid stdout fails the effect, with `meta.stdout` null,
+  naming the exit code and quoting the first 200 characters of stdout; with
   `allow_nonzero: true` a non-zero exit's stdout is parsed the same way and
   `meta.exit_code` keeps the code. Any other `parse` value fails before the
   process runs.
@@ -995,6 +997,38 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+#### Recording parsed stdout (`runtime.state.parsed_stdout`)
+
+With `parse: json`, a step saves its stdout twice: parsed on `value` and raw
+on `meta.stdout`. A run with many such steps carries every one of them twice
+in `--out`, `--live-state`, `--resume` and persistence.
+`runtime.state.parsed_stdout` decides what a parsed step keeps:
+
+| Value | A step whose stdout parsed |
+|-------|----------------------------|
+| `full` (default) | `meta.stdout` holds the raw text, as before |
+| `drop` | `meta.stdout` is `null`; `meta.stdout_chars` (its length in Unicode code points) and `meta.stdout_sha256` (the lowercase hex SHA-256 of its UTF-8 bytes) describe it |
+
+```yaml
+runtime:
+  state:
+    parsed_stdout: drop
+```
+
+`value` is the same either way. A failed parse already records no stdout
+(`meta.stdout` is `null`, and the error quotes the first 200 characters), so
+`drop` leaves failures unchanged, and a step without `parse: json` keeps its
+stdout under both values. A document that reads a parsed step's
+`meta.stdout` should keep `full`. Like `record_children` and
+[`prompt_sent`](#recording-the-prompt-text-runtimestateprompt_sent), the key
+sits under `runtime.state`, so it applies however the document arrives
+(config, or the document's own `runtime:` block). A document's
+`runtime.state` block replaces the config's whole `state` block, so a document
+that wants several of these keys sets all of them. `cof check` rejects any
+other value, naming `runtime.state.parsed_stdout`. `--resume` reuses a
+finished step's saved record as it is, so it works on a state written with
+`drop`.
 
 #### `params_json`
 

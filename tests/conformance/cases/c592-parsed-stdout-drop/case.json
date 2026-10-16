@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #592: runtime.state.parsed_stdout",
+  "description": "Under `runtime.state.parsed_stdout: drop`, a `parse: json` step records `meta.stdout: null` plus `meta.stdout_chars` and `meta.stdout_sha256`, its `value` unchanged and readable by a later effect; a step without `parse: json` keeps its stdout.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

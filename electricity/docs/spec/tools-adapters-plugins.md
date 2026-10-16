@@ -277,6 +277,16 @@ stdout is empty (exit {code}).")`; a decode failure raises `ValueError("{binary}
 stdout is not valid JSON (exit {code}): {json_error}; stdout begins {stdout[:200]!r}")`, with
 `...` appended when stdout is longer than 200 characters. `{binary}` is the resolved path.
 
+A parsed result carries `stdout_parsed = True` (`ToolResult.stdout_parsed`). Under
+**`runtime.state.parsed_stdout: drop`** (#592, `core/parsed_stdout.py`) the tool runtime then
+records `meta.stdout = None` plus `meta.stdout_chars` (code points of the whole stdout) and
+`meta.stdout_sha256` (lowercase hex SHA-256 of its UTF-8 bytes); the two new keys follow
+`params_rendered` in key order and are popped at the start of every attempt. `full` (the
+default) records stdout as before. A failed parse raises before a result exists, so it records
+`meta.stdout = None` and no new key in either mode. Any other value is a configuration error,
+`runtime.state.parsed_stdout must be 'full' or 'drop', got {value!r}.`, reported by `cof check`
+after the `runtime.state.prompt_sent` error and raised by a run right after it.
+
 ### 2.2 `json`
 
 `src/circuitry/plugins/json.py`. Modes: `parse` (default — `json.loads(input)`, raises
