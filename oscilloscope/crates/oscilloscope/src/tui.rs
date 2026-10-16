@@ -1401,6 +1401,7 @@ mod golden_tests {
                 expect: None,
                 description: None,
                 group: None,
+                prompt_file: None,
             }))),
             on_error,
             labels: None,
