@@ -49,7 +49,8 @@
     "enabled",
     "group",
     "limited",
-    "confine_to"
+    "confine_to",
+    "prompt_file"
   ],
   "ExpectDef": [
     "mode",

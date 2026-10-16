@@ -323,6 +323,7 @@ fn compile_effect(
                 &path.push_name(&valid_name),
                 &valid_name,
                 effect_path,
+                &ctx.origin,
                 loop_names,
             )
         }

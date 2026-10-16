@@ -305,7 +305,9 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
   stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
   #592), binary? (process plugins), status_code? (HTTP-family only), raw
-  (redacted + size-capped), waiting_for, retries_used?, expect?`.
+  (redacted + size-capped), waiting_for, retries_used?, expect?,
+  template_files? (an `agent` effect's `params.prompt` read from a file only,
+  #591)`.
 - **use** (`core/use.py:271` `UseDefinition`, confirmed live): `orchestration,
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
@@ -986,6 +988,22 @@ plan prompt (the top-level `prompt` named `plan_from_step`) whose `template` or
 a message's `content` is `file: {from: ...}` is a compile error naming the
 reflector, the prompt and the field: `Reflector effect '<name>' at '<path>':
 its plan prompt '<prompt>' reads <field> from a file named in state ...`.
+
+The **`agent` tool's `params.prompt`** (issue #591, `core/compiler.py::
+_compile_agent_prompt_file`, `core/tool.py`) takes the same form by the same
+rules, compiled into `ToolDefinition.prompt_file` (`prompt` is then dropped
+from `params`) with the field `<effect_path>.params.prompt`. At dispatch it is
+read once, on the first attempt (a read failure is not retried), and the
+errors read `Tool effect '<name>': params.prompt: <problem>`. The plugin gets
+the text; `meta.params_rendered.prompt` is `{file: <resolved path>, within:
+<resolved within>}` and `meta.template_files` one record with field
+`params.prompt`. `params_json` never supplies the form, and with
+`params.prompt` in the form never sets `prompt` at all: when the raw
+`params_json` parses as a JSON object, compiling fails with `<effect_path>:
+params_json must not set params.prompt ...`, and the rendered one is checked
+again at dispatch. electricity compiles the same checks (the IR's
+`ToolOp::prompt_file`) but refuses the cof-only `agent` plugin, so it never
+reads the file.
 
 **Routing/scoring/decomposition** — see §5.8.
 

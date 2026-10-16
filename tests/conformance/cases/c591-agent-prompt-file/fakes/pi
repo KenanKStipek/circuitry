@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c591-agent-prompt-file (issue #591): replies with the
+SHA-256 and length of the prompt it was given (`@<file>`), never the text
+itself, so the case shows the text reached the session and stayed out of
+state."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+
+attached = [arg[1:] for arg in sys.argv[1:] if arg.startswith("@")]
+with open(attached[0], encoding="utf-8") as handle:
+    prompt = handle.read()
+reply = f"sha256={hashlib.sha256(prompt.encode('utf-8')).hexdigest()} chars={len(prompt)}"
+usage = {"input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}}
+for event in (
+    {"type": "session", "id": "sess-591", "cwd": os.getcwd()},
+    {"type": "message_end", "message": {"role": "assistant", "usage": usage,
+        "content": [{"type": "text", "text": reply}], "stopReason": "stop"}},
+    {"type": "agent_end"},
+):
+    sys.stdout.write(json.dumps(event) + "\n")

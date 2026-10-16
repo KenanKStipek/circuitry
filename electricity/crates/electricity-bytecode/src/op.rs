@@ -167,6 +167,7 @@ mod python_type_name_tests {
                 expect: None,
                 description: None,
                 group: None,
+                prompt_file: None,
             }))))
             .python_type_name(),
             "ToolDefinition"

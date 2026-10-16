@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #591: the agent tool reads params.prompt from a file named in state",
+  "description": "expect: failure, error_compare: exact. An agent effect's `params.prompt: {file: {from: ...}}` without `within` is rejected before any effect runs, naming `params.prompt`. electricity compiles the same check, then would refuse the cof-only agent plugin.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

@@ -129,6 +129,7 @@ mod tests {
                 expect: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
+                prompt_file: None,
             }))),
             on_error: OnError::Fail,
             labels: None,

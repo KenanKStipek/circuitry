@@ -1,0 +1,45 @@
+name: c591-agent-prompt-file
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    timeout_ms: 30000
+    params:
+      prompt:
+        file: {from: input.prompt_file}
+        within: {from: input.work_dir}
+      cwd: {from: input.work_dir}
+      transcript: scratch-591/transcript.log
+  - type: tool
+    name: missing_file
+    provider: agent
+    on_error: continue
+    params:
+      prompt:
+        file: {from: input.missing_file}
+        within: {from: input.work_dir}
+  - type: tool
+    name: outside_within
+    provider: agent
+    on_error: continue
+    params:
+      prompt:
+        file: {from: input.escape_file}
+        within: {from: input.work_dir}
+  - type: tool
+    name: not_utf8
+    provider: agent
+    on_error: continue
+    params:
+      prompt:
+        file: {from: input.binary_file}
+        within: {from: input.work_dir}
+  - type: tool
+    name: form_from_params_json
+    provider: agent
+    on_error: continue
+    params_json: "{{{input.overlay}}}"
+  - type: tool
+    name: remove_transcript
+    provider: fs
+    params: {mode: delete, path: scratch-591, recursive: true}
