@@ -6,7 +6,7 @@
 
 use crate::compile::Ctx;
 use crate::compile::coerce::{get_bool_default, get_truthy, py_int};
-use crate::compile::containers::{compile_effects_in_scope, normalize_flow};
+use crate::compile::containers::{check_resume_mode, compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
 use crate::compile::params::{build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
@@ -565,6 +565,7 @@ pub(crate) fn compile_use(
     loop_names: &BTreeSet<String>,
     origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
+    check_resume_mode(effect, "Use", effect_path)?;
     let field_str = |key: &str| -> Option<String> {
         effect
             .get(&Value::Str(key.to_string()))

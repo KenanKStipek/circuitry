@@ -36,6 +36,7 @@ from .prompt_files import (
     resolve_text_or_file,
 )
 from .reflector import ReflectorDefinition
+from .resume import RESUME_MODES, ResumeMode
 from .state_ns import (
     validate_bare_input_refs,
     validate_cel_expr,
@@ -369,6 +370,20 @@ _VALID_FLOWS: dict[str, Literal["chain", "tree"]] = {
     "chain": "chain", "chain_of_thought": "chain", "cot": "chain",
     "tree": "tree", "tree_of_thought": "tree", "tot": "tree",
 }
+
+
+def _resume_mode(effect: dict[str, Any], *, label: str, effect_path: str) -> ResumeMode:
+    """A ``dynamic``'s or ``use``'s ``resume:`` (#590); ``continue`` when absent."""
+    if "resume" not in effect:
+        return "continue"
+    value = effect["resume"]
+    for mode in RESUME_MODES:
+        if value == mode:
+            return mode
+    raise ValueError(
+        f"{label} effect at '{effect_path}': 'resume' must be 'continue' or "
+        f"'restart', got {value!r}."
+    )
 
 
 def _normalize_flow(flow: str) -> Literal["chain", "tree"]:
@@ -735,6 +750,12 @@ def _compile_effect(
             "only allowed on a 'dynamic' effect or the document root."
         )
 
+    if effect_type not in ("dynamic", "use") and "resume" in effect:
+        raise ValueError(
+            f"{effect_type or 'unknown'} effect at '{effect_path}': 'resume' is "
+            "only allowed on a 'dynamic' or 'use' effect."
+        )
+
     if effect_type == "prompt":
         if name is None:
             raise ValueError(
@@ -759,6 +780,7 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
+        resume = _resume_mode(effect, label="Dynamic", effect_path=effect_path)
 
         flow = _normalize_flow(effect.get("flow") or effect.get("strategy") or "chain")
 
@@ -817,6 +839,7 @@ def _compile_effect(
             max_concurrency=max_concurrency,
             stop_on_error=stop_on_error,
             on_error=dyn_on_error,
+            resume=resume,
             labels=labels,
             finally_effects=tuple(compiled_finally),
         )
@@ -1453,6 +1476,7 @@ def _compile_use(
     name = effect.get("name")
     if not name:
         raise ValueError(f"Use effect at '{effect_path}' is missing 'name'.")
+    resume = _resume_mode(effect, label="Use", effect_path=effect_path)
 
     ref = effect.get("ref")
     path = effect.get("path")
@@ -1563,6 +1587,7 @@ def _compile_use(
         validate=validate_flag,
         on_error=on_error,
         description=description,
+        resume=resume,
         retries=retries,
         expect=expect,
         parent_trusted=_current_document_trusted(),

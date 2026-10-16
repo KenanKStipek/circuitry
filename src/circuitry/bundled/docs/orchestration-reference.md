@@ -284,6 +284,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `max_concurrency` | integer | no | unbounded (every child at once) | Max parallel workers when `flow: tree`. No meaning on `flow: chain`, which always runs one child at a time. |
 | `stop_on_error` | boolean | no | `false` | `flow: tree` only. `true` cancels every child that has not started yet as soon as one fails; a child already running cannot be cancelled, finishes on its own, and its failure (if any) is not added to the dynamic's `meta.error` — only the triggering failure is. A cancelled child leaves no node and fires no hooks. No effect on `flow: chain`, where a failing child already stops the ones after it. |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
+| `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this dynamic when its saved node did not finish without error. `continue` goes on at its first unfinished effect; `restart` runs it from its first effect in a fresh state, `finally` as usual. A finished one is skipped either way. Only `dynamic` and `use` take this key. |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
 | `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/SIGTERM/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
 
@@ -1087,6 +1088,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last |
 | `expect` | string or object | no | — | Output check, run after a successful child run, over this effect's own mapped `value`/`meta` plus `state` — same shape as a [tool's `expect`](#tool-expect) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this `use` when its saved node did not finish without error. `continue` continues inside its child when the saved state holds the child's record; `restart` always runs the child from its start in a fresh state. A finished one is skipped either way. |
 | `description` | string | no | — | |
 
 \* Exactly one of `ref` / `path` / `inline` / `orchestration` must be present.
@@ -1974,7 +1976,8 @@ changing that).
 Inside a resumed pass or branch, the first effect that didn't finish
 resumes the same way it would at the top level: a nested loop at its own
 first unfinished pass, a nested `if` inside its branch, a `dynamic` at its
-first unfinished effect, and a `use` inside its child (below).
+first unfinished effect, and a `use` inside its child (below), unless it
+says [`resume: restart`](#resume-restart).
 
 A `use` effect whose node already finished without error is skipped whole
 too. One that didn't finish reruns its child from the start, in a fresh
@@ -2001,6 +2004,26 @@ same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
 (including a `flow: tree` root), or inside a pass or branch that runs from
 its start, reruns from its start: a tree branch starts from only the
 finished nodes of the saved state.
+
+<a id="resume-restart"></a>
+**`resume: restart`.** A scope whose first effects acquire something its
+`finally:` releases (start a server, take a lock, apply a migration) cannot
+continue where it stopped: the stopped run's `finally:` already released it,
+and the resumed effects would work against something that is gone. Set
+`resume: restart` on such a `dynamic` or `use`. If its saved node finished
+without error, it is skipped whole, as without the key. Otherwise (it never
+finished, it failed, or it was interrupted, in its own `finally:` too) it
+runs from its first effect in a fresh state: none of its saved children is
+reused or readable, and its `finally:` runs as usual at its end. A `use`
+runs its child from its start, even when the saved record
+(`record_children`) matches. This holds at any depth: such a scope inside a
+resumed loop pass, an `if` branch or a `use` child restarts there. The
+effects after it in the same chain rerun, as after any effect that did not
+resume whole. `resume: continue` is the default and the behaviour described
+above. Only `dynamic` and `use` take the key: `cof check` rejects it on any
+other effect type and rejects any value but `continue` and `restart`.
+electricity has no `--resume`; it checks the key the same way and otherwise
+ignores it.
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and

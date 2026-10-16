@@ -187,6 +187,12 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("UseDefinition", "on_error", "op::Op::on_error");
     add(
         "UseDefinition",
+        "resume",
+        "documented divergence: no IR field -- only cof's --resume reads it, \
+         and electricity has no --resume; the compiler only checks its value",
+    );
+    add(
+        "UseDefinition",
         "description",
         "effects::UseOp::description",
     );
@@ -279,6 +285,12 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "region::Region::Parallel::stop_on_error",
     );
     add("DynamicDefinition", "on_error", "op::Op::on_error");
+    add(
+        "DynamicDefinition",
+        "resume",
+        "documented divergence: no IR field -- only cof's --resume reads it, \
+         and electricity has no --resume; the compiler only checks its value",
+    );
     add("DynamicDefinition", "labels", "op::Op::labels");
     add("DynamicDefinition", "enabled", "op::Op::enabled");
     add(

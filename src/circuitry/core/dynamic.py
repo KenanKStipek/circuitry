@@ -25,7 +25,7 @@ from .cancellation import (
 from .disabled import is_enabled, write_disabled_node
 from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
-from .resume import effect_completed_ok
+from .resume import ResumeMode, effect_completed_ok
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,11 @@ class DynamicDefinition:
     # degradation a leaf effect's on_error gives (see guidebook ch. 5).
     on_error: Literal["fail", "skip", "continue"] = "fail"
 
+    # `cof run --resume` (#590): 'restart' runs an unfinished saved dynamic
+    # from its first effect in a fresh state instead of continuing at its
+    # first unfinished effect. A finished one is skipped either way.
+    resume: ResumeMode = "continue"
+
     # Free-form metadata, recorded on this dynamic's own meta. Observability
     # tagging, not behavior.
     labels: Mapping[str, Any] | None = None
@@ -252,6 +257,12 @@ class DynamicRuntime:
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
     ) -> None:
+        if self.resume and self.defn.resume == "restart":
+            # `resume: restart` (#590): a finished node was already skipped
+            # by the parent, so this one is unfinished. Drop what it saved
+            # and run it from its first effect, like a fresh run.
+            self.resume = False
+            store.state.pop(self.defn.name, None)
         dyn = store.ensure_dict(self.defn.name)
         dyn.setdefault("value", None)
         meta = dyn.get("meta")

@@ -28,6 +28,7 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .resume import ResumeMode
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -451,6 +452,11 @@ class UseDefinition:
     validate: bool = True
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
+
+    # `cof run --resume` (#590): 'restart' runs an unfinished saved use's
+    # child from its start in a fresh state, even when a saved child record
+    # (runtime.state.record_children) matches.
+    resume: ResumeMode = "continue"
 
     # Reliability (#273) — same key names, default and backoff as prompts
     # (see core.prompt.RetryPolicyDef). None: one attempt, no retry. A
@@ -1148,7 +1154,11 @@ class UseRuntime:
                     resume_child = False
                     if saved_child_run is not None and attempt_index == 0:
                         saved_effects = _take_child_record(node)
-                        if saved_child_run.matches(digest=digest, inputs=child_inputs):
+                        # `resume: restart` (#590): the record is dropped
+                        # even when it matches.
+                        if self.defn.resume == "continue" and saved_child_run.matches(
+                            digest=digest, inputs=child_inputs
+                        ):
                             child_state[_CHILD_ROOT] = saved_effects
                             resume_child = True
 
