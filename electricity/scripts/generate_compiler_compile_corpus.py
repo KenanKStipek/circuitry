@@ -459,6 +459,117 @@ add(doc(text=(
 )))
 CASES[-1]["name"] = "finally_not_allowed_on_tool"
 
+# `resume:` (#590): cof-only behaviour (electricity has no --resume), but a
+# document validates the same on both engines.
+add({
+    "name": "resume_on_dynamic_and_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: dynamic\n"
+            "    name: session\n"
+            "    resume: restart\n"
+            "    effects:\n"
+            "      - type: prompt\n"
+            "        name: a\n"
+            "        template: 'a'\n"
+            "    finally:\n"
+            "      - type: prompt\n"
+            "        name: release\n"
+            "        template: 'release'\n"
+            "  - type: dynamic\n"
+            "    name: plain\n"
+            "    resume: continue\n"
+            "    effects:\n"
+            "      - type: prompt\n"
+            "        name: b\n"
+            "        template: 'b'\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume: restart\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    resume: restart\n"
+)))
+CASES[-1]["name"] = "resume_not_allowed_on_tool"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: l\n"
+    "    while: {mode: cel, expr: 'false'}\n"
+    "    resume: restart\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_not_allowed_on_loop"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: d\n"
+    "    resume: again\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_invalid_value_on_dynamic"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: d\n"
+    "    resume: [restart]\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_list_value_on_dynamic"
+
+add({
+    "name": "resume_invalid_value_on_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume: true\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "resume_null_value_on_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume:\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
 
 # --- Compile errors: conditional/loop ------------------------------------
 

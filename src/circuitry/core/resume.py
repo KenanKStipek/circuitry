@@ -29,9 +29,16 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-__all__ = ["effect_completed_ok"]
+__all__ = ["RESUME_MODES", "ResumeMode", "effect_completed_ok"]
+
+#: A ``dynamic``'s or ``use``'s ``resume:`` (#590): what ``--resume`` does
+#: with the scope when its saved node did not finish without error.
+#: ``continue`` (the default) reuses its finished effects, as described
+#: above; ``restart`` runs it from its first effect in a fresh state.
+ResumeMode = Literal["continue", "restart"]
+RESUME_MODES: tuple[ResumeMode, ...] = ("continue", "restart")
 
 
 def _legacy_document_sha256(path: Path) -> str:

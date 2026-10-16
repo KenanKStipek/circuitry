@@ -124,6 +124,12 @@
       "description": "Error handling policy. fail = abort; skip = omit this effect and continue; continue = record error and continue."
     },
 
+    "ResumeMode": {
+      "enum": ["continue", "restart"],
+      "default": "continue",
+      "description": "What cof run --resume does with this scope when its saved node did not finish without error. continue = reuse its finished effects and go on at the first unfinished one. restart = run it from its first effect in a fresh state; its finally runs as usual. A scope that finished is skipped either way."
+    },
+
     "OnErrorLoop": {
       "type": "string",
       "enum": ["fail", "break", "continue"],
@@ -421,6 +427,7 @@
         },
         "stop_on_error": { "type": "boolean" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "resume": { "$ref": "#/$defs/ResumeMode" },
         "labels": { "type": "object" }
       }
     },
@@ -663,7 +670,8 @@
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "resume": { "$ref": "#/$defs/ResumeMode" }
       },
       "oneOf": [
         { "required": ["ref"] },

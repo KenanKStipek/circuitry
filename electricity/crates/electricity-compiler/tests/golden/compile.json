@@ -47,6 +47,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -120,6 +121,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -184,6 +186,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -253,6 +256,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -315,6 +319,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -375,6 +380,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -436,6 +442,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -486,6 +493,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -497,6 +505,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -542,6 +551,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -553,6 +563,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -601,6 +612,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -668,6 +680,7 @@
             "max_concurrency": null,
             "stop_on_error": false,
             "on_error": "fail",
+            "resume": "continue",
             "labels": null,
             "enabled": true,
             "prompts": {},
@@ -687,6 +700,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -798,6 +812,7 @@
           "max_concurrency": null,
           "stop_on_error": false,
           "on_error": "fail",
+          "resume": "continue",
           "labels": null,
           "enabled": true,
           "prompts": {},
@@ -809,6 +824,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -913,6 +929,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -995,6 +1012,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1078,6 +1096,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1161,6 +1180,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1243,6 +1263,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1325,6 +1346,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1387,6 +1409,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -1909,6 +1932,347 @@
     }
   },
   {
+    "name": "resume_on_dynamic_and_use",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: session\n    resume: restart\n    effects:\n      - type: prompt\n        name: a\n        template: 'a'\n    finally:\n      - type: prompt\n        name: release\n        template: 'release'\n  - type: dynamic\n    name: plain\n    resume: continue\n    effects:\n      - type: prompt\n        name: b\n        template: 'b'\n  - type: use\n    name: sub\n    path: child.yml\n    resume: restart\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "session",
+          "effects": [
+            {
+              "name": "a",
+              "template": "a",
+              "template_file": null,
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [
+            {
+              "name": "release",
+              "template": "release",
+              "template_file": null,
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "resume": "restart",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        },
+        {
+          "name": "plain",
+          "effects": [
+            {
+              "name": "b",
+              "template": "b",
+              "template_file": null,
+              "messages": null,
+              "prompt_type": "text",
+              "schema": null,
+              "model": null,
+              "provider": null,
+              "provider_fallbacks": null,
+              "routing_override": null,
+              "params": null,
+              "timeout_ms": null,
+              "deterministic": false,
+              "inputs": null,
+              "assets": null,
+              "retries": null,
+              "on_error": "fail",
+              "description": null,
+              "enabled": true,
+              "group": null
+            }
+          ],
+          "flow": "chain",
+          "finally_effects": [],
+          "max_concurrency": null,
+          "stop_on_error": false,
+          "on_error": "fail",
+          "resume": "continue",
+          "labels": null,
+          "enabled": true,
+          "prompts": {},
+          "effect_names": []
+        },
+        {
+          "name": "sub",
+          "ref": null,
+          "path": "child.yml",
+          "orchestration": null,
+          "inline": null,
+          "inputs": null,
+          "outputs": null,
+          "validate": true,
+          "on_error": "fail",
+          "description": null,
+          "resume": "restart",
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "parent_trusted": true
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "a",
+        "b",
+        "plain",
+        "release",
+        "session",
+        "sub"
+      ]
+    },
+    "definition_error": null,
+    "digest": "93f1d3e561051804cb9324a2da1cb79c04cb8029d685509cc065b9a3653917ef",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "resume_not_allowed_on_tool",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: x\n    provider: shell\n    resume: restart\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "tool effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect."
+      ],
+      "warnings": [
+        "effects[0]: unknown key 'resume' on a 'tool' effect is ignored. Known keys: description, expect, group, model, name, on_error, params, params_json, prompt, provider, retries, timeout_ms, type."
+      ]
+    },
+    "run_error": "tool effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect.",
+    "definition": null,
+    "definition_error": "ValueError: tool effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect.",
+    "digest": "80777d4aecdda9a3c5af709712684ecfad1a9e98c76e78fc9c66893b0e2b0fee",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "resume_not_allowed_on_loop",
+    "files": {
+      "doc.yml": "effects:\n  - type: loop\n    name: l\n    while: {mode: cel, expr: 'false'}\n    resume: restart\n    body:\n      - type: prompt\n        name: a\n        template: 'a'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "loop effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect."
+      ],
+      "warnings": [
+        "effects[0]: unknown key 'resume' on a 'loop' effect is ignored. Known keys: body, collect, description, each, flow, labels, max_concurrency, max_iterations, min_iterations, name, on_error, type, while."
+      ]
+    },
+    "run_error": "loop effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect.",
+    "definition": null,
+    "definition_error": "ValueError: loop effect at 'prime.effects[0]': 'resume' is only allowed on a 'dynamic' or 'use' effect.",
+    "digest": "f2aef75837b151a5c171354a0df9508750b987793706815197e605235f035985",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "resume_invalid_value_on_dynamic",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: d\n    resume: again\n    effects:\n      - type: prompt\n        name: a\n        template: 'a'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].resume: 'again' is not one of ['continue', 'restart']"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].resume: 'again' is not one of ['continue', 'restart']",
+    "definition": null,
+    "definition_error": "ValueError: Dynamic effect at 'prime.effects[0]': 'resume' must be 'continue' or 'restart', got 'again'.",
+    "digest": "7bdb6db49988f9dd69cd2aa40b0ba233f04b9dd5dae289fb8a80ccbb7631c30a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "resume_list_value_on_dynamic",
+    "files": {
+      "doc.yml": "effects:\n  - type: dynamic\n    name: d\n    resume: [restart]\n    effects:\n      - type: prompt\n        name: a\n        template: 'a'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].resume: value is not one of ['continue', 'restart']"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].resume: value is not one of ['continue', 'restart']",
+    "definition": null,
+    "definition_error": "ValueError: Dynamic effect at 'prime.effects[0]': 'resume' must be 'continue' or 'restart', got ['restart'].",
+    "digest": "925e3e7165006a8d526621a575c41e5c12d2b73058e5adafb03b14036bcc79e2",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "resume_invalid_value_on_use",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    resume: true\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].resume: True is not one of ['continue', 'restart']"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].resume: True is not one of ['continue', 'restart']",
+    "definition": null,
+    "definition_error": "ValueError: Use effect at 'prime.effects[0]': 'resume' must be 'continue' or 'restart', got True.",
+    "digest": "2ce858b595d01c2432482c1e122aaff8c494242a0906118a59ab4dafaecd9b8c",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "resume_null_value_on_use",
+    "files": {
+      "doc.yml": "effects:\n  - type: use\n    name: sub\n    path: child.yml\n    resume:\n",
+      "child.yml": "effects: []\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "effects[0].resume: None is not one of ['continue', 'restart']"
+      ],
+      "warnings": []
+    },
+    "run_error": "Orchestration validation failed:\n  - effects[0].resume: None is not one of ['continue', 'restart']",
+    "definition": null,
+    "definition_error": "ValueError: Use effect at 'prime.effects[0]': 'resume' must be 'continue' or 'restart', got None.",
+    "digest": "095e3a3d79e44c96ec55b0be3a6b02ee7d7d526f7f0b609068e84e634b08a28b",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
     "name": "conditional_missing_if",
     "files": {
       "doc.yml": "effects:\n  - type: if\n    then: []\n"
@@ -2291,6 +2655,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -2302,6 +2667,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -3246,6 +3612,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -3895,6 +4262,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -3982,6 +4350,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4101,6 +4470,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4163,6 +4533,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4208,6 +4579,7 @@
           "max_concurrency": 0,
           "stop_on_error": false,
           "on_error": "fail",
+          "resume": "continue",
           "labels": null,
           "enabled": true,
           "prompts": {},
@@ -4219,6 +4591,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4282,6 +4655,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4342,6 +4716,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4421,6 +4796,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4864,6 +5240,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -4929,6 +5306,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -5013,6 +5391,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -5458,6 +5837,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -5525,6 +5905,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -5603,6 +5984,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -5689,6 +6071,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6335,6 +6718,7 @@
             "max_concurrency": null,
             "stop_on_error": false,
             "on_error": "fail",
+            "resume": "continue",
             "labels": null,
             "enabled": true,
             "prompts": {},
@@ -6354,6 +6738,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6419,6 +6804,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6488,6 +6874,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6537,6 +6924,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6793,6 +7181,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6874,6 +7263,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6945,6 +7335,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -6998,6 +7389,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7083,6 +7475,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7151,6 +7544,7 @@
             "max_concurrency": null,
             "stop_on_error": false,
             "on_error": "fail",
+            "resume": "continue",
             "labels": null,
             "enabled": true,
             "prompts": {},
@@ -7170,6 +7564,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7368,6 +7763,7 @@
             "max_concurrency": null,
             "stop_on_error": false,
             "on_error": "fail",
+            "resume": "continue",
             "labels": null,
             "enabled": true,
             "prompts": {},
@@ -7410,6 +7806,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7467,6 +7864,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7478,6 +7876,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7526,6 +7925,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7537,6 +7937,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7586,6 +7987,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7597,6 +7999,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7648,6 +8051,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7659,6 +8063,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7708,6 +8113,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7719,6 +8125,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7769,6 +8176,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7780,6 +8188,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7828,6 +8237,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7839,6 +8249,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},
@@ -7888,6 +8299,7 @@
           "validate": true,
           "on_error": "fail",
           "description": null,
+          "resume": "continue",
           "retries": null,
           "expect": null,
           "enabled": true,
@@ -7899,6 +8311,7 @@
       "max_concurrency": null,
       "stop_on_error": false,
       "on_error": "fail",
+      "resume": "continue",
       "labels": null,
       "enabled": true,
       "prompts": {},

@@ -12,7 +12,7 @@ Resolution is layered, each layer deep-merged over the last:
 2. **Global config** — `~/.config/circuitry/config.json`.
 3. **Project config** — `circuitry.config.json` or `config.json` in the working directory, once you have trusted it with `cof trust` (see [Trusting a project config](#trusting-a-project-config)).
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
-5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
+5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
 
 Two exceptions to "the last layer wins", both about a project config found in the working directory rather than named explicitly. First, trust: it applies only once you have run `cof trust` on it (or set `CIRCUITRY_TRUST_PROJECT_CONFIG=1`) — see [Trusting a project config](#trusting-a-project-config). Second, once trusted, it may *narrow* an allowlist the global config set, never widen it: its list is intersected with the global one, and `"enabled_tools": null` in a cloned repo does not re-open what your global config locked down; a warning names what was ignored. A file you name yourself — `--config` or `CIRCUITRY_CONFIG` — skips both checks and is trusted as written.
 

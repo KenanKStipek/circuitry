@@ -304,6 +304,40 @@ doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
 run.json --resume x` picks up at frame 250, and the adapter/tool calls for
 frames 0–249 never happen again.
 
+Continuing where a run stopped is wrong for a scope whose first effects start
+something its `finally:` stops — a server, a lock, a migration. The stopped
+run's `finally:` has already stopped it, so a resumed run that reuses the
+starting effect would work against nothing. Mark such a `dynamic` (or `use`)
+`resume: restart`: if it did not finish, `--resume` runs it from its first
+effect in a fresh state, `finally:` as usual at its end; if it finished, it
+is skipped like any other finished effect. The default, `resume: continue`,
+is the behaviour above.
+
+```yaml
+- type: dynamic
+  name: with_web
+  resume: restart
+  effects:
+    - type: tool
+      name: start_web
+      provider: service
+      params:
+        action: start
+        name: web
+        command: [python3, -m, http.server, "8000", --bind, 127.0.0.1]
+        ports: [8000]
+        ready: "http://127.0.0.1:8000/"
+    - type: tool
+      name: page
+      provider: http
+      params: {url: "http://127.0.0.1:8000/"}
+  finally:
+    - type: tool
+      name: stop_web
+      provider: service
+      params: {action: stop, name: web}
+```
+
 ## Anti-patterns
 
 **A tool for text work.** Summarising is a prompt. A tool that "analyses" is a prompt wearing a `provider:`.

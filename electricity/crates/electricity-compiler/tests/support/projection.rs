@@ -5,10 +5,10 @@
 //! `tests/definition_fields.rs` mapping. Used only by `golden_compile.rs`
 //! (lane C); nothing outside this crate's own tests reads it.
 //!
-//! Two deliberate, narrow exceptions from a literal field-for-field
-//! dump, both already documented as such in `electricity-bytecode`'s
-//! own crate docs -- [`definitions_match`] (not a plain `==`) knows
-//! about both:
+//! Three deliberate, narrow exceptions from a literal field-for-field
+//! dump, each documented as such in `electricity-bytecode`'s own crate
+//! docs or `tests/definition_fields.rs` -- [`definitions_match`] (not a
+//! plain `==`) knows about all three:
 //!
 //! - `max_concurrency`/`stop_on_error` on a **chain**-flow
 //!   `DynamicDefinition`: Circuitry carries both fields unconditionally
@@ -22,6 +22,10 @@
 //!   semantically identical defaults, but a structural `null` vs.
 //!   `{...}` difference. A `null` on the Circuitry side is accepted
 //!   unconditionally; a concrete object is compared structurally.
+//! - `resume` on a `DynamicDefinition`/`UseDefinition` (#590): only
+//!   `cof run --resume` reads it, and electricity has none, so the
+//!   compiler checks the value but the IR does not carry it. Projected
+//!   as `null` and never compared.
 
 // golden_smoke.rs/no_leaked_paths.rs (lane A) compile this module too
 // (via `mod support;`) but never call into it -- only golden_compile.rs
@@ -273,6 +277,8 @@ fn project_dynamic_region(op: &Op, region: &Region) -> Json {
         "max_concurrency": max_concurrency,
         "stop_on_error": stop_on_error,
         "on_error": on_error_str(op.on_error),
+        // Not IR-carried -- `definitions_match` never compares it.
+        "resume": Json::Null,
         "labels": op.labels.as_ref().map(value_to_json).unwrap_or(Json::Null),
         "enabled": op.enabled,
         // Root-only in Circuitry's own dump; every non-root dynamic
@@ -461,6 +467,8 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 }).unwrap_or(Json::Null),
                 "validate": use_op.validate,
                 "on_error": on_error_str(op.on_error),
+                // Not IR-carried -- `definitions_match` never compares it.
+                "resume": Json::Null,
                 "description": use_op.description,
                 "retries": project_retries(use_op.retries),
                 "expect": project_expect(&use_op.expect),
@@ -555,6 +563,9 @@ pub fn definitions_match(expected: &Json, actual: &Json) -> bool {
                 && expected_map.contains_key("effects");
             for (key, expected_value) in expected_map {
                 if is_chain_dynamic && (key == "max_concurrency" || key == "stop_on_error") {
+                    continue;
+                }
+                if key == "resume" && actual_map.contains_key(key) {
                     continue;
                 }
                 if key == "retries" && expected_value.is_null() {
