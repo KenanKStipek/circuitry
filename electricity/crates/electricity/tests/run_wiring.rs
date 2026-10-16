@@ -895,6 +895,32 @@ async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker
     assert!(error.contains("comfyui"));
 }
 
+/// Issue #580: `systemone` is a cof-only plugin, so a document naming it is
+/// refused up front with the standard preview message and writes no state.
+#[tokio::test]
+async fn a_tool_naming_the_cof_only_systemone_plugin_is_refused_with_the_marker() {
+    let dir = temp_dir("systemone-cof-only");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: decide\n    provider: systemone\n    params:\n      model: m\n      state: s\n      questions: {q: {type: noul, instructions: i}}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("systemone"));
+    assert!(error.contains("use `cof run` instead"));
+}
+
 /// Issue #511: a `provider:` that is not a cof plugin at all is never
 /// refused by the walker (unlike the `comfyui` case just above, a
 /// Circuitry-known plugin this build has no builder for) -- it reaches

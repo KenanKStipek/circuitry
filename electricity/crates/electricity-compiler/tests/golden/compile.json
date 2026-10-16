@@ -243,7 +243,9 @@
             "template": null
           },
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -303,7 +305,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -361,7 +365,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -420,7 +426,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -3228,7 +3236,9 @@
             "template": "Is it ok?\n"
           },
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4081,7 +4091,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4260,7 +4272,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4318,7 +4332,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "limited": false,
+          "confine_to": null
         }
       ],
       "flow": "chain",
@@ -4379,7 +4395,9 @@
               "retries": null,
               "expect": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "limited": false,
+              "confine_to": null
             }
           ],
           "while_def": null,
@@ -7234,7 +7252,9 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "group": "io"
+          "group": "io",
+          "limited": false,
+          "confine_to": null
         },
         {
           "name": "it",

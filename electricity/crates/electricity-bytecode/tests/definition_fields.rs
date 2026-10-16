@@ -144,6 +144,18 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("ToolDefinition", "expect", "effects::ToolOp::expect");
     add("ToolDefinition", "enabled", "op::Op::enabled");
     add("ToolDefinition", "group", "effects::ToolOp::group");
+    add(
+        "ToolDefinition",
+        "limited",
+        "documented divergence: no IR field -- only the cof-only systemone \
+         plugin reads it, and electricity refuses that plugin",
+    );
+    add(
+        "ToolDefinition",
+        "confine_to",
+        "documented divergence: no IR field -- only the cof-only systemone \
+         plugin reads it, and electricity refuses that plugin",
+    );
 
     // ExpectDef -> region::ExpectCondition
     add("ExpectDef", "mode", "region::ExpectCondition (variant tag)");

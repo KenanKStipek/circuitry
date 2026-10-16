@@ -106,6 +106,7 @@ Seventy-odd ship in-tree. By purpose:
 | System | `system_info`, `process_list`, `env_vars`, `service` |
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
+| Typed decisions | `systemone` — typed answers (`noul`, `choice`, `score`) about a piece of state; see [`docs/plugins/systemone.md`](../plugins/systemone.md) |
 
 `service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 

@@ -405,6 +405,13 @@ def compile_orchestration(
     ``core.prompt_compose.RUNTIME_CONFIG_KEY`` itself, fresh for every
     ``use`` child, so "a child document sees only its own declared prompts"
     needs no special-casing at the ``use`` boundary.
+
+    A document with no file of its own cannot name a ``state_file`` either
+    (the ``systemone`` tool). For a limited document (*trusted* false) that
+    tool's effect records ``ToolDefinition.limited`` and *confinement_root* as
+    ``ToolDefinition.confine_to``, which its ``within`` must stay inside,
+    checked here for a literal ``within`` and at dispatch for one read from
+    ``input``. A limited document with no project reads no file at all.
     """
     with _document_location(document_dir, confinement_root, trusted):
         # Support both 'effects' (spec) and 'steps' (legacy)
@@ -467,7 +474,10 @@ def compile_orchestration(
 
 
 def apply_effect_overrides(
-    root: DynamicDefinition, overrides: dict[str, dict[str, Any]]
+    root: DynamicDefinition,
+    overrides: dict[str, dict[str, Any]],
+    *,
+    profile_name: str | None = None,
 ) -> tuple[DynamicDefinition, set[str]]:
     """Apply a profile's per-effect model/provider/enabled/routing overlay onto a tree.
 
@@ -482,6 +492,12 @@ def apply_effect_overrides(
     runtime acts on (a disabled container never executes its subtree — see
     ``core.disabled``).
 
+    A ``provider`` override cannot make a tool effect ``systemone`` or take it
+    away from it: that tool's confinement is fixed at compile time from its
+    provider (``ToolDefinition.limited``), so changing the provider afterwards
+    would bypass it. That is a ``ValueError`` naming *profile_name* (the profile
+    the overrides come from, when known) and the effect path.
+
     Returns the rebuilt root plus the set of override keys that matched an
     effect somewhere in the tree.
     """
@@ -490,14 +506,32 @@ def apply_effect_overrides(
 
     matched: set[str] = set()
     new_children = [
-        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        _overlay_effect(
+            child, path="", overrides=overrides, matched=matched, profile_name=profile_name
+        )
         for child in root.effects
     ]
     new_finally = [
-        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        _overlay_effect(
+            child, path="", overrides=overrides, matched=matched, profile_name=profile_name
+        )
         for child in root.finally_effects
     ]
     return replace(root, effects=new_children, finally_effects=new_finally), matched
+
+
+def _refuse_systemone_provider_switch(
+    node: ToolDefinition, new_provider: Any, *, path: str, profile_name: str | None
+) -> None:
+    old = node.provider.strip().lower()
+    new = str(new_provider).strip().lower()
+    if old != new and "systemone" in (old, new):
+        profile = f"profile {profile_name!r}" if profile_name else "a profile"
+        raise ValueError(
+            f"{profile}: effect '{path}' cannot change its provider from {node.provider!r} "
+            f"to {str(new_provider)!r}: a systemone tool's file access is confined when "
+            "the document compiles, so a profile cannot switch a tool to or from systemone."
+        )
 
 
 def _overlay_effect(
@@ -506,6 +540,7 @@ def _overlay_effect(
     path: str,
     overrides: dict[str, dict[str, Any]],
     matched: set[str],
+    profile_name: str | None = None,
 ) -> EffectDef:
     name = getattr(node, "name", None)
     own_path = _scope_child(path, name) if name else path
@@ -518,6 +553,10 @@ def _overlay_effect(
         if "model" in override and hasattr(node, "model"):
             field_overrides["model"] = override["model"]
         if "provider" in override and hasattr(node, "provider"):
+            if isinstance(node, ToolDefinition):
+                _refuse_systemone_provider_switch(
+                    node, override["provider"], path=own_path, profile_name=profile_name
+                )
             field_overrides["provider"] = override["provider"]
         if "routing" in override and hasattr(node, "routing_override"):
             field_overrides["routing_override"] = override["routing"]
@@ -529,7 +568,13 @@ def _overlay_effect(
         node = replace(
             node,
             effects=[
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.effects
             ],
             # 'finally' shares its dynamic's own scope (same child_scope the
@@ -537,7 +582,13 @@ def _overlay_effect(
             # see _compile_effect) so a profile addresses a cleanup effect
             # exactly like a body one.
             finally_effects=[
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.finally_effects
             ],
         )
@@ -548,7 +599,11 @@ def _overlay_effect(
                 node.inner,
                 effects=[
                     _overlay_effect(
-                        c, path=own_path, overrides=overrides, matched=matched
+                        c,
+                        path=own_path,
+                        overrides=overrides,
+                        matched=matched,
+                        profile_name=profile_name,
                     )
                     for c in node.inner.effects
                 ],
@@ -558,11 +613,23 @@ def _overlay_effect(
         node = replace(
             node,
             then_effects=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.then_effects
             ),
             else_effects=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.else_effects
             ),
         )
@@ -570,7 +637,13 @@ def _overlay_effect(
         node = replace(
             node,
             body=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.body
             ),
         )
@@ -1296,6 +1369,32 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
+    limited = False
+    confine_to: str | None = None
+    if provider.strip().lower() == "systemone":
+        from ..plugins.systemone import static_param_errors
+
+        # Same rule as a prompt's `file: {from: ...}` (#578): a limited
+        # document's `within` stays inside its project.
+        # A limited document with no project is still limited: it reads no file.
+        limited = not _current_document_trusted()
+        project = _current_confinement_root()
+        if limited and project is not None:
+            confine_to = str(project)
+
+        # The effect-level `model:` is merged under params at dispatch.
+        problems = static_param_errors(
+            {**({"model": model} if model else {}), **params},
+            has_params_json=params_json is not None,
+            has_document_file=_current_document_dir() is not None,
+            limited=limited,
+            confine_to=confine_to,
+        )
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (systemone) at '{effect_path}': " + "; ".join(problems)
+            )
+
     timeout_ms = compile_timeout_ms(
         effect.get("timeout_ms"),
         effect_type="tool",
@@ -1336,6 +1435,8 @@ def _compile_tool(
         retries=retries,
         expect=expect,
         group=group,
+        limited=limited,
+        confine_to=confine_to,
     )
 
 

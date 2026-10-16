@@ -47,7 +47,9 @@
     "retries",
     "expect",
     "enabled",
-    "group"
+    "group",
+    "limited",
+    "confine_to"
   ],
   "ExpectDef": [
     "mode",

@@ -44,7 +44,7 @@ def _now_iso() -> str:
 
 #: Providers whose raw["status"] is an HTTP status code, not some other
 #: plugin's unrelated int field that happens to be named "status".
-_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear"})
+_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear", "systemone"})
 
 #: Cap on meta.raw's serialized size, in bytes, after redaction. Protects
 #: state (and anything that mirrors it: --out, --live-state, persisted
@@ -430,6 +430,19 @@ class ToolDefinition:
     # actually held; see #274.
     group: str | None = None
 
+    #: For a ``systemone`` effect: ``True`` when its document is not trusted
+    #: (not run by path, see ``compile_orchestration``'s *trusted*). A limited
+    #: effect reads a ``state_file`` only inside :attr:`confine_to`, and none
+    #: at all when that is ``None`` (the document has no project). ``False``
+    #: means unconfined: a trusted document, and every other provider.
+    limited: bool = False
+
+    #: The project a limited ``systemone`` effect's ``within`` must stay inside
+    #: (the same root a ``{file: ...}`` prompt is confined to, as
+    #: ``DispatchFileSource.confine_to``); ``None`` when not limited, or when
+    #: the document has no project.
+    confine_to: str | None = None
+
 
 #: Fallback when neither the effect's ``timeout_ms`` nor
 #: ``runtime.tools.timeout_seconds`` in config is set. Tools get their own
@@ -460,10 +473,11 @@ class ToolRuntime:
       process-backed plugins) — it is ``None`` for every other plugin. A
       tool fails — ``meta.error`` is set and ``on_error`` applies — whenever
       the plugin raises, or returns a ``ToolResult`` with ``ok=False``. HTTP-
-      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``) fail
-      this way on a 4xx/5xx response by default and set ``meta.status_code``
-      to the HTTP status; each has a per-effect opt-out param (see each
-      plugin's docstring) that restores the old always-succeeds behaviour.
+      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``,
+      ``systemone``) fail this way on a 4xx/5xx response by default and set
+      ``meta.status_code`` to the HTTP status; all but ``systemone`` have a
+      per-effect opt-out param (see each plugin's docstring) that restores
+      the old always-succeeds behaviour.
       Soft-failure plugins (``wikipedia``, ``dns``, ``port_check``,
       ``validate_yaml``) report their own outcome via ``value``/``raw``
       fields with ``ok`` staying ``True`` — see orchestration-reference.md.
@@ -743,6 +757,10 @@ class ToolRuntime:
                         self.defn.params_json, ctx, declared=declared, known_names=known_names
                     )
                     _reject_params_json_security_overrides(params_json_overlay)
+                    if self.defn.provider.strip().lower() == "systemone":
+                        from ..plugins.systemone import reject_overlay_within
+
+                        reject_overlay_within(params_json_overlay)
                     params = _deep_merge_params(params, params_json_overlay)
 
                 rendered = {**top_level, **params}
@@ -764,6 +782,11 @@ class ToolRuntime:
                 plugin = build_plugin(
                     plugin_name=self.defn.provider,
                     runtime=self.runtime_config,
+                    **(
+                        {"limited": True, "confine_to": self.defn.confine_to}
+                        if self.defn.limited
+                        else {}
+                    ),
                 )
                 target = _plugin_target(plugin, mtag)
 
