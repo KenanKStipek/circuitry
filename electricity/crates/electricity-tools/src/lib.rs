@@ -71,6 +71,11 @@ pub struct ToolResult {
     /// signal `ToolRuntime` (lane B/C) treats as a failure without an
     /// exception (`plugins/base.py::ToolResult.ok`'s own doc comment).
     pub ok: bool,
+    /// `true` when `value` is the parsed JSON of `stdout` (`parse: json` on a
+    /// subprocess-family plugin, `plugins/base.py::ToolResult.stdout_parsed`).
+    /// `runtime.state.parsed_stdout: drop` keeps such a `stdout` out of
+    /// state (#592).
+    pub stdout_parsed: bool,
 }
 
 impl ToolResult {
@@ -84,6 +89,7 @@ impl ToolResult {
             stderr: None,
             exit_code: None,
             ok: true,
+            stdout_parsed: false,
         }
     }
 

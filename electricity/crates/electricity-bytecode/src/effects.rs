@@ -187,6 +187,11 @@ pub struct ToolOp {
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
+    /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
+    /// for parity with `cof check`; `prompt` is then absent from `params`.
+    /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
+    pub prompt_file: Option<DispatchFile>,
 }
 
 /// `UseDefinition.path`/`.orchestration`/`.inline` — exactly one present

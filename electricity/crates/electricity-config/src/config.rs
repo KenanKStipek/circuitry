@@ -357,7 +357,9 @@ fn strerror(err: &io::Error) -> String {
 }
 
 /// `cli/config.py::_apply_env_vars`, in the same order
-/// `CONFIG_ENV_VARS` lists them.
+/// `CONFIG_ENV_VARS` lists them, except `CIRCUITRY_SYSTEMONE_URL`, which
+/// this crate skips on purpose: electricity does not run the `systemone`
+/// tool.
 fn apply_env_vars(merged: Dict, env: &HashMap<String, String>) -> Dict {
     let mut result = merged;
 

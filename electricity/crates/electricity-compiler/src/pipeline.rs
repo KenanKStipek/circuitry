@@ -838,7 +838,10 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
         };
     }
 
-    let state_errors = electricity_config::prompt_sent_errors(merged_runtime.as_ref());
+    let mut state_errors = electricity_config::prompt_sent_errors(merged_runtime.as_ref());
+    state_errors.extend(electricity_config::parsed_stdout_errors(
+        merged_runtime.as_ref(),
+    ));
     if !state_errors.is_empty() {
         return CheckReport {
             ok: false,
@@ -969,10 +972,12 @@ pub fn pre_input_checks(
     electricity_config::validate_complexity(&loaded.document, effective_runtime)
         .map_err(|err| RunCheckError::Compile(err.0))?;
 
-    // `resolve_effective_settings`'s own `runtime.state.prompt_sent` check
-    // (#577), right after the complexity block and before the limiter.
+    // `resolve_effective_settings`'s own `runtime.state.prompt_sent` (#577)
+    // and `runtime.state.parsed_stdout` (#592) checks, right after the
+    // complexity block and before the limiter.
     if let Some(message) = electricity_config::prompt_sent_errors(effective_runtime)
         .into_iter()
+        .chain(electricity_config::parsed_stdout_errors(effective_runtime))
         .next()
     {
         return Err(RunCheckError::Compile(message));

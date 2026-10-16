@@ -792,6 +792,7 @@ mod tests {
                 expect: None,
                 description: None,
                 group: None,
+                prompt_file: None,
             }))),
             on_error: OnError::Fail,
             labels: None,

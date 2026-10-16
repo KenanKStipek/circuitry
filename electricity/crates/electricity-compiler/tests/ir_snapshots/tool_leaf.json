@@ -41,6 +41,7 @@
                     },
                     "params_json": null,
                     "prompt": null,
+                    "prompt_file": null,
                     "provider": "shell",
                     "retries": {
                       "backoff_ms": 1000,

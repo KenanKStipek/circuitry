@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1377,6 +1378,13 @@ def _compile_tool(
         prompt = None
 
     _check_templates(prompt, effect_path=effect_path, field="prompt", allow_partials=True)
+    prompt_file: DispatchFileSource | None = None
+    if provider.strip().lower() == "agent":
+        prompt_file = _compile_agent_prompt_file(
+            params, params_json, effect_path=effect_path, loop_names=loop_names
+        )
+        if prompt_file is not None:
+            params = {key: value for key, value in params.items() if key != "prompt"}
     _check_param_leaves(
         params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
     )
@@ -1460,7 +1468,48 @@ def _compile_tool(
         group=group,
         limited=limited,
         confine_to=confine_to,
+        prompt_file=prompt_file,
     )
+
+
+def _compile_agent_prompt_file(
+    params: dict[str, Any],
+    params_json: str | None,
+    *,
+    effect_path: str,
+    loop_names: frozenset[str],
+) -> DispatchFileSource | None:
+    """The ``agent`` tool's ``params.prompt: {file: {from: ...}, within: ...}`` (#591).
+
+    Compiled like a prompt's ``template`` of that form (#578), under this
+    document's trust. ``params_json`` never supplies the form nor replaces a
+    prompt read from a file; a raw ``params_json`` that parses as JSON is
+    checked for both here, and the rendered one again at dispatch.
+    """
+    from ..plugins.agent import reject_overlay_prompt
+
+    prompt_raw = params.get("prompt")
+    prompt_file = (
+        _compile_dispatch_file(
+            prompt_raw,
+            field=f"{effect_path}.params.prompt",
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
+        if is_dispatch_file(prompt_raw)
+        else None
+    )
+    if params_json is not None:
+        try:
+            overlay = json.loads(params_json)
+        except ValueError:
+            overlay = None
+        if isinstance(overlay, dict):
+            try:
+                reject_overlay_prompt(overlay, prompt_from_file=prompt_file is not None)
+            except ValueError as exc:
+                raise ValueError(f"{effect_path}: {exc}") from exc
+    return prompt_file
 
 
 def _compile_use(

@@ -174,6 +174,7 @@ impl ToolPlugin for ValidateYamlPlugin {
             stderr,
             exit_code: None,
             ok: true,
+            stdout_parsed: false,
         })
     }
 

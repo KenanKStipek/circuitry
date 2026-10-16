@@ -1415,6 +1415,68 @@ _dispatch_file_case(
 )
 
 
+# --- Issue #591: the agent tool's `params.prompt: {file: {from: ...}, within: ...}` ---
+
+_AGENT_HEAD = "  - type: tool\n    name: implement\n    provider: agent\n"
+
+_dispatch_file_case(
+    "agent_prompt_file_from_state",
+    _AGENT_HEAD
+    + "    params:\n      prompt:\n        file: {from: prime.prep.value.prompt_file}\n"
+    "        within: {from: input.work_dir}\n      cwd: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "agent_prompt_file_with_a_literal_within_and_a_spelled_out_provider",
+    "  - type: tool\n    name: implement\n    provider: ' Agent '\n"
+    "    params:\n      prompt: {file: {from: input.prompt_file}, within: /srv/work}\n",
+)
+for _label, _prompt in (
+    ("no_within", "{file: {from: input.f}}"),
+    ("a_relative_within", "{file: {from: input.f}, within: relative/dir}"),
+    ("a_within_with_a_template_tag", "{file: {from: input.f}, within: '/srv/{{x}}'}"),
+    ("a_within_from_an_effect_output", "{file: {from: input.f}, within: {from: prime.prep.value}}"),
+    ("an_extra_key", "{file: {from: input.f}, within: {from: input.d}, x: 1}"),
+    ("a_from_without_a_root", "{file: {from: bare}, within: {from: input.d}}"),
+):
+    _dispatch_file_case(
+        f"agent_prompt_file_{_label}_is_a_check_error",
+        _AGENT_HEAD + f"    params:\n      prompt: {_prompt}\n",
+    )
+_dispatch_file_case(
+    "agent_params_json_that_sets_the_prompt_file_form_is_a_check_error",
+    _AGENT_HEAD
+    + "    params_json: '{\"prompt\": {\"file\": {\"from\": \"input.f\"}, \"within\": \"/srv\"}}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_that_replaces_a_prompt_file_is_a_check_error",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{\"prompt\": \"{{input.task}}\", \"model\": \"m\"}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_may_set_the_other_params_next_to_a_prompt_file",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{\"engine\": \"claude_code\", \"model\": \"{{input.model}}\"}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_that_is_not_json_before_rendering_is_not_checked",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{{{prime.plan.value}}}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_string_prompt_without_a_prompt_file",
+    _AGENT_HEAD + "    params_json: '{\"prompt\": \"{{input.task}}\"}'\n",
+)
+_dispatch_file_case(
+    "another_provider_keeps_a_prompt_file_form_as_a_plain_param",
+    "  - type: tool\n    name: t\n    provider: json\n"
+    "    params:\n      mode: stringify\n      input: 1\n"
+    "      prompt: {file: {from: input.f}, within: {from: input.d}}\n",
+)
+
+
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 

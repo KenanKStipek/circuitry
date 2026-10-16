@@ -302,9 +302,12 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
   assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
-  params_rendered (redacted), stdout, stderr, exit_code, binary? (process
-  plugins), status_code? (HTTP-family only), raw (redacted + size-capped),
-  waiting_for, retries_used?, expect?`.
+  params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
+  stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
+  #592), binary? (process plugins), status_code? (HTTP-family only), raw
+  (redacted + size-capped), waiting_for, retries_used?, expect?,
+  template_files? (an `agent` effect's `params.prompt` read from a file only,
+  #591)`.
 - **use** (`core/use.py:271` `UseDefinition`, confirmed live): `orchestration,
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
@@ -985,6 +988,22 @@ plan prompt (the top-level `prompt` named `plan_from_step`) whose `template` or
 a message's `content` is `file: {from: ...}` is a compile error naming the
 reflector, the prompt and the field: `Reflector effect '<name>' at '<path>':
 its plan prompt '<prompt>' reads <field> from a file named in state ...`.
+
+The **`agent` tool's `params.prompt`** (issue #591, `core/compiler.py::
+_compile_agent_prompt_file`, `core/tool.py`) takes the same form by the same
+rules, compiled into `ToolDefinition.prompt_file` (`prompt` is then dropped
+from `params`) with the field `<effect_path>.params.prompt`. At dispatch it is
+read once, on the first attempt (a read failure is not retried), and the
+errors read `Tool effect '<name>': params.prompt: <problem>`. The plugin gets
+the text; `meta.params_rendered.prompt` is `{file: <resolved path>, within:
+<resolved within>}` and `meta.template_files` one record with field
+`params.prompt`. `params_json` never supplies the form, and with
+`params.prompt` in the form never sets `prompt` at all: when the raw
+`params_json` parses as a JSON object, compiling fails with `<effect_path>:
+params_json must not set params.prompt ...`, and the rendered one is checked
+again at dispatch. electricity compiles the same checks (the IR's
+`ToolOp::prompt_file`) but refuses the cof-only `agent` plugin, so it never
+reads the file.
 
 **Routing/scoring/decomposition** — see §5.8.
 
@@ -1834,6 +1853,16 @@ that is the first unfinished effect of a resumed loop pass or `if` branch
 resumes inside its child the same way; one in a tree-flow branch, or in a
 pass or branch that runs from its start, reruns whole.
 
+A `dynamic` or `use` with **`resume: restart`** (`core/dynamic.py`,
+`core/use.py`, #590) whose saved node did not finish without error runs
+from its first effect in a fresh state instead: none of its saved children
+is reused, a `use` runs its child from its start even when its saved record
+matches, and its `finally:` runs as usual. A finished one is still skipped
+whole, and the rule holds at any depth. `resume: continue` is the default.
+electricity's compiler checks the key's value, but its IR does not carry
+it; once electricity has `--resume`, the IR must carry `resume`, or a
+resumed run would silently continue such a scope.
+
 ### 8.6 Config keys that affect a run
 
 Under electricity's explicit-config-only design ("no discovery, no `cof
@@ -1843,7 +1872,8 @@ discovery/trust system; the keys that matter for *parity of execution*
 `enabled_adapters`/`enabled_plugins`/`enabled_tools` (allowlists),
 `environment`, and the `runtime:` block (`adapters.<name>.*`,
 `plugins.<name>.*`, `max_concurrency`, `concurrency_groups`, `complexity.*`,
-`tools.timeout_seconds`, `state.record_children`, `persistence.*`). An
+`tools.timeout_seconds`, `state.record_children`, `state.prompt_sent`,
+`state.parsed_stdout`, `persistence.*`). An
 orchestration's **own** `runtime:` block may only ever set
 `ORCHESTRATION_RUNTIME_KEYS = {"complexity", "state"}`
 (`cli/effective_settings.py:62`) unless the whole document is **trusted**

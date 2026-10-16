@@ -25,12 +25,14 @@ from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
+from .parsed_stdout import dropped_stdout_fields, drops_parsed_stdout
 from .prompt import RetryPolicyDef
 from .prompt_compose import (
     declared_prompts,
     known_effect_names,
     render_with_composition,
 )
+from .prompt_files import DispatchFileSource, DispatchFileText, read_dispatch_file
 from .store import Store
 from .timeout_ref import TimeoutFrom, resolve_timeout_ms
 from .use import REFERENCE_AS_KEY, _resolve_reference, serialize_reference
@@ -443,6 +445,11 @@ class ToolDefinition:
     #: the document has no project.
     confine_to: str | None = None
 
+    #: For an ``agent`` effect: ``params.prompt`` of ``{file: {from: <state
+    #: path>}, within: <dir>}`` (#591), read once when the effect dispatches;
+    #: ``prompt`` is then absent from :attr:`params`.
+    prompt_file: DispatchFileSource | None = None
+
 
 #: Fallback when neither the effect's ``timeout_ms`` nor
 #: ``runtime.tools.timeout_seconds`` in config is set. Tools get their own
@@ -489,6 +496,10 @@ class ToolRuntime:
       ``meta.binary`` is also set for binary-wrapping tool plugins
       (the resolved absolute executable path), when the plugin's result
       carries one.
+
+      Under ``runtime.state.parsed_stdout: drop`` (#592), a result whose
+      stdout parsed (``ToolResult.stdout_parsed``) records ``meta.stdout``
+      as ``None`` plus ``meta.stdout_chars`` and ``meta.stdout_sha256``.
 
       ``meta.tokens_sent``/``meta.tokens_received``/``meta.cost_usd`` are
       set, the same fields a ``prompt`` effect uses, when the plugin's
@@ -541,6 +552,7 @@ class ToolRuntime:
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
+        self._drop_parsed_stdout = drops_parsed_stdout(self.runtime_config)
 
     def _resolve_timeout_seconds(self, ctx: dict[str, Any]) -> int:
         """The tool's own timeout budget for one attempt, in whole seconds.
@@ -666,6 +678,10 @@ class ToolRuntime:
         )
 
         next_delay_ms = backoff_ms
+        # An agent's `params.prompt: {file: {from: ...}, within: ...}` (#591),
+        # read once on this pass's first attempt: a retry and the session's
+        # repair turn use the same text.
+        prompt_file_read: DispatchFileText | None = None
         # Summed across this pass's attempts (retried or not) the same way
         # a prompt effect's tokens_sent_total/tokens_received_total do —
         # usage an earlier, failed attempt spent still counts even when a
@@ -717,6 +733,9 @@ class ToolRuntime:
             meta.pop("tokens_sent_total", None)
             meta.pop("tokens_received_total", None)
             meta.pop("cost_usd", None)
+            meta.pop("stdout_chars", None)
+            meta.pop("stdout_sha256", None)
+            meta.pop("template_files", None)
             meta["waiting_for"] = None
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
@@ -724,11 +743,24 @@ class ToolRuntime:
             failure: Exception | None = None
             retryable = False
             timeout_unresolved = False
+            prompt_file_unread = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
             retry_after: str | None = None
             try:
+                if attempt_index == 0 and self.defn.prompt_file is not None:
+                    try:
+                        prompt_file_read = read_dispatch_file(
+                            self.defn.prompt_file,
+                            ctx,
+                            field="params.prompt",
+                            effect_label=f"Tool effect '{self.defn.name}'",
+                        )
+                    except ValueError:
+                        prompt_file_unread = True
+                        raise
+
                 # Render top-level prompt/model, then merge with params (params take precedence)
                 top_level: dict[str, Any] = {}
                 declared = declared_prompts(self.runtime_config)
@@ -761,10 +793,27 @@ class ToolRuntime:
                         from ..plugins.systemone import reject_overlay_within
 
                         reject_overlay_within(params_json_overlay)
+                    if self.defn.provider.strip().lower() == "agent":
+                        from ..plugins.agent import reject_overlay_prompt
+
+                        reject_overlay_prompt(
+                            params_json_overlay,
+                            prompt_from_file=self.defn.prompt_file is not None,
+                        )
                     params = _deep_merge_params(params, params_json_overlay)
 
                 rendered = {**top_level, **params}
+                plugin_params = rendered
+                if prompt_file_read is not None:
+                    # State records the file, never its text.
+                    rendered["prompt"] = {
+                        "file": prompt_file_read.record["path"],
+                        "within": prompt_file_read.within,
+                    }
+                    plugin_params = {**rendered, "prompt": prompt_file_read.text}
                 meta["params_rendered"] = redact(rendered)
+                if prompt_file_read is not None:
+                    meta["template_files"] = [prompt_file_read.record]
                 mtag = _model_tag(rendered)
 
                 # Per attempt, from the state this attempt sees (#564). A
@@ -840,12 +889,16 @@ class ToolRuntime:
                         live_cm = nullcontext()
 
                     with live_cm:
-                        result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
+                        result = plugin.execute(
+                            params=plugin_params, timeout_seconds=timeout_seconds
+                        )
 
             except Exception as e:
                 failure = e
-                retryable = not timeout_unresolved and self._is_retryable_failure(
-                    status_code=None, failure=e
+                retryable = (
+                    not timeout_unresolved
+                    and not prompt_file_unread
+                    and self._is_retryable_failure(status_code=None, failure=e)
                 )
 
             if failure is not None:
@@ -892,7 +945,10 @@ class ToolRuntime:
             assert result is not None
 
             node["value"] = result.value
-            meta["stdout"] = result.stdout
+            if self._drop_parsed_stdout and result.stdout_parsed and result.stdout is not None:
+                meta.update(dropped_stdout_fields(result.stdout))
+            else:
+                meta["stdout"] = result.stdout
             meta["stderr"] = result.stderr
             meta["exit_code"] = result.exit_code
             status_code: int | None = None

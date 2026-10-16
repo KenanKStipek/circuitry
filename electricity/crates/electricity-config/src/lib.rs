@@ -41,6 +41,7 @@ mod config;
 pub mod dotenv;
 mod effective_settings;
 mod merge;
+mod parsed_stdout;
 mod persistence;
 pub mod preflight;
 mod profile;
@@ -66,6 +67,7 @@ pub use effective_settings::{
     EffectiveSettings, effective_settings, effective_settings_with_profile,
 };
 pub use merge::merge_runtime;
+pub use parsed_stdout::{drops_parsed_stdout, parsed_stdout_errors};
 pub use persistence::persistence_enabled;
 pub use profile::{
     ProfileError, ProfileSettings, collect_orchestration_condition_paths,

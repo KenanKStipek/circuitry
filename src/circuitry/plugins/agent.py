@@ -45,7 +45,11 @@ appended to its first prompt. See ``docs/plugins/agent.md``.
 Params:
   - ``prompt`` (required, str): multi-line; written to a temporary file
     (pi attaches it with ``@<file>``) or sent on stdin (Claude Code), never
-    put in argv.
+    put in argv. In a document's literal params it may instead be
+    ``{file: {from: <state path>}, within: <dir>}`` (#591): ``core.tool``
+    reads that file once, before the first attempt, and passes its text here
+    as the string; ``params_json`` can never supply that form (see
+    :func:`reject_overlay_prompt`).
   - ``engine`` (optional): ``pi`` | ``claude_code``; default
     ``runtime.plugins.agent.engine``, else ``pi``.
   - ``cwd`` (optional, str): where the session runs; default the current
@@ -97,6 +101,7 @@ from ..agent_cli import (
     pi_command,
     run_agent_cli,
 )
+from ..core.prompt_files import is_dispatch_file
 from ..preflight import CheckResult
 from ._subprocess import _expand_and_validate, resolve_binary
 from .base import ToolResult
@@ -728,6 +733,28 @@ def _project_instructions(cwd: Path) -> tuple[str, str] | None:
     if not text.strip():
         return None
     return str(path), text
+
+
+def reject_overlay_prompt(overlay: Mapping[str, Any], *, prompt_from_file: bool) -> None:
+    """``params_json`` is built at run time and can carry generated content, so
+    it never supplies ``prompt`` as ``{file: {from: ...}, within: ...}`` (its
+    ``within`` is a trust boundary, like ``systemone``'s), and never replaces
+    a ``prompt`` the document reads from a file (*prompt_from_file*).
+    """
+    if "prompt" not in overlay:
+        return
+    if is_dispatch_file(overlay["prompt"]):
+        raise ValueError(
+            "params_json must not set params.prompt to {file: {from: <state path>}, "
+            "within: <dir>}: a prompt file is only honoured from a document's literal "
+            "params block."
+        )
+    if prompt_from_file:
+        raise ValueError(
+            "params_json must not set params.prompt: this effect reads params.prompt "
+            "from a file ({file: {from: <state path>}, within: <dir>}), which "
+            "params_json cannot replace."
+        )
 
 
 @dataclass(frozen=True)

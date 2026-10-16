@@ -442,6 +442,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "group": tool.group,
             "limited": false,
             "confine_to": Json::Null,
+            "prompt_file": project_dispatch_file(tool.prompt_file.as_ref()),
         }),
         LeafKind::Use(use_op) => {
             let (path, orchestration, inline) = match &use_op.source {

@@ -248,7 +248,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -311,7 +312,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -372,7 +374,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -434,7 +437,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -3604,7 +3608,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -4462,7 +4467,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -4647,7 +4653,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -4708,7 +4715,8 @@
           "enabled": true,
           "group": null,
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         }
       ],
       "flow": "chain",
@@ -4772,7 +4780,8 @@
               "enabled": true,
               "group": null,
               "limited": false,
-              "confine_to": null
+              "confine_to": null,
+              "prompt_file": null
             }
           ],
           "while_def": null,
@@ -6756,6 +6765,627 @@
     }
   },
   {
+    "name": "agent_prompt_file_from_state",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt:\n        file: {from: prime.prep.value.prompt_file}\n        within: {from: input.work_dir}\n      cwd: {from: input.work_dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "implement",
+          "provider": "agent",
+          "params": {
+            "cwd": {
+              "from": "input.work_dir"
+            }
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": {
+            "path_from": "prime.prep.value.prompt_file",
+            "within": null,
+            "within_from": "input.work_dir",
+            "confine_to": null
+          }
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "implement"
+      ]
+    },
+    "definition_error": null,
+    "digest": "5ffce22c1cd986740fe58f4209980f8c72bc543cba0f2650ad2c1c56841588db",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "agent_prompt_file_with_a_literal_within_and_a_spelled_out_provider",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: ' Agent '\n    params:\n      prompt: {file: {from: input.prompt_file}, within: /srv/work}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "implement",
+          "provider": "Agent",
+          "params": {},
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": {
+            "path_from": "input.prompt_file",
+            "within": "/srv/work",
+            "within_from": null,
+            "confine_to": null
+          }
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "implement"
+      ]
+    },
+    "definition_error": null,
+    "digest": "ade75e131000ab652b1936299556dfb7e4aca9e9a6318421c7390aa519a2a927",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "agent_prompt_file_no_within_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.prompt: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.prompt: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.prompt: 'within' is required with 'file: {from: <path>}' — the directory the file must stay inside.",
+    "digest": "3158373e09688341bdb9adf6256dc3d53815b2d6bb3516d9ea69d4415b5f884a",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_prompt_file_a_relative_within_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: relative/dir}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>}; got 'relative/dir'.",
+    "digest": "ba93b66133345a566635f01a0097b7f4e7b5e4013ba73c0b8a3ca8e6c3241f06",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_prompt_file_a_within_with_a_template_tag_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: '/srv/{{x}}'}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.prompt: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.prompt: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.prompt: 'within' must be a literal path — it cannot contain a template tag: '/srv/{{x}}'.",
+    "digest": "4a66eb8e8e7f52dc02102b7182aa06de100bf9f97116032c714689879799be19",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_prompt_file_a_within_from_an_effect_output_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: {from: prime.prep.value}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.prompt: 'within' must be an absolute path, or {from: input.<name>} — never an effect's output; got {'from': 'prime.prep.value'}.",
+    "digest": "964065bd4e34887705b3ca4d747cb0b1bf797a7f79c8ee724d1b9167e655653d",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_prompt_file_an_extra_key_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}, x: 1}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].params.prompt: 'file: {from: <path>}' takes only 'file' and 'within'; got ['x']."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].params.prompt: 'file: {from: <path>}' takes only 'file' and 'within'; got ['x'].",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].params.prompt: 'file: {from: <path>}' takes only 'file' and 'within'; got ['x'].",
+    "digest": "7d0ddb56dfccb22a34539fd9d7a2589f29302d5eccee336dc9d6f6f3abf34566",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_prompt_file_a_from_without_a_root_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: bare}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "Prompt prime.effects[0].params.prompt file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs."
+      ],
+      "warnings": []
+    },
+    "run_error": "Prompt prime.effects[0].params.prompt file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "definition": null,
+    "definition_error": "ValueError: Prompt prime.effects[0].params.prompt file at 'prime.effects[0]': 'bare' is not rooted at a state namespace or an enclosing loop binding (loop bindings in scope: none here). Write 'input.bare' for caller-supplied values or 'prime.<effect>.value' for effect outputs.",
+    "digest": "8212e9cf6b872630da594000e337a1aa1599391a4430523dfa34843096daa2f8",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_params_json_that_sets_the_prompt_file_form_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params_json: '{\"prompt\": {\"file\": {\"from\": \"input.f\"}, \"within\": \"/srv\"}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0]: params_json must not set params.prompt to {file: {from: <state path>}, within: <dir>}: a prompt file is only honoured from a document's literal params block."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0]: params_json must not set params.prompt to {file: {from: <state path>}, within: <dir>}: a prompt file is only honoured from a document's literal params block.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0]: params_json must not set params.prompt to {file: {from: <state path>}, within: <dir>}: a prompt file is only honoured from a document's literal params block.",
+    "digest": "0ce5f0f4d5727931ffc29606f8126d69daed43c7a5079f4ff0e18b7ca44e2f73",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_params_json_that_replaces_a_prompt_file_is_a_check_error",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n    params_json: '{\"prompt\": \"{{input.task}}\", \"model\": \"m\"}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0]: params_json must not set params.prompt: this effect reads params.prompt from a file ({file: {from: <state path>}, within: <dir>}), which params_json cannot replace."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0]: params_json must not set params.prompt: this effect reads params.prompt from a file ({file: {from: <state path>}, within: <dir>}), which params_json cannot replace.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0]: params_json must not set params.prompt: this effect reads params.prompt from a file ({file: {from: <state path>}, within: <dir>}), which params_json cannot replace.",
+    "digest": "0875e1d0a8843de8e8dc2764543dc80c06ea209129eaba7c5d9c665216a0c1a0",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "agent_params_json_may_set_the_other_params_next_to_a_prompt_file",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n    params_json: '{\"engine\": \"claude_code\", \"model\": \"{{input.model}}\"}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "implement",
+          "provider": "agent",
+          "params": {},
+          "params_json": "{\"engine\": \"claude_code\", \"model\": \"{{input.model}}\"}",
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": {
+            "path_from": "input.f",
+            "within": null,
+            "within_from": "input.d",
+            "confine_to": null
+          }
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "implement"
+      ]
+    },
+    "definition_error": null,
+    "digest": "323c3ddaa65e6dc27d9e6b2b79a4bc032a8a8008ed5c93e092776b5f1cfec91a",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "agent_params_json_that_is_not_json_before_rendering_is_not_checked",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n    params_json: '{{{prime.plan.value}}}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "implement",
+          "provider": "agent",
+          "params": {},
+          "params_json": "{{{prime.plan.value}}}",
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": {
+            "path_from": "input.f",
+            "within": null,
+            "within_from": "input.d",
+            "confine_to": null
+          }
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "implement"
+      ]
+    },
+    "definition_error": null,
+    "digest": "9f9931d448b2e4d38bcaecb80ea24bf7270e09b1b67830af514eacaef30e437d",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "agent_params_json_string_prompt_without_a_prompt_file",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params_json: '{\"prompt\": \"{{input.task}}\"}'\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "implement",
+          "provider": "agent",
+          "params": {},
+          "params_json": "{\"prompt\": \"{{input.task}}\"}",
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "implement"
+      ]
+    },
+    "definition_error": null,
+    "digest": "9134ccdf77e800812eb2aaeae8fae8d348a9c1cdb80160ad4c31d134fa4b53dd",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
+    "name": "another_provider_keeps_a_prompt_file_form_as_a_plain_param",
+    "files": {
+      "doc.yml": "effects:\n  - type: tool\n    name: t\n    provider: json\n    params:\n      mode: stringify\n      input: 1\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "run_error": null,
+    "definition": {
+      "name": "prime",
+      "effects": [
+        {
+          "name": "t",
+          "provider": "json",
+          "params": {
+            "mode": "stringify",
+            "input": 1,
+            "prompt": {
+              "file": {
+                "from": "input.f"
+              },
+              "within": {
+                "from": "input.d"
+              }
+            }
+          },
+          "params_json": null,
+          "prompt": null,
+          "model": null,
+          "timeout_ms": null,
+          "on_error": "fail",
+          "description": null,
+          "retries": null,
+          "expect": null,
+          "enabled": true,
+          "group": null,
+          "limited": false,
+          "confine_to": null,
+          "prompt_file": null
+        }
+      ],
+      "flow": "chain",
+      "finally_effects": [],
+      "max_concurrency": null,
+      "stop_on_error": false,
+      "on_error": "fail",
+      "resume": "continue",
+      "labels": null,
+      "enabled": true,
+      "prompts": {},
+      "effect_names": [
+        "t"
+      ]
+    },
+    "definition_error": null,
+    "digest": "7f8cb60ac6ae3eacf5808037fa4a31f535b9a5825f359317675f2c8310748ddc",
+    "comparison": {
+      "validate_errors": [],
+      "run_error": null
+    }
+  },
+  {
     "name": "prompt_template_from_file",
     "files": {
       "doc.yml": "effects:\n  - type: prompt\n    name: greet\n    template: {file: template.txt}\n",
@@ -7649,7 +8279,8 @@
           "enabled": true,
           "group": "io",
           "limited": false,
-          "confine_to": null
+          "confine_to": null,
+          "prompt_file": null
         },
         {
           "name": "it",

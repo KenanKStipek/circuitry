@@ -1,0 +1,16 @@
+{"v":1,"seq":0,"ts":"2026-10-16T19:34:57.461Z","ev":"run_start","run_id":"3e5095bc-40a9-4177-bf45-d92415dce313","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":26273}
+{"v":1,"seq":1,"ts":"2026-10-16T19:34:57.464Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-16T19:34:57.464Z","ev":"start","id":1,"path":"prime.implement"}
+{"v":1,"seq":3,"ts":"2026-10-16T19:34:57.496Z","ev":"end","id":1,"path":"prime.implement","ok":true,"ms":32}
+{"v":1,"seq":4,"ts":"2026-10-16T19:34:57.496Z","ev":"start","id":2,"path":"prime.missing_file"}
+{"v":1,"seq":5,"ts":"2026-10-16T19:34:57.496Z","ev":"end","id":2,"path":"prime.missing_file","ok":false,"ms":0,"error":"Tool effect 'missing_file': params.prompt: file 'prompts/nope.md' does not exist."}
+{"v":1,"seq":6,"ts":"2026-10-16T19:34:57.497Z","ev":"start","id":3,"path":"prime.outside_within"}
+{"v":1,"seq":7,"ts":"2026-10-16T19:34:57.497Z","ev":"end","id":3,"path":"prime.outside_within","ok":false,"ms":0,"error":"Tool effect 'outside_within': params.prompt: file '../case.json' resolves outside 'within' (<CASE_DIR>)."}
+{"v":1,"seq":8,"ts":"2026-10-16T19:34:57.497Z","ev":"start","id":4,"path":"prime.not_utf8"}
+{"v":1,"seq":9,"ts":"2026-10-16T19:34:57.497Z","ev":"end","id":4,"path":"prime.not_utf8","ok":false,"ms":0,"error":"Tool effect 'not_utf8': params.prompt: file 'prompts/binary.bin' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"}
+{"v":1,"seq":10,"ts":"2026-10-16T19:34:57.497Z","ev":"start","id":5,"path":"prime.form_from_params_json"}
+{"v":1,"seq":11,"ts":"2026-10-16T19:34:57.498Z","ev":"end","id":5,"path":"prime.form_from_params_json","ok":false,"ms":0,"error":"params_json must not set params.prompt to {file: {from: <state path>}, within: <dir>}: a prompt file is only honoured from a document's literal params block."}
+{"v":1,"seq":12,"ts":"2026-10-16T19:34:57.498Z","ev":"start","id":6,"path":"prime.remove_transcript"}
+{"v":1,"seq":13,"ts":"2026-10-16T19:34:57.498Z","ev":"end","id":6,"path":"prime.remove_transcript","ok":true,"ms":0}
+{"v":1,"seq":14,"ts":"2026-10-16T19:34:57.498Z","ev":"end","id":0,"path":"prime","ok":true,"ms":34}
+{"v":1,"seq":15,"ts":"2026-10-16T19:34:57.498Z","ev":"run_end","ok":true}

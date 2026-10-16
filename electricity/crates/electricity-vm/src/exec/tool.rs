@@ -555,6 +555,16 @@ pub async fn execute_tool<R: ParamsCtx>(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
+    // `ToolRuntime.__init__`'s own `drops_parsed_stdout` read (#592).
+    // Validated before the run starts (`pre_input_checks`); a bad value that
+    // got here anyway fails the run rather than recording the text in full.
+    let drop_parsed_stdout = electricity_config::drops_parsed_stdout(Some(run_ctx.runtime_config))
+        .map_err(|message| VmError::Raised {
+            py_class: electricity_tools::PyExc::ValueError,
+            message,
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        })?;
     let name = op
         .name
         .as_deref()
@@ -627,6 +637,8 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "raw");
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
+        pop_leaf(&meta_node, "stdout_chars");
+        pop_leaf(&meta_node, "stdout_sha256");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
@@ -845,12 +857,36 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     Ok(result) => {
                                         let value_for_expect = result.value.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
-                                        set_leaf(
-                                            store,
-                                            &meta_node,
-                                            "stdout",
-                                            result.stdout.map(Value::Str).unwrap_or(Value::None),
-                                        );
+                                        match result.stdout {
+                                            // `runtime.state.parsed_stdout: drop`
+                                            // (#592): the parsed text's length
+                                            // and digest, never the text.
+                                            Some(stdout)
+                                                if drop_parsed_stdout && result.stdout_parsed =>
+                                            {
+                                                set_leaf(store, &meta_node, "stdout", Value::None);
+                                                set_leaf(
+                                                    store,
+                                                    &meta_node,
+                                                    "stdout_chars",
+                                                    Value::from(stdout.chars().count() as i64),
+                                                );
+                                                set_leaf(
+                                                    store,
+                                                    &meta_node,
+                                                    "stdout_sha256",
+                                                    Value::Str(super::use_::sha256_hex(
+                                                        stdout.as_bytes(),
+                                                    )),
+                                                );
+                                            }
+                                            stdout => set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "stdout",
+                                                stdout.map(Value::Str).unwrap_or(Value::None),
+                                            ),
+                                        }
                                         set_leaf(
                                             store,
                                             &meta_node,
@@ -1281,6 +1317,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }
     }
 

@@ -24,8 +24,9 @@ compile error for it; see ``core.prompt_compose`` for where that is raised.
 
 ``{file: {from: <state path>}, within: <dir>}`` (#578) is the run-time
 counterpart, for a ``prompt`` effect's ``template`` and a message's
-``content`` only: the path is read from state and the file when the effect
-dispatches, never when the document loads. See :class:`DispatchFileSource`.
+``content``, and the ``agent`` tool's ``params.prompt`` (#591): the path is
+read from state and the file when the effect dispatches, never when the
+document loads. See :class:`DispatchFileSource`.
 """
 
 from __future__ import annotations
@@ -317,10 +318,12 @@ def compile_dispatch_file(
 
 @dataclass(frozen=True)
 class DispatchFileText:
-    """What :func:`read_dispatch_file` read: the text and its ``meta.template_files`` record."""
+    """What :func:`read_dispatch_file` read: the text, its ``meta.template_files``
+    record, and the resolved ``within`` directory it was read inside."""
 
     text: str
     record: dict[str, Any]
+    within: str
 
 
 def read_dispatch_file(
@@ -416,4 +419,5 @@ def read_dispatch_file(
             "sha256": hashlib.sha256(data).hexdigest(),
             "chars": len(text),
         },
+        within=str(within_dir),
     )

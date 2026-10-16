@@ -413,6 +413,7 @@ pub(crate) fn compile_tool(
     path: &EffectPath,
     name: &str,
     effect_path: &str,
+    origin: &DocumentOrigin,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
     let provider = effect
@@ -447,6 +448,27 @@ pub(crate) fn compile_tool(
     let prompt = optional_str(effect, "prompt");
     if let Some(prompt) = &prompt {
         check_templates(&Value::Str(prompt.clone()), effect_path, "prompt", true)?;
+    }
+
+    let mut prompt_file: Option<DispatchFile> = None;
+    let params_without_prompt: Dict;
+    let mut params = params;
+    if electricity_value::pycompat::py_strip(provider).to_lowercase() == "agent" {
+        prompt_file = compile_agent_prompt_file(
+            params,
+            params_json.as_deref(),
+            effect_path,
+            origin,
+            loop_names,
+        )?;
+        if prompt_file.is_some() {
+            params_without_prompt = params
+                .iter()
+                .filter(|(key, _)| **key != Value::Str("prompt".to_string()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            params = &params_without_prompt;
+        }
     }
 
     let params_node = build_tool_params(params, name, effect_path, loop_names)?;
@@ -490,8 +512,54 @@ pub(crate) fn compile_tool(
         expect,
         description,
         group,
+        prompt_file,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Tool(op), on_error))
+}
+
+/// `core/compiler.py::_compile_agent_prompt_file` (issue #591): the `agent`
+/// tool's `params.prompt` of `{file: {from: ...}, within: ...}`, compiled
+/// like a prompt's `template` of that form under this document's trust.
+/// `params_json` never supplies the form nor replaces a prompt read from a
+/// file; a raw `params_json` that parses as JSON is checked for both.
+fn compile_agent_prompt_file(
+    params: &Dict,
+    params_json: Option<&str>,
+    effect_path: &str,
+    origin: &DocumentOrigin,
+    loop_names: &BTreeSet<String>,
+) -> Result<Option<DispatchFile>, CompileError> {
+    let prompt_key = Value::Str("prompt".to_string());
+    let prompt_file = match params.get(&prompt_key) {
+        Some(value) if prompt_files::is_dispatch_file(value) => Some(compile_dispatch_file(
+            value,
+            &format!("{effect_path}.params.prompt"),
+            effect_path,
+            loop_names,
+            origin,
+        )?),
+        _ => None,
+    };
+    let overlay = params_json.and_then(|raw| electricity_json::loads(raw).ok());
+    if let Some(Value::Dict(overlay)) = &overlay {
+        if let Some(prompt) = overlay.get(&prompt_key) {
+            if prompt_files::is_dispatch_file(prompt) {
+                return Err(CompileError(format!(
+                    "{effect_path}: params_json must not set params.prompt to {{file: {{from: \
+                     <state path>}}, within: <dir>}}: a prompt file is only honoured from a \
+                     document's literal params block."
+                )));
+            }
+            if prompt_file.is_some() {
+                return Err(CompileError(format!(
+                    "{effect_path}: params_json must not set params.prompt: this effect reads \
+                     params.prompt from a file ({{file: {{from: <state path>}}, within: <dir>}}), \
+                     which params_json cannot replace."
+                )));
+            }
+        }
+    }
+    Ok(prompt_file)
 }
 
 fn normalize_outputs(
