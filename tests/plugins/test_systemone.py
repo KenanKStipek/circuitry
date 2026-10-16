@@ -22,7 +22,7 @@ import pytest
 import yaml
 
 from circuitry.adapters._retry import classify_exception
-from circuitry.cli.config import CircuitryConfig
+from circuitry.cli.config import CircuitryConfig, resolve_config
 from circuitry.cli.effective_settings import resolve_effective_settings
 from circuitry.cli.runtime_shim import RunRequest, run
 from circuitry.core.compiler import compile_orchestration
@@ -180,6 +180,7 @@ def server() -> Iterator[FakeServer]:
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SYSTEMONE_TEST_KEY", raising=False)
+    monkeypatch.delenv("CIRCUITRY_SYSTEMONE_URL", raising=False)
 
 
 def _params(**overrides: Any) -> dict[str, Any]:
@@ -2120,3 +2121,111 @@ def test_a_profile_may_still_switch_between_two_other_providers() -> None:
         compile_orchestration(orch=_doc(state="s")), {"decide": {"provider": "systemone"}}
     )
     assert kept.effects[0].provider == "systemone"
+
+
+# ---------------------------------------------------------------------------
+# CIRCUITRY_SYSTEMONE_URL
+# ---------------------------------------------------------------------------
+
+
+def _config_file(tmp_path: Path, systemone: dict[str, Any]) -> Path:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"runtime": {"plugins": {"systemone": systemone}}}), encoding="utf-8"
+    )
+    return path
+
+
+def _plugin_from(config: CircuitryConfig) -> SystemOnePlugin:
+    plugin = build_plugin(plugin_name="systemone", runtime=config.runtime)
+    assert isinstance(plugin, SystemOnePlugin)
+    return plugin
+
+
+def test_the_url_variable_wins_over_config_and_keeps_its_other_settings(
+    server: FakeServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYSTEMONE_TEST_KEY", KEY)
+    monkeypatch.setenv("CIRCUITRY_SYSTEMONE_URL", server.url)
+    config = resolve_config(
+        explicit_path=_config_file(
+            tmp_path,
+            {"base_url": f"http://127.0.0.1:{_closed_port()}", "api_key_env": "SYSTEMONE_TEST_KEY"},
+        )
+    )
+    assert config.runtime["plugins"]["systemone"] == {
+        "base_url": server.url,
+        "api_key_env": "SYSTEMONE_TEST_KEY",
+    }
+
+    server.reply_answers()
+    result = _run(_write_doc(tmp_path / "decide.yml", _params()), config, trust_document=True)
+
+    assert result.ok, result.error
+    assert len(server.requests) == 1
+    assert server.requests[0].headers["authorization"] == f"Bearer {KEY}"
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_the_config_url_applies_when_the_variable_is_unset_or_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("CIRCUITRY_SYSTEMONE_URL", value)
+    config = resolve_config(explicit_path=_config_file(tmp_path, {"base_url": "http://localhost:9"}))
+    assert _plugin_from(config).base_url == "http://localhost:9"
+
+
+def test_the_url_variable_sets_base_url_when_config_has_no_systemone_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CIRCUITRY_SYSTEMONE_URL", "http://localhost:9")
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    assert resolve_config(explicit_path=config_path).runtime["plugins"]["systemone"] == {
+        "base_url": "http://localhost:9"
+    }
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("ftp://127.0.0.1", "http:// or https://"),
+        ("127.0.0.1:8080", "http:// or https://"),
+        ("http://user:pw@127.0.0.1", "must not carry credentials"),
+        ("http://127.0.0.1?token=abc", "query or fragment"),
+        ("http://127.0.0.1#abc", "query or fragment"),
+    ],
+)
+def test_the_url_variable_is_validated_like_the_config_base_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, message: str
+) -> None:
+    attempts = _no_network(monkeypatch)
+    monkeypatch.setenv("CIRCUITRY_SYSTEMONE_URL", value)
+    config = resolve_config(explicit_path=_config_file(tmp_path, {"base_url": "http://localhost:9"}))
+    with pytest.raises(ValueError, match=message) as excinfo:
+        _plugin_from(config).execute(params=_params(), timeout_seconds=5)
+    assert "runtime.plugins.systemone.base_url" in str(excinfo.value)
+    assert "pw" not in str(excinfo.value)
+    assert "abc" not in str(excinfo.value)
+    assert attempts == []
+
+
+def test_a_remote_url_from_the_variable_is_refused_unless_config_allows_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = _no_network(monkeypatch)
+    monkeypatch.setenv("CIRCUITRY_SYSTEMONE_URL", "https://api.typesafe.ai")
+
+    config = resolve_config(explicit_path=_config_file(tmp_path, {"base_url": "http://localhost:9"}))
+    with pytest.raises(ValueError, match="not a loopback host") as excinfo:
+        _plugin_from(config).execute(params=_params(), timeout_seconds=5)
+    assert "allow_remote" in str(excinfo.value)
+    assert attempts == []
+
+    allowed = resolve_config(
+        explicit_path=_config_file(tmp_path, {"base_url": "http://localhost:9", "allow_remote": True})
+    )
+    plugin = _plugin_from(allowed)
+    assert plugin.allow_remote is True
+    assert plugin._server() == "https://api.typesafe.ai"

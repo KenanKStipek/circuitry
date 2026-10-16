@@ -53,6 +53,13 @@ config (or in a document you run by path), never in an effect's params.
   in `cof check` and at dispatch.
 - Use `https://` for a remote server: with `http://` the key crosses the network
   in the clear.
+- **`CIRCUITRY_SYSTEMONE_URL`** sets `base_url` for one run without editing
+  config, as `CIRCUITRY_COMFYUI_URL` does for ComfyUI. When it is set and not
+  empty, it wins over the config's `base_url` (with `--config` and
+  `CIRCUITRY_CONFIG` too); the other two keys still come from config. It is
+  checked like `base_url`, and a non-loopback URL from it is still refused
+  unless config says `allow_remote: true`. Only `cof` reads it: electricity does
+  not run the `systemone` tool.
 
 ## Params
 
