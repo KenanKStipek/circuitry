@@ -1331,7 +1331,8 @@ dict every subsystem above reads from directly.
 
 Environment-variable overlays that win over all of the above when set (`CONFIG_ENV_VARS`,
 `config.py:72-81`): `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`,
-`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
+`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL` (`cof` only: electricity does not run the
+`systemone` tool), `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
 `CIRCUITRY_ENABLED_TOOLS`, `CIRCUITRY_ENVIRONMENT` — plus every per-plugin env var documented in
 §2–§4 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SURREAL_*`, `CIRCUITRY_<NAME>_STORE_RAW`,
 `CIRCUITRY_JSONL_PATH`, `DATABASE_URL`, `CIRCUITRY_SQLITE_PATH`, ...), which take precedence over

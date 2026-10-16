@@ -58,8 +58,10 @@ config (or in a document you run by path), never in an effect's params.
   empty, it wins over the config's `base_url` (with `--config` and
   `CIRCUITRY_CONFIG` too); the other two keys still come from config. It is
   checked like `base_url`, and a non-loopback URL from it is still refused
-  unless config says `allow_remote: true`. Only `cof` reads it: electricity does
-  not run the `systemone` tool.
+  unless config says `allow_remote: true`. A document run by path still wins
+  over it: its own `runtime.plugins.systemone.base_url` is merged over the
+  config the variable already set, as with `CIRCUITRY_COMFYUI_URL`. Only `cof`
+  reads it: electricity does not run the `systemone` tool.
 
 ## Params
 

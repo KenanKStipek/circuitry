@@ -2014,7 +2014,7 @@ and the resumed effects would work against something that is gone. Set
 without error, it is skipped whole, as without the key. Otherwise (it never
 finished, it failed, or it was interrupted, in its own `finally:` too) it
 runs from its first effect in a fresh state: none of its saved children is
-reused or readable, and its `finally:` runs as usual at its end. A `use`
+reused, and its `finally:` runs as usual at its end. A `use`
 runs its child from its start, even when the saved record
 (`record_children`) matches. This holds at any depth: such a scope inside a
 resumed loop pass, an `if` branch or a `use` child restarts there. The

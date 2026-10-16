@@ -1834,6 +1834,16 @@ that is the first unfinished effect of a resumed loop pass or `if` branch
 resumes inside its child the same way; one in a tree-flow branch, or in a
 pass or branch that runs from its start, reruns whole.
 
+A `dynamic` or `use` with **`resume: restart`** (`core/dynamic.py`,
+`core/use.py`, #590) whose saved node did not finish without error runs
+from its first effect in a fresh state instead: none of its saved children
+is reused, a `use` runs its child from its start even when its saved record
+matches, and its `finally:` runs as usual. A finished one is still skipped
+whole, and the rule holds at any depth. `resume: continue` is the default.
+electricity's compiler checks the key's value, but its IR does not carry
+it; once electricity has `--resume`, the IR must carry `resume`, or a
+resumed run would silently continue such a scope.
+
 ### 8.6 Config keys that affect a run
 
 Under electricity's explicit-config-only design ("no discovery, no `cof
