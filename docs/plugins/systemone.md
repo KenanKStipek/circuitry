@@ -134,6 +134,9 @@ mechanism decides them: a document's trust is fixed when it compiles.
 - With `trust_orchestration_runtime: true`, a document run by library name as
   the root is unlimited, while the same document as a `use: {ref: …}` child is
   limited.
+- A profile's per-effect `provider` cannot switch a tool to or from `systemone`:
+  the effect's confinement is fixed when the document compiles, so such an
+  override is an error naming the profile and the effect.
 - In a `use` child, `input.<name>` is whatever the parent maps to it, which can
   be another effect's output. A limited child's `within` is still held to its own
   project, but a trusted child that takes `within` from `input` takes it from the

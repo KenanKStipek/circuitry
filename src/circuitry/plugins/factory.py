@@ -634,9 +634,11 @@ def build_plugin(
     """
     Build a plugin instance from configuration.
 
-    *confine_to* is the project a limited document's tool effect must keep
-    the paths it names inside (``ToolDefinition.confine_to``); only
-    ``systemone`` reads one.
+    *limited* and *confine_to* (``ToolDefinition.limited`` and ``.confine_to``)
+    confine the paths a tool effect names; only ``systemone`` reads them. Three
+    states: limited with a project (reads only inside it), limited with no
+    project (``confine_to`` is ``None``: refuses every read), and not limited
+    (the default: a trusted document, unconfined).
 
     Plugins register themselves in PLUGIN_REGISTRY: a dict from canonical
     lower-case name to a builder callable that takes the per-plugin config

@@ -2025,3 +2025,98 @@ def test_question_ids_that_collide_once_written_are_reported() -> None:
     question = {"type": "noul", "instructions": "?"}
     message = _compile_error(_doc(questions={1: question, "1": question}))
     assert "repeats another id" in message
+
+
+# ---------------------------------------------------------------------------
+# A profile cannot switch a tool to or from systemone
+# ---------------------------------------------------------------------------
+
+
+def _profile_doc(tmp_path: Path, provider: str, params: dict[str, Any]) -> Path:
+    project = tmp_path / "project"
+    project.mkdir(exist_ok=True)
+    (project / "profiles").mkdir(exist_ok=True)
+    doc = project / "decide.yml"
+    doc.write_text(
+        yaml.dump(
+            {"effects": [{"type": "tool", "name": "decide", "provider": provider, "params": params}]}
+        ),
+        encoding="utf-8",
+    )
+    return doc
+
+
+def _write_profile(doc: Path, provider: str) -> None:
+    (doc.parent / "profiles" / "swap.yml").write_text(
+        yaml.dump({"effects": {"decide": {"provider": provider}}}), encoding="utf-8"
+    )
+
+
+def test_a_profile_cannot_switch_an_http_tool_to_systemone(
+    server: FakeServer, tmp_path: Path
+) -> None:
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret", encoding="utf-8")
+    doc = _profile_doc(
+        tmp_path,
+        "http",
+        {
+            "url": "http://127.0.0.1:1/",
+            "model": "m",
+            "state_file": str(secret),
+            "within": "/",
+            "questions": QUESTIONS,
+        },
+    )
+    _write_profile(doc, "systemone")
+    config = CircuitryConfig(runtime={"plugins": {"systemone": {"base_url": server.url}}})
+
+    result = _run(doc, config, trust_document=False, profile_name="swap")
+
+    assert result.ok is False
+    error = result.error or ""
+    assert "swap" in error
+    assert "decide" in error
+    assert "systemone" in error
+    assert server.requests == []
+
+
+def test_a_profile_cannot_switch_a_systemone_tool_to_another_provider(
+    server: FakeServer, tmp_path: Path
+) -> None:
+    doc = _profile_doc(tmp_path, "systemone", _params())
+    _write_profile(doc, "http")
+    config = CircuitryConfig(runtime={"plugins": {"systemone": {"base_url": server.url}}})
+
+    result = _run(doc, config, trust_document=True, profile_name="swap")
+
+    assert result.ok is False
+    assert "cannot change its provider" in (result.error or "")
+    assert server.requests == []
+
+
+@pytest.mark.parametrize("new_provider", ["SystemOne ", " systemone"])
+def test_the_provider_switch_check_ignores_case_and_whitespace(new_provider: str) -> None:
+    from circuitry.core.compiler import apply_effect_overrides
+
+    orch = {"effects": [{"type": "tool", "name": "t", "provider": "http", "params": {"url": "u"}}]}
+    root = compile_orchestration(orch=orch)
+    with pytest.raises(ValueError, match="cannot change its provider"):
+        apply_effect_overrides(root, {"t": {"provider": new_provider}}, profile_name="p")
+
+
+def test_a_profile_may_still_switch_between_two_other_providers() -> None:
+    from circuitry.core.compiler import apply_effect_overrides
+
+    orch = {"effects": [{"type": "tool", "name": "t", "provider": "http", "params": {"url": "u"}}]}
+    root = compile_orchestration(orch=orch)
+    swapped, matched = apply_effect_overrides(
+        root, {"t": {"provider": "web_fetch"}}, profile_name="p"
+    )
+    assert matched == {"t"}
+    assert swapped.effects[0].provider == "web_fetch"
+
+    kept, _ = apply_effect_overrides(
+        compile_orchestration(orch=_doc(state="s")), {"decide": {"provider": "systemone"}}
+    )
+    assert kept.effects[0].provider == "systemone"

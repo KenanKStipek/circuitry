@@ -828,7 +828,9 @@ def run(req: RunRequest) -> RunResult:
                 path: override for path, override in effect_overrides.items() if override
             }
             if effect_overrides:
-                root_def, _ = apply_effect_overrides(root_def, effect_overrides)
+                root_def, _ = apply_effect_overrides(
+                    root_def, effect_overrides, profile_name=profile.name
+                )
 
         adapter: Adapter
         timeout_seconds = 120

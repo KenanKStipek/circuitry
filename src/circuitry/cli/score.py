@@ -448,7 +448,9 @@ def score_orchestration(
         orch=orch, document_dir=document_dir, confinement_root=confinement_root, trusted=trusted
     )
     if profile is not None and profile.effects:
-        root, _matched = apply_effect_overrides(root, profile.effects)
+        root, _matched = apply_effect_overrides(
+            root, profile.effects, profile_name=profile.name
+        )
 
     rows: list[ScoredEffect] = []
     for child in root.effects:
