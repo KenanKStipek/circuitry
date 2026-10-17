@@ -29,6 +29,29 @@ across machines. Neither can be set via `params` on the tool effect.
 }
 ```
 
+## A secret in `env`
+
+An `env` value can be a secret instead of a literal, `{secret: <name>}`
+(optionally with `prefix:`, literal text put before it), resolved from
+`runtime.secrets.<name>` when the tool runs, never earlier:
+
+```json
+{
+  "runtime": {
+    "secrets": {"gh": {"command": ["gh", "auth", "token"]}},
+    "plugins": {
+      "git": {"env": {"GH_TOKEN": {"secret": "gh"}}}
+    }
+  }
+}
+```
+
+The process gets the value; anything it prints that contains it, on
+`stdout`, `stderr` or in an error, is saved with the value replaced by
+`[secret:gh]`, and the value never reaches saved state, events or logs.
+See [Secrets](../orchestration-reference.md#secrets-in-http-headers-and-a-subprocess-tools-env)
+for the three kinds of secret and the trust rule.
+
 ## Unset — behaviour is unchanged
 
 Leaving `binary` unset means the same `PATH` search as always: the first

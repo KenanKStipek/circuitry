@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -22,6 +23,16 @@ from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
+from ..plugins.http import HttpPlugin
+from ..secrets import (
+    SecretError,
+    SecretRef,
+    SecretValues,
+    env_secret_refs,
+    looks_like_secret_ref,
+    secret_ref,
+    secret_ref_error,
+)
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
@@ -78,6 +89,18 @@ def _capped_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "_original_bytes": len(encoded),
         "_preview": encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore"),
     }
+
+
+def _scrub_result(result: ToolResult, secrets: SecretValues) -> ToolResult:
+    """*result* with every secret this dispatch resolved replaced by its
+    placeholder, wherever the plugin's output echoes it (#598)."""
+    return dataclasses.replace(
+        result,
+        value=secrets.scrub(result.value),
+        raw=secrets.scrub(result.raw),
+        stdout=secrets.scrub(result.stdout),
+        stderr=secrets.scrub(result.stderr),
+    )
 
 
 def _elapsed_str(seconds: float) -> str:
@@ -199,6 +222,9 @@ def _render_params(
     """
 
     def _render_value(v: Any, path: str) -> Any:
+        if looks_like_secret_ref(v):
+            # Resolved at dispatch, never rendered (#598).
+            return dict(v)
         ref = param_reference(v)
         if ref is not None:
             resolved = _resolve_reference(ctx, ref.path)
@@ -588,6 +614,75 @@ class ToolRuntime:
             )
             return DEFAULT_TOOL_TIMEOUT_SECONDS
 
+    def _secret_headers(self, rendered: dict[str, Any]) -> dict[str, SecretRef]:
+        """The ``http`` headers whose value is a ``{secret: ...}`` reference
+        (#598), by header name.
+
+        Only a reference the document wrote in its literal ``params.headers``
+        is honoured: one that reaches the headers any other way (``params_json``,
+        a ``{from: ...}`` value, a list of pairs) could name a secret from state
+        or a model's output, and is an error.
+        """
+        literal = self.defn.params.get("headers")
+        literal_refs = (
+            {header: ref for header, value in literal.items() if (ref := secret_ref(value))}
+            if isinstance(literal, dict)
+            else {}
+        )
+        headers = rendered.get("headers")
+        if isinstance(headers, dict):
+            pairs: list[tuple[Any, Any]] = list(headers.items())
+        elif isinstance(headers, list):
+            pairs = [
+                (item[0], item[1])
+                for item in headers
+                if isinstance(item, (list, tuple)) and len(item) == 2
+            ]
+        else:
+            pairs = []
+        found: dict[str, SecretRef] = {}
+        for header, value in pairs:
+            if not looks_like_secret_ref(value):
+                continue
+            ref = secret_ref(value)
+            if (
+                not isinstance(headers, dict)
+                or ref is None
+                or literal_refs.get(header) != ref
+            ):
+                raise ValueError(
+                    f"Tool effect '{self.defn.name}' params.headers.{header}: a "
+                    "{secret: ...} value is honoured only when the document writes "
+                    "it in params.headers itself."
+                )
+            found[str(header)] = ref
+        return found
+
+    def _runtime_with_env_secrets(self, secrets: SecretValues) -> dict[str, Any]:
+        """The runtime config the plugin is built from: this provider's
+        ``runtime.plugins.<name>.env`` with each ``{secret: ...}`` value
+        resolved (#598). Unchanged when it names none."""
+        plugin_name = self.defn.provider.strip().lower()
+        plugins = self.runtime_config.get("plugins")
+        cfg = plugins.get(plugin_name) if isinstance(plugins, dict) else None
+        env = cfg.get("env") if isinstance(cfg, dict) else None
+        for var, value in env.items() if isinstance(env, dict) else ():
+            problem = secret_ref_error(value) if looks_like_secret_ref(value) else None
+            if problem is not None:
+                raise SecretError(f"runtime.plugins.{plugin_name}.env.{var}: {problem}.")
+        refs = env_secret_refs(env)
+        if not refs or not isinstance(plugins, dict) or not isinstance(cfg, dict):
+            return self.runtime_config
+        assert isinstance(env, dict)
+        resolved_env = {
+            **env,
+            **{var: secrets.resolve(ref, self.runtime_config) for var, ref in refs.items()},
+        }
+        return {
+            **self.runtime_config,
+            "plugins": {**plugins, plugin_name: {**cfg, "env": resolved_env}},
+        }
+
     def _is_retryable_failure(
         self, *, status_code: int | None, failure: BaseException | None = None
     ) -> bool:
@@ -679,6 +774,9 @@ class ToolRuntime:
         )
 
         is_cel = self.defn.provider.strip().lower() == "cel"
+        # The secrets this pass resolved (#598): resolved once, at dispatch,
+        # and scrubbed out of everything the plugin returns or raises.
+        dispatch_secrets = SecretValues()
         next_delay_ms = backoff_ms
         # An agent's `params.prompt: {file: {from: ...}, within: ...}` (#591),
         # read once on this pass's first attempt: a retry and the session's
@@ -746,6 +844,7 @@ class ToolRuntime:
             retryable = False
             timeout_unresolved = False
             prompt_file_unread = False
+            secret_unresolved = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
@@ -819,7 +918,29 @@ class ToolRuntime:
                         "within": prompt_file_read.within,
                     }
                     plugin_params = {**rendered, "prompt": prompt_file_read.text}
+                secret_headers: dict[str, SecretRef] = {}
+                if self.defn.provider.strip().lower() == "http":
+                    secret_headers = self._secret_headers(rendered)
                 meta["params_rendered"] = redact(rendered)
+                if secret_headers:
+                    # Recorded as the placeholder, whatever the header's name.
+                    meta["params_rendered"]["headers"].update(
+                        {header: ref.placeholder for header, ref in secret_headers.items()}
+                    )
+                    try:
+                        plugin_params = {
+                            **plugin_params,
+                            "headers": {
+                                **rendered["headers"],
+                                **{
+                                    header: dispatch_secrets.resolve(ref, self.runtime_config)
+                                    for header, ref in secret_headers.items()
+                                },
+                            },
+                        }
+                    except SecretError:
+                        secret_unresolved = True
+                        raise
                 if prompt_file_read is not None:
                     meta["template_files"] = [prompt_file_read.record]
                 mtag = _model_tag(rendered)
@@ -836,9 +957,14 @@ class ToolRuntime:
                 # Build plugin early so we can use its target string in the spinner
                 # (require_tool/require_within_ceiling already checked once
                 # above, before the first attempt)
+                try:
+                    plugin_runtime = self._runtime_with_env_secrets(dispatch_secrets)
+                except SecretError:
+                    secret_unresolved = True
+                    raise
                 plugin = build_plugin(
                     plugin_name=self.defn.provider,
-                    runtime=self.runtime_config,
+                    runtime=plugin_runtime,
                     **(
                         {"limited": True, "confine_to": self.defn.confine_to}
                         if self.defn.limited
@@ -899,18 +1025,34 @@ class ToolRuntime:
                     with live_cm:
                         if isinstance(plugin, CelPlugin):
                             result = plugin.evaluate(params=plugin_params, ctx=ctx)
+                        elif isinstance(plugin, HttpPlugin):
+                            result = plugin.execute(
+                                params=plugin_params,
+                                timeout_seconds=timeout_seconds,
+                                secret_headers=frozenset(
+                                    header.lower() for header in secret_headers
+                                ),
+                            )
                         else:
                             result = plugin.execute(
                                 params=plugin_params, timeout_seconds=timeout_seconds
                             )
+                if dispatch_secrets:
+                    result = _scrub_result(result, dispatch_secrets)
 
             except Exception as e:
                 failure = e
                 retryable = (
                     not timeout_unresolved
                     and not prompt_file_unread
+                    and not secret_unresolved
                     and self._is_retryable_failure(status_code=None, failure=e)
                 )
+                if dispatch_secrets:
+                    scrubbed = dispatch_secrets.scrub(str(e))
+                    if scrubbed != str(e):
+                        # A new error, so no traceback or cause carries the value.
+                        failure = RuntimeError(scrubbed)
 
             if failure is not None:
                 meta["error"] = str(failure)

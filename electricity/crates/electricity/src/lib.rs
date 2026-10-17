@@ -235,6 +235,33 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
 /// malformed by the time a caller ever reaches this; this only asks
 /// whether the now-valid block actually turns the backend on,
 /// Circuitry's own `build_persistence_backend`'s one truthy gate.
+/// `runtime.plugins.<name>.env.<VAR>` for the first variable whose value
+/// is a mapping with a `secret` key (issue #598), among the tools
+/// *document* names -- in sorted order, so the refusal names the same one
+/// every run.
+fn env_secret_in_use(document: &Value, runtime: Option<&Value>) -> Option<String> {
+    let plugins = runtime
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
+        .and_then(Value::as_dict)?;
+    let (_adapters, mut tools) = electricity_config::preflight::preflight_refs(document, false);
+    tools.sort();
+    tools.into_iter().find_map(|tool| {
+        let name = electricity_value::pycompat::py_strip(&tool).to_lowercase();
+        let env = plugins
+            .get(&Value::Str(name.clone()))
+            .and_then(Value::as_dict)
+            .and_then(|cfg| cfg.get(&Value::Str("env".to_string())))
+            .and_then(Value::as_dict)?;
+        env.iter().find_map(|(var, value)| match value {
+            Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())) => {
+                Some(format!("runtime.plugins.{name}.env.{}", var.py_str()))
+            }
+            _ => None,
+        })
+    })
+}
+
 fn persistence_is_configured(runtime: Option<&Value>) -> bool {
     electricity_config::persistence_enabled(runtime)
 }
@@ -1240,6 +1267,21 @@ pub async fn run_orchestration_with_config(
             out_path: None,
             state: None,
             error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
+            warnings,
+            signal: None,
+        };
+    }
+
+    // Issue #598: a `{secret: ...}` in the host `env` of a tool this
+    // document names. `cof run` resolves it when the tool dispatches; this
+    // build resolves no secret, so the run is refused up front instead of
+    // starting the tool without the variable.
+    if let Some(path) = env_secret_in_use(&loaded.document, effective.runtime.as_ref()) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("a secret in {path}"))),
             warnings,
             signal: None,
         };

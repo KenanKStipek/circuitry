@@ -912,7 +912,9 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   sent back is visible without having to read `meta.raw.body` separately.
   Each has a `fail_on_error: false` param that restores the old
   always-succeeds behaviour — the response still lands on
-  `value`/`meta.status_code`, it just doesn't fail the effect.
+  `value`/`meta.status_code`, it just doesn't fail the effect. `http` also
+  fails on a redirect its `redirects` param refuses (see
+  [Redirects](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 - **`systemone`** (typed decisions, see `docs/plugins/systemone.md`) fails
   and retries like the HTTP family: a 4xx/5xx response fails the effect with
   `meta.status_code` and a redacted body excerpt, and `meta.raw.error_kind`
@@ -1046,6 +1048,82 @@ set a literal.
 
 electricity does not run the `cel` tool yet: a document that names it is
 refused with the preview message.
+
+#### Secrets in `http` headers and a subprocess tool's `env`
+
+A credential belongs in host configuration, not in a document's data flow.
+Define it once under `runtime.secrets` in config.json, as one of:
+
+| Kind | Shape | The value |
+|------|-------|-----------|
+| Keychain | `{keychain: {service, account?}}` | the macOS Keychain item, read with `security find-generic-password -w -s <service> [-a <account>]` |
+| Command | `{command: [argv...]}` | the command's stdout, trimmed, e.g. `["gh", "auth", "token"]` |
+| Environment | `{env: NAME}` | the variable `NAME` of the `cof` process |
+
+```json
+{"runtime": {"secrets": {
+  "github": {"command": ["gh", "auth", "token"]},
+  "billing": {"keychain": {"service": "billing-api", "account": "ci"}}
+}}}
+```
+
+Then name it with `{secret: <name>}`, optionally with `prefix:` (literal text
+put before the value, never rendered), in exactly two places: as a value in
+an `http` effect's `params.headers`, and as a value in a subprocess tool's
+host `env` (`runtime.plugins.<name>.env`, see
+[Binary tool plugins](./plugins/binary-tools.md)):
+
+```yaml
+- type: tool
+  name: issues
+  provider: http
+  params:
+    url: "https://api.github.com/repos/{{input.repo}}/issues"
+    headers:
+      Authorization: {secret: github, prefix: "Bearer "}
+```
+
+- **Resolved at dispatch, never earlier.** Each tool effect's attempt
+  resolves it as it dispatches (once per effect, retries included). A
+  secret that is not defined, a command that fails, or a value that is empty
+  or holds a line break fails the effect with an error naming the secret,
+  never anything its command printed (`secret 'github': its command exited
+  with status 1.`); it is not retried.
+- **The value stays out of every record.** It never appears in `params`,
+  `meta.params_rendered` (which shows `Bearer [secret:github]`), `meta.raw`,
+  an error, the events stream or a log. A response body, a response header,
+  a process's output or an error text that echoes it is saved with it
+  replaced by `[secret:<name>]` (`<prefix>[secret:<name>]` where the prefix
+  precedes it).
+- **Literal only.** Only a `{secret: ...}` the document writes in
+  `params.headers` itself is resolved: one that arrives through
+  `params_json` or a `{from: ...}` value fails the effect, and one anywhere
+  else in `params`, or in another tool's params, is a `cof check` error.
+- **Trust.** Only a trusted document (one run by path, see
+  [File Structure](#file-structure)) may name a secret. A limited document —
+  a library entry run by name, an MCP or REST run, a `use: ref:` or inline
+  child, a reflector or decomposition plan — that names one fails before
+  anything runs. `cof check` lists the secrets a document names
+  (`Secrets: billing, github`).
+- **electricity** resolves no secret yet: it refuses a document whose tool
+  params name one, and a run whose tool's host `env` holds one, with the
+  preview message.
+
+**Redirects (`http`'s `redirects`).** Python's HTTP client follows a
+redirect with the same headers, which would send a bearer token to whatever
+host the redirect names (an attachment URL that redirects to a storage
+host, say). `redirects` decides:
+
+| Value | A redirect |
+|-------|-----------|
+| `follow` | followed with the same headers, as before |
+| `never` | not followed; any 3xx response fails the effect like a 4xx (`HTTP 302: Found: redirect not followed (redirects: never)`) |
+| `strip_auth` | followed only to `https`: with every header to the same origin (scheme, host and port), and without `Authorization` or a header that came from a secret to any other. A redirect to `http` is not followed and fails the effect like a 4xx (`... redirect not followed (redirects: strip_auth follows https only)`) |
+
+The default is `strip_auth` when a header came from a secret and `follow`
+otherwise. `fail_on_error: false` turns a refused redirect back into a
+success, the 3xx response on `value` and `meta.status_code`, as it does for
+a 4xx.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 

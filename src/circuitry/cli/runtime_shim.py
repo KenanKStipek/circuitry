@@ -20,6 +20,7 @@ from ..capability_gate import install_capability_ceiling
 from ..core.cancellation import RunCancelledBySignal, get_token
 from ..core.compiler import (
     apply_effect_overrides,
+    collect_named_secrets,
     compile_orchestration,
     unknown_concurrency_group_errors,
 )
@@ -43,6 +44,7 @@ from ..core.store import Store, build_persistence_backend
 from ..core.store.persistence import PersistenceBackend
 from ..plugins.factory import build_plugin
 from ..preflight import CheckResult, call_check
+from ..secrets import runtime_env_secret_paths
 from .allowlist import (
     check_allowlist,
     collect_adapter_usages,
@@ -1423,6 +1425,15 @@ def validate(
             ),
             trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
+        # The secrets the document names (#598), for `cof check` to list;
+        # compiling already refused them in a limited document.
+        named_secrets = sorted(
+            collect_named_secrets(root_def)
+            | {
+                value["secret"]
+                for _path, value in runtime_env_secret_paths(orch.get("runtime"))
+            }
+        )
 
         # Same merge `run()` applies (document `runtime:` key by key over
         # config, trusted document keeps its whole block) — just enough to
@@ -1519,7 +1530,7 @@ def validate(
                 }
             lint_warnings = [*lint_warnings, *format_preflight_warnings(soft_results)]
 
-        return {"ok": True, "errors": [], "warnings": lint_warnings}
+        return {"ok": True, "errors": [], "warnings": lint_warnings, "secrets": named_secrets}
     except Exception as e:
         return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
 

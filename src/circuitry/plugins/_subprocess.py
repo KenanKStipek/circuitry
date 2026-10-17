@@ -25,6 +25,7 @@ from typing import Any
 
 from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
+from ..secrets import looks_like_secret_ref
 from .base import ToolResult, _as_bool
 
 #: How much of an unparseable stdout ``parse: json`` quotes in its error.
@@ -102,7 +103,11 @@ def plugin_binary_override(cfg: dict[str, Any]) -> str | None:
 
 def plugin_env_override(cfg: dict[str, Any], *, plugin_name: str) -> dict[str, str] | None:
     """Read the optional ``env`` setting from a plugin's
-    ``runtime.plugins.<name>`` config block."""
+    ``runtime.plugins.<name>`` config block.
+
+    A ``{secret: ...}`` value (#598) is left out: ``core.tool`` resolves it
+    into the config it builds a dispatching plugin from, so only a plugin
+    built for its ``check()`` (preflight, ``cof doctor``) still sees one."""
     value = cfg.get("env")
     if not value:
         return None
@@ -111,7 +116,7 @@ def plugin_env_override(cfg: dict[str, Any], *, plugin_name: str) -> dict[str, s
             f"runtime.plugins.{plugin_name}.env must be a mapping of environment "
             f"variable names to values, got {type(value).__name__}."
         )
-    return {str(k): str(v) for k, v in value.items()}
+    return {str(k): str(v) for k, v in value.items() if not looks_like_secret_ref(v)}
 
 
 def merged_env(overrides: dict[str, str] | None) -> dict[str, str] | None:

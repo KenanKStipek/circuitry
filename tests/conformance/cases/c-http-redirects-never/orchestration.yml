@@ -1,0 +1,26 @@
+name: c-http-redirects-never
+interface:
+  inputs:
+    base_url: {type: string, required: true}
+effects:
+  - type: tool
+    name: refused
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/moved"
+      redirects: never
+  - type: tool
+    name: refused_but_not_failed
+    provider: http
+    params:
+      url: "{{input.base_url}}/moved"
+      redirects: never
+      fail_on_error: false
+  - type: tool
+    name: not_modified
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/cached"
+      redirects: never

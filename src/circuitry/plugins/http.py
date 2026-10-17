@@ -25,6 +25,14 @@ Params:
     ``on_error`` applies) exactly like a raised exception. Set ``false`` to
     restore the old behaviour of always succeeding and letting the
     orchestration branch on ``meta.status_code`` itself.
+  - ``redirects`` (optional, ``"follow"`` | ``"never"`` | ``"strip_auth"``):
+    ``follow`` follows a redirect with the same headers (urllib's own rule);
+    ``never`` follows none, and a 3xx response fails like a 4xx;
+    ``strip_auth`` follows only to ``https``, and to another origin (scheme,
+    host or port) without ``Authorization`` or a header that came from a
+    secret. A redirect it refuses fails like a 4xx. The default is
+    ``strip_auth`` when a header came from a secret (``secret_headers``),
+    ``follow`` otherwise.
 
 ToolResult shape:
   - ``value``: parsed body per ``parse`` (dict/list for JSON, str for text).
@@ -35,7 +43,9 @@ ToolResult shape:
     characters).
   - ``exit_code``: always ``None`` — this plugin issues no process. The HTTP
     status lands on ``meta.status_code`` (from ``raw["status"]``), not here.
-  - ``ok``: ``False`` on a 4xx/5xx response, unless ``fail_on_error: false``.
+  - ``ok``: ``False`` on a 4xx/5xx response, on a redirect ``redirects``
+    refused, and on any 3xx under ``redirects: never``, unless
+    ``fail_on_error: false``.
 """
 
 from __future__ import annotations
@@ -51,6 +61,61 @@ from typing import Any
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
 
+REDIRECT_MODES = ("follow", "never", "strip_auth")
+
+#: The note a refused redirect's failure carries, by ``redirects`` mode.
+_REFUSED_REDIRECT_NOTES = {
+    "never": "redirect not followed (redirects: never)",
+    "strip_auth": "redirect not followed (redirects: strip_auth follows https only)",
+}
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """``(scheme, host, port)`` of *url*, a default port filled in; ``None``
+    when the URL has no host or an unreadable port, which matches no origin."""
+    parts = urllib.parse.urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    scheme = parts.scheme.lower()
+    return scheme, parts.hostname, port if port is not None else _DEFAULT_PORTS.get(scheme)
+
+
+class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
+    """urllib's redirect handling, under ``redirects: never`` or
+    ``strip_auth``. A refused redirect returns no request, so urllib raises
+    the 3xx as an ``HTTPError``; :attr:`refused` records that it was refused."""
+
+    def __init__(self, mode: str, auth_headers: frozenset[str]) -> None:
+        self.mode = mode
+        self.auth_headers = auth_headers
+        self.refused = False
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if self.mode == "never" or urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            self.refused = True
+            return None
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        origin = _origin(req.full_url)
+        if new is not None and (origin is None or origin != _origin(newurl)):
+            for header in list(new.headers):
+                if header.lower() in self.auth_headers:
+                    del new.headers[header]
+        return new
+
 
 @dataclass(frozen=True)
 class HttpPlugin:
@@ -61,7 +126,10 @@ class HttpPlugin:
         *,
         params: dict[str, Any],
         timeout_seconds: int = 300,
+        secret_headers: frozenset[str] = frozenset(),
     ) -> ToolResult:
+        """*secret_headers*: the (lower-cased) names of the headers whose
+        value came from a secret (``core.tool`` resolves them, #598)."""
         url = params.get("url")
         if not isinstance(url, str) or not url.strip():
             raise ValueError("HttpPlugin requires params['url'] as a non-empty string.")
@@ -74,6 +142,14 @@ class HttpPlugin:
         raw_body = params.get("body")
         parse = str(params.get("parse", "auto")).lower()
         fail_on_error = _as_bool(params.get("fail_on_error"), default=True)
+        redirects = params.get("redirects")
+        if redirects is None:
+            redirects = "strip_auth" if secret_headers else "follow"
+        if redirects not in REDIRECT_MODES:
+            raise ValueError(
+                "HttpPlugin: params['redirects'] must be one of 'follow', 'never', "
+                f"'strip_auth', got {redirects!r}."
+            )
 
         if json_body is not None and raw_body is not None:
             raise ValueError(
@@ -102,8 +178,14 @@ class HttpPlugin:
         text: str = ""
         stderr: str | None = None
 
+        policy: _RedirectPolicy | None = None
+        open_request: Any = urllib.request.urlopen
+        if redirects != "follow":
+            policy = _RedirectPolicy(redirects, frozenset({"authorization", *secret_headers}))
+            open_request = urllib.request.build_opener(policy).open
+
         try:
-            with urllib.request.urlopen(req, timeout=int(timeout_seconds)) as resp:
+            with open_request(req, timeout=int(timeout_seconds)) as resp:
                 status = int(resp.status)
                 resp_headers = {k.lower(): v for k, v in resp.headers.items()}
                 text = resp.read().decode("utf-8", errors="replace")
@@ -116,6 +198,8 @@ class HttpPlugin:
             except Exception:
                 text = ""
             stderr = f"HTTP {status}: {exc.reason}"
+            if policy is not None and policy.refused:
+                stderr = f"{stderr}: {_REFUSED_REDIRECT_NOTES[redirects]}"
             excerpt = http_error_excerpt(text)
             if excerpt:
                 stderr = f"{stderr}: {excerpt}"
@@ -150,7 +234,14 @@ class HttpPlugin:
             stdout=None,
             stderr=stderr,
             exit_code=None,
-            ok=not (fail_on_error and status >= 400),
+            ok=not (
+                fail_on_error
+                and (
+                    status >= 400
+                    or (policy is not None and policy.refused)
+                    or (redirects == "never" and 300 <= status < 400)
+                )
+            ),
         )
 
     def check(self) -> CheckResult:

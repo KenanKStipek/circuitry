@@ -9,6 +9,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from ..secrets import (
+    looks_like_secret_ref,
+    runtime_env_secret_paths,
+    secret_ref,
+    secret_ref_error,
+)
 from .cel_eval import validate_cel_syntax
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
@@ -430,6 +436,7 @@ def compile_orchestration(
     ``input``. A limited document with no project reads no file at all.
     """
     with _document_location(document_dir, confinement_root, trusted):
+        _check_runtime_env_secrets(orch.get("runtime"))
         # Support both 'effects' (spec) and 'steps' (legacy)
         effects = orch.get("effects") or orch.get("steps") or []
         # Bare {{name}} refs to this document's declared interface inputs are a
@@ -1344,6 +1351,83 @@ def _check_security_sensitive_param_leaf(
             _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
 
 
+def _untrusted_secret_error(where: str, name: str) -> str:
+    return (
+        f"{where} names secret {name!r}: only a document run by path may name a "
+        "secret (a limited document, a library entry or a generated plan cannot)."
+    )
+
+
+def _check_runtime_env_secrets(runtime: Any) -> None:
+    """A ``{secret: ...}`` in the document's own ``runtime.plugins.<name>.env``
+    (#598): well-formed, and only in a trusted document."""
+    for path, value in runtime_env_secret_paths(runtime):
+        problem = secret_ref_error(value)
+        if problem is not None:
+            raise ValueError(f"{path}: a secret reference {problem}.")
+        if not _current_document_trusted():
+            raise ValueError(_untrusted_secret_error(path, value["secret"]))
+
+
+def _check_param_secrets(
+    params: dict[str, Any], *, name: str, provider: str, effect_path: str
+) -> None:
+    """``{secret: ...}`` in a tool effect's params (#598): only as a value of
+    an ``http`` effect's ``params.headers``, well-formed, and only in a
+    trusted document."""
+    headers = params.get("headers") if provider == "http" else None
+    allowed = (
+        {id(value) for value in headers.values()} if isinstance(headers, dict) else set()
+    )
+    label = f"Tool effect '{name}' at '{effect_path}'"
+
+    def walk(value: Any, field: str) -> None:
+        if looks_like_secret_ref(value):
+            if id(value) not in allowed:
+                raise ValueError(
+                    f"{label}: {field} is a {{secret: ...}} value, which is allowed only "
+                    "as a value in an http effect's params.headers (or a subprocess "
+                    "tool's runtime.plugins.<name>.env)."
+                )
+            problem = secret_ref_error(value)
+            if problem is not None:
+                raise ValueError(f"{label}: {field}: a secret reference {problem}.")
+            if not _current_document_trusted():
+                raise ValueError(_untrusted_secret_error(label, value["secret"]))
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, f"{field}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{field}[{index}]")
+
+    walk(params, "params")
+
+
+def collect_named_secrets(node: EffectDef) -> set[str]:
+    """Every secret an ``http`` effect's ``params.headers`` names anywhere
+    under *node* (#598). Like :func:`collect_effect_groups`, a ``use``
+    effect's child is not compiled yet, so it is not read."""
+    names: set[str] = set()
+    if isinstance(node, ToolDefinition):
+        headers = node.params.get("headers")
+        if node.provider.strip().lower() == "http" and isinstance(headers, dict):
+            names |= {ref.name for value in headers.values() if (ref := secret_ref(value))}
+    elif isinstance(node, DynamicDefinition):
+        for child in (*node.effects, *node.finally_effects):
+            names |= collect_named_secrets(child)
+    elif isinstance(node, ReflectorDefinition):
+        names |= collect_named_secrets(node.inner)
+    elif isinstance(node, ConditionalDefinition):
+        for child in (*node.then_effects, *node.else_effects):
+            names |= collect_named_secrets(child)
+    elif isinstance(node, LoopDefinition):
+        for child in node.body:
+            names |= collect_named_secrets(child)
+    return names
+
+
 def _check_cel_params(
     params: dict[str, Any],
     *,
@@ -1408,6 +1492,9 @@ def _compile_tool(
         )
         if prompt_file is not None:
             params = {key: value for key, value in params.items() if key != "prompt"}
+    _check_param_secrets(
+        params, name=str(name), provider=provider.strip().lower(), effect_path=effect_path
+    )
     if provider.strip().lower() == "cel":
         _check_cel_params(
             params,
