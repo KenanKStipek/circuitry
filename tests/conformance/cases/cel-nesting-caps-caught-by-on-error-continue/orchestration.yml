@@ -1,0 +1,86 @@
+name: cel-nesting-caps-caught-by-on-error-continue
+effects:
+  - type: if
+    name: gate_paren
+    on_error: continue
+    if:
+      mode: cel
+      expr: "((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: gate_list
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: gate_chain
+    on_error: continue
+    if:
+      mode: cel
+      expr: "state.input.a[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: gate_logical
+    on_error: continue
+    if:
+      mode: cel
+      expr: "true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: if
+    name: gate_method_call
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1].map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x)"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}
