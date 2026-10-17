@@ -453,6 +453,34 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
 }
 
 #[tokio::test]
+async fn save_to_fails_with_the_preview_marker_before_any_request() {
+    // Issue #602: `cof run` saves the body to a file; electricity does not.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/a.png"))),
+            ("save_to", Value::Str("a.png".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(
+        err.message
+            .contains("an http effect with save_to is not supported")
+    );
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
 async fn a_blank_url_is_a_value_error() {
     let token = CancellationToken::new();
     let err = ToolPlugin::execute(

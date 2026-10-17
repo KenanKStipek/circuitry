@@ -1524,7 +1524,19 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
-    limited = False
+    if provider.strip().lower() == "http":
+        from ..plugins.http import static_param_errors as http_param_errors
+
+        problems = http_param_errors(
+            params, params_json=params_json, trusted=_current_document_trusted()
+        )
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (http) at '{effect_path}': " + "; ".join(problems)
+            )
+
+    # An http effect of a limited document never saves a file (#602).
+    limited = provider.strip().lower() == "http" and not _current_document_trusted()
     confine_to: str | None = None
     if provider.strip().lower() == "systemone":
         from ..plugins.systemone import static_param_errors

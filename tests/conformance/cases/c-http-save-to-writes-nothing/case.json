@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #602 (http's save_to)",
+  "description": "`save_to` writes a 2xx body to a file as bytes; nothing here writes one. A 404 with `fail_on_error: false` writes nothing and succeeds, `value` holding `{path: null, bytes: 0, sha256: null, content_type, status: 404}` and `meta.raw` no body. A path outside the working directory, and an existing file without `overwrite: true`, are refused before any request (one recorded request in all). electricity does not save a body yet and refuses the document with the preview marker.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"],
+  "electricity_preview_ok": true
+}

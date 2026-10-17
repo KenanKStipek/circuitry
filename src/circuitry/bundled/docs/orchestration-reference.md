@@ -916,7 +916,9 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   always-succeeds behaviour — the response still lands on
   `value`/`meta.status_code`, it just doesn't fail the effect. `http` also
   fails on a redirect its `redirects` param refuses (see
-  [Redirects](#secrets-in-http-headers-and-a-subprocess-tools-env)).
+  [Redirects](#secrets-in-http-headers-and-a-subprocess-tools-env)), and
+  with `save_to` writes a 2xx body to a file instead of returning it (see
+  [`save_to`](#saving-a-response-body-to-a-file-https-save_to)).
 - **`systemone`** (typed decisions, see `docs/plugins/systemone.md`) fails
   and retries like the HTTP family: a 4xx/5xx response fails the effect with
   `meta.status_code` and a redacted body excerpt, and `meta.raw.error_kind`
@@ -1159,6 +1161,66 @@ The default is `strip_auth` when a header came from a secret and `follow`
 otherwise. `fail_on_error: false` turns a refused redirect back into a
 success, the 3xx response on `value` and `meta.status_code`, as it does for
 a 4xx.
+
+#### Saving a response body to a file (`http`'s `save_to`)
+
+`http` decodes a body as text. To download a binary file, an image or an
+archive say, name a file with `save_to`: a 2xx body is written to it as raw
+bytes, never decoded, and never kept in state.
+
+```yaml
+- type: tool
+  name: attachment
+  provider: http
+  params:
+    url: "{{input.attachment_url}}"
+    headers:
+      Authorization: {secret: github, prefix: "Bearer "}
+    save_to: "downloads/{{input.name}}"
+```
+
+| Param | Default | Meaning |
+|-------|---------|---------|
+| `save_to` | — | a relative path: against `within` when given, otherwise against the run's working directory |
+| `within` | — | an absolute directory, written literally or as `{from: input.<name>}` (as for [prompt files](#prompt-files-file-path)), never set by `params_json` |
+| `overwrite` | `false` | replace an existing file |
+| `max_bytes` | `104857600` (100 MiB) | the largest body it writes |
+
+- **`value`** is `{path, bytes, sha256, content_type, status}`: the absolute
+  path written, the body's size and SHA-256, and the response's
+  `Content-Type` and status. `meta.raw` has no `body`, and no record (state,
+  events, logs, an error) holds any part of a saved body.
+- **Where it may write.** After symlinks are resolved, the file must be
+  inside its base (`within`, or the working directory): `..` out of it, or a
+  symlinked directory that leads out of it, is refused. Missing directories
+  inside it are created, each checked the same way. A target that is a
+  symlink or a directory is refused, even with `overwrite: true`, and an
+  existing file is refused without it. Each of these fails the effect
+  before any request is sent.
+- **Size.** A body over `max_bytes` fails the effect: at once when the
+  response declares a larger `Content-Length`, otherwise while it is read.
+- **No partial file.** The body is written to a temporary file next to the
+  target and moved into place only once it is complete, so a failure (over
+  `max_bytes`, a connection lost mid-body, a timeout, an interrupt) leaves
+  neither the target nor the temporary file. A connection lost mid-body is
+  retried like one lost before the response.
+- **A non-2xx response writes nothing.** It fails the effect with the usual
+  text excerpt of the body in `meta.error`; with `fail_on_error: false` the
+  effect succeeds with `value` `{path: null, bytes: 0, sha256: null,
+  content_type, status}`. A refused redirect is the same.
+- **Unchanged otherwise.** `redirects` and `{secret: ...}` headers work as
+  above; `parse` must be `auto` (or unset), and anything else is a
+  `cof check` error.
+- **Trust.** Only a document run by path may name `save_to` or `within`. A
+  limited document that names `save_to` (in `params`, with `{from: ...}`, or
+  through `params_json`) fails `cof check` and is refused before it runs;
+  one whose `params_json` only produces the key when rendered fails that
+  effect at dispatch. That is why `save_to` needs no
+  [capability](#tool) of its own: `http` stays `network`, and a document
+  that capability consent asks about cannot save a file.
+- **electricity** does not save a body yet: a document whose `http` params
+  name `save_to` is refused with the preview message, and one that
+  `params_json` adds fails that effect with it, before any request.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 

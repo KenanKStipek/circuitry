@@ -460,11 +460,13 @@ class ToolDefinition:
     # actually held; see #274.
     group: str | None = None
 
-    #: For a ``systemone`` effect: ``True`` when its document is not trusted
-    #: (not run by path, see ``compile_orchestration``'s *trusted*). A limited
-    #: effect reads a ``state_file`` only inside :attr:`confine_to`, and none
-    #: at all when that is ``None`` (the document has no project). ``False``
-    #: means unconfined: a trusted document, and every other provider.
+    #: For a ``systemone`` or ``http`` effect: ``True`` when its document is
+    #: not trusted (not run by path, see ``compile_orchestration``'s
+    #: *trusted*). A limited ``systemone`` effect reads a ``state_file`` only
+    #: inside :attr:`confine_to`, and none at all when that is ``None`` (the
+    #: document has no project); a limited ``http`` effect never saves a file
+    #: (``save_to``). ``False`` means unconfined: a trusted document, and
+    #: every other provider.
     limited: bool = False
 
     #: The project a limited ``systemone`` effect's ``within`` must stay inside
@@ -897,7 +899,7 @@ class ToolRuntime:
                         self.defn.params_json, ctx, declared=declared, known_names=known_names
                     )
                     _reject_params_json_security_overrides(params_json_overlay)
-                    if self.defn.provider.strip().lower() == "systemone":
+                    if self.defn.provider.strip().lower() in ("systemone", "http"):
                         from ..plugins.systemone import reject_overlay_within
 
                         reject_overlay_within(params_json_overlay)
@@ -909,6 +911,10 @@ class ToolRuntime:
                             prompt_from_file=self.defn.prompt_file is not None,
                         )
                     params = _deep_merge_params(params, params_json_overlay)
+                if self.defn.limited and self.defn.provider.strip().lower() == "http":
+                    from ..plugins.http import reject_limited_save_to
+
+                    reject_limited_save_to(params)
 
                 rendered = {**top_level, **params}
                 plugin_params = rendered
