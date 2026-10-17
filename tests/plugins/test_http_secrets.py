@@ -688,6 +688,11 @@ effects:
     report = validate(doc, trust_document=True)
     assert report["ok"], report["errors"]
     assert report["secrets"] == ["api", "other", "tok"]
+    assert report["secret_sources"] == {
+        "api": "not defined",
+        "other": "not defined",
+        "tok": "not defined",
+    }
 
     proc = subprocess.run(
         [sys.executable, "-m", "circuitry.cli.app", "check", str(doc), "--skip-preflight"],
@@ -702,7 +707,251 @@ effects:
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "Secrets: api, other, tok" in proc.stdout
+    assert "Secrets: api (not defined), other (not defined), tok (not defined)" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Secrets a trusted document defines (#601).
+# ---------------------------------------------------------------------------
+
+DOC_TOKEN = "d0c-t0ken-601-fedcba"
+
+
+def _cli_env(home: Path) -> dict[str, str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _CREDENTIAL_ENV_VARS and key not in _PROXY_ENV_VARS
+    }
+    env["HOME"] = str(home)
+    env["COLUMNS"] = "200"
+    return env
+
+
+def _cof(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    return subprocess.run(
+        [sys.executable, "-m", "circuitry.cli.app", *args],
+        capture_output=True,
+        text=True,
+        env=_cli_env(home),
+        cwd=tmp_path,
+        timeout=120,
+        check=False,
+    )
+
+
+def _doc_token_command(tmp_path: Path) -> list[str]:
+    """A ``command`` secret printing DOC_TOKEN from a file, so the
+    definition itself (which state's settings snapshot records) holds no part
+    of the value."""
+    token_file = tmp_path / "doc-token.txt"
+    token_file.write_text(DOC_TOKEN, encoding="utf-8")
+    return [sys.executable, "-c", "import sys; print(open(sys.argv[1]).read())", str(token_file)]
+
+
+def _defining_doc(directory: Path, url: str, command: list[str], name: str = "doc.yml") -> Path:
+    """A document that defines ``doc_tok`` and names it, and names the host's
+    ``api`` in a second effect."""
+    return _write(
+        directory,
+        name,
+        f"""
+runtime:
+  secrets:
+    doc_tok: {{command: {json.dumps(command)}}}
+effects:
+  - type: tool
+    name: own
+    provider: http
+    params:
+      url: "{url}/own"
+      headers: {{Authorization: {{secret: doc_tok, prefix: "Bearer "}}}}
+  - type: tool
+    name: host
+    provider: http
+    params:
+      url: "{url}/host"
+      headers: {{X-Api-Key: {{secret: api}}}}
+""",
+    )
+
+
+def test_a_trusted_documents_own_secret_reaches_the_header_and_no_record(
+    tmp_path: Path, fake_bin: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 1, 2 and 4, through `cof run`: the document's own
+    secret and the host's both arrive; the notice names the secret's key
+    only; neither value reaches the output, the state or the events."""
+    servers.routes["/own"] = Route(body="own")
+    servers.routes["/host"] = Route(body="host")
+    doc = _defining_doc(tmp_path, servers.http, _doc_token_command(tmp_path))
+    config = _write(tmp_path, "config.json", json.dumps({"runtime": {"secrets": _KEYCHAIN}}))
+    out, events = tmp_path / "out.json", tmp_path / "events.jsonl"
+
+    proc = _cof(
+        tmp_path, "run", str(doc), "--config", str(config), "--out", str(out),
+        "--events", str(events), "--verbose",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert servers.arrived("/own").headers["authorization"] == f"Bearer {DOC_TOKEN}"
+    assert servers.arrived("/host").headers["x-api-key"] == TOKEN
+    assert "Warning: Applied host settings from doc.yml: runtime.secrets.doc_tok\n" in proc.stderr
+    state = json.loads(out.read_text())
+    assert state["prime"]["own"]["meta"]["params_rendered"]["headers"] == {
+        "Authorization": "Bearer [secret:doc_tok]"
+    }
+    for text in (out.read_text(), events.read_text(), proc.stdout, proc.stderr):
+        _assert_no_token(text)
+        assert DOC_TOKEN not in text
+
+
+def test_a_limited_documents_secrets_block_is_dropped_and_the_secret_refused(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 3, through `cof run` by library name: the block is
+    ignored like any host key, and the run is refused before its first
+    effect, naming the secret."""
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    _defining_doc(folder, servers.http, _doc_token_command(tmp_path), name="shared_doc.yml")
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps(
+            {
+                "runtime": {
+                    "library": {
+                        "sources": [{"type": "folder", "name": "local", "path": str(folder)}]
+                    }
+                }
+            }
+        ),
+    )
+
+    proc = _cof(tmp_path, "run", "shared_doc", "--config", str(config), "--skip-preflight")
+
+    assert proc.returncode != 0
+    assert "Ignored runtime.secrets from the orchestration" in proc.stderr
+    assert "names secret 'doc_tok': only a document run by path may name a secret" in (
+        proc.stdout + proc.stderr
+    )
+    assert servers.received == []
+
+
+def test_a_documents_secrets_merge_with_the_hosts_by_name() -> None:
+    from circuitry.cli.effective_settings import resolve_effective_settings
+
+    host = {"api": {"env": "HOST_API"}, "shared": {"keychain": {"service": "host-svc"}}}
+    document = {"shared": {"command": ["doc-token"]}, "doc_tok": {"env": "DOC_TOK"}}
+    orch = {"runtime": {"secrets": document}}
+
+    trusted = resolve_effective_settings(
+        cfg=_config(host), orch=orch, trust_document=True, document_name="doc.yml"
+    )
+    assert trusted.runtime["secrets"] == {
+        "api": {"env": "HOST_API"},
+        "shared": {"command": ["doc-token"]},
+        "doc_tok": {"env": "DOC_TOK"},
+    }
+    assert trusted.warnings == (
+        "Applied host settings from doc.yml: runtime.secrets.shared, runtime.secrets.doc_tok",
+    )
+
+    limited = resolve_effective_settings(cfg=_config(host), orch=orch, document_name="doc.yml")
+    assert limited.runtime["secrets"] == host
+    (warning,) = limited.warnings
+    assert warning.startswith("Ignored runtime.secrets from the orchestration")
+
+
+def test_check_lists_each_secret_with_where_it_is_defined(tmp_path: Path) -> None:
+    """#601 acceptance 5."""
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        """
+runtime:
+  secrets:
+    doc_tok: {env: DOC_TOK}
+    api: {env: DOC_API}
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "https://api.example.com/"
+      headers:
+        A: {secret: api}
+        B: {secret: doc_tok}
+        C: {secret: host_only}
+        D: {secret: missing}
+""",
+    )
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps({"runtime": {"secrets": {"api": {"env": "HOST_API"}, "host_only": {"env": "H"}}}}),
+    )
+
+    report = _cof(tmp_path, "check", str(doc), "--config", str(config), "--skip-preflight", "--json")
+    assert report.returncode == 0, report.stdout + report.stderr
+    assert json.loads(report.stdout)["secret_sources"] == {
+        "api": "document",
+        "doc_tok": "document",
+        "host_only": "host",
+        "missing": "not defined",
+    }
+
+    text = _cof(tmp_path, "check", str(doc), "--config", str(config), "--skip-preflight")
+    assert text.returncode == 0, text.stdout + text.stderr
+    assert (
+        "Secrets: api (document), doc_tok (document), host_only (host), missing (not defined)"
+        in text.stdout
+    )
+
+
+def test_a_use_child_run_by_path_resolves_the_root_documents_secret(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#601 acceptance 6."""
+    servers.routes["/child"] = Route(body="child")
+    command = _doc_token_command(tmp_path)
+    _write(
+        tmp_path,
+        "child.yml",
+        f"""
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "{servers.http}/child"
+      headers: {{Authorization: {{secret: doc_tok}}}}
+""",
+    )
+    parent = _write(
+        tmp_path,
+        "parent.yml",
+        f"""
+adapter: scripted
+model: none
+runtime:
+  secrets:
+    doc_tok: {{command: {json.dumps(command)}}}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+""",
+    )
+
+    result = _run(parent, secrets={})
+
+    assert result.ok, result.error
+    assert servers.arrived("/child").headers["authorization"] == DOC_TOKEN
+    assert DOC_TOKEN not in json.dumps(result.state)
 
 
 @pytest.mark.parametrize(

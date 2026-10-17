@@ -45,7 +45,7 @@ config.json itself is documented in [Configuration](./guidebook/04-configuration
 Warning: Applied host settings from my.yml: runtime.adapters.openai.base_url, plugins: acme.telemetry
 ```
 
-`runtime.plugins.<name>` and `runtime.adapters.<name>` merge into the host's config key by key, not whole-block replace: a document setting `runtime.plugins.sqlite.*` does not drop the host's `runtime.plugins.shell.*`, and one setting `runtime.adapters.ollama.timeout_seconds` does not drop another adapter's config. The one exception is `runtime.plugins.shell.allowed_commands`: when the host pins it, the effective list is always the intersection of the host's and the document's, never the document's outright — the only `runtime:` key a trusted document cannot simply override (see [Host settings versus orchestration documents](./threat-model.md#6-host-settings-versus-orchestration-documents)).
+`runtime.plugins.<name>` and `runtime.adapters.<name>` merge into the host's config key by key, not whole-block replace: a document setting `runtime.plugins.sqlite.*` does not drop the host's `runtime.plugins.shell.*`, and one setting `runtime.adapters.ollama.timeout_seconds` does not drop another adapter's config. The one exception is `runtime.plugins.shell.allowed_commands`: when the host pins it, the effective list is always the intersection of the host's and the document's, never the document's outright — the only `runtime:` key a trusted document cannot simply override (see [Host settings versus orchestration documents](./threat-model.md#6-host-settings-versus-orchestration-documents)). `runtime.secrets` merges by name: a document's `runtime.secrets.<name>` is added to the host's secrets, and one with a host secret's name replaces that definition for the run; the notice names it as `runtime.secrets.<name>`, never where it is read from (see [Secrets](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 
 **A document that arrives any other way is limited** to `runtime.complexity` and `runtime.state`: `cof run <library name>` (bundled, folder and github sources), `cof run-library` and `run_shared_orchestration`, the MCP `run_orchestration` / `validate_orchestration` tools, the REST trigger, and plans a model generates. The TUI's Library view's "run this entry" is limited the same way whatever the source, and its Chat view's "run it now" is limited too — saving a model-generated draft to disk does not make it a file you named by path. Run that saved file with `cof run f.yml`, or pick it from the Run view's own local-file list, to trust it like any other local file. Every limited document's host settings are ignored, with a warning from `cof run` (on stderr) and `cof check` naming each key, and an unlisted `plugins:` entry is skipped. `use:` children never contribute their own `runtime:` or `plugins:` — they run on the parent's settings.
 
@@ -1054,7 +1054,8 @@ refused with the preview message.
 #### Secrets in `http` headers and a subprocess tool's `env`
 
 A credential belongs in host configuration, not in a document's data flow.
-Define it once under `runtime.secrets` in config.json, as one of:
+Define it once under `runtime.secrets` in config.json, or in the `runtime:`
+block of a document run by path (below), as one of:
 
 | Kind | Shape | The value |
 |------|-------|-----------|
@@ -1068,6 +1069,25 @@ Define it once under `runtime.secrets` in config.json, as one of:
   "billing": {"keychain": {"service": "billing-api", "account": "ci"}}
 }}}
 ```
+
+A definition holds no secret, only where to read one, so a document run by
+path may define its own, and a project's orchestrations then run on a new
+checkout without an edit to config.json:
+
+```yaml
+runtime:
+  secrets:
+    github: {command: [gh, auth, token]}
+```
+
+Its entries are added to the host's by name (the host's other secrets stay
+usable in the run), and one with a host secret's name replaces that
+definition for the run, like any host setting a trusted document applies.
+The "Applied host settings" line names each as `runtime.secrets.<name>`,
+never its definition. A `use: path:` child runs on its parent's settings, so
+it resolves the root document's definitions. A limited document's
+`runtime.secrets` is ignored like its other host keys, and one that names a
+secret is refused before anything runs (see **Trust** below).
 
 Then name it with `{secret: <name>}`, optionally with `prefix:` (literal text
 put before the value, never rendered), in exactly two places: as a value in
@@ -1105,7 +1125,7 @@ host `env` (`runtime.plugins.<name>.env`, see
   value, any mapping with a `secret` key is one, and must be well-formed.
   Anywhere else in `params`, only a mapping whose keys are `secret` plus,
   optionally, `prefix`, with a string `secret`, is one (the
-  [`{from:}` rule](#tool)). Any other mapping, such as a `json` body
+  [`{from:}` rule](#params-by-reference)). Any other mapping, such as a `json` body
   `{secret: "{{input.key}}", response: "..."}` or a schema with a `secret`
   property, is passed through literally, as before. To pass a literal one-key
   `{secret: ...}` object, use `params_json`.
@@ -1113,8 +1133,11 @@ host `env` (`runtime.plugins.<name>.env`, see
   [File Structure](#file-structure)) may name a secret. A limited document —
   a library entry run by name, an MCP or REST run, a `use: ref:` or inline
   child, a reflector or decomposition plan — that names one fails before
-  anything runs. `cof check` lists the secrets a document names
-  (`Secrets: billing, github`).
+  anything runs. `cof check` lists the secrets a document names, each with
+  where it is defined for the run: `host` (config.json), `document` (the
+  document's own `runtime.secrets`, which wins over the host's) or
+  `not defined` (`Secrets: billing (host), github (document)`; `--json` adds
+  `secret_sources`, by name).
 - **electricity** resolves no secret yet: it refuses a document whose tool
   params name one, and a run whose tool's host `env` holds one, with the
   preview message. A host `env` secret for a tool that only a `use` child or

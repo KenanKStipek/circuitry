@@ -62,6 +62,7 @@ from .effective_settings import (
     _split_orchestration_runtime,
     orchestration_host_setting_warnings,
     resolve_effective_settings,
+    secret_definition_sources,
 )
 from .events import EventLog
 from .interrupts import SigHupInterrupt, SigTermInterrupt
@@ -1450,6 +1451,11 @@ def validate(
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
+        secret_sources = secret_definition_sources(
+            named_secrets,
+            config_runtime=config.runtime if config is not None else None,
+            orch_runtime=accepted_orch_runtime,
+        )
         from ..core.concurrency import parse_concurrency_groups, parse_max_concurrency
 
         _, mc_errors = parse_max_concurrency(merged_runtime.get("max_concurrency"))
@@ -1530,7 +1536,13 @@ def validate(
                 }
             lint_warnings = [*lint_warnings, *format_preflight_warnings(soft_results)]
 
-        return {"ok": True, "errors": [], "warnings": lint_warnings, "secrets": named_secrets}
+        return {
+            "ok": True,
+            "errors": [],
+            "warnings": lint_warnings,
+            "secrets": named_secrets,
+            "secret_sources": secret_sources,
+        }
     except Exception as e:
         return {"ok": False, "errors": [str(e)], "warnings": lint_warnings}
 
