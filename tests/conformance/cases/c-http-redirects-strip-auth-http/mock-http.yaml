@@ -1,0 +1,6 @@
+- request: {method: GET, path: /start}
+  response:
+    status: 301
+    reason: Moved Permanently
+    headers: {Location: /next}
+    body: ""

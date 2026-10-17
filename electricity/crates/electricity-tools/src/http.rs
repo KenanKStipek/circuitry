@@ -791,6 +791,73 @@ struct ParsedRequest {
     body: Option<Vec<u8>>,
     parse_mode: String,
     fail_on_error: bool,
+    redirects: RedirectMode,
+}
+
+/// `params.redirects` (`plugins/http.py`'s `REDIRECT_MODES`, issue #598).
+/// Absent is `Follow`: the default is `strip_auth` only when a header came
+/// from a secret, and electricity refuses a document that names one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedirectMode {
+    Follow,
+    Never,
+    StripAuth,
+}
+
+impl RedirectMode {
+    /// `plugins/http.py`'s `_REFUSED_REDIRECT_NOTES`: what a refused
+    /// redirect's `stderr` adds after the reason.
+    fn refused_note(self) -> &'static str {
+        match self {
+            RedirectMode::StripAuth => {
+                "redirect not followed (redirects: strip_auth follows https only)"
+            }
+            RedirectMode::Follow | RedirectMode::Never => {
+                "redirect not followed (redirects: never)"
+            }
+        }
+    }
+}
+
+fn parse_redirects(value: Option<&Value>) -> Result<RedirectMode, ToolError> {
+    match value {
+        None | Some(Value::None) => Ok(RedirectMode::Follow),
+        Some(Value::Str(s)) if s == "follow" => Ok(RedirectMode::Follow),
+        Some(Value::Str(s)) if s == "never" => Ok(RedirectMode::Never),
+        Some(Value::Str(s)) if s == "strip_auth" => Ok(RedirectMode::StripAuth),
+        Some(other) => Err(value_error(format!(
+            "HttpPlugin: params['redirects'] must be one of 'follow', 'never', \
+             'strip_auth', got {}.",
+            other.py_repr()
+        ))),
+    }
+}
+
+/// `plugins/http.py::_origin`: `(scheme, host, port)` of *url*, the
+/// scheme's default port filled in, the host lower-cased; `None` (which
+/// matches no origin) for a URL with no host or a port that isn't 0-65535
+/// in ASCII digits.
+fn redirect_origin(url: &str) -> Option<(String, String, Option<u16>)> {
+    let split = http_url::urlsplit(url, "");
+    let scheme = split.scheme.to_lowercase();
+    let (host, port_text) = split_hostport(&split.netloc);
+    if host.is_empty() {
+        return None;
+    }
+    let port = match port_text {
+        PortText::Absent | PortText::Empty => match scheme.as_str() {
+            "http" => Some(80),
+            "https" => Some(443),
+            _ => None,
+        },
+        PortText::Given(text) => {
+            if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some(text.parse::<u16>().ok()?)
+        }
+    };
+    Some((scheme, host.to_lowercase(), port))
 }
 
 fn present(value: Option<&Value>) -> Option<&Value> {
@@ -899,6 +966,7 @@ fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
         .to_lowercase();
 
     let fail_on_error = crate::fs::as_bool(get(params, "fail_on_error"), true);
+    let redirects = parse_redirects(get(params, "redirects"))?;
 
     let json_body = present(get(params, "json"));
     let raw_body = present(get(params, "body"));
@@ -957,6 +1025,7 @@ fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
         body,
         parse_mode,
         fail_on_error,
+        redirects,
     })
 }
 
@@ -1006,12 +1075,15 @@ fn parse_body(
 /// 3xx): `stderr = f"HTTP {status}: {reason}"`, with
 /// [`http_error_excerpt`] appended when non-empty. `raw.url` is always
 /// *original_url* (`plugins/http.py`'s own `url` local, never the
-/// final redirected target). `ok = not (fail_on_error and status >= 400)`.
+/// final redirected target). `ok = not (fail_on_error and (status >=
+/// 400 or refused or (redirects: never and a 3xx)))` -- *refused* is a
+/// redirect `params.redirects` would not follow (issue #598).
 fn finalize_response(
     parsed: &ParsedRequest,
     original_url: &str,
     response: http_client::RawResponse,
     final_reason: Option<String>,
+    refused: bool,
 ) -> Result<ToolResult, ToolError> {
     let status = response.status;
     let text = String::from_utf8_lossy(&response.body).into_owned();
@@ -1040,7 +1112,10 @@ fn finalize_response(
         Value::Str(original_url.to_string()),
     );
     raw.insert(Value::Str("body".to_string()), Value::Str(text));
-    let ok = !(parsed.fail_on_error && status >= 400);
+    let ok = !(parsed.fail_on_error
+        && (status >= 400
+            || refused
+            || (parsed.redirects == RedirectMode::Never && (300..400).contains(&status))));
     Ok(ToolResult {
         value,
         raw: Value::Dict(raw),
@@ -1377,7 +1452,7 @@ impl ToolPlugin for HttpPlugin {
                 if let Some(body_error) = response.body_error.clone() {
                     return Err(send_error_to_tool_error(body_error, &original_url));
                 }
-                return finalize_response(&parsed, &original_url, response, None);
+                return finalize_response(&parsed, &original_url, response, None, false);
             }
 
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -1390,7 +1465,30 @@ impl ToolPlugin for HttpPlugin {
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
                     if !matches!(target_scheme.as_str(), "" | "http" | "https" | "ftp") {
                         let reason = disallowed_redirect_scheme_reason(&response.reason, &quoted);
-                        return finalize_response(&parsed, &original_url, response, Some(reason));
+                        return finalize_response(
+                            &parsed,
+                            &original_url,
+                            response,
+                            Some(reason),
+                            false,
+                        );
+                    }
+                    // `plugins/http.py::_RedirectPolicy.redirect_request`:
+                    // reached after urllib's own scheme check, before its
+                    // method/status rule.
+                    if parsed.redirects == RedirectMode::Never
+                        || (parsed.redirects == RedirectMode::StripAuth
+                            && target_scheme.to_lowercase() != "https")
+                    {
+                        let reason =
+                            format!("{}: {}", response.reason, parsed.redirects.refused_note());
+                        return finalize_response(
+                            &parsed,
+                            &original_url,
+                            response,
+                            Some(reason),
+                            true,
+                        );
                     }
                     if let Some(redirect) = http_client::redirect_policy(&current_method, status) {
                         let repeat_count = visited.get(&quoted).copied().unwrap_or(0);
@@ -1401,9 +1499,17 @@ impl ToolPlugin for HttpPlugin {
                                 &original_url,
                                 response,
                                 Some(reason),
+                                false,
                             );
                         }
                         *visited.entry(quoted.clone()).or_insert(0) += 1;
+                        if parsed.redirects == RedirectMode::StripAuth {
+                            let origin = redirect_origin(&current_url);
+                            if origin.is_none() || origin != redirect_origin(&quoted) {
+                                current_headers
+                                    .retain(|name, _| !name.eq_ignore_ascii_case("authorization"));
+                            }
+                        }
                         current_url = quoted;
                         current_method = redirect.method;
                         if redirect.drop_body {
@@ -1414,14 +1520,20 @@ impl ToolPlugin for HttpPlugin {
                         continue;
                     }
                     let reason = response.reason.clone();
-                    return finalize_response(&parsed, &original_url, response, Some(reason));
+                    return finalize_response(
+                        &parsed,
+                        &original_url,
+                        response,
+                        Some(reason),
+                        false,
+                    );
                 }
                 let reason = response.reason.clone();
-                return finalize_response(&parsed, &original_url, response, Some(reason));
+                return finalize_response(&parsed, &original_url, response, Some(reason), false);
             }
 
             let reason = response.reason.clone();
-            return finalize_response(&parsed, &original_url, response, Some(reason));
+            return finalize_response(&parsed, &original_url, response, Some(reason), false);
         }
     }
 
@@ -1577,6 +1689,37 @@ mod proxy_parse_tests {
 #[cfg(test)]
 mod port_tests {
     use super::*;
+
+    #[test]
+    fn redirect_origin_follows_plugins_http_origin() {
+        let origin = |url: &str| redirect_origin(url);
+        assert_eq!(
+            origin("https://API.example.com/a?b"),
+            Some((
+                "https".to_string(),
+                "api.example.com".to_string(),
+                Some(443)
+            ))
+        );
+        assert_eq!(origin("https://h:443/"), origin("https://h/"));
+        assert_eq!(origin("http://h:/"), origin("http://h/"));
+        assert_eq!(origin("http://u:p@h:81/"), origin("http://h:81/"));
+        assert_ne!(origin("https://h/"), origin("http://h/"));
+        assert_ne!(origin("https://h/"), origin("https://h:8443/"));
+        assert_ne!(origin("https://h/"), origin("https://other/"));
+        assert_eq!(
+            origin("http://[::1]:5/"),
+            Some(("http".to_string(), "::1".to_string(), Some(5)))
+        );
+        for unreadable in [
+            "http://h:+9/",
+            "http://h:0_9/",
+            "http://h:99999/",
+            "http:///x",
+        ] {
+            assert_eq!(origin(unreadable), None, "{unreadable}");
+        }
+    }
 
     #[test]
     fn split_hostport_follows_get_hostport() {

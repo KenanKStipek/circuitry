@@ -15,6 +15,7 @@ pub const PLUGIN_NAMES: &[&str] = &[
     "agent",
     "awk",
     "base64",
+    "cel",
     "clock",
     "comfyui",
     "csv",

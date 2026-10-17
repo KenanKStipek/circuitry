@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #598 (http's redirects: never)",
+  "description": "`redirects: never` follows no redirect: a 302 is not followed (one recorded request each) and fails like a 4xx, its stderr saying so after the reason and before the body excerpt; `fail_on_error: false` turns it back into a success with `meta.status_code` 302. A 304, a 3xx that is not a redirect, fails the same way, with no note.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}

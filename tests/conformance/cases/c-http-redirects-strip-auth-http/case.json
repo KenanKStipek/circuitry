@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #598 (http's redirects: strip_auth)",
+  "description": "`redirects: strip_auth` follows a redirect only to https: a 301 to an http URL, even on the same origin, is not followed (one recorded request, with its Authorization header) and fails like a 4xx, the stderr naming the rule. A header that is not from a secret is sent as written.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}

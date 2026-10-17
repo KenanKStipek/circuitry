@@ -818,7 +818,9 @@ time.
 - Only a mapping with the key `from` (optionally plus `default` and `as`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
-  `{from: ...}` object to a plugin, use `params_json` instead.
+  `{from: ...}` object to a plugin, use `params_json` instead. A
+  `{secret: <name>}` reference follows the same rule (see
+  [Secrets](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 - A security-sensitive param a plugin treats as its own allowlist (today:
   the `shell` plugin's `allowed_commands`) must stay a literal list of
   strings written in the document: `{from: ...}` there — as the whole value
@@ -844,7 +846,7 @@ Not every plugin can actually be bounded by it:
 | Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `systemone`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
 | Sandboxed child process, killed on overrun | `python_eval` |
 | Process-group timeout: the whole group is killed on overrun, the CLI and everything it started | `agent` (one budget for the whole session, its repair turn included) |
-| Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
+| Ignored — pure in-memory, nothing to bound | `cel`, `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `service` (its readiness wait, `params.ready_timeout_ms`, default 60s, is capped by the effect's budget; the process it starts is not bounded by it — it is meant to outlive the call), `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
 **Capability consent (#275):** a document that did not come from the user's
@@ -875,7 +877,7 @@ for the CLI walkthrough. Each provider's capability tag
 | `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `systemone`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
 
 A provider absent from every row needs no consent: it only reads its own
-parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
+parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
 `uuid`, `base64`, ...).
 
 **Result contract — one meaning for "this tool failed":** a tool effect
@@ -912,7 +914,9 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   sent back is visible without having to read `meta.raw.body` separately.
   Each has a `fail_on_error: false` param that restores the old
   always-succeeds behaviour — the response still lands on
-  `value`/`meta.status_code`, it just doesn't fail the effect.
+  `value`/`meta.status_code`, it just doesn't fail the effect. `http` also
+  fails on a redirect its `redirects` param refuses (see
+  [Redirects](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 - **`systemone`** (typed decisions, see `docs/plugins/systemone.md`) fails
   and retries like the HTTP family: a 4xx/5xx response fails the effect with
   `meta.status_code` and a redacted body excerpt, and `meta.raw.error_kind`
@@ -997,6 +1001,141 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+#### `cel`: a value computed with CEL
+
+The `cel` tool evaluates one [CEL](#cel-expressions) expression and writes
+its result to `prime.<name>.value`, converted to JSON. Use it to filter or
+deduplicate a list, look a key up in a map with a default, or pick the later
+of two timestamps, without a script step or an `if` whose two branches each
+set a literal.
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.items.value.filter(i, i.status == 'open').map(i, i.id)"
+    schema: {type: array, items: {type: string}}
+```
+
+| Param | Type | Required | Default | Meaning |
+|-------|------|----------|---------|---------|
+| `expr` | string | yes | — | The CEL expression |
+| `strict` | bool | no | `false` | An unset `state.` path fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
+| `schema` | object | no | — | A JSON Schema the result must match; a mismatch fails the effect, naming each mismatch (`cel: the result does not match params.schema: 1: 'two' is not of type 'integer'`) |
+
+- **Bindings.** The expression sees what an `if` at the same position sees:
+  `state.input`, `state.prime`, `state.runtime`, and inside a loop body the
+  loop's `each.as` binding and `state.iter` (see
+  [CEL scoping](#cel-scoping-what-statekey-may-name-at-each-nesting-level)).
+- **The value.** Lists, maps, strings, numbers, booleans and `null` as they
+  are; a map keeps its key order, and a map key that is a number or a boolean
+  becomes its JSON text (`"1"`, `"true"`). A timestamp becomes an ISO 8601
+  UTC string (`2026-01-02T03:04:05Z`, with a fraction of a second only when
+  it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
+  `-PT1M30S`). A result with no JSON form (bytes, a non-finite number, a type)
+  fails the effect.
+- **An unset path.** Without `strict`, an unguarded `state.` path that is
+  unset makes the value `null` and logs a warning naming the path, as an `if`
+  does; `has()` guards a path the same way.
+- **Literal params.** `cof check` parses `expr` and checks the names it reads
+  like any other CEL in the document, so the params are never
+  Mustache-rendered and never read `{from: ...}`; `params_json` and any param
+  other than these three are `cof check` errors.
+- **Pure.** It does no I/O, needs no [capability](#tool), and ignores
+  `timeout_ms`. `meta.raw` is `{expr}`. A finished `cel` step is not
+  evaluated again on [`--resume`](#resuming-a-run-cof-run---resume), like any
+  other finished effect.
+
+electricity does not run the `cel` tool yet: a document that names it is
+refused with the preview message.
+
+#### Secrets in `http` headers and a subprocess tool's `env`
+
+A credential belongs in host configuration, not in a document's data flow.
+Define it once under `runtime.secrets` in config.json, as one of:
+
+| Kind | Shape | The value |
+|------|-------|-----------|
+| Keychain | `{keychain: {service, account?}}` | the macOS Keychain item, read with `security find-generic-password -w -s <service> [-a <account>]` |
+| Command | `{command: [argv...]}` | the command's stdout, trimmed, e.g. `["gh", "auth", "token"]` |
+| Environment | `{env: NAME}` | the variable `NAME` of the `cof` process |
+
+```json
+{"runtime": {"secrets": {
+  "github": {"command": ["gh", "auth", "token"]},
+  "billing": {"keychain": {"service": "billing-api", "account": "ci"}}
+}}}
+```
+
+Then name it with `{secret: <name>}`, optionally with `prefix:` (literal text
+put before the value, never rendered), in exactly two places: as a value in
+an `http` effect's `params.headers`, and as a value in a subprocess tool's
+host `env` (`runtime.plugins.<name>.env`, see
+[Binary tool plugins](./plugins/binary-tools.md)):
+
+```yaml
+- type: tool
+  name: issues
+  provider: http
+  params:
+    url: "https://api.github.com/repos/{{input.repo}}/issues"
+    headers:
+      Authorization: {secret: github, prefix: "Bearer "}
+```
+
+- **Resolved at dispatch, never earlier.** Each tool effect's attempt
+  resolves it as it dispatches (once per effect, retries included). A
+  secret that is not defined, a command that fails, or a value that is empty
+  or holds a line break fails the effect with an error naming the secret,
+  never anything its command printed (`secret 'github': its command exited
+  with status 1.`); it is not retried.
+- **The value stays out of every record.** It never appears in `params`,
+  `meta.params_rendered` (which shows `Bearer [secret:github]`), `meta.raw`,
+  an error, the events stream or a log. A response body, a response header,
+  a process's output or an error text that echoes it is saved with it
+  replaced by `[secret:<name>]` (`<prefix>[secret:<name>]` where the prefix
+  precedes it).
+- **Literal only.** Only a `{secret: ...}` the document writes in
+  `params.headers` itself is resolved: one that arrives through
+  `params_json` or a `{from: ...}` value fails the effect, and one anywhere
+  else in `params`, or in another tool's params, is a `cof check` error.
+- **What reads as a reference.** In an `http` header value or a host `env`
+  value, any mapping with a `secret` key is one, and must be well-formed.
+  Anywhere else in `params`, only a mapping whose keys are `secret` plus,
+  optionally, `prefix`, with a string `secret`, is one (the
+  [`{from:}` rule](#tool)). Any other mapping, such as a `json` body
+  `{secret: "{{input.key}}", response: "..."}` or a schema with a `secret`
+  property, is passed through literally, as before. To pass a literal one-key
+  `{secret: ...}` object, use `params_json`.
+- **Trust.** Only a trusted document (one run by path, see
+  [File Structure](#file-structure)) may name a secret. A limited document —
+  a library entry run by name, an MCP or REST run, a `use: ref:` or inline
+  child, a reflector or decomposition plan — that names one fails before
+  anything runs. `cof check` lists the secrets a document names
+  (`Secrets: billing, github`).
+- **electricity** resolves no secret yet: it refuses a document whose tool
+  params name one, and a run whose tool's host `env` holds one, with the
+  preview message. A host `env` secret for a tool that only a `use` child or
+  a generated plan names fails that effect with the preview message
+  instead, which `on_error` can absorb.
+
+**Redirects (`http`'s `redirects`).** Python's HTTP client follows a
+redirect with the same headers, which would send a bearer token to whatever
+host the redirect names (an attachment URL that redirects to a storage
+host, say). `redirects` decides:
+
+| Value | A redirect |
+|-------|-----------|
+| `follow` | followed with the same headers, as before |
+| `never` | not followed; any 3xx response fails the effect like a 4xx (`HTTP 302: Found: redirect not followed (redirects: never)`) |
+| `strip_auth` | followed only to `https`: with every header to the same origin (scheme, host and port), and without `Authorization` or a header that came from a secret to any other. A redirect to `http` is not followed and fails the effect like a 4xx (`... redirect not followed (redirects: strip_auth follows https only)`) |
+
+The default is `strip_auth` when a header came from a secret and `follow`
+otherwise. `fail_on_error: false` turns a refused redirect back into a
+success, the 3xx response on `value` and `meta.status_code`, as it does for
+a 4xx.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 
@@ -1645,7 +1784,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 ### CEL Expressions
 
-CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object named `state`.
+CEL expressions (in `if.expr`, `while.expr` and the [`cel` tool](#cel-a-value-computed-with-cel)'s `expr`) evaluate against a root object named `state`.
 
 | ✅ Correct | ❌ Wrong |
 |-----------|---------|

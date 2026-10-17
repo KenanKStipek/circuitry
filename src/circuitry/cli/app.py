@@ -720,6 +720,8 @@ def _do_validate(
 
     if result["ok"]:
         console.print("[green]Valid[/green]")
+        if result.get("secrets"):
+            console.print(f"[bold]Secrets:[/bold] {escape(', '.join(result['secrets']))}")
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):

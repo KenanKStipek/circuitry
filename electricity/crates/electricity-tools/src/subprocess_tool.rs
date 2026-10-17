@@ -134,6 +134,23 @@ pub fn plugin_env_override(
     };
     let mut map = HashMap::with_capacity(dict.len());
     for (k, v) in dict {
+        // Issue #598: `cof run` resolves a `{secret: ...}` value when the
+        // tool dispatches; this build resolves none (the run is refused up
+        // front for a tool the document names; this catches the rest).
+        if matches!(v, Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())))
+        {
+            return Err(ToolError {
+                py_class: PyExc::RuntimeError,
+                message: format!(
+                    "electricity {} {}: a secret in runtime.plugins.{plugin_name}.env.{} is not \
+                     supported until a later milestone; use `cof run` instead",
+                    env!("CARGO_PKG_VERSION"),
+                    electricity_bytecode::PREVIEW_MARKER,
+                    k.py_str()
+                ),
+                cause: ErrorCause::None,
+            });
+        }
         map.insert(k.py_str(), v.py_str());
     }
     Ok(Some(map))
@@ -576,6 +593,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(overrides.get("A"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn plugin_env_override_refuses_a_secret_with_the_preview_marker() {
+        let mut reference = DictType::new();
+        reference.insert(Value::from("secret"), Value::from("api"));
+        let mut env = DictType::new();
+        env.insert(Value::from("TOKEN"), Value::Dict(reference));
+        let mut cfg = DictType::new();
+        cfg.insert(Value::from("env"), Value::Dict(env));
+        let err = plugin_env_override(&Value::Dict(cfg), "awk").unwrap_err();
+        assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
+        assert!(
+            err.message
+                .contains("a secret in runtime.plugins.awk.env.TOKEN")
+        );
     }
 
     #[test]

@@ -1,0 +1,10 @@
+name: c-cel-parse-error
+effects:
+  - type: tool
+    name: first
+    provider: cel
+    params: {expr: "1 + 1"}
+  - type: tool
+    name: broken
+    provider: cel
+    params: {expr: "state.input.x &&"}

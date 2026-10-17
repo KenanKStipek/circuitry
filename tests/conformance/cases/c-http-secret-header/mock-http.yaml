@@ -1,0 +1,8 @@
+- request: {method: GET, path: /whoami}
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+      X-Echo: "Bearer circuitry-test-fake-secret-598"
+    body: '{"seen": "circuitry-test-fake-secret-598", "user": "octo"}'

@@ -27,7 +27,7 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
 
 `provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them. When the program prints JSON, add `parse: json` (`shell` and the plugins that run a program accept it) and `value` is the parsed document rather than the text, with the raw stdout still on `meta.stdout`; empty or invalid output fails the step, and a non-zero exit's output is parsed too under `allow_nonzero`. A run with many such steps saves each output twice; `runtime.state.parsed_stdout: drop` leaves `meta.stdout` null on a step whose output parsed and records its length and SHA-256 instead (`stdout_chars`, `stdout_sha256`), so keep the default, `full`, if a later step reads `meta.stdout`. [The reference](../orchestration-reference.md#recording-parsed-stdout-runtimestateparsed_stdout) has the details.
 
-One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
+One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `http` takes a credential from host config as a header value, `{secret: <name>}`, resolved at dispatch and kept out of every record, and its `redirects` param decides whether a redirect is followed and with which headers (see [Configuration](./04-configuration.md#secrets-for-a-request-header-or-a-tools-environment)). `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
 
 A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
 
@@ -88,7 +88,7 @@ Seventy-odd ship in-tree. By purpose:
 
 | Group | Providers |
 | --- | --- |
-| Time / utility | `clock`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
+| Time / utility | `clock`, `cel`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
 | Filesystem / data | `fs`, `csv`, `tar`, `zip`, `gzip`, `7z` |
 | Internet | `http`, `web_search`, `web_fetch`, `webhook`, `wikipedia`, `rss`, `weather` |
 | Browser | `playwright`, `screenshot` |
@@ -107,6 +107,19 @@ Seventy-odd ship in-tree. By purpose:
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
 | Typed decisions | `systemone` — typed answers (`noul`, `choice`, `score`) about a piece of state; see [`docs/plugins/systemone.md`](../plugins/systemone.md) |
+
+`cel` computes a value instead of fetching one: it evaluates a CEL expression against the same bindings an `if` at that position sees, and its result, converted to JSON, is the step's value. Filtering a list, a map lookup with a default, or the later of two timestamps is one step, with no script to parse and no `if` whose branches each set a literal:
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.issues.value.filter(i, i.state == 'open').map(i, i.number)"
+    schema: {type: array, items: {type: integer}}
+```
+
+`cof check` parses the expression and checks every name it reads, like the CEL in an `if`; `schema` is optional and fails the step when the result doesn't match it, and `strict: true` fails it on an unset path that would otherwise give `null` with a warning. Timestamps and durations come out as ISO 8601 strings. [The reference](../orchestration-reference.md#cel-a-value-computed-with-cel) has the details.
 
 `service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 

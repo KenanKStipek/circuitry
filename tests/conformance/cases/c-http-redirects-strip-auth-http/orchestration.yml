@@ -1,0 +1,13 @@
+name: c-http-redirects-strip-auth-http
+interface:
+  inputs:
+    base_url: {type: string, required: true}
+effects:
+  - type: tool
+    name: refused
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/start"
+      headers: {Authorization: "Basic plain-not-a-secret"}
+      redirects: strip_auth

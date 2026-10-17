@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #598 (secrets for http headers)",
+  "description": "An `http` header `{secret: api, prefix: \"Bearer \"}` is resolved at dispatch from `runtime.secrets.api` (an `env` secret here): the request carries `Bearer <value>`, `meta.params_rendered` shows `Bearer [secret:api]`, and the response, which echoes the value in its body and a header, has it replaced with `[secret:api]`. The value is a fake-credential marker, so the harness's own blanket check proves it reaches no --out, --events, --live-state, stdout or stderr. electricity resolves no secret yet and refuses the document with the preview marker.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "env": {"CONFORMANCE_VALUE_598": "circuitry-test-fake-secret-598"},
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"],
+  "electricity_preview_ok": true
+}

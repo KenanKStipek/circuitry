@@ -388,7 +388,15 @@ as-is), `params` (dict, URL-encoded query string appended with `urllib.parse.url
 doseq=True)`, `&` or `?` separator chosen based on whether the URL already has a `?`), `parse`
 (`"json"|"text"|"auto"`, default `"auto"` — parses JSON only when the response Content-Type
 contains `"json"`, else text; `parse="json"` forces a parse and raises `RuntimeError` if the
-body isn't valid JSON), `fail_on_error` (bool via `_as_bool`, default `True`).
+body isn't valid JSON), `fail_on_error` (bool via `_as_bool`, default `True`), `redirects`
+(`"follow"|"never"|"strip_auth"`, issue #598; default `"strip_auth"` when a header came from a
+secret, `"follow"` otherwise; any other value raises `ValueError` before the request).
+`never` follows no redirect and fails on any 3xx. `strip_auth` follows a redirect only to
+`https`, keeping every header to the same origin (scheme, host and port) and dropping
+`Authorization` and each header that came from a secret to any other; a redirect to `http` is
+not followed and fails like a 4xx, its `stderr` noting why (`... redirect not followed
+(redirects: strip_auth follows https only)`). electricity resolves no secret, so its default is
+always `follow`.
 
 Transport: stdlib `urllib.request.urlopen`, not `requests` ("the standard library is sufficient
 ...and keeps the dependency footprint narrow", `:7-11`). A 4xx/5xx is caught as
@@ -400,8 +408,8 @@ available. A `urllib.error.URLError` (DNS/connection failure) **is** a real rais
 (§3.6) and electricity must preserve it.
 
 Output: `value` per `parse`; `raw = {"status": int, "headers": {lowercased name: value},
-"url": str, "body": str}`; `exit_code` always `None`; `ok = not (fail_on_error and status >=
-400)` (`:153`).
+"url": str, "body": str}`; `exit_code` always `None`; `ok = not (fail_on_error and (status >=
+400 or a redirect was refused or (redirects == "never" and 300 <= status < 400)))`.
 
 **2.6.1 `http_error_excerpt`** (`src/circuitry/plugins/base.py:16-62`): bounded to 500 chars
 (`_ERROR_EXCERPT_MAX_CHARS`). Prefers, in order: a JSON body's `error.message` (nested, the

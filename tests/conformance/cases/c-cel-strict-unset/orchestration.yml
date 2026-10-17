@@ -1,0 +1,8 @@
+name: c-cel-strict-unset
+effects:
+  - type: tool
+    name: gate
+    provider: cel
+    params:
+      expr: "state.prime.never_ran.value.price <= 10"
+      strict: true

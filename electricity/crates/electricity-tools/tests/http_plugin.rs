@@ -231,6 +231,107 @@ async fn a_post_to_a_307_is_a_success_with_stderr_set() {
     );
 }
 
+// Issue #598: `params.redirects`, word for word with `plugins/http.py`.
+// Each server below answers one request only, so following a redirect it
+// refuses would fail the call outright.
+
+async fn execute_redirect(
+    addr: std::net::SocketAddr,
+    extra: Vec<(&str, Value)>,
+) -> electricity_tools::ToolResult {
+    let token = CancellationToken::new();
+    let mut entries = vec![("url", Value::Str(format!("http://{addr}/start")))];
+    entries.extend(extra);
+    ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(entries),
+        &call(&token),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn redirects_never_fails_on_a_302_without_following_it() {
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmoved",
+    );
+    let result = execute_redirect(addr, vec![("redirects", Value::Str("never".to_string()))]).await;
+    assert!(!result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some("HTTP 302: Found: redirect not followed (redirects: never): moved")
+    );
+}
+
+#[tokio::test]
+async fn redirects_never_with_fail_on_error_false_is_a_success() {
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let result = execute_redirect(
+        addr,
+        vec![
+            ("redirects", Value::Str("never".to_string())),
+            ("fail_on_error", Value::Bool(false)),
+        ],
+    )
+    .await;
+    assert!(result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some("HTTP 302: Found: redirect not followed (redirects: never)")
+    );
+}
+
+#[tokio::test]
+async fn redirects_never_fails_on_a_3xx_that_is_not_a_redirect() {
+    let addr = respond_once(
+        b"HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let result = execute_redirect(addr, vec![("redirects", Value::Str("never".to_string()))]).await;
+    assert!(!result.ok);
+    assert_eq!(result.stderr.as_deref(), Some("HTTP 304: Not Modified"));
+}
+
+#[tokio::test]
+async fn redirects_strip_auth_never_follows_to_http() {
+    let addr = respond_once(
+        b"HTTP/1.1 301 Moved Permanently\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let result = execute_redirect(
+        addr,
+        vec![("redirects", Value::Str("strip_auth".to_string()))],
+    )
+    .await;
+    assert!(!result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some(
+            "HTTP 301: Moved Permanently: redirect not followed (redirects: strip_auth follows https only)"
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_redirects_value_is_a_value_error() {
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("redirects", Value::Str("sometimes".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: params['redirects'] must be one of 'follow', 'never', 'strip_auth', got 'sometimes'."
+    );
+}
+
 #[tokio::test]
 async fn query_params_with_doseq_append_to_an_existing_query_string() {
     let (addr, rx) =
