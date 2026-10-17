@@ -631,7 +631,7 @@ def test_check_rejects_a_malformed_save_to(tmp_path: Path, params: str, message:
 
 @pytest.mark.parametrize("provider", ["webhook", "web_fetch"])
 def test_a_profile_switching_a_limited_documents_effect_to_http_never_saves_a_file(
-    tmp_path: Path, servers: ServerPair, provider: str
+    tmp_path: Path, work: Path, servers: ServerPair, provider: str
 ) -> None:
     """A limited document's effect keeps its document's trust when a
     profile switches its provider to http, so its save_to is refused at
@@ -672,7 +672,7 @@ def test_a_profile_switching_a_limited_documents_effect_to_http_never_saves_a_fi
         "decide.yml",
         "swap.yml",
     ]
-    assert not (tmp_path / "image.png").exists()
+    assert _files(work) == []
 
 
 def test_a_limited_document_may_not_name_within(tmp_path: Path, servers: ServerPair) -> None:
