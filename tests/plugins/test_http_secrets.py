@@ -543,6 +543,35 @@ def test_an_error_body_that_echoes_the_token_is_redacted(
         _assert_no_token(text)
 
 
+def test_a_token_that_straddles_the_error_excerpts_cut_leaves_no_part_behind(
+    tmp_path: Path, fake_bin: Path, servers: ServerPair
+) -> None:
+    # The excerpt keeps a body's first 500 characters; the token starts at 490.
+    servers.routes["/fail"] = Route(400, {"Content-Type": "text/plain"}, "x" * 490 + TOKEN)
+    result = run(
+        RunRequest(
+            orchestration_path=_http_doc(tmp_path, f"{servers.http}/fail"),
+            state_path=None,
+            out_path=None,
+            events_path=tmp_path / "events.jsonl",
+            dry_run=False,
+            validate_only=False,
+            config=_config(_KEYCHAIN),
+            skip_preflight=True,
+            trust_document=True,
+        )
+    )
+    assert not result.ok
+    meta = result.state["prime"]["call"]["meta"]
+    assert meta["error"] == "HTTP 400: Bad Request: " + "x" * 490 + "[secret:ap"
+    for text in (
+        json.dumps(result.state),
+        (tmp_path / "events.jsonl").read_text(),
+        result.error or "",
+    ):
+        assert TOKEN[:10] not in text
+
+
 def test_a_failing_command_secret_fails_the_effect_naming_it(
     tmp_path: Path, servers: ServerPair
 ) -> None:

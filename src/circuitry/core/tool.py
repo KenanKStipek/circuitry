@@ -1033,6 +1033,7 @@ class ToolRuntime:
                                 secret_headers=frozenset(
                                     header.lower() for header in secret_headers
                                 ),
+                                scrub_secrets=dispatch_secrets.scrub,
                             )
                         else:
                             result = plugin.execute(

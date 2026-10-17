@@ -1117,7 +1117,9 @@ host `env` (`runtime.plugins.<name>.env`, see
   (`Secrets: billing, github`).
 - **electricity** resolves no secret yet: it refuses a document whose tool
   params name one, and a run whose tool's host `env` holds one, with the
-  preview message.
+  preview message. A host `env` secret for a tool that only a `use` child or
+  a generated plan names fails that effect with the preview message
+  instead, which `on_error` can absorb.
 
 **Redirects (`http`'s `redirects`).** Python's HTTP client follows a
 redirect with the same headers, which would send a bearer token to whatever

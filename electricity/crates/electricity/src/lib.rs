@@ -226,15 +226,6 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
     registry
 }
 
-/// Whether *runtime* (the already-merged, effective `runtime:` block)
-/// configures persistence -- `runtime.persistence.enabled` is Python-
-/// truthy (`electricity_config::persistence_enabled`, PR #441 review
-/// finding 2: `1`/`"yes"` turn persistence on just as `true` does, not
-/// only a literal boolean). `electricity_config::validate_persistence`,
-/// called inside `pre_state_checks`, has already rejected anything
-/// malformed by the time a caller ever reaches this; this only asks
-/// whether the now-valid block actually turns the backend on,
-/// Circuitry's own `build_persistence_backend`'s one truthy gate.
 /// `runtime.plugins.<name>.env.<VAR>` for the first variable whose value
 /// is a mapping with a `secret` key (issue #598), among the tools
 /// *document* names -- in sorted order, so the refusal names the same one
@@ -262,6 +253,15 @@ fn env_secret_in_use(document: &Value, runtime: Option<&Value>) -> Option<String
     })
 }
 
+/// Whether *runtime* (the already-merged, effective `runtime:` block)
+/// configures persistence -- `runtime.persistence.enabled` is Python-
+/// truthy (`electricity_config::persistence_enabled`, PR #441 review
+/// finding 2: `1`/`"yes"` turn persistence on just as `true` does, not
+/// only a literal boolean). `electricity_config::validate_persistence`,
+/// called inside `pre_state_checks`, has already rejected anything
+/// malformed by the time a caller ever reaches this; this only asks
+/// whether the now-valid block actually turns the backend on,
+/// Circuitry's own `build_persistence_backend`'s one truthy gate.
 fn persistence_is_configured(runtime: Option<&Value>) -> bool {
     electricity_config::persistence_enabled(runtime)
 }

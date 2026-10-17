@@ -55,6 +55,7 @@ import json as _json
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -127,9 +128,12 @@ class HttpPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
         secret_headers: frozenset[str] = frozenset(),
+        scrub_secrets: Callable[[str], str] | None = None,
     ) -> ToolResult:
         """*secret_headers*: the (lower-cased) names of the headers whose
-        value came from a secret (``core.tool`` resolves them, #598)."""
+        value came from a secret (``core.tool`` resolves them, #598).
+        *scrub_secrets* replaces their values in an error body before the
+        excerpt cuts it, so no part of a value survives the cut."""
         url = params.get("url")
         if not isinstance(url, str) or not url.strip():
             raise ValueError("HttpPlugin requires params['url'] as a non-empty string.")
@@ -200,7 +204,7 @@ class HttpPlugin:
             stderr = f"HTTP {status}: {exc.reason}"
             if policy is not None and policy.refused:
                 stderr = f"{stderr}: {_REFUSED_REDIRECT_NOTES[redirects]}"
-            excerpt = http_error_excerpt(text)
+            excerpt = http_error_excerpt(scrub_secrets(text) if scrub_secrets else text)
             if excerpt:
                 stderr = f"{stderr}: {excerpt}"
         except urllib.error.URLError as exc:

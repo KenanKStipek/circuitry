@@ -55,6 +55,12 @@ release alongside the Python distributions, marked as a preview.
   bridge, which brings `python_eval` and the rest, isn't either.
 - **Text encodings.** In `fs` and `hash`, any encoding other than UTF-8,
   ASCII or Latin-1 fails the effect with the preview message.
+- **Secrets.** electricity resolves no `{secret: <name>}` (issue #598). A
+  document whose tool params name one, or whose tools' host `env` holds
+  one, is refused before the run starts. A host `env` secret for a tool
+  that only a `use` child or a generated plan names fails that effect
+  with the preview message instead, like a text encoding, so `on_error`
+  can absorb it.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
 - **Persistence and resume.** `runtime.persistence` is refused. There is
