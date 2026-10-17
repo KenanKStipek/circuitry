@@ -1034,7 +1034,7 @@ set a literal.
   becomes its JSON text (`"1"`, `"true"`). A timestamp becomes an ISO 8601
   UTC string (`2026-01-02T03:04:05Z`, with a fraction of a second only when
   it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
-  `-PT90S`). A result with no JSON form (bytes, a non-finite number, a type)
+  `-PT1M30S`). A result with no JSON form (bytes, a non-finite number, a type)
   fails the effect.
 - **An unset path.** Without `strict`, an unguarded `state.` path that is
   unset makes the value `null` and logs a warning naming the path, as an `if`

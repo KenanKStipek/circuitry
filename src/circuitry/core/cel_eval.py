@@ -96,6 +96,70 @@ class CelEvaluationError(CelError, RuntimeError):
     """
 
 
+#: What :func:`_evaluate_in_state` returns when an unguarded ``state.`` path
+#: the expression reads is unset and the caller is not strict.
+_UNSET_STATE = object()
+
+
+def _evaluate_in_state(
+    expr: str, ctx: dict[str, Any], *, strict: bool, unset_outcome: str
+) -> Any:
+    """*expr*'s CEL result with *ctx* bound as ``state``: what
+    :func:`evaluate_cel` and :func:`evaluate_cel_value` share.
+
+    Returns :data:`_UNSET_STATE`, after a warning that names the path and
+    ends with *unset_outcome* (what the caller gives instead), when an
+    unguarded ``state.`` path the expression reads is unset, unless
+    *strict*. Raises :class:`CelEvaluationError` on an empty, over-long,
+    unparseable or failing expression, and on an unset path when *strict*.
+    """
+    if not expr or not expr.strip():
+        raise CelEvaluationError(
+            "CEL expression is empty; nothing to evaluate.", expression=expr
+        )
+
+    if len(expr) > _MAX_EXPR_LENGTH:
+        raise CelEvaluationError(
+            f"CEL expression too long ({len(expr)} chars, max "
+            f"{_MAX_EXPR_LENGTH}).",
+            expression=expr,
+        )
+
+    try:
+        compiled = _compile(expr)
+    except CelError as exc:
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
+        ) from exc
+
+    unresolved = _first_unresolved(compiled.read_paths, ctx)
+    if unresolved is not None:
+        if strict:
+            raise CelEvaluationError(
+                f"CEL expression {expr!r} reads unset state path "
+                f"{unresolved!r} and is marked strict.",
+                expression=expr,
+            )
+        logger.warning(
+            "CEL expression %r reads unset state path %r; %s",
+            expr,
+            unresolved,
+            unset_outcome,
+        )
+        return _UNSET_STATE
+
+    try:
+        result = compiled.runner.evaluate({"state": compiled.context(ctx)})
+        if isinstance(result, CELEvalError):
+            raise result
+    except Exception as exc:
+        logger.error("CEL evaluation failed for expr %r: %s", expr, exc)
+        raise CelEvaluationError(
+            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
+        ) from exc
+    return result
+
+
 def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> bool:
     """Evaluate a CEL expression against *ctx* and return a bool.
 
@@ -114,51 +178,8 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
     instead. See the module docstring: absent state is data, not a defect,
     unless the author says otherwise.
     """
-    if not expr or not expr.strip():
-        raise CelEvaluationError(
-            "CEL expression is empty; nothing to evaluate.", expression=expr
-        )
-
-    if len(expr) > _MAX_EXPR_LENGTH:
-        raise CelEvaluationError(
-            f"CEL expression too long ({len(expr)} chars, max "
-            f"{_MAX_EXPR_LENGTH}).",
-            expression=expr,
-        )
-
-    try:
-        compiled = _compile(expr)
-    except CelError as exc:
-        raise CelEvaluationError(
-            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
-        ) from exc
-
-    unresolved = _first_unresolved(compiled.read_paths, ctx)
-    if unresolved is not None:
-        if strict:
-            raise CelEvaluationError(
-                f"CEL expression {expr!r} reads unset state path "
-                f"{unresolved!r} and is marked strict.",
-                expression=expr,
-            )
-        logger.warning(
-            "CEL expression %r reads unset state path %r; condition is false",
-            expr,
-            unresolved,
-        )
-        return False
-
-    try:
-        result = compiled.runner.evaluate({"state": compiled.context(ctx)})
-        if isinstance(result, CELEvalError):
-            raise result
-    except Exception as exc:
-        logger.error("CEL evaluation failed for expr %r: %s", expr, exc)
-        raise CelEvaluationError(
-            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
-        ) from exc
-
-    return bool(result)
+    result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="condition is false")
+    return False if result is _UNSET_STATE else bool(result)
 
 
 def evaluate_cel_value(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> Any:
@@ -174,49 +195,9 @@ def evaluate_cel_value(expr: str, ctx: dict[str, Any], *, strict: bool = False) 
     Raises :class:`CelEvaluationError` for every case :func:`evaluate_cel`
     raises on, and for a result JSON cannot carry.
     """
-    if not expr or not expr.strip():
-        raise CelEvaluationError(
-            "CEL expression is empty; nothing to evaluate.", expression=expr
-        )
-
-    if len(expr) > _MAX_EXPR_LENGTH:
-        raise CelEvaluationError(
-            f"CEL expression too long ({len(expr)} chars, max "
-            f"{_MAX_EXPR_LENGTH}).",
-            expression=expr,
-        )
-
-    try:
-        compiled = _compile(expr)
-    except CelError as exc:
-        raise CelEvaluationError(
-            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
-        ) from exc
-
-    unresolved = _first_unresolved(compiled.read_paths, ctx)
-    if unresolved is not None:
-        if strict:
-            raise CelEvaluationError(
-                f"CEL expression {expr!r} reads unset state path "
-                f"{unresolved!r} and is marked strict.",
-                expression=expr,
-            )
-        logger.warning(
-            "CEL expression %r reads unset state path %r; value is null",
-            expr,
-            unresolved,
-        )
+    result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="value is null")
+    if result is _UNSET_STATE:
         return None
-
-    try:
-        result = compiled.runner.evaluate({"state": compiled.context(ctx)})
-        if isinstance(result, CELEvalError):
-            raise result
-    except Exception as exc:
-        raise CelEvaluationError(
-            f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
-        ) from exc
-
     try:
         return cel_to_json(result)
     except ValueError as exc:
@@ -602,7 +583,7 @@ def cel_to_json(value: Any) -> Any:
     or ``bool`` becomes its JSON text (``"1"``, ``"true"``), as ``json.dumps``
     would write it. A timestamp becomes an ISO 8601 UTC string
     (``2026-01-02T03:04:05Z``, with a fraction only when it has one) and a
-    duration an ISO 8601 duration (``PT1H30M``, ``PT0.5S``, ``-PT90S``).
+    duration an ISO 8601 duration (``PT1H30M``, ``PT0.5S``, ``-PT1M30S``).
 
     Raises ``ValueError`` for bytes, a non-finite double, a type value, or
     anything else with no JSON form.
