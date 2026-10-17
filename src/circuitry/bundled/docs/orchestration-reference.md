@@ -1215,9 +1215,12 @@ bytes, never decoded, and never kept in state.
   limited document that names `save_to` (in `params`, with `{from: ...}`, or
   through `params_json`) fails `cof check` and is refused before it runs;
   one whose `params_json` only produces the key when rendered fails that
-  effect at dispatch. That is why `save_to` needs no
-  [capability](#tool) of its own: `http` stays `network`, and a document
-  that capability consent asks about cannot save a file.
+  effect at dispatch, as does one a profile switches to `http`. That is why
+  `save_to` needs no [capability](#tool) of its own: `http` stays
+  `network`, and a document that capability consent asks about cannot save
+  a file, unless the host sets `trust_orchestration_runtime` (which trusts
+  every document, so a library entry may then name `save_to` and its
+  consent asks about `network` only).
 - **electricity** does not save a body yet: a document whose `http` params
   name `save_to` is refused with the preview message, and one that
   `params_json` adds fails that effect with it, before any request.

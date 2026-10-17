@@ -7,6 +7,7 @@ state, events or output: the file holds it, nothing else does.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from http_server_support import PROXY_ENV_VARS, Route, ServerPair, serve_pair
 
 from circuitry.cli.config import CircuitryConfig
@@ -424,6 +426,121 @@ effects:
     assert _files(work) == ["doc.yml"]
 
 
+def test_a_refused_redirect_writes_nothing(work: Path, servers: ServerPair) -> None:
+    """Under `redirects: never`, and under `strip_auth` to `http`: the
+    redirect is not followed and nothing is written, with or without
+    fail_on_error."""
+    servers.routes["/start"] = Route(302, {"Location": "/image.png"}, body="moved")
+    servers.routes["/secure-start"] = Route(302, {"Location": f"{servers.http}/image.png"}, body="")
+    servers.routes["/image.png"] = Route(headers={"Content-Type": "image/png"}, body=PNG)
+    doc = _write(
+        work,
+        "doc.yml",
+        f"""
+effects:
+  - type: tool
+    name: strict
+    provider: http
+    on_error: continue
+    params: {{url: "{servers.http}/start", redirects: never, save_to: strict.png}}
+  - type: tool
+    name: lenient
+    provider: http
+    params:
+      url: "{servers.http}/start"
+      redirects: never
+      save_to: lenient.png
+      fail_on_error: false
+  - type: tool
+    name: to_http
+    provider: http
+    on_error: continue
+    params: {{url: "{servers.https}/secure-start", redirects: strip_auth, save_to: to-http.png}}
+""",
+    )
+
+    result = _run(doc)
+
+    assert result.ok, result.error
+    prime = result.state["prime"]
+    assert prime["strict"]["meta"]["error"] == (
+        "HTTP 302: Found: redirect not followed (redirects: never): moved"
+    )
+    assert prime["lenient"]["meta"]["error"] is None
+    assert prime["lenient"]["value"]["path"] is None
+    assert prime["lenient"]["value"]["status"] == 302
+    assert prime["to_http"]["meta"]["error"] == (
+        "HTTP 302: Found: redirect not followed (redirects: strip_auth follows https only)"
+    )
+    assert [request.path for request in servers.received] == ["/start", "/start", "/secure-start"]
+    assert _files(work) == ["doc.yml"]
+
+
+@pytest.mark.parametrize(
+    "code", [errno.ENOTSUP, errno.EPERM, errno.EXDEV], ids=["ENOTSUP", "EPERM", "EXDEV"]
+)
+def test_without_hard_links_the_file_is_still_saved(
+    work: Path, servers: ServerPair, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """A filesystem without hard links (FAT, exFAT, some shares) saves
+    through an exclusively created placeholder instead."""
+
+    def no_link(src: Any, dst: Any) -> None:
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(os, "link", no_link)
+    servers.routes["/image.png"] = Route(body=PNG)
+    doc = _doc(work, f'      url: "{servers.http}/image.png"\n      save_to: image.png')
+
+    result = _run(doc)
+
+    assert result.ok, result.error
+    assert (work / "image.png").read_bytes() == PNG
+    assert _files(work) == ["doc.yml", "image.png"]
+
+
+def test_without_hard_links_a_file_that_appears_during_the_download_is_kept(
+    work: Path, servers: ServerPair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_link_and_a_racing_writer(src: Any, dst: Any) -> None:
+        Path(dst).write_bytes(b"theirs")
+        raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+
+    monkeypatch.setattr(os, "link", no_link_and_a_racing_writer)
+    servers.routes["/image.png"] = Route(body=PNG)
+    doc = _doc(work, f'      url: "{servers.http}/image.png"\n      save_to: image.png')
+
+    result = _run(doc)
+
+    assert not result.ok
+    assert "appeared during the download; nothing was replaced." in (
+        result.state["prime"]["download"]["meta"]["error"]
+    )
+    assert (work / "image.png").read_bytes() == b"theirs"
+    assert _files(work) == ["doc.yml", "image.png"]
+
+
+def test_without_hard_links_a_failed_replace_leaves_no_placeholder(
+    work: Path, servers: ServerPair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_link(src: Any, dst: Any) -> None:
+        raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+
+    def no_replace(src: Any, dst: Any) -> None:
+        raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    monkeypatch.setattr(os, "link", no_link)
+    monkeypatch.setattr(os, "replace", no_replace)
+    servers.routes["/image.png"] = Route(body=PNG)
+    doc = _doc(work, f'      url: "{servers.http}/image.png"\n      save_to: image.png')
+
+    result = _run(doc)
+
+    assert not result.ok
+    assert "could not save" in result.state["prime"]["download"]["meta"]["error"]
+    assert _files(work) == ["doc.yml"]
+
+
 # ---------------------------------------------------------------------------
 # Only a document run by path saves a file.
 # ---------------------------------------------------------------------------
@@ -510,3 +627,66 @@ def test_check_rejects_a_malformed_save_to(tmp_path: Path, params: str, message:
     report = validate(doc, trust_document=True)
     assert not report["ok"]
     assert message in report["errors"][0]
+
+
+@pytest.mark.parametrize("provider", ["webhook", "web_fetch"])
+def test_a_profile_switching_a_limited_documents_effect_to_http_never_saves_a_file(
+    tmp_path: Path, servers: ServerPair, provider: str
+) -> None:
+    """A limited document's effect keeps its document's trust when a
+    profile switches its provider to http, so its save_to is refused at
+    dispatch, before any request."""
+    servers.routes["/image.png"] = Route(body=PNG)
+    project = tmp_path / "project"
+    (project / "profiles").mkdir(parents=True)
+    doc = _doc(
+        project,
+        f'      url: "{servers.http}/image.png"\n      save_to: image.png',
+        name="decide.yml",
+    )
+    (project / "profiles" / "swap.yml").write_text(
+        yaml.dump({"effects": {"download": {"provider": "http"}}}), encoding="utf-8"
+    )
+    doc.write_text(doc.read_text().replace("provider: http", f"provider: {provider}"))
+
+    result = run(
+        RunRequest(
+            orchestration_path=doc,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            config=CircuitryConfig(),
+            skip_preflight=True,
+            trust_document=False,
+            profile_name="swap",
+        )
+    )
+
+    assert not result.ok
+    assert result.state["prime"]["download"]["meta"]["error"] == (
+        f"HttpPlugin: params['save_to']: {_LIMITED}."
+    )
+    assert servers.received == []
+    assert sorted(path.name for path in project.rglob("*") if path.is_file()) == [
+        "decide.yml",
+        "swap.yml",
+    ]
+    assert not (tmp_path / "image.png").exists()
+
+
+def test_a_limited_document_may_not_name_within(tmp_path: Path, servers: ServerPair) -> None:
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    doc = _doc(tmp_path, f'      url: "{servers.http}/image.png"\n      within: "{downloads}"')
+
+    report = validate(doc, trust_document=False)
+
+    assert not report["ok"]
+    assert report["errors"] == [
+        f"Tool effect 'download' (http) at 'prime.effects[0]': params.within: {_LIMITED}"
+    ]
+    result = _run(doc, trusted=False)
+    assert not result.ok
+    assert servers.received == []
+    assert validate(doc, trust_document=True)["ok"]

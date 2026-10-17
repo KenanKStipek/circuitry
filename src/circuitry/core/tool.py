@@ -460,13 +460,14 @@ class ToolDefinition:
     # actually held; see #274.
     group: str | None = None
 
-    #: For a ``systemone`` or ``http`` effect: ``True`` when its document is
-    #: not trusted (not run by path, see ``compile_orchestration``'s
-    #: *trusted*). A limited ``systemone`` effect reads a ``state_file`` only
-    #: inside :attr:`confine_to`, and none at all when that is ``None`` (the
-    #: document has no project); a limited ``http`` effect never saves a file
-    #: (``save_to``). ``False`` means unconfined: a trusted document, and
-    #: every other provider.
+    #: ``True`` when the effect's document is not trusted (not run by path,
+    #: see ``compile_orchestration``'s *trusted*), whatever its provider, so
+    #: a profile that switches the provider to ``http`` keeps it. Two
+    #: providers read it: a limited ``systemone`` effect reads a
+    #: ``state_file`` only inside :attr:`confine_to`, and none at all when
+    #: that is ``None`` (the document has no project); a limited ``http``
+    #: effect never saves a file (``save_to``, ``within``). ``False`` means
+    #: unconfined: a trusted document.
     limited: bool = False
 
     #: The project a limited ``systemone`` effect's ``within`` must stay inside

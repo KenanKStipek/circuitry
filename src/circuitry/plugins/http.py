@@ -172,8 +172,9 @@ def static_param_errors(
     if "within" in overlay_keys:
         errors.append("params_json must not set within: only the literal params may")
     if not trusted:
-        if "save_to" in params:
-            errors.append(f"params.save_to: {_LIMITED_SAVE_TO}")
+        errors.extend(
+            f"params.{key}: {_LIMITED_SAVE_TO}" for key in ("save_to", "within") if key in params
+        )
         if "save_to" in overlay_keys:
             errors.append(f"params_json sets save_to: {_LIMITED_SAVE_TO}")
         return errors
@@ -206,9 +207,11 @@ def static_param_errors(
 
 def reject_limited_save_to(params: Mapping[str, Any]) -> None:
     """A limited document's ``http`` effect never saves a file, whatever
-    supplied ``save_to`` (``params_json`` included); checked at dispatch."""
-    if "save_to" in params:
-        raise ValueError(f"HttpPlugin: params['save_to']: {_LIMITED_SAVE_TO}.")
+    supplied ``save_to`` or ``within`` (``params_json``, or a profile that
+    switched the provider to ``http``); checked at dispatch."""
+    for key in ("save_to", "within"):
+        if key in params:
+            raise ValueError(f"HttpPlugin: params['{key}']: {_LIMITED_SAVE_TO}.")
 
 
 @dataclass(frozen=True)
@@ -261,10 +264,14 @@ def _save_target(params: Mapping[str, Any]) -> _SaveTarget | None:
     path = directory / lexical.name
     overwrite = _as_bool(params.get("overwrite"), default=False)
     if path.is_symlink():
-        raise ValueError(f"HttpPlugin: params['save_to'] {raw!r} is a symlink; it is never replaced.")
+        raise ValueError(
+            f"HttpPlugin: params['save_to'] {raw!r} is a symlink; it is never replaced."
+        )
     if path.exists():
         if not path.is_file():
-            raise ValueError(f"HttpPlugin: params['save_to'] {raw!r} exists and is not a regular file.")
+            raise ValueError(
+                f"HttpPlugin: params['save_to'] {raw!r} exists and is not a regular file."
+            )
         if not overwrite:
             raise ValueError(
                 f"HttpPlugin: params['save_to'] {raw!r} already exists; set overwrite: true "
@@ -373,13 +380,34 @@ def _move_into_place(temp: Path, target: _SaveTarget) -> None:
         if target.overwrite:
             os.replace(temp, path)
         else:
-            os.link(temp, path)
+            try:
+                os.link(temp, path)
+            except FileExistsError:
+                raise
+            except OSError:
+                # No hard links here (FAT, exFAT, some network shares):
+                # claim the name exclusively, then replace the placeholder.
+                _replace_exclusively(temp, path)
     except FileExistsError:
         raise RuntimeError(
             f"HttpPlugin: {path} appeared during the download; nothing was replaced."
         ) from None
     except OSError as exc:
         raise RuntimeError(f"HttpPlugin: could not save {path}: {exc}") from None
+
+
+def _replace_exclusively(temp: Path, path: Path) -> None:
+    """Move *temp* to *path* only if nothing is there: an empty placeholder
+    created with ``O_EXCL`` (``FileExistsError`` otherwise), then replaced;
+    the placeholder is removed again if the replace fails."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    os.close(os.open(path, flags, 0o666))
+    try:
+        os.replace(temp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        raise
 
 
 @dataclass(frozen=True)
