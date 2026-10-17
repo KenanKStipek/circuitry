@@ -18,6 +18,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,9 +202,12 @@ def servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ServerP
     for thread in threads:
         thread.start()
 
-    # The client trusts the test certificate, and only for this test.
+    # The client trusts the test certificate, and only for this test. From
+    # Python 3.12 an HTTPS handler takes its context when it is built, and
+    # `urlopen` keeps the opener it built first, so that one is dropped too.
     client_context = ssl.create_default_context(cafile=str(cert))
     monkeypatch.setattr(ssl, "_create_default_https_context", lambda: client_context)
+    monkeypatch.setattr(urllib.request, "_opener", None)
     try:
         yield ServerPair(
             http_port=plain.server_address[1],
