@@ -4,5 +4,6 @@
   "engines": ["python", "electricity"],
   "expect": "failure",
   "error_compare": "location",
-  "location_pattern": "maximum recursion depth exceeded"
+  "location_pattern": "maximum recursion depth exceeded",
+  "python_runner_versions": ["3.11"]
 }

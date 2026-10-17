@@ -356,6 +356,42 @@ def test_load_case_rejects_third_party_text_with_an_empty_pattern(tmp_path: Path
         harness.load_case(case_dir)
 
 
+def test_load_case_defaults_python_runner_versions_to_none(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success"})
+    metadata = harness.load_case(case_dir)
+    assert metadata["python_runner_versions"] is None
+
+
+def test_load_case_accepts_well_formed_python_runner_versions(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "python_runner_versions": ["3.11"]}
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["python_runner_versions"] == ["3.11"]
+
+
+def test_load_case_rejects_empty_python_runner_versions(tmp_path: Path) -> None:
+    case_dir = _write_case(tmp_path, {"expect": "success", "python_runner_versions": []})
+    with pytest.raises(ValueError, match="'python_runner_versions' must be"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_non_list_python_runner_versions(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "python_runner_versions": "3.11"}
+    )
+    with pytest.raises(ValueError, match="'python_runner_versions' must be"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_malformed_python_runner_versions_entry(tmp_path: Path) -> None:
+    case_dir = _write_case(
+        tmp_path, {"expect": "success", "python_runner_versions": ["3.11.0"]}
+    )
+    with pytest.raises(ValueError, match="'python_runner_versions' must be"):
+        harness.load_case(case_dir)
+
+
 def test_apply_third_party_text_replaces_a_matching_leaf() -> None:
     state = {"meta": {"error": "curl: (7) Failed to connect to host port 1: Connection refused"}}
     specs = [{"location": "meta.error", "pattern": r"curl: \(7\).*"}]

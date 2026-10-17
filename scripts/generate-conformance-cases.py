@@ -339,13 +339,30 @@ def main() -> int:
 
     stale: list[str] = []
     for case_dir in case_dirs:
+        metadata = harness.load_case(case_dir)
+        python_runner_versions = metadata["python_runner_versions"]
+        if python_runner_versions is not None:
+            running_version = harness.running_python_version()
+            if running_version not in python_runner_versions:
+                # cof's own CEL nesting limits come from CPython's recursion
+                # handling, which differs between Python versions -- running this
+                # generator under any other interpreter would silently rewrite
+                # the case's committed expected output with that version's own
+                # boundary instead of the one it's pinned to.
+                print(
+                    f"SKIP {case_dir.name}: expected output is pinned to Python "
+                    f"{'/'.join(python_runner_versions)}, not {running_version}",
+                    file=sys.stderr,
+                )
+                continue
+
         try:
             files = generate_case(case_dir)
         except Exception as exc:  # stop at the first case that fails to run
             print(f"FAIL {case_dir.name}: {exc}", file=sys.stderr)
             return 1
 
-        third_party_text = harness.load_case(case_dir).get("third_party_text", [])
+        third_party_text = metadata.get("third_party_text", [])
         for filename, content in files.items():
             target = case_dir / filename
             current = target.read_bytes() if target.exists() else None
