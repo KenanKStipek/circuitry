@@ -29,7 +29,8 @@ from ..secrets import (
     SecretRef,
     SecretValues,
     env_secret_refs,
-    looks_like_secret_ref,
+    has_secret_key,
+    is_secret_ref,
     secret_ref,
     secret_ref_error,
 )
@@ -222,7 +223,7 @@ def _render_params(
     """
 
     def _render_value(v: Any, path: str) -> Any:
-        if looks_like_secret_ref(v):
+        if is_secret_ref(v):
             # Resolved at dispatch, never rendered (#598).
             return dict(v)
         ref = param_reference(v)
@@ -642,7 +643,7 @@ class ToolRuntime:
             pairs = []
         found: dict[str, SecretRef] = {}
         for header, value in pairs:
-            if not looks_like_secret_ref(value):
+            if not has_secret_key(value):
                 continue
             ref = secret_ref(value)
             if (
@@ -667,7 +668,7 @@ class ToolRuntime:
         cfg = plugins.get(plugin_name) if isinstance(plugins, dict) else None
         env = cfg.get("env") if isinstance(cfg, dict) else None
         for var, value in env.items() if isinstance(env, dict) else ():
-            problem = secret_ref_error(value) if looks_like_secret_ref(value) else None
+            problem = secret_ref_error(value) if has_secret_key(value) else None
             if problem is not None:
                 raise SecretError(f"runtime.plugins.{plugin_name}.env.{var}: {problem}.")
         refs = env_secret_refs(env)

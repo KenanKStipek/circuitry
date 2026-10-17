@@ -818,7 +818,9 @@ time.
 - Only a mapping with the key `from` (optionally plus `default` and `as`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
-  `{from: ...}` object to a plugin, use `params_json` instead.
+  `{from: ...}` object to a plugin, use `params_json` instead. A
+  `{secret: <name>}` reference follows the same rule (see
+  [Secrets](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 - A security-sensitive param a plugin treats as its own allowlist (today:
   the `shell` plugin's `allowed_commands`) must stay a literal list of
   strings written in the document: `{from: ...}` there — as the whole value
@@ -1099,6 +1101,14 @@ host `env` (`runtime.plugins.<name>.env`, see
   `params.headers` itself is resolved: one that arrives through
   `params_json` or a `{from: ...}` value fails the effect, and one anywhere
   else in `params`, or in another tool's params, is a `cof check` error.
+- **What reads as a reference.** In an `http` header value or a host `env`
+  value, any mapping with a `secret` key is one, and must be well-formed.
+  Anywhere else in `params`, only a mapping whose keys are `secret` plus,
+  optionally, `prefix`, with a string `secret`, is one (the
+  [`{from:}` rule](#tool)). Any other mapping, such as a `json` body
+  `{secret: "{{input.key}}", response: "..."}` or a schema with a `secret`
+  property, is passed through literally, as before. To pass a literal one-key
+  `{secret: ...}` object, use `params_json`.
 - **Trust.** Only a trusted document (one run by path, see
   [File Structure](#file-structure)) may name a secret. A limited document —
   a library entry run by name, an MCP or REST run, a `use: ref:` or inline

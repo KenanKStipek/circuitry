@@ -486,7 +486,7 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
                 );
             }
-            if names_a_secret(&tool.params) {
+            if names_a_secret(&tool.params, normalized_provider == "http") {
                 return refusal(path, RefusalReason::SecretReference);
             }
             None
@@ -494,28 +494,67 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
     }
 }
 
-/// Whether *params* hold a mapping with a `secret` key anywhere -- the
-/// shape `cof check` reads as a secret reference (issue #598), placed
-/// where it is allowed or not.
-fn names_a_secret(params: &ParamNode) -> bool {
+/// Whether *params* name a secret (issue #598), placed where it is
+/// allowed or not, by `cof check`'s own rule (`secrets.is_secret_ref`): a
+/// mapping whose keys are `secret` plus, optionally, `prefix`, with a
+/// string `secret`, the same rule as a `{from:}` leaf's. Any other mapping
+/// (a `json` body with a `secret` property, say) is literal data. Only a
+/// value of an `http` effect's `params.headers` counts with any `secret`
+/// key, as `cof check` reads it there.
+fn names_a_secret(params: &ParamNode, is_http: bool) -> bool {
+    fn is_key(key: &Value, name: &str) -> bool {
+        matches!(key, Value::Str(text) if text == name)
+    }
+    fn keys_are_a_reference<'a>(mut keys: impl Iterator<Item = &'a Value>) -> bool {
+        keys.all(|key| is_key(key, "secret") || is_key(key, "prefix"))
+    }
     fn value_names_a_secret(value: &Value) -> bool {
         match value {
             Value::Dict(dict) => {
-                dict.contains_key(&Value::Str("secret".to_string()))
+                let secret = Value::Str("secret".to_string());
+                (keys_are_a_reference(dict.keys())
+                    && matches!(dict.get(&secret), Some(Value::Str(_))))
                     || dict.values().any(value_names_a_secret)
             }
             Value::List(items) => items.iter().any(value_names_a_secret),
             _ => false,
         }
     }
-    match params {
-        ParamNode::Map(map) => {
-            map.contains_key(&Value::Str("secret".to_string())) || map.values().any(names_a_secret)
+    fn node_names_a_secret(node: &ParamNode) -> bool {
+        match node {
+            ParamNode::Map(map) => {
+                let secret = Value::Str("secret".to_string());
+                (keys_are_a_reference(map.keys())
+                    && matches!(
+                        map.get(&secret),
+                        Some(ParamNode::Literal(Value::Str(_)) | ParamNode::Template(_))
+                    ))
+                    || map.values().any(node_names_a_secret)
+            }
+            ParamNode::List(items) => items.iter().any(node_names_a_secret),
+            ParamNode::Literal(value) => value_names_a_secret(value),
+            ParamNode::From { .. } | ParamNode::Template(_) => false,
         }
-        ParamNode::List(items) => items.iter().any(names_a_secret),
-        ParamNode::Literal(value) => value_names_a_secret(value),
-        ParamNode::From { .. } | ParamNode::Template(_) => false,
     }
+    fn value_has_secret_key(value: &Value) -> bool {
+        matches!(value, Value::Dict(dict) if dict.contains_key(&Value::Str("secret".to_string())))
+    }
+    let headers = match params {
+        ParamNode::Map(map) if is_http => map.get(&Value::Str("headers".to_string())),
+        _ => None,
+    };
+    let header_has_secret_key = match headers {
+        Some(ParamNode::Map(headers)) => headers.values().any(|value| match value {
+            ParamNode::Map(map) => map.contains_key(&Value::Str("secret".to_string())),
+            ParamNode::Literal(value) => value_has_secret_key(value),
+            _ => false,
+        }),
+        Some(ParamNode::Literal(Value::Dict(headers))) => {
+            headers.values().any(value_has_secret_key)
+        }
+        _ => false,
+    };
+    header_has_secret_key || node_names_a_secret(params)
 }
 
 fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) -> Option<Refusal> {
@@ -970,6 +1009,50 @@ mod tests {
                 &with_http
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_mapping_with_a_secret_key_and_other_keys_is_data_outside_http_headers() {
+        // Issue #598's review: like a `{from:}` leaf, only `secret` plus an
+        // optional `prefix` is a reference, except as an `http` header's
+        // value, where any `secret` key is one.
+        let str_value = |text: &str| Value::Str(text.to_string());
+        let mut body = IndexMap::new();
+        body.insert(str_value("secret"), ParamNode::Literal(str_value("k")));
+        body.insert(str_value("response"), ParamNode::Literal(str_value("r")));
+        let mut schema_property = electricity_value::Dict::new();
+        schema_property.insert(str_value("type"), str_value("string"));
+        let mut properties = electricity_value::Dict::new();
+        properties.insert(str_value("secret"), Value::Dict(schema_property));
+        let mut params = IndexMap::new();
+        params.insert(str_value("json"), ParamNode::Map(body.clone()));
+        params.insert(
+            str_value("schema"),
+            ParamNode::Literal(Value::Dict(properties)),
+        );
+        let with_http = Supported::m0(&["json", "http"]);
+        let run = |params: ParamNode| {
+            let tool = leaf_op(
+                EffectPath::root().push_name("call"),
+                LeafKind::Tool(tool_op_with_provider("http", params)),
+            );
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_http,
+            )
+            .map(|refusal| refusal.reason)
+        };
+        assert_eq!(run(ParamNode::Map(params)), None);
+
+        let mut headers = IndexMap::new();
+        headers.insert(str_value("Authorization"), ParamNode::Map(body));
+        let mut params = IndexMap::new();
+        params.insert(str_value("headers"), ParamNode::Map(headers));
+        assert_eq!(
+            run(ParamNode::Map(params)),
+            Some(RefusalReason::SecretReference)
         );
     }
 

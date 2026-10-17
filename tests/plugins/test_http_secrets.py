@@ -723,6 +723,58 @@ effects:
     assert message in report["errors"][0]
 
 
+_INPUT_KEY = """
+interface:
+  inputs:
+    key: {type: string, default: k-1}
+effects:
+"""
+
+_SITEVERIFY_EFFECT = """
+  - type: tool
+    name: verify
+    provider: http
+    params:
+      url: "https://challenges.example.com/siteverify"
+      method: POST
+      json: {secret: "{{input.key}}", response: "r-1"}
+"""
+
+_LOCAL_SECRET_KEY_EFFECTS = """
+  - type: tool
+    name: encode
+    provider: json
+    params:
+      mode: stringify
+      input: {secret: "{{input.key}}", name: db}
+  - type: tool
+    name: shaped
+    provider: cel
+    params:
+      expr: '{"secret": "s"}'
+      schema: {type: object, properties: {secret: {type: string}}}
+"""
+
+
+def test_a_mapping_with_a_secret_key_and_other_keys_is_data_and_is_rendered(
+    tmp_path: Path,
+) -> None:
+    # Like a `{from:}` leaf, only `secret` plus an optional `prefix` is a
+    # reference outside an http header: a siteverify body, a stringified
+    # object or a schema with a `secret` property stays valid, as before #598.
+    checked = _write(
+        tmp_path, "checked.yml", _INPUT_KEY + _SITEVERIFY_EFFECT + _LOCAL_SECRET_KEY_EFFECTS
+    )
+    report = validate(checked, trust_document=True)
+    assert report["ok"], report["errors"]
+    assert report["secrets"] == []
+
+    result = _run(_write(tmp_path, "run.yml", _INPUT_KEY + _LOCAL_SECRET_KEY_EFFECTS), secrets={})
+    assert result.ok, result.error
+    assert json.loads(result.state["prime"]["encode"]["value"]) == {"secret": "k-1", "name": "db"}
+    assert result.state["prime"]["shaped"]["value"] == {"secret": "s"}
+
+
 def test_check_rejects_a_secret_in_another_tools_params(tmp_path: Path) -> None:
     doc = _write(
         tmp_path,

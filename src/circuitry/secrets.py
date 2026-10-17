@@ -62,10 +62,24 @@ class SecretError(RuntimeError):
     its value or anything its command printed."""
 
 
-def looks_like_secret_ref(value: Any) -> bool:
-    """Whether *value* is a mapping with a ``secret`` key: a reference,
-    well-formed or not."""
+def has_secret_key(value: Any) -> bool:
+    """Whether *value* is a mapping with a ``secret`` key. In an ``http``
+    header value or a host ``env`` value, where a reference is allowed, that
+    is a reference, well-formed or not."""
     return isinstance(value, Mapping) and SECRET_KEY in value
+
+
+def is_secret_ref(value: Any) -> bool:
+    """Whether *value* reads as a reference anywhere else in a tool's params:
+    a mapping whose keys are ``secret`` plus, optionally, ``prefix``, with a
+    string ``secret``. The same rule as a ``{from: ...}`` leaf: any other
+    mapping (a ``json`` body or a schema with a ``secret`` property, say) is
+    passed through literally."""
+    return (
+        has_secret_key(value)
+        and set(value) <= {SECRET_KEY, PREFIX_KEY}
+        and isinstance(value[SECRET_KEY], str)
+    )
 
 
 def secret_ref_error(value: Any) -> str | None:
@@ -96,7 +110,7 @@ def secret_ref_error(value: Any) -> str | None:
 def secret_ref(value: Any) -> SecretRef | None:
     """*value* as a :class:`SecretRef`, or ``None`` when it is not a
     well-formed ``{secret: <name>, prefix?: <text>}``."""
-    if not looks_like_secret_ref(value) or secret_ref_error(value) is not None:
+    if not has_secret_key(value) or secret_ref_error(value) is not None:
         return None
     return SecretRef(name=value[SECRET_KEY], prefix=value.get(PREFIX_KEY, ""))
 
@@ -127,7 +141,7 @@ def runtime_env_secret_paths(runtime: Any) -> Iterator[tuple[str, Any]]:
         if not isinstance(env, Mapping):
             continue
         for var, value in env.items():
-            if looks_like_secret_ref(value):
+            if has_secret_key(value):
                 yield f"runtime.plugins.{plugin_name}.env.{var}", value
 
 

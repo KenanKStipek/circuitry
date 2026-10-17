@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from ..secrets import (
-    looks_like_secret_ref,
+    has_secret_key,
+    is_secret_ref,
     runtime_env_secret_paths,
     secret_ref,
     secret_ref_error,
@@ -1374,7 +1375,11 @@ def _check_param_secrets(
 ) -> None:
     """``{secret: ...}`` in a tool effect's params (#598): only as a value of
     an ``http`` effect's ``params.headers``, well-formed, and only in a
-    trusted document."""
+    trusted document.
+
+    A header value with a ``secret`` key is a reference, well-formed or not;
+    anywhere else only a mapping :func:`is_secret_ref` accepts is one, and
+    any other mapping is literal data."""
     headers = params.get("headers") if provider == "http" else None
     allowed = (
         {id(value) for value in headers.values()} if isinstance(headers, dict) else set()
@@ -1382,19 +1387,19 @@ def _check_param_secrets(
     label = f"Tool effect '{name}' at '{effect_path}'"
 
     def walk(value: Any, field: str) -> None:
-        if looks_like_secret_ref(value):
-            if id(value) not in allowed:
-                raise ValueError(
-                    f"{label}: {field} is a {{secret: ...}} value, which is allowed only "
-                    "as a value in an http effect's params.headers (or a subprocess "
-                    "tool's runtime.plugins.<name>.env)."
-                )
+        if id(value) in allowed and has_secret_key(value):
             problem = secret_ref_error(value)
             if problem is not None:
                 raise ValueError(f"{label}: {field}: a secret reference {problem}.")
             if not _current_document_trusted():
                 raise ValueError(_untrusted_secret_error(label, value["secret"]))
             return
+        if is_secret_ref(value):
+            raise ValueError(
+                f"{label}: {field} is a {{secret: ...}} value, which is allowed only "
+                "as a value in an http effect's params.headers (or a subprocess "
+                "tool's runtime.plugins.<name>.env)."
+            )
         if isinstance(value, dict):
             for key, item in value.items():
                 walk(item, f"{field}.{key}")
