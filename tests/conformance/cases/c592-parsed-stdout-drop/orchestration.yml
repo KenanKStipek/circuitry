@@ -1,0 +1,27 @@
+name: c592-parsed-stdout-drop
+runtime:
+  state:
+    parsed_stdout: drop
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "{\"ok\": true, \"items\": [1, 2.5, \"café\"]}"]
+      parse: json
+  - type: tool
+    name: text
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "{\"ok\": true}"]
+  - type: tool
+    name: second
+    provider: json
+    params:
+      mode: extract
+      input: {from: prime.report.value}
+      path: items[2]

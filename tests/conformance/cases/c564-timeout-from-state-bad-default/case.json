@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `timeout_ms` reference's default must be a positive integer; the check rejects 0.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "effects\\[0\\]\\.timeout_ms\\.default"
+}

@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-10-17T10:57:04.202Z","ev":"run_start","run_id":"0a138b2c-4529-4f13-ada9-0a885c403ab3","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":60824}
+{"v":1,"seq":1,"ts":"2026-10-17T10:57:04.211Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-17T10:57:04.212Z","ev":"start","id":1,"path":"prime.refused"}
+{"v":1,"seq":3,"ts":"2026-10-17T10:57:04.218Z","ev":"end","id":1,"path":"prime.refused","ok":false,"ms":6,"error":"HTTP 301: Moved Permanently: redirect not followed (redirects: strip_auth follows https only)"}
+{"v":1,"seq":4,"ts":"2026-10-17T10:57:04.218Z","ev":"end","id":0,"path":"prime","ok":true,"ms":7}
+{"v":1,"seq":5,"ts":"2026-10-17T10:57:04.218Z","ev":"run_end","ok":true}

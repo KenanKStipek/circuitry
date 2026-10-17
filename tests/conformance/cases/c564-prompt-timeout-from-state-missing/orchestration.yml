@@ -1,0 +1,9 @@
+name: c564-prompt-timeout-from-state-missing
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"
+    timeout_ms: {from: input.budget_ms}
+    on_error: continue

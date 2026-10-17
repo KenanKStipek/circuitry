@@ -97,6 +97,7 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
     "weather": frozenset({NETWORK}),
     "s3": frozenset({NETWORK}),
     "surrealdb": frozenset({NETWORK}),
+    "systemone": frozenset({NETWORK}),
     "mcp": frozenset({NETWORK}),
     "linear": frozenset({NETWORK}),
     "slack": frozenset({NETWORK}),
@@ -121,6 +122,7 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
 NO_CAPABILITIES: frozenset[str] = frozenset(
     {
         "clock",
+        "cel",
         "math",
         "regex",
         "json",

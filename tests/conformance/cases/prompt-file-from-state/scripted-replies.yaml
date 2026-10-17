@@ -1,0 +1,4 @@
+prime.from_template_file:
+  - text: "one"
+prime.from_message_file:
+  - text: "two"

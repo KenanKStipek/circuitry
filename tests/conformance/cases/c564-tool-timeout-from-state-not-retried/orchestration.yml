@@ -1,0 +1,11 @@
+name: c564-tool-timeout-from-state-not-retried
+effects:
+  - type: tool
+    name: result
+    provider: json
+    timeout_ms: {from: input.budget_ms}
+    retries: {max_attempts: 3, backoff_ms: 1}
+    on_error: continue
+    params:
+      mode: stringify
+      input: 1

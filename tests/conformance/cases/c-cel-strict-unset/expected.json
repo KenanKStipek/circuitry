@@ -1,0 +1,3 @@
+{
+  "error": "prime.gate: CEL expression 'state.prime.never_ran.value.price <= 10' reads unset state path 'state.prime.never_ran.value.price' and is marked strict."
+}

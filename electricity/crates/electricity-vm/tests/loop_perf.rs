@@ -66,6 +66,7 @@ fn stringify_item(path: EffectPath, name: &str) -> Op {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
@@ -330,6 +331,7 @@ fn use_loop_item(path: EffectPath, name: &str) -> Op {
         ParamNode::From {
             path: "iter.index".to_string(),
             default: None,
+            as_json: false,
         },
     );
     support::use_leaf(

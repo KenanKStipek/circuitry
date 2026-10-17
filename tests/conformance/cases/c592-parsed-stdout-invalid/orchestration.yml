@@ -1,0 +1,13 @@
+name: c592-parsed-stdout-invalid
+runtime:
+  state:
+    parsed_stdout: sha256
+effects:
+  - type: tool
+    name: report
+    provider: shell
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--stdout", "{}"]
+      parse: json

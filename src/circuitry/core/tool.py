@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+import dataclasses
 import json
 import logging
 import math
@@ -22,18 +22,33 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
+from ..plugins.cel import CelPlugin
+from ..plugins.http import HttpPlugin
+from ..secrets import (
+    SecretError,
+    SecretRef,
+    SecretValues,
+    env_secret_refs,
+    has_secret_key,
+    is_secret_ref,
+    secret_ref,
+    secret_ref_error,
+)
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
+from .parsed_stdout import dropped_stdout_fields, drops_parsed_stdout
 from .prompt import RetryPolicyDef
 from .prompt_compose import (
     declared_prompts,
     known_effect_names,
     render_with_composition,
 )
+from .prompt_files import DispatchFileSource, DispatchFileText, read_dispatch_file
 from .store import Store
-from .use import _resolve_reference
+from .timeout_ref import TimeoutFrom, resolve_timeout_ms
+from .use import REFERENCE_AS_KEY, _resolve_reference, serialize_reference
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +59,7 @@ def _now_iso() -> str:
 
 #: Providers whose raw["status"] is an HTTP status code, not some other
 #: plugin's unrelated int field that happens to be named "status".
-_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear"})
+_HTTP_FAMILY_PROVIDERS = frozenset({"http", "web_fetch", "webhook", "linear", "systemone"})
 
 #: Cap on meta.raw's serialized size, in bytes, after redaction. Protects
 #: state (and anything that mirrors it: --out, --live-state, persisted
@@ -75,6 +90,18 @@ def _capped_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "_original_bytes": len(encoded),
         "_preview": encoded[:_RAW_META_MAX_BYTES].decode("utf-8", errors="ignore"),
     }
+
+
+def _scrub_result(result: ToolResult, secrets: SecretValues) -> ToolResult:
+    """*result* with every secret this dispatch resolved replaced by its
+    placeholder, wherever the plugin's output echoes it (#598)."""
+    return dataclasses.replace(
+        result,
+        value=secrets.scrub(result.value),
+        raw=secrets.scrub(result.raw),
+        stdout=secrets.scrub(result.stdout),
+        stderr=secrets.scrub(result.stderr),
+    )
 
 
 def _elapsed_str(seconds: float) -> str:
@@ -129,10 +156,12 @@ def _format_output(value: Any) -> str:
         return s
 
 
-#: The one or two keys of a by-reference ``params`` leaf: ``{from: <path>}``,
-#: optionally with a ``default:`` for when the path doesn't resolve (#234).
+#: The keys of a by-reference ``params`` leaf: ``{from: <path>}``, optionally
+#: with a ``default:`` for when the path doesn't resolve (#234) and an
+#: ``as:`` modifier naming the form the value takes (``json``, #566).
 PARAM_REFERENCE_KEY = "from"
 PARAM_DEFAULT_KEY = "default"
+PARAM_AS_KEY = REFERENCE_AS_KEY
 
 
 @dataclass(frozen=True)
@@ -140,30 +169,34 @@ class ParamReference:
     path: str
     has_default: bool = False
     default: Any = None
+    as_format: Any = None
 
 
 def param_reference(value: Any) -> ParamReference | None:
-    """A ``params`` leaf's ``{from: <path>}`` (optionally with ``default:``), or None.
+    """A ``params`` leaf's ``{from: <path>}`` (optionally ``default:``, ``as:``), or None.
 
-    Only a mapping with exactly the keys ``{"from"}`` or ``{"from", "default"}``,
+    Only a mapping whose keys are ``from`` plus any of ``default`` and ``as``,
     and a string ``from`` value, is a reference — any other mapping (including
     one with other keys mixed in) is passed through literally, same as before.
     ``params_json`` is the way to pass a literal one-key ``{from: ...}`` dict.
+    ``as_format`` is the ``as:`` value as written; ``cof check`` rejects any
+    other than ``json`` (``validate_reference_as``).
     """
     if not isinstance(value, dict):
         return None
-    keys = set(value.keys())
-    if keys == {PARAM_REFERENCE_KEY}:
-        path = value[PARAM_REFERENCE_KEY]
-        return ParamReference(path=path.strip()) if isinstance(path, str) else None
-    if keys == {PARAM_REFERENCE_KEY, PARAM_DEFAULT_KEY}:
-        path = value[PARAM_REFERENCE_KEY]
-        if isinstance(path, str):
-            return ParamReference(
-                path=path.strip(), has_default=True, default=value[PARAM_DEFAULT_KEY]
-            )
+    if PARAM_REFERENCE_KEY not in value:
         return None
-    return None
+    if not set(value) <= {PARAM_REFERENCE_KEY, PARAM_DEFAULT_KEY, PARAM_AS_KEY}:
+        return None
+    path = value[PARAM_REFERENCE_KEY]
+    if not isinstance(path, str):
+        return None
+    return ParamReference(
+        path=path.strip(),
+        has_default=PARAM_DEFAULT_KEY in value,
+        default=value.get(PARAM_DEFAULT_KEY),
+        as_format=value.get(PARAM_AS_KEY),
+    )
 
 
 def _render_params(
@@ -182,22 +215,33 @@ def _render_params(
     inputs (``core.use._render_inputs``). A path that doesn't resolve raises,
     naming the param's own path, unless the leaf also carries ``default:``,
     which is used as-is (mirroring how ``interface.inputs`` defaults fill an
-    unresolved/absent value). Any other value that fails to render also
+    unresolved/absent value). ``as: json`` serializes the value (the default
+    included) to compact JSON text instead, so a string-only param can carry
+    an object or array; a value JSON can't carry raises, naming its path (#566).
+    Any other value that fails to render also
     raises, naming its path, rather than handing the tool unrendered text.
     """
 
     def _render_value(v: Any, path: str) -> Any:
+        if is_secret_ref(v):
+            # Resolved at dispatch, never rendered (#598).
+            return dict(v)
         ref = param_reference(v)
         if ref is not None:
             resolved = _resolve_reference(ctx, ref.path)
             if resolved is None:
-                if ref.has_default:
-                    return copy.deepcopy(ref.default)
-                raise ValueError(
-                    f"Tool effect '{name}' param '{path}': "
-                    f"'{{from: {ref.path}}}' did not resolve to a value."
-                )
-            return copy.deepcopy(resolved)
+                if not ref.has_default:
+                    raise ValueError(
+                        f"Tool effect '{name}' param '{path}': "
+                        f"'{{from: {ref.path}}}' did not resolve to a value."
+                    )
+                resolved = ref.default
+            return serialize_reference(
+                resolved,
+                as_value=ref.as_format,
+                label=f"Tool effect '{name}' param '{path}'",
+                path=ref.path,
+            )
         if isinstance(v, str):
             return render_with_composition(
                 v, ctx, declared=declared, known_effect_names=known_names, label=path
@@ -393,7 +437,9 @@ class ToolDefinition:
     params_json: str | None = None
     prompt: str | None = None
     model: str | None = None
-    timeout_ms: int | None = None
+    #: A literal, or ``{from: <path>, default: <int>}`` read from state at each
+    #: attempt's dispatch (#564).
+    timeout_ms: int | TimeoutFrom | None = None
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
@@ -413,6 +459,24 @@ class ToolDefinition:
     # configured. A tool effect is a leaf, so this is where a slot is
     # actually held; see #274.
     group: str | None = None
+
+    #: For a ``systemone`` effect: ``True`` when its document is not trusted
+    #: (not run by path, see ``compile_orchestration``'s *trusted*). A limited
+    #: effect reads a ``state_file`` only inside :attr:`confine_to`, and none
+    #: at all when that is ``None`` (the document has no project). ``False``
+    #: means unconfined: a trusted document, and every other provider.
+    limited: bool = False
+
+    #: The project a limited ``systemone`` effect's ``within`` must stay inside
+    #: (the same root a ``{file: ...}`` prompt is confined to, as
+    #: ``DispatchFileSource.confine_to``); ``None`` when not limited, or when
+    #: the document has no project.
+    confine_to: str | None = None
+
+    #: For an ``agent`` effect: ``params.prompt`` of ``{file: {from: <state
+    #: path>}, within: <dir>}`` (#591), read once when the effect dispatches;
+    #: ``prompt`` is then absent from :attr:`params`.
+    prompt_file: DispatchFileSource | None = None
 
 
 #: Fallback when neither the effect's ``timeout_ms`` nor
@@ -444,10 +508,11 @@ class ToolRuntime:
       process-backed plugins) — it is ``None`` for every other plugin. A
       tool fails — ``meta.error`` is set and ``on_error`` applies — whenever
       the plugin raises, or returns a ``ToolResult`` with ``ok=False``. HTTP-
-      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``) fail
-      this way on a 4xx/5xx response by default and set ``meta.status_code``
-      to the HTTP status; each has a per-effect opt-out param (see each
-      plugin's docstring) that restores the old always-succeeds behaviour.
+      family plugins (``http``, ``web_fetch``, ``webhook``, ``linear``,
+      ``systemone``) fail this way on a 4xx/5xx response by default and set
+      ``meta.status_code`` to the HTTP status; all but ``systemone`` have a
+      per-effect opt-out param (see each plugin's docstring) that restores
+      the old always-succeeds behaviour.
       Soft-failure plugins (``wikipedia``, ``dns``, ``port_check``,
       ``validate_yaml``) report their own outcome via ``value``/``raw``
       fields with ``ok`` staying ``True`` — see orchestration-reference.md.
@@ -459,6 +524,10 @@ class ToolRuntime:
       ``meta.binary`` is also set for binary-wrapping tool plugins
       (the resolved absolute executable path), when the plugin's result
       carries one.
+
+      Under ``runtime.state.parsed_stdout: drop`` (#592), a result whose
+      stdout parsed (``ToolResult.stdout_parsed``) records ``meta.stdout``
+      as ``None`` plus ``meta.stdout_chars`` and ``meta.stdout_sha256``.
 
       ``meta.tokens_sent``/``meta.tokens_received``/``meta.cost_usd`` are
       set, the same fields a ``prompt`` effect uses, when the plugin's
@@ -511,11 +580,13 @@ class ToolRuntime:
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
+        self._drop_parsed_stdout = drops_parsed_stdout(self.runtime_config)
 
-    def _resolve_timeout_seconds(self) -> int:
-        """The tool's own timeout budget, in whole seconds.
+    def _resolve_timeout_seconds(self, ctx: dict[str, Any]) -> int:
+        """The tool's own timeout budget for one attempt, in whole seconds.
 
-        ``timeout_ms`` on the effect wins when set, rounded up so a
+        ``timeout_ms`` on the effect wins when set (a ``{from: <path>}`` one
+        is read from *ctx* now, #564), rounded up so a
         sub-second budget (e.g. 500) never floors to 0 and gets handed to
         a subprocess/curl/urlopen call as "no timeout" or "fail instantly"
         depending on the plugin. Otherwise ``runtime.tools.timeout_seconds``
@@ -525,8 +596,11 @@ class ToolRuntime:
         run on the no-op adapter, or one that just needs more time than the
         model's socket timeout allows, shouldn't be bound by either.
         """
-        if self.defn.timeout_ms:
-            return max(1, math.ceil(self.defn.timeout_ms / 1000))
+        timeout_ms = resolve_timeout_ms(
+            self.defn.timeout_ms, ctx, effect_label=f"Tool effect '{self.defn.name}'"
+        )
+        if timeout_ms:
+            return max(1, math.ceil(timeout_ms / 1000))
         tools_cfg = self.runtime_config.get("tools")
         raw = tools_cfg.get("timeout_seconds") if isinstance(tools_cfg, dict) else None
         if raw is None:
@@ -540,6 +614,75 @@ class ToolRuntime:
                 DEFAULT_TOOL_TIMEOUT_SECONDS,
             )
             return DEFAULT_TOOL_TIMEOUT_SECONDS
+
+    def _secret_headers(self, rendered: dict[str, Any]) -> dict[str, SecretRef]:
+        """The ``http`` headers whose value is a ``{secret: ...}`` reference
+        (#598), by header name.
+
+        Only a reference the document wrote in its literal ``params.headers``
+        is honoured: one that reaches the headers any other way (``params_json``,
+        a ``{from: ...}`` value, a list of pairs) could name a secret from state
+        or a model's output, and is an error.
+        """
+        literal = self.defn.params.get("headers")
+        literal_refs = (
+            {header: ref for header, value in literal.items() if (ref := secret_ref(value))}
+            if isinstance(literal, dict)
+            else {}
+        )
+        headers = rendered.get("headers")
+        if isinstance(headers, dict):
+            pairs: list[tuple[Any, Any]] = list(headers.items())
+        elif isinstance(headers, list):
+            pairs = [
+                (item[0], item[1])
+                for item in headers
+                if isinstance(item, (list, tuple)) and len(item) == 2
+            ]
+        else:
+            pairs = []
+        found: dict[str, SecretRef] = {}
+        for header, value in pairs:
+            if not has_secret_key(value):
+                continue
+            ref = secret_ref(value)
+            if (
+                not isinstance(headers, dict)
+                or ref is None
+                or literal_refs.get(header) != ref
+            ):
+                raise ValueError(
+                    f"Tool effect '{self.defn.name}' params.headers.{header}: a "
+                    "{secret: ...} value is honoured only when the document writes "
+                    "it in params.headers itself."
+                )
+            found[str(header)] = ref
+        return found
+
+    def _runtime_with_env_secrets(self, secrets: SecretValues) -> dict[str, Any]:
+        """The runtime config the plugin is built from: this provider's
+        ``runtime.plugins.<name>.env`` with each ``{secret: ...}`` value
+        resolved (#598). Unchanged when it names none."""
+        plugin_name = self.defn.provider.strip().lower()
+        plugins = self.runtime_config.get("plugins")
+        cfg = plugins.get(plugin_name) if isinstance(plugins, dict) else None
+        env = cfg.get("env") if isinstance(cfg, dict) else None
+        for var, value in env.items() if isinstance(env, dict) else ():
+            problem = secret_ref_error(value) if has_secret_key(value) else None
+            if problem is not None:
+                raise SecretError(f"runtime.plugins.{plugin_name}.env.{var}: {problem}.")
+        refs = env_secret_refs(env)
+        if not refs or not isinstance(plugins, dict) or not isinstance(cfg, dict):
+            return self.runtime_config
+        assert isinstance(env, dict)
+        resolved_env = {
+            **env,
+            **{var: secrets.resolve(ref, self.runtime_config) for var, ref in refs.items()},
+        }
+        return {
+            **self.runtime_config,
+            "plugins": {**plugins, plugin_name: {**cfg, "env": resolved_env}},
+        }
 
     def _is_retryable_failure(
         self, *, status_code: int | None, failure: BaseException | None = None
@@ -580,7 +723,6 @@ class ToolRuntime:
             node["meta"] = meta
 
         indent = "  " * self.depth
-        timeout_seconds = self._resolve_timeout_seconds()
 
         if self.verbose and self.cb_start is not None:
             self.cb_start()
@@ -632,7 +774,15 @@ class ToolRuntime:
             self.runtime_config,
         )
 
+        is_cel = self.defn.provider.strip().lower() == "cel"
+        # The secrets this pass resolved (#598): resolved once, at dispatch,
+        # and scrubbed out of everything the plugin returns or raises.
+        dispatch_secrets = SecretValues()
         next_delay_ms = backoff_ms
+        # An agent's `params.prompt: {file: {from: ...}, within: ...}` (#591),
+        # read once on this pass's first attempt: a retry and the session's
+        # repair turn use the same text.
+        prompt_file_read: DispatchFileText | None = None
         # Summed across this pass's attempts (retried or not) the same way
         # a prompt effect's tokens_sent_total/tokens_received_total do —
         # usage an earlier, failed attempt spent still counts even when a
@@ -684,17 +834,35 @@ class ToolRuntime:
             meta.pop("tokens_sent_total", None)
             meta.pop("tokens_received_total", None)
             meta.pop("cost_usd", None)
+            meta.pop("stdout_chars", None)
+            meta.pop("stdout_sha256", None)
+            meta.pop("template_files", None)
             meta["waiting_for"] = None
 
             target = self.defn.provider  # fallback if build_plugin fails before we can compute it
             result: ToolResult | None = None
             failure: Exception | None = None
             retryable = False
+            timeout_unresolved = False
+            prompt_file_unread = False
+            secret_unresolved = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
             retry_after: str | None = None
             try:
+                if attempt_index == 0 and self.defn.prompt_file is not None:
+                    try:
+                        prompt_file_read = read_dispatch_file(
+                            self.defn.prompt_file,
+                            ctx,
+                            field="params.prompt",
+                            effect_label=f"Tool effect '{self.defn.name}'",
+                        )
+                    except ValueError:
+                        prompt_file_unread = True
+                        raise
+
                 # Render top-level prompt/model, then merge with params (params take precedence)
                 top_level: dict[str, Any] = {}
                 declared = declared_prompts(self.runtime_config)
@@ -711,30 +879,98 @@ class ToolRuntime:
                     top_level["model"] = self.defn.model
 
                 _reject_templated_security_params(self.defn.params)
-                params = _render_params(
-                    self.defn.params,
-                    ctx,
-                    name=self.defn.name,
-                    declared=declared,
-                    known_names=known_names,
+                params = (
+                    # Literal: `cof check` parsed and scope-checked the
+                    # expression as written (#597).
+                    dict(self.defn.params)
+                    if is_cel
+                    else _render_params(
+                        self.defn.params,
+                        ctx,
+                        name=self.defn.name,
+                        declared=declared,
+                        known_names=known_names,
+                    )
                 )
                 if self.defn.params_json is not None:
                     params_json_overlay = _render_params_json(
                         self.defn.params_json, ctx, declared=declared, known_names=known_names
                     )
                     _reject_params_json_security_overrides(params_json_overlay)
+                    if self.defn.provider.strip().lower() == "systemone":
+                        from ..plugins.systemone import reject_overlay_within
+
+                        reject_overlay_within(params_json_overlay)
+                    if self.defn.provider.strip().lower() == "agent":
+                        from ..plugins.agent import reject_overlay_prompt
+
+                        reject_overlay_prompt(
+                            params_json_overlay,
+                            prompt_from_file=self.defn.prompt_file is not None,
+                        )
                     params = _deep_merge_params(params, params_json_overlay)
 
                 rendered = {**top_level, **params}
+                plugin_params = rendered
+                if prompt_file_read is not None:
+                    # State records the file, never its text.
+                    rendered["prompt"] = {
+                        "file": prompt_file_read.record["path"],
+                        "within": prompt_file_read.within,
+                    }
+                    plugin_params = {**rendered, "prompt": prompt_file_read.text}
+                secret_headers: dict[str, SecretRef] = {}
+                if self.defn.provider.strip().lower() == "http":
+                    secret_headers = self._secret_headers(rendered)
                 meta["params_rendered"] = redact(rendered)
+                if secret_headers:
+                    # Recorded as the placeholder, whatever the header's name.
+                    meta["params_rendered"]["headers"].update(
+                        {header: ref.placeholder for header, ref in secret_headers.items()}
+                    )
+                    try:
+                        plugin_params = {
+                            **plugin_params,
+                            "headers": {
+                                **rendered["headers"],
+                                **{
+                                    header: dispatch_secrets.resolve(ref, self.runtime_config)
+                                    for header, ref in secret_headers.items()
+                                },
+                            },
+                        }
+                    except SecretError:
+                        secret_unresolved = True
+                        raise
+                if prompt_file_read is not None:
+                    meta["template_files"] = [prompt_file_read.record]
                 mtag = _model_tag(rendered)
+
+                # Per attempt, from the state this attempt sees (#564). A
+                # reference that can't resolve is not retried: a retry reads
+                # the same state.
+                try:
+                    timeout_seconds = self._resolve_timeout_seconds(ctx)
+                except ValueError:
+                    timeout_unresolved = True
+                    raise
 
                 # Build plugin early so we can use its target string in the spinner
                 # (require_tool/require_within_ceiling already checked once
                 # above, before the first attempt)
+                try:
+                    plugin_runtime = self._runtime_with_env_secrets(dispatch_secrets)
+                except SecretError:
+                    secret_unresolved = True
+                    raise
                 plugin = build_plugin(
                     plugin_name=self.defn.provider,
-                    runtime=self.runtime_config,
+                    runtime=plugin_runtime,
+                    **(
+                        {"limited": True, "confine_to": self.defn.confine_to}
+                        if self.defn.limited
+                        else {}
+                    ),
                 )
                 target = _plugin_target(plugin, mtag)
 
@@ -788,11 +1024,37 @@ class ToolRuntime:
                         live_cm = nullcontext()
 
                     with live_cm:
-                        result = plugin.execute(params=rendered, timeout_seconds=timeout_seconds)
+                        if isinstance(plugin, CelPlugin):
+                            result = plugin.evaluate(params=plugin_params, ctx=ctx)
+                        elif isinstance(plugin, HttpPlugin):
+                            result = plugin.execute(
+                                params=plugin_params,
+                                timeout_seconds=timeout_seconds,
+                                secret_headers=frozenset(
+                                    header.lower() for header in secret_headers
+                                ),
+                                scrub_secrets=dispatch_secrets.scrub,
+                            )
+                        else:
+                            result = plugin.execute(
+                                params=plugin_params, timeout_seconds=timeout_seconds
+                            )
+                if dispatch_secrets:
+                    result = _scrub_result(result, dispatch_secrets)
 
             except Exception as e:
                 failure = e
-                retryable = self._is_retryable_failure(status_code=None, failure=e)
+                retryable = (
+                    not timeout_unresolved
+                    and not prompt_file_unread
+                    and not secret_unresolved
+                    and self._is_retryable_failure(status_code=None, failure=e)
+                )
+                if dispatch_secrets:
+                    scrubbed = dispatch_secrets.scrub(str(e))
+                    if scrubbed != str(e):
+                        # A new error, so no traceback or cause carries the value.
+                        failure = RuntimeError(scrubbed)
 
             if failure is not None:
                 meta["error"] = str(failure)
@@ -838,7 +1100,10 @@ class ToolRuntime:
             assert result is not None
 
             node["value"] = result.value
-            meta["stdout"] = result.stdout
+            if self._drop_parsed_stdout and result.stdout_parsed and result.stdout is not None:
+                meta.update(dropped_stdout_fields(result.stdout))
+            else:
+                meta["stdout"] = result.stdout
             meta["stderr"] = result.stderr
             meta["exit_code"] = result.exit_code
             status_code: int | None = None

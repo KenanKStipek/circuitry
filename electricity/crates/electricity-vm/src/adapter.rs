@@ -227,6 +227,10 @@ impl Adapter for NoopAdapter {
 /// builder callables, registered under their canonical lower-case name.
 pub type AdapterBuilder = Box<dyn Fn(&Value) -> Result<Box<dyn Adapter>, AdapterError>>;
 
+/// A builder that also takes the name the instance reports -- an
+/// adapter alias's own name (`adapters/factory.py::_ALIAS_BUILDERS`).
+pub type NamedAdapterBuilder = Box<dyn Fn(&str, &Value) -> Result<Box<dyn Adapter>, AdapterError>>;
+
 /// `adapters/factory.py::ADAPTER_REGISTRY` plus `build_adapter`, ported
 /// -- a name -> builder lookup, built fresh per call
 /// ([`AdapterRegistry::build`]) rather than holding long-lived
@@ -236,6 +240,30 @@ pub type AdapterBuilder = Box<dyn Fn(&Value) -> Result<Box<dyn Adapter>, Adapter
 #[derive(Default)]
 pub struct AdapterRegistry {
     builders: HashMap<String, AdapterBuilder>,
+    /// The adapters an alias may be based on (`claude_code`, `pi`).
+    alias_bases: HashMap<String, NamedAdapterBuilder>,
+}
+
+/// `runtime.adapters.<name>` as a dict, when it is one.
+fn adapter_entry<'a>(runtime_config: &'a Value, name: &str) -> Option<&'a electricity_value::Dict> {
+    runtime_config
+        .as_dict()?
+        .get(&Value::Str("adapters".to_string()))?
+        .as_dict()?
+        .get(&Value::Str(name.to_string()))?
+        .as_dict()
+}
+
+fn sets_adapter(entry: &electricity_value::Dict) -> bool {
+    entry.contains_key(&Value::Str("adapter".to_string()))
+}
+
+fn value_error(message: String) -> AdapterError {
+    AdapterError {
+        message,
+        retry: RetryInfo::not_retryable(),
+        py_class: PyExc::ValueError,
+    }
 }
 
 impl AdapterRegistry {
@@ -249,6 +277,18 @@ impl AdapterRegistry {
     /// normalizes a *lookup*).
     pub fn register(&mut self, name: &str, builder: AdapterBuilder) {
         self.builders.insert(name.to_string(), builder);
+    }
+
+    /// Registers *builder* as the one an alias of *name* is built with.
+    /// *name* is also registered with [`AdapterRegistry::register`].
+    pub fn register_alias_base(&mut self, name: &str, builder: NamedAdapterBuilder) {
+        self.alias_bases.insert(name.to_string(), builder);
+    }
+
+    /// `adapters/factory.py::alias_names` for one name: whether
+    /// `runtime.adapters.<name>` sets `adapter`, valid alias or not.
+    pub fn is_alias(&self, name: &str, runtime_config: &Value) -> bool {
+        adapter_entry(runtime_config, name).is_some_and(sets_adapter)
     }
 
     /// Every name *this registry* actually has a builder for, sorted --
@@ -282,6 +322,9 @@ impl AdapterRegistry {
         runtime_config: &Value,
     ) -> Result<Box<dyn Adapter>, AdapterError> {
         let normalized = electricity_value::pycompat::py_strip(adapter_name).to_lowercase();
+        if self.is_alias(&normalized, runtime_config) {
+            return self.build_alias(&normalized, runtime_config);
+        }
         let builder = self.builders.get(normalized.as_str()).ok_or_else(|| {
             let supported = crate::adapter_names::ADAPTER_NAMES.join(", ");
             AdapterError {
@@ -295,6 +338,54 @@ impl AdapterRegistry {
         })?;
         let cfg = adapter_config_slice(runtime_config, &normalized);
         builder(&cfg)
+    }
+}
+
+impl AdapterRegistry {
+    /// `adapters/factory.py::_build_alias`: the base adapter built from
+    /// the alias's own settings, under the alias's name. The base's own
+    /// `runtime.adapters` entry is not consulted.
+    fn build_alias(
+        &self,
+        name: &str,
+        runtime_config: &Value,
+    ) -> Result<Box<dyn Adapter>, AdapterError> {
+        if crate::adapter_names::ADAPTER_NAMES.contains(&name) {
+            return Err(value_error(format!(
+                "runtime.adapters.{name}.adapter is set, but {} is a built-in adapter; \
+                 an alias needs a name of its own",
+                Value::Str(name.to_string()).py_repr()
+            )));
+        }
+        let entry = adapter_entry(runtime_config, name).expect("is_alias found this entry");
+        let raw_base = entry
+            .get(&Value::Str("adapter".to_string()))
+            .expect("is_alias found the adapter key");
+        let base = match raw_base {
+            Value::Str(text) => Some(electricity_value::pycompat::py_strip(text).to_lowercase()),
+            _ => None,
+        };
+        let builder = base
+            .as_deref()
+            .and_then(|base| self.alias_bases.get(base).map(|builder| (base, builder)));
+        let Some((_, builder)) = builder else {
+            let itself_alias = base.as_deref().is_some_and(|base| {
+                !crate::adapter_names::ADAPTER_NAMES.contains(&base)
+                    && adapter_entry(runtime_config, base).is_some_and(sets_adapter)
+            });
+            return Err(value_error(format!(
+                "runtime.adapters.{name}.adapter must be claude_code or pi, got {}{}",
+                raw_base.py_repr(),
+                if itself_alias {
+                    ", which is itself an alias"
+                } else {
+                    ""
+                }
+            )));
+        };
+        let mut settings = entry.clone();
+        settings.shift_remove(&Value::Str("adapter".to_string()));
+        builder(name, &Value::Dict(settings))
     }
 }
 
@@ -418,5 +509,177 @@ mod tests {
         assert!(!NoopAdapter.accepts_images());
         assert!(NotImplementedAdapter.check().await.ok);
         assert!(!NotImplementedAdapter.accepts_images());
+    }
+
+    struct NamedStub(String);
+
+    #[async_trait(?Send)]
+    impl Adapter for NamedStub {
+        fn name(&self) -> &str {
+            &self.0
+        }
+
+        async fn generate(
+            &self,
+            _model: &str,
+            _prompt: &str,
+            _options: &GenerateOptions,
+            _call: &CallContext<'_>,
+        ) -> Result<GenerateResult, AdapterError> {
+            unreachable!("never generated")
+        }
+
+        async fn check(&self) -> CheckResult {
+            CheckResult::default()
+        }
+    }
+
+    fn alias_registry() -> AdapterRegistry {
+        let mut registry = AdapterRegistry::new();
+        for base in ["claude_code", "pi"] {
+            registry.register(
+                base,
+                Box::new(|_cfg| Ok(Box::new(NamedStub("builtin".to_string())) as Box<dyn Adapter>)),
+            );
+            registry.register_alias_base(
+                base,
+                Box::new(|name, cfg| {
+                    let seen = cfg
+                        .as_dict()
+                        .map(|d| {
+                            d.keys()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default();
+                    Ok(Box::new(NamedStub(format!("{name}[{seen}]"))) as Box<dyn Adapter>)
+                }),
+            );
+        }
+        registry
+    }
+
+    fn runtime(adapters: Value) -> Value {
+        let mut d = electricity_value::Dict::new();
+        d.insert(Value::Str("adapters".to_string()), adapters);
+        Value::Dict(d)
+    }
+
+    fn entry(pairs: &[(&str, Value)]) -> Value {
+        let mut d = electricity_value::Dict::new();
+        for (k, v) in pairs {
+            d.insert(Value::Str((*k).to_string()), v.clone());
+        }
+        Value::Dict(d)
+    }
+
+    fn build_err(registry: &AdapterRegistry, name: &str, runtime: &Value) -> String {
+        match registry.build(name, runtime) {
+            Err(err) => {
+                assert_eq!(err.py_class, PyExc::ValueError);
+                err.message
+            }
+            Ok(_) => panic!("expected a config error"),
+        }
+    }
+
+    #[test]
+    fn an_alias_builds_its_base_from_its_own_settings_under_its_own_name() {
+        let registry = alias_registry();
+        let rt = runtime(entry(&[
+            (
+                "claude_code",
+                entry(&[("binary", Value::Str("base".to_string()))]),
+            ),
+            (
+                "claude_alt",
+                entry(&[
+                    ("adapter", Value::Str(" Claude_Code ".to_string())),
+                    ("binary", Value::Str("alt".to_string())),
+                ]),
+            ),
+        ]));
+        let alias = registry.build("claude_alt", &rt).unwrap();
+        // the `adapter` key is consumed; the alias's own settings pass on
+        assert_eq!(alias.name(), "claude_alt[binary]");
+        assert_eq!(
+            registry.build("claude_code", &rt).unwrap().name(),
+            "builtin"
+        );
+        assert!(registry.is_alias("claude_alt", &rt));
+        assert!(!registry.is_alias("claude_code", &rt));
+    }
+
+    #[test]
+    fn an_entry_without_adapter_is_not_an_alias() {
+        let registry = alias_registry();
+        let rt = runtime(entry(&[(
+            "claude_alt",
+            entry(&[("binary", Value::Str("x".to_string()))]),
+        )]));
+        assert!(
+            registry
+                .build("claude_alt", &rt)
+                .err()
+                .unwrap()
+                .message
+                .starts_with("Unknown adapter: 'claude_alt'.")
+        );
+    }
+
+    #[test]
+    fn an_alias_with_a_bad_base_is_a_config_error_naming_it() {
+        let registry = alias_registry();
+        let rt = runtime(entry(&[
+            (
+                "a",
+                entry(&[("adapter", Value::Str("nonesuch".to_string()))]),
+            ),
+            ("b", entry(&[("adapter", Value::Str("openai".to_string()))])),
+            ("c", entry(&[("adapter", Value::from(5i64))])),
+            ("d", entry(&[("adapter", Value::Str("e".to_string()))])),
+            ("e", entry(&[("adapter", Value::Str("pi".to_string()))])),
+        ]));
+        assert_eq!(
+            build_err(&registry, "a", &rt),
+            "runtime.adapters.a.adapter must be claude_code or pi, got 'nonesuch'"
+        );
+        assert_eq!(
+            build_err(&registry, "b", &rt),
+            "runtime.adapters.b.adapter must be claude_code or pi, got 'openai'"
+        );
+        assert_eq!(
+            build_err(&registry, "c", &rt),
+            "runtime.adapters.c.adapter must be claude_code or pi, got 5"
+        );
+        assert_eq!(
+            build_err(&registry, "d", &rt),
+            "runtime.adapters.d.adapter must be claude_code or pi, got 'e', which is itself an alias"
+        );
+    }
+
+    #[test]
+    fn an_alias_named_like_a_built_in_adapter_is_a_config_error() {
+        let registry = alias_registry();
+        let rt = runtime(entry(&[
+            (
+                "pi",
+                entry(&[("adapter", Value::Str("claude_code".to_string()))]),
+            ),
+            (
+                "openai",
+                entry(&[("adapter", Value::Str("pi".to_string()))]),
+            ),
+        ]));
+        for name in ["pi", "openai"] {
+            assert_eq!(
+                build_err(&registry, name, &rt),
+                format!(
+                    "runtime.adapters.{name}.adapter is set, but '{name}' is a built-in adapter; \
+                     an alias needs a name of its own"
+                )
+            );
+        }
     }
 }

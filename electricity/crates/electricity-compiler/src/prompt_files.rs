@@ -50,8 +50,10 @@
 //!   §12).
 
 use crate::{CompileError, DocumentOrigin};
+use electricity_bytecode::DispatchFile;
 use electricity_value::Value;
 use indexmap::IndexMap;
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io;
@@ -136,23 +138,30 @@ pub(crate) fn resolve_text_or_file(
     if let Value::Str(s) = value {
         return Ok(s.clone());
     }
+    if is_dispatch_file(value) {
+        return Err(CompileError(format!(
+            "{field}: 'file: {{from: <state path>}}' reads a file when the effect \
+             dispatches, and is only for a prompt effect's 'template' and \
+             messages[].content."
+        )));
+    }
     if let Some(file_value) = file_shaped(value) {
-        let DocumentOrigin::File {
-            document_dir,
-            confinement_root,
-        } = origin
-        else {
-            return Err(CompileError(format!(
-                "{field}: 'file:' cannot be used here — this document has no \
-                 file of its own (it was generated at run time, or has no \
-                 path: stdin, an SDK string, a 'use: inline' child)."
-            )));
+        let Some((document_dir, confinement_root)) = origin.file_dirs() else {
+            return Err(no_file_of_its_own(field));
         };
         return resolve_prompt_file(file_value, field, document_dir, confinement_root);
     }
     Err(CompileError(format!(
         "{field} must be a string or {{file: <path>}}."
     )))
+}
+
+fn no_file_of_its_own(field: &str) -> CompileError {
+    CompileError(format!(
+        "{field}: 'file:' cannot be used here — this document has no \
+         file of its own (it was generated at run time, or has no \
+         path: stdin, an SDK string, a 'use: inline' child)."
+    ))
 }
 
 /// The resolved, confined filesystem path a `{file: <path_str>}` names,
@@ -201,7 +210,7 @@ pub(crate) fn resolve_prompt_file_path(
         ))
     })?;
 
-    if resolved != confinement_resolved && !resolved.starts_with(&confinement_resolved) {
+    if !path_is_inside(&resolved, &confinement_resolved) {
         return Err(CompileError(format!(
             "{field}: 'file' {} resolves outside the project ({}) — 'file:' \
              paths must stay inside it.",
@@ -270,6 +279,330 @@ fn resolve_prompt_file(
     Ok(universal_newlines(&text))
 }
 
+/// `core/prompt_files.py::is_dispatch_file`: the `{file: {from: ...}, ...}`
+/// shape, valid or not.
+pub fn is_dispatch_file(value: &Value) -> bool {
+    let Value::Dict(dict) = value else {
+        return false;
+    };
+    matches!(
+        dict.get(&Value::Str("file".to_string())),
+        Some(Value::Dict(_))
+    )
+}
+
+/// `within: {from: input.<name>}`'s path: one non-empty name under `input`,
+/// holding no `.`, whitespace, `{` or `}` -- `_WITHIN_INPUT_PATH`.
+fn is_within_input_path(path: &str) -> bool {
+    let Some(name) = path.strip_prefix("input.") else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.chars().any(|c| {
+            c == '.' || c == '{' || c == '}' || electricity_value::pycompat::is_py_whitespace(c)
+        })
+}
+
+/// `core/prompt_files.py::compile_dispatch_file`: checks a `{file: {from:
+/// <path>}, within: <dir>}` and compiles it. *trusted* is true for a
+/// document run by path: only then can a literal `within` leave the
+/// project.
+pub(crate) fn compile_dispatch_file(
+    dict: &electricity_value::Dict,
+    field: &str,
+    effect_path: &str,
+    loop_names: &std::collections::BTreeSet<String>,
+    origin: &DocumentOrigin,
+) -> Result<DispatchFile, CompileError> {
+    let Some((_, confinement_root)) = origin.file_dirs() else {
+        return Err(no_file_of_its_own(field));
+    };
+    let trusted = matches!(origin, DocumentOrigin::File { .. });
+    let key = |name: &str| Value::Str(name.to_string());
+    let Some(within_raw) = dict.get(&key("within")) else {
+        return Err(CompileError(format!(
+            "{field}: 'within' is required with 'file: {{from: <path>}}' — the \
+             directory the file must stay inside."
+        )));
+    };
+    let mut extra: Vec<String> = dict
+        .keys()
+        .filter(|k| **k != key("file") && **k != key("within"))
+        .map(Value::py_str)
+        .collect();
+    if !extra.is_empty() {
+        extra.sort();
+        let listed: Vec<String> = extra.iter().map(|k| repr_str(k)).collect();
+        return Err(CompileError(format!(
+            "{field}: 'file: {{from: <path>}}' takes only 'file' and 'within'; got [{}].",
+            listed.join(", ")
+        )));
+    }
+
+    let Some(Value::Dict(file_ref)) = dict.get(&key("file")) else {
+        unreachable!("is_dispatch_file already checked 'file' is a mapping");
+    };
+    let from_value = file_ref.get(&key("from"));
+    let path_from = match from_value {
+        Some(Value::Str(from))
+            if file_ref.len() == 1 && !electricity_value::pycompat::py_strip(from).is_empty() =>
+        {
+            electricity_value::pycompat::py_strip(from).to_string()
+        }
+        _ => {
+            return Err(CompileError(format!(
+                "{field}: 'file' must be a path, or {{from: <state path>}}; got {}.",
+                Value::Dict(file_ref.clone()).py_repr()
+            )));
+        }
+    };
+    crate::state_ns::validate_reference_path(
+        &path_from,
+        &format!("Prompt {field} file"),
+        effect_path,
+        loop_names,
+    )?;
+
+    let mut within: Option<String> = None;
+    let mut within_from: Option<String> = None;
+    match within_raw {
+        Value::Str(text) => {
+            if text.contains("{{") || text.contains("}}") {
+                return Err(CompileError(format!(
+                    "{field}: 'within' must be a literal path — it cannot contain a \
+                     template tag: {}.",
+                    repr_str(text)
+                )));
+            }
+            if electricity_value::pycompat::py_strip(text).is_empty()
+                || !Path::new(text).is_absolute()
+            {
+                return Err(CompileError(format!(
+                    "{field}: 'within' must be an absolute path, or {{from: input.<name>}}; \
+                     got {}.",
+                    repr_str(text)
+                )));
+            }
+            within = Some(text.clone());
+        }
+        Value::Dict(within_ref)
+            if within_ref.len() == 1
+                && matches!(
+                    within_ref.get(&key("from")),
+                    Some(Value::Str(from)) if is_within_input_path(electricity_value::pycompat::py_strip(from))
+                ) =>
+        {
+            if let Some(Value::Str(from)) = within_ref.get(&key("from")) {
+                within_from = Some(electricity_value::pycompat::py_strip(from).to_string());
+            }
+        }
+        other => {
+            return Err(CompileError(format!(
+                "{field}: 'within' must be an absolute path, or {{from: input.<name>}} — \
+                 never an effect's output; got {}.",
+                other.py_repr()
+            )));
+        }
+    }
+
+    let confine_to = if trusted {
+        None
+    } else {
+        Some(confinement_root.display().to_string())
+    };
+    if let (Some(within), Some(root)) = (&within, &confine_to) {
+        let resolved_within = resolve_non_strict(Path::new(within)).map_err(|err| {
+            CompileError(format!(
+                "{field}: could not resolve 'within' {}: {err}",
+                repr_str(within)
+            ))
+        })?;
+        let resolved_root = resolve_non_strict(Path::new(root)).map_err(|err| {
+            CompileError(format!(
+                "{field}: could not resolve 'within' {}: {err}",
+                repr_str(within)
+            ))
+        })?;
+        if !path_is_inside(&resolved_within, &resolved_root) {
+            return Err(CompileError(format!(
+                "{field}: 'within' {} resolves outside the project ({}) — a limited \
+                 document's 'within' must stay inside it.",
+                repr_str(within),
+                resolved_root.display()
+            )));
+        }
+    }
+    Ok(DispatchFile {
+        path_from,
+        within,
+        within_from,
+        confine_to,
+    })
+}
+
+/// What [`read_dispatch_file`] read: the text and its
+/// `meta.template_files` record's own fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchFileRead {
+    pub text: String,
+    pub path: String,
+    pub sha256: String,
+    pub chars: usize,
+}
+
+/// `core/prompt_files.py::read_dispatch_file`, with the two state values
+/// already resolved by the caller (*raw_path* from `source.path_from`,
+/// *within_value* from `source.within_from`, `None` when absent): reads the
+/// file the way the effect's dispatch does, verbatim -- bytes decoded as
+/// UTF-8, no newline translation. Every error is the full message,
+/// `"<effect_label>: <field>: <problem>"`.
+pub fn read_dispatch_file(
+    source: &DispatchFile,
+    raw_path: Option<&Value>,
+    within_value: Option<&Value>,
+    field: &str,
+    effect_label: &str,
+) -> Result<DispatchFileRead, String> {
+    let fail = |problem: String| format!("{effect_label}: {field}: {problem}");
+
+    let raw_path_str = match raw_path {
+        Some(Value::Str(text)) if !electricity_value::pycompat::py_strip(text).is_empty() => {
+            text.as_str()
+        }
+        other => {
+            return Err(fail(format!(
+                "'file: {{from: {}}}' resolved to {}; expected a file path string.",
+                source.path_from,
+                other
+                    .map(Value::py_repr)
+                    .unwrap_or_else(|| "None".to_string())
+            )));
+        }
+    };
+
+    let (within_resolved_value, within_label) = match &source.within {
+        Some(literal) => (Some(Value::Str(literal.clone())), repr_str(literal)),
+        None => (
+            within_value.cloned(),
+            format!(
+                "{{from: {}}}",
+                source.within_from.as_deref().unwrap_or_default()
+            ),
+        ),
+    };
+    let within_str = match &within_resolved_value {
+        Some(Value::Str(text)) if Path::new(text).is_absolute() => text.as_str(),
+        other => {
+            return Err(fail(format!(
+                "'within' {within_label} resolved to {}; expected an absolute directory path.",
+                other
+                    .as_ref()
+                    .map(Value::py_repr)
+                    .unwrap_or_else(|| "None".to_string())
+            )));
+        }
+    };
+    if within_str.contains('\0') {
+        return Err(fail(format!(
+            "could not resolve 'within' {}: embedded null byte",
+            repr_str(within_str)
+        )));
+    }
+    let within_dir = resolve_non_strict(Path::new(within_str)).map_err(|err| {
+        fail(format!(
+            "could not resolve 'within' {}: {err}",
+            repr_str(within_str)
+        ))
+    })?;
+    if let Some(root) = &source.confine_to {
+        let project = resolve_non_strict(Path::new(root))
+            .map_err(|err| fail(format!("could not resolve the project directory: {err}")))?;
+        if !path_is_inside(&within_dir, &project) {
+            return Err(fail(format!(
+                "'within' {} resolves outside the project ({}) — a limited document's \
+                 'within' must stay inside it.",
+                repr_str(within_str),
+                project.display()
+            )));
+        }
+    }
+
+    if raw_path_str.contains('\0') {
+        return Err(fail(format!(
+            "could not resolve file {}: embedded null byte",
+            repr_str(raw_path_str)
+        )));
+    }
+    let candidate = Path::new(raw_path_str);
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        within_dir.join(candidate)
+    };
+    let resolved = resolve_non_strict(&joined).map_err(|err| {
+        fail(format!(
+            "could not resolve file {}: {err}",
+            repr_str(raw_path_str)
+        ))
+    })?;
+    if !path_is_inside(&resolved, &within_dir) {
+        return Err(fail(format!(
+            "file {} resolves outside 'within' ({}).",
+            repr_str(raw_path_str),
+            within_dir.display()
+        )));
+    }
+
+    if !resolved.exists() {
+        return Err(fail(format!(
+            "file {} does not exist.",
+            repr_str(raw_path_str)
+        )));
+    }
+    if !resolved.is_file() {
+        return Err(fail(format!(
+            "file {} is not a regular file.",
+            repr_str(raw_path_str)
+        )));
+    }
+    let read_error = |err: io::Error| {
+        fail(format!(
+            "file {} could not be read: {err}",
+            repr_str(raw_path_str)
+        ))
+    };
+    let mut bytes = Vec::new();
+    {
+        use std::io::Read;
+        let file = std::fs::File::open(&resolved).map_err(read_error)?;
+        file.take(MAX_PROMPT_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(read_error)?;
+    }
+    if bytes.len() as u64 > MAX_PROMPT_FILE_BYTES {
+        return Err(fail(format!(
+            "file {} is over the {MAX_PROMPT_FILE_BYTES}-byte limit for a prompt file.",
+            repr_str(raw_path_str)
+        )));
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => {
+            return Err(fail(format!(
+                "file {} is not valid UTF-8: {}",
+                repr_str(raw_path_str),
+                describe_utf8_error(&bytes)
+            )));
+        }
+    };
+    Ok(DispatchFileRead {
+        chars: text.chars().count(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        path: resolved.display().to_string(),
+        text,
+    })
+}
+
 /// Python `repr()` of a plain string -- every `{path_str!r}` in
 /// `core/prompt_files.py`'s own messages.
 fn repr_str(s: &str) -> String {
@@ -292,6 +625,12 @@ pub(crate) fn file_shaped(value: &Value) -> Option<&Value> {
     } else {
         None
     }
+}
+
+/// `core/prompt_files.py::path_is_inside`: *path* is *root* itself or lies
+/// under it; both already resolved.
+pub(crate) fn path_is_inside(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 /// `\r\n` and a lone `\r` both become `\n` -- Python's universal-newline

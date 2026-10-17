@@ -426,6 +426,7 @@ def score_orchestration(
     profile: ProfileSettings | None = None,
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    trusted: bool = False,
 ) -> list[ScoredEffect]:
     """Compile *orch* and score every prompt effect in the frozen tree.
 
@@ -439,14 +440,17 @@ def score_orchestration(
     own, the same ``compile_orchestration`` contract every other caller
     honours; a path-run document with a real file always has both, or this
     preview rejects it with "this document has no file of its own" even
-    though ``cof run`` on the exact same file would not.
+    though ``cof run`` on the exact same file would not. *trusted* is true for
+    a document the caller named by path (``cof score``), as in a run.
     """
     _load_compiler_chain()
     root = compile_orchestration(
-        orch=orch, document_dir=document_dir, confinement_root=confinement_root
+        orch=orch, document_dir=document_dir, confinement_root=confinement_root, trusted=trusted
     )
     if profile is not None and profile.effects:
-        root, _matched = apply_effect_overrides(root, profile.effects)
+        root, _matched = apply_effect_overrides(
+            root, profile.effects, profile_name=profile.name
+        )
 
     rows: list[ScoredEffect] = []
     for child in root.effects:
@@ -637,6 +641,7 @@ def register_score(app: typer.Typer) -> None:
                 profile=profile_settings,
                 document_dir=_document_dir,
                 confinement_root=default_project_root(_document_dir),
+                trusted=True,
             )
         except ValueError as exc:
             # A tree that will not compile cannot be previewed; report it the

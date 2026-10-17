@@ -1,0 +1,9 @@
+name: c564-timeout-from-state-bad-root
+effects:
+  - type: tool
+    name: result
+    provider: json
+    timeout_ms: {from: budget_ms}
+    params:
+      mode: stringify
+      input: 1

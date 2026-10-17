@@ -1,0 +1,3 @@
+{
+  "error": "CEL expression at 'prime.effects[1]' (effect 'broken'): expression does not parse (state.input.x &&\n              ^). Expression: 'state.input.x &&'"
+}

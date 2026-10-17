@@ -93,7 +93,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 |-------|------|----------|---------|-------------|
 | `type` | `"prompt"` | yes | — | |
 | `name` | string | yes | — | Pattern `^[A-Za-z_][A-Za-z0-9_]*$`; `iter_<N>` reserved; `value`/`meta`/`input`/`prime`/`runtime` reserved |
-| `template` | string | one-of | — | Mustache template; mutually exclusive with `messages` |
+| `template` | string or `{file: …}` | one-of | — | Mustache template; mutually exclusive with `messages`. Or `{file: <path>}` to load it from a file when the document loads, or `{file: {from: <state path>}, within: <dir>}` to read it when the effect dispatches — see [Prompt files](#prompt-files-file-path) |
 | `messages` | array | one-of | — | Role-based messages; mutually exclusive with `template`. Sent as real conversation turns (a system message, then user/assistant turns) to adapters that take them — see [Generation options](#generation-options-messages-and-images) |
 | `prompt_type` | string | no | `text` | `text`, `json`, `boolean`, `number`, `array`, `object`, `tool`. `boolean`/`number` parse the reply leniently (`Yes.`, `**TRUE**`, `42.`, `1e3` all read correctly; wrapping quotes/markdown/punctuation stripped first) and raise — rather than decoding to `null` — on a reply that still doesn't parse; `provider_fallbacks` (see below), when configured, is tried before `on_error`/`retries` apply. Raw reply kept on `meta.answer` |
 | `schema` | object | no | — | JSON Schema for validating structured output |
@@ -102,7 +102,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `provider` | string | no | — | Per-effect provider override |
 | `provider_fallbacks` | array | no | — | Ordered fallback providers. Tried on a dispatch failure *and* on a reply this effect can't use (an unreadable boolean/number, schema-invalid JSON) — either moves to the next provider before a retry is counted. Each attempt lands in `meta.fallback_attempts` with its own `tokens_sent`/`tokens_received` and, for an unusable reply, a size-capped `raw_reply` and a `decode_failed`/`schema_invalid` status |
 | `params` | object | no | — | Generation parameters. `temperature`, `max_tokens` and `stop` are mapped to each provider's own names; every other key goes to the provider unchanged (e.g. ollama `num_ctx`, OpenAI `top_p`) — see [Generation options](#generation-options-messages-and-images) |
-| `timeout_ms` | integer | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout |
+| `timeout_ms` | integer or `{from, default}` | no | — | Per-attempt timeout in milliseconds, capped by the timeout of whichever adapter that attempt actually dispatches to (`runtime.adapters.<name>.timeout_seconds` for *that* adapter — not necessarily the run default's, if `provider:`/`provider_fallbacks` sends the attempt elsewhere); rounded up to whole seconds. `0` or absent: the adapter's timeout. Or read it from state, `{from: <path>, default: <int>}`: see [`timeout_ms` from state](#timeout_ms-from-state) |
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
@@ -163,6 +163,8 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.finish_reason` — the provider's stop reason (`stop`, `length`, `end_turn`, `max_tokens`, ...) when it reports one.
 - `meta.warnings` — a reply cut off at the length limit (`finish_reason` `length`/`max_tokens`), options an adapter ignored, an asset kind no adapter sends.
 - `meta.cost_usd` — the winning attempt's cost in US dollars, when its adapter reports one (`pi`, `claude_code`). The run's `runtime.last_run.totals.cost_usd` sums it.
+- `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
+- `meta.template_files` — one `{field, path, sha256, chars}` per `file: {from: ...}` source read at dispatch. See [Reading a prompt file at dispatch](#reading-a-prompt-file-at-dispatch-file-from-state-path).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
 
 **Example — an image to a local vision model:**
@@ -186,6 +188,33 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 
 A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the timeout of whichever adapter the attempt actually dispatches to, so it can only shorten the wait — that's `ollama`'s own configured timeout here even when `ollama` isn't the run's default adapter, as long as this prompt's `provider:` (or a fallback) names it. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
 
+#### Recording the prompt text (`runtime.state.prompt_sent`)
+
+Every `prompt` effect records the text it sent in `meta.prompt_sent`, with no cap: a document that sends many large prompts keeps every one of them in its saved state (`--out`, `--live-state`, `--resume`, persistence). `runtime.state.prompt_sent` decides what that one field holds. Like `record_children`, it sits under `runtime.state`, so it applies however the document arrives (config, or the document's own `runtime:` block). A document's `runtime.state` block replaces the config's whole `state` block, so a host cannot impose `prompt_sent` on a document that sets any `runtime.state` key; a document that wants it together with `record_children` sets both.
+
+| Value | `meta.prompt_sent` |
+|-------|--------------------|
+| `full` (default) | the whole text |
+| `sha256` | `null` |
+| `head:<N>` (N ≥ 1) | the first N characters, then the marker `\n[… <M> more characters not recorded]`, `<M>` being the number left out. A text of N characters or fewer is kept whole, with no marker |
+
+```yaml
+runtime:
+  state:
+    prompt_sent: sha256
+```
+
+In every mode, `full` included, two fields describe the whole text:
+
+| Field | Meaning |
+|-------|---------|
+| `meta.prompt_sent_sha256` | the lowercase hex SHA-256 of the text's UTF-8 bytes |
+| `meta.prompt_chars` | its length in Unicode code points |
+
+For a `messages` prompt the setting applies to the flattened `role: content` form that `meta.prompt_sent` holds. Only the record changes: the text in memory is untouched, so what the adapter receives, retries, fallback, complexity scoring and token estimates behave exactly as before. The fields are written alongside `meta.prompt_sent`, whether the prompt succeeds, fails, runs under `on_error: continue`, or is a dry run; a retry's or fallback's attempt record never carries the prompt text. `cof check` rejects any other value, and `head:0`, naming `runtime.state.prompt_sent`.
+
+Runtime plugins read the effect's `meta`, so what they store follows the setting; the bundled SQL persistence plugins keep no prompt text at all and have no column for the two new fields.
+
 #### Coding-agent CLI adapters: `pi` and `claude_code`
 
 `pi` and `claude_code` run a coding-agent CLI headlessly for one completion, through the CLI's own login instead of an API key — a Claude subscription used through Claude Code, or pi with any provider it is logged in to (its `claude-bridge` provider uses Claude Code's login). The CLI's own tools are off and nothing is saved as a session:
@@ -201,7 +230,7 @@ A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_se
 
 `--tools ""` turns off only Claude Code's built-in tools, so `claude_code` also passes `--strict-mcp-config`: no MCP server starts, neither one from your Claude Code config nor a project `.mcp.json`. Each call runs in a fresh temporary directory, so no project's `AGENTS.md`/`CLAUDE.md` is read, and in its own process group: a timeout or a cancelled run (Ctrl-C, SIGTERM) stops the CLI and everything it started. A timeout is retried like any other; a CLI error is not, and fails the attempt with the CLI's own message — an auth failure (`Failed to authenticate. API Error: 401 ...`) or a CLI too old for the requested model (`... version X or newer is required`). `params`, `messages` turns and images are not sent: the prompt arrives flattened, with one warning naming what was ignored.
 
-The child gets the caller's environment minus the variables that make a CLI think it runs inside a parent session (`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — always removed) and minus `unset_env` (by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so the CLI uses its own login rather than a key that happens to be exported). Config, in `runtime.adapters.pi` / `runtime.adapters.claude_code`:
+The child gets the caller's environment minus the variables that make a CLI think it runs inside a parent session (`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PANE_ARGS`, `PI_CODING_AGENT`, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` — always removed) and minus `unset_env` (by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so the CLI uses its own login rather than a key that happens to be exported); `env` is applied last. Config, in `runtime.adapters.pi` / `runtime.adapters.claude_code`:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -211,6 +240,29 @@ The child gets the caller's environment minus the variables that make a CLI thin
 | `timeout_seconds` | the run's adapter timeout | Per-call budget. A CLI retries a failing request on its own before it gives up, which can take minutes |
 | `unset_env` | `["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]` | Variables removed from the CLI's environment; replaces the default list (`[]` keeps both) |
 | `extra_args` | `[]` | Extra CLI arguments, added before the prompt (`pi`) or last (`claude_code`) |
+| `env` | `{}` | Variables set in the CLI's environment, after the always-removed variables and `unset_env` are taken out, so a variable named in both `unset_env` and `env` gets the `env` value. Values are strings; a leading `~/` is the home directory, nothing else is expanded. Only that CLI's child process sees them. The values never appear in saved state, events, logs, error messages or `cof doctor` output (see [Aliases](#aliases-of-the-cli-adapters)) |
+
+##### Aliases of the CLI adapters
+
+A CLI often picks its login or profile from an environment variable (a config directory, say), and a `prompt` effect has no `env` of its own. An **alias** runs `pi` or `claude_code` with settings and an `env` of its own, so one run can send some effects through one login and others through another. Define it where adapter settings already live, `runtime.adapters`:
+
+```json
+{"runtime": {"adapters": {
+  "claude_alt": {
+    "adapter": "claude_code",
+    "env": {"CLAUDE_CONFIG_DIR": "~/.claude-alt"},
+    "timeout_seconds": 1800
+  }
+}}}
+```
+
+- **The base.** `adapter` names the alias's base: `claude_code` or `pi`, and nothing else (not another alias, not an API adapter). Every other key is one of the base's own settings from the table above (`binary`, `default_model`, `thinking` for `pi`, `timeout_seconds`, `unset_env`, `extra_args`) or `env`. An alias starts from nothing: it does not inherit the base's own `runtime.adapters.claude_code` entry, and it never changes that entry or another alias's.
+- **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`. `meta.adapter` records the alias name. `enabled_adapters` lists an alias by its own name, like any adapter.
+- **The child's environment.** In order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
+- **Errors.** A config error names the alias, and never shows an `env` value: an unknown base, or one other than `claude_code` or `pi`; a base that is itself an alias; an alias named like a built-in adapter (any name `cof list --extensions` shows); an `env` that is not a mapping, has a non-string value, or has a variable name that does not match `[A-Za-z_][A-Za-z0-9_]*`. A name that sets no `adapter` is not an alias, whatever else it sets.
+- **`cof check` and `cof doctor`** check the alias's binary, its own `binary` or else the base's default, and report it as `binary:<name>` under the alias's name.
+- **Secrecy.** `env` values are blanked in the `runtime.effective_settings` snapshot of the saved state (the variable names stay) and appear in no event, log, error message or "Applied host settings" line (which lists key paths, such as `runtime.adapters.claude_alt.env`, never values). Treat `env` as host configuration all the same: put a secret in a file the CLI reads, not in a value that config.json holds.
+- **Trust.** An alias is adapter configuration, so the trust boundary is unchanged. A document run by path may define aliases in its `runtime.adapters`, and they are listed in "Applied host settings"; a limited document's `runtime.adapters` is ignored, so an effect of it that names an alias only that document defines fails as an unknown adapter.
 
 **`on_error` and preflight — optional adapters:** `cof check`/`cof run` walk every `adapter`/`provider` an orchestration references and probe its credentials before anything runs (`check()`, see the plugins pages). By default that's a **hard** dependency: a missing credential fails preflight for the whole file, even if only one effect needs it. Set `on_error: skip` (or `continue`) on every `prompt` effect that uses a given adapter and preflight reclassifies it as **soft** — a missing credential downgrades to a warning naming the effects that will skip, and the run proceeds, leaving those effects' `value` as `null`. An adapter is soft only when *every* effect referencing it tolerates failure; one effect without `on_error` handling makes the whole adapter a hard dependency again, and preflight's error names that effect specifically. This looks at each `prompt` effect's own `on_error`, not an enclosing `dynamic`/`loop`/`if` container's — a `prompt` effect nested in a container that tolerates failure still needs its own `on_error: skip`/`continue` to be classified as soft. `cof run --skip-preflight` bypasses preflight entirely (hard and soft alike) — unrelated to this classification.
 
@@ -232,6 +284,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `max_concurrency` | integer | no | unbounded (every child at once) | Max parallel workers when `flow: tree`. No meaning on `flow: chain`, which always runs one child at a time. |
 | `stop_on_error` | boolean | no | `false` | `flow: tree` only. `true` cancels every child that has not started yet as soon as one fails; a child already running cannot be cancelled, finishes on its own, and its failure (if any) is not added to the dynamic's `meta.error` — only the triggering failure is. A cancelled child leaves no node and fires no hooks. No effect on `flow: chain`, where a failing child already stops the ones after it. |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
+| `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this dynamic when its saved node did not finish without error. `continue` goes on at its first unfinished effect; `restart` runs it from its first effect in a fresh state, `finally` as usual. A finished one is skipped either way. Only `dynamic` and `use` take this key. |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
 | `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/SIGTERM/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
 
@@ -667,6 +720,28 @@ rest of the run.
 
 ---
 
+### `timeout_ms` from state
+
+A `prompt` or `tool` effect's `timeout_ms` is an integer literal, or a reference to a value in state that is read when the effect is dispatched:
+
+```yaml
+- type: tool
+  name: session
+  provider: agent
+  timeout_ms: {from: prime.spec.value.timeout_ms, default: 3600000}
+  params_json: "{{{prime.spec.value.agent}}}"
+```
+
+| Key | Type | Required | Constraints |
+|-----|------|----------|-------------|
+| `from` | string | yes | A state path, rooted like every other [`{from:}`](#params-by-reference): `input.`, `prime.`, `runtime.`, or an enclosing loop's binding (`each.as`, `iter`). `cof check` rejects any other root |
+| `default` | integer | no | A positive integer, used when the path is missing (or `null`) |
+
+- **When.** Resolved for each attempt, at the moment that attempt is dispatched, from current state, so a retry reads whatever the state holds by then. In a loop body it sees the iteration's bindings; in a `use` child it sees the child's own `input.*`. `use` has no `timeout_ms` of its own: a child's `prompt` and `tool` effects read theirs from the child's inputs, e.g. `timeout_ms: {from: input.budget_ms}`.
+- **What it must be.** A positive integer. A string (even `"5000"`), a float, a boolean, `0`, a negative number, an array or an object fails the effect, with an error that names the path: `Tool effect 'session': timeout_ms '{from: prime.spec.value.timeout_ms}' resolved to '90'; expected a positive integer.` A resolution failure is not retried: it fails the effect under its `on_error`, like a template that does not render.
+- **Missing.** A path that is missing or holds `null` takes `default`. Without a `default` it fails the effect: `timeout_ms '{from: <path>}' did not resolve to a value and has no default.`
+- **Everything else is as for a literal.** The resolved value is rounded up to whole seconds, a prompt's is capped by the adapter that attempt dispatches to, and `retries` and `on_error` apply as usual. A dry run (`--dry-run`) dispatches nothing and resolves nothing.
+
 ### `tool`
 
 Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously and writes its result to state. Tool effects do not require an `adapter` or `model` at the orchestration level — those fields only need to be set if the orchestration also contains `prompt` effects.
@@ -682,7 +757,7 @@ Executes a non-LLM side-effect via a named plugin. The plugin runs synchronously
 | `model` | string | no | — | Model/checkpoint name. For comfyui: checkpoint filename |
 | `params` | object | no | `{}` | Plugin-specific parameters. All string values support Mustache rendering. A leaf anywhere in `params` (any depth, in objects and lists), `{from: <path>}`, passes the value at that path unchanged instead of rendering it (see [Params by reference](#params-by-reference)). Takes precedence over top-level `prompt`/`model`. Quote every `args` entry: an unquoted `0x1`, `off` or `-0` reaches the tool as `1`, `False`, `0` (`cof check` warns) |
 | `params_json` | string | no | — | A Mustache template rendered to text and parsed as JSON, producing a real array/object instead of a Mustache-rendered string. Deep-merged over `params` (wins on overlapping keys). See [`params_json`](#params_json) below |
-| `timeout_ms` | integer | no | — | Per-effect timeout in milliseconds |
+| `timeout_ms` | integer or `{from, default}` | no | — | Per-effect timeout in milliseconds. Or read it from state, `{from: <path>, default: <int>}`: see [`timeout_ms` from state](#timeout_ms-from-state) |
 | `retries` | object | no | — | `{max_attempts, backoff_ms}` — see [Retries](#tool-retries) below |
 | `expect` | string or object | no | — | Output check, run after a successful attempt — see [`expect`](#tool-expect) below |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
@@ -725,10 +800,27 @@ time.
   is no way to tell "missing" from "stored null" — so it also raises (or
   falls back to `default:`), unlike a `use` effect's input reference, which
   passes `null` through as the value.
-- Only a mapping with exactly the key `from` (optionally plus `default`) is a
+- `as: json` hands the value over as compact JSON text instead (keys in their
+  stored order, non-ASCII text kept as is) — for a param that must be a
+  string, such as a CLI argument in `shell`'s `args`. It works at every place
+  `{from:}` does, list items included, and `default:` is applied before the
+  value is serialized:
+  ```yaml
+  params:
+    command: mytool
+    args: [record, --meta, {from: prime.session.meta, as: json, default: {}}]
+  ```
+  The last `args` entry is then the text `{"k":1}`, or `{}` when
+  `prime.session.meta` didn't resolve. A value JSON can't carry (`NaN`,
+  bytes, ...) fails the effect with `Tool effect '<name>' param '<path>':
+  '{from: ..., as: json}' did not serialize to JSON: ...`. `json` is the only
+  `as` value: `cof check` rejects any other.
+- Only a mapping with the key `from` (optionally plus `default` and `as`) is a
   reference. Any other mapping — including one with other keys mixed in — is
   passed through literally, same as today. To pass a *literal* one-key
-  `{from: ...}` object to a plugin, use `params_json` instead.
+  `{from: ...}` object to a plugin, use `params_json` instead. A
+  `{secret: <name>}` reference follows the same rule (see
+  [Secrets](#secrets-in-http-headers-and-a-subprocess-tools-env)).
 - A security-sensitive param a plugin treats as its own allowlist (today:
   the `shell` plugin's `allowed_commands`) must stay a literal list of
   strings written in the document: `{from: ...}` there — as the whole value
@@ -739,7 +831,7 @@ time.
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 <a id="tool-retries"></a>
-**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's.
+**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's.
 
 <a id="tool-expect"></a>
 **`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?}`).
@@ -751,10 +843,10 @@ Not every plugin can actually be bounded by it:
 | How a plugin honors it | Plugins |
 |---|---|
 | Subprocess timeout (`subprocess.run(timeout=...)` or curl `--max-time`) | Every binary-wrapping plugin: `ffmpeg`, `shell`, `git`, `gh`, `ripgrep`, `sed`, `awk`, `pandoc`, `imagemagick`, `exiftool`, `gpg`, `docker`, `kubectl`, and the rest of that family. `comfyui` and `web_search`/`weather` apply it to their own curl calls |
-| Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
+| Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `systemone`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
 | Sandboxed child process, killed on overrun | `python_eval` |
 | Process-group timeout: the whole group is killed on overrun, the CLI and everything it started | `agent` (one budget for the whole session, its repair turn included) |
-| Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
+| Ignored — pure in-memory, nothing to bound | `cel`, `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `service` (its readiness wait, `params.ready_timeout_ms`, default 60s, is capped by the effect's budget; the process it starts is not bounded by it — it is meant to outlive the call), `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
 **Capability consent (#275):** a document that did not come from the user's
@@ -782,10 +874,10 @@ for the CLI walkthrough. Each provider's capability tag
 | `shell` | `shell`, `agent`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render`, `ffmpeg`, `service` |
 | `python_eval` | `python_eval` |
 | `fs-write` | `agent`, `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
-| `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
+| `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `systemone`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
 
 A provider absent from every row needs no consent: it only reads its own
-parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
+parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
 `uuid`, `base64`, ...).
 
 **Result contract — one meaning for "this tool failed":** a tool effect
@@ -801,6 +893,18 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   other plugin — including the HTTP-family, `mcp_client`, and the
   soft-outcome ones below — always leaves it `None`: it is never an HTTP
   status or a soft 0/1/2 flag.
+- **`parse: json`** — `shell` and the plugins built on the shared
+  subprocess base (`git`, `gh`, `ripgrep`, `docker`, `pytest`, and the rest of
+  that family) accept `parse: json`: `value` is then the parsed JSON of
+  stdout (an object, array or scalar) instead of the text, so a later
+  `{from: prime.<name>.value.ok}` or CEL expression reads real types. The raw
+  stdout stays on `meta.stdout`, unless
+  [`runtime.state.parsed_stdout: drop`](#recording-parsed-stdout-runtimestateparsed_stdout)
+  keeps it out of state. Empty or invalid stdout fails the effect, with `meta.stdout` null,
+  naming the exit code and quoting the first 200 characters of stdout; with
+  `allow_nonzero: true` a non-zero exit's stdout is parsed the same way and
+  `meta.exit_code` keeps the code. Any other `parse` value fails before the
+  process runs.
 - **HTTP-family plugins** (`http`, `web_fetch`, `webhook`, `linear`) fail
   (`ok: false`) on a 4xx/5xx response by default, with the status recorded
   on **`meta.status_code`**. The failure message (`meta.error`, and
@@ -810,7 +914,15 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   sent back is visible without having to read `meta.raw.body` separately.
   Each has a `fail_on_error: false` param that restores the old
   always-succeeds behaviour — the response still lands on
-  `value`/`meta.status_code`, it just doesn't fail the effect.
+  `value`/`meta.status_code`, it just doesn't fail the effect. `http` also
+  fails on a redirect its `redirects` param refuses (see
+  [Redirects](#secrets-in-http-headers-and-a-subprocess-tools-env)).
+- **`systemone`** (typed decisions, see `docs/plugins/systemone.md`) fails
+  and retries like the HTTP family: a 4xx/5xx response fails the effect with
+  `meta.status_code` and a redacted body excerpt, and `meta.raw.error_kind`
+  names the kind (`context_exceeded`, `unauthorized`, `too_large`, `invalid`,
+  ...). It has no `fail_on_error`; it also fails an answer that does not match
+  its question, and any redirect (never followed).
 - **Soft-outcome plugins** (`wikipedia`, `dns`, `port_check`,
   `validate_yaml`) keep `ok: true` regardless of outcome and report it on
   their own fields instead: a missing Wikipedia page or an NXDOMAIN lookup
@@ -889,6 +1001,173 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+#### `cel`: a value computed with CEL
+
+The `cel` tool evaluates one [CEL](#cel-expressions) expression and writes
+its result to `prime.<name>.value`, converted to JSON. Use it to filter or
+deduplicate a list, look a key up in a map with a default, or pick the later
+of two timestamps, without a script step or an `if` whose two branches each
+set a literal.
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.items.value.filter(i, i.status == 'open').map(i, i.id)"
+    schema: {type: array, items: {type: string}}
+```
+
+| Param | Type | Required | Default | Meaning |
+|-------|------|----------|---------|---------|
+| `expr` | string | yes | — | The CEL expression |
+| `strict` | bool | no | `false` | An unset `state.` path fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
+| `schema` | object | no | — | A JSON Schema the result must match; a mismatch fails the effect, naming each mismatch (`cel: the result does not match params.schema: 1: 'two' is not of type 'integer'`) |
+
+- **Bindings.** The expression sees what an `if` at the same position sees:
+  `state.input`, `state.prime`, `state.runtime`, and inside a loop body the
+  loop's `each.as` binding and `state.iter` (see
+  [CEL scoping](#cel-scoping-what-statekey-may-name-at-each-nesting-level)).
+- **The value.** Lists, maps, strings, numbers, booleans and `null` as they
+  are; a map keeps its key order, and a map key that is a number or a boolean
+  becomes its JSON text (`"1"`, `"true"`). A timestamp becomes an ISO 8601
+  UTC string (`2026-01-02T03:04:05Z`, with a fraction of a second only when
+  it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
+  `-PT1M30S`). A result with no JSON form (bytes, a non-finite number, a type)
+  fails the effect.
+- **An unset path.** Without `strict`, an unguarded `state.` path that is
+  unset makes the value `null` and logs a warning naming the path, as an `if`
+  does; `has()` guards a path the same way.
+- **Literal params.** `cof check` parses `expr` and checks the names it reads
+  like any other CEL in the document, so the params are never
+  Mustache-rendered and never read `{from: ...}`; `params_json` and any param
+  other than these three are `cof check` errors.
+- **Pure.** It does no I/O, needs no [capability](#tool), and ignores
+  `timeout_ms`. `meta.raw` is `{expr}`. A finished `cel` step is not
+  evaluated again on [`--resume`](#resuming-a-run-cof-run---resume), like any
+  other finished effect.
+
+electricity does not run the `cel` tool yet: a document that names it is
+refused with the preview message.
+
+#### Secrets in `http` headers and a subprocess tool's `env`
+
+A credential belongs in host configuration, not in a document's data flow.
+Define it once under `runtime.secrets` in config.json, as one of:
+
+| Kind | Shape | The value |
+|------|-------|-----------|
+| Keychain | `{keychain: {service, account?}}` | the macOS Keychain item, read with `security find-generic-password -w -s <service> [-a <account>]` |
+| Command | `{command: [argv...]}` | the command's stdout, trimmed, e.g. `["gh", "auth", "token"]` |
+| Environment | `{env: NAME}` | the variable `NAME` of the `cof` process |
+
+```json
+{"runtime": {"secrets": {
+  "github": {"command": ["gh", "auth", "token"]},
+  "billing": {"keychain": {"service": "billing-api", "account": "ci"}}
+}}}
+```
+
+Then name it with `{secret: <name>}`, optionally with `prefix:` (literal text
+put before the value, never rendered), in exactly two places: as a value in
+an `http` effect's `params.headers`, and as a value in a subprocess tool's
+host `env` (`runtime.plugins.<name>.env`, see
+[Binary tool plugins](./plugins/binary-tools.md)):
+
+```yaml
+- type: tool
+  name: issues
+  provider: http
+  params:
+    url: "https://api.github.com/repos/{{input.repo}}/issues"
+    headers:
+      Authorization: {secret: github, prefix: "Bearer "}
+```
+
+- **Resolved at dispatch, never earlier.** Each tool effect's attempt
+  resolves it as it dispatches (once per effect, retries included). A
+  secret that is not defined, a command that fails, or a value that is empty
+  or holds a line break fails the effect with an error naming the secret,
+  never anything its command printed (`secret 'github': its command exited
+  with status 1.`); it is not retried.
+- **The value stays out of every record.** It never appears in `params`,
+  `meta.params_rendered` (which shows `Bearer [secret:github]`), `meta.raw`,
+  an error, the events stream or a log. A response body, a response header,
+  a process's output or an error text that echoes it is saved with it
+  replaced by `[secret:<name>]` (`<prefix>[secret:<name>]` where the prefix
+  precedes it).
+- **Literal only.** Only a `{secret: ...}` the document writes in
+  `params.headers` itself is resolved: one that arrives through
+  `params_json` or a `{from: ...}` value fails the effect, and one anywhere
+  else in `params`, or in another tool's params, is a `cof check` error.
+- **What reads as a reference.** In an `http` header value or a host `env`
+  value, any mapping with a `secret` key is one, and must be well-formed.
+  Anywhere else in `params`, only a mapping whose keys are `secret` plus,
+  optionally, `prefix`, with a string `secret`, is one (the
+  [`{from:}` rule](#tool)). Any other mapping, such as a `json` body
+  `{secret: "{{input.key}}", response: "..."}` or a schema with a `secret`
+  property, is passed through literally, as before. To pass a literal one-key
+  `{secret: ...}` object, use `params_json`.
+- **Trust.** Only a trusted document (one run by path, see
+  [File Structure](#file-structure)) may name a secret. A limited document —
+  a library entry run by name, an MCP or REST run, a `use: ref:` or inline
+  child, a reflector or decomposition plan — that names one fails before
+  anything runs. `cof check` lists the secrets a document names
+  (`Secrets: billing, github`).
+- **electricity** resolves no secret yet: it refuses a document whose tool
+  params name one, and a run whose tool's host `env` holds one, with the
+  preview message. A host `env` secret for a tool that only a `use` child or
+  a generated plan names fails that effect with the preview message
+  instead, which `on_error` can absorb.
+
+**Redirects (`http`'s `redirects`).** Python's HTTP client follows a
+redirect with the same headers, which would send a bearer token to whatever
+host the redirect names (an attachment URL that redirects to a storage
+host, say). `redirects` decides:
+
+| Value | A redirect |
+|-------|-----------|
+| `follow` | followed with the same headers, as before |
+| `never` | not followed; any 3xx response fails the effect like a 4xx (`HTTP 302: Found: redirect not followed (redirects: never)`) |
+| `strip_auth` | followed only to `https`: with every header to the same origin (scheme, host and port), and without `Authorization` or a header that came from a secret to any other. A redirect to `http` is not followed and fails the effect like a 4xx (`... redirect not followed (redirects: strip_auth follows https only)`) |
+
+The default is `strip_auth` when a header came from a secret and `follow`
+otherwise. `fail_on_error: false` turns a refused redirect back into a
+success, the 3xx response on `value` and `meta.status_code`, as it does for
+a 4xx.
+
+#### Recording parsed stdout (`runtime.state.parsed_stdout`)
+
+With `parse: json`, a step saves its stdout twice: parsed on `value` and raw
+on `meta.stdout`. A run with many such steps carries every one of them twice
+in `--out`, `--live-state`, `--resume` and persistence.
+`runtime.state.parsed_stdout` decides what a parsed step keeps:
+
+| Value | A step whose stdout parsed |
+|-------|----------------------------|
+| `full` (default) | `meta.stdout` holds the raw text, as before |
+| `drop` | `meta.stdout` is `null`; `meta.stdout_chars` (its length in Unicode code points) and `meta.stdout_sha256` (the lowercase hex SHA-256 of its UTF-8 bytes) describe it |
+
+```yaml
+runtime:
+  state:
+    parsed_stdout: drop
+```
+
+`value` is the same either way. A failed parse already records no stdout
+(`meta.stdout` is `null`, and the error quotes the first 200 characters), so
+`drop` leaves failures unchanged, and a step without `parse: json` keeps its
+stdout under both values. A document that reads a parsed step's
+`meta.stdout` should keep `full`. Like `record_children` and
+[`prompt_sent`](#recording-the-prompt-text-runtimestateprompt_sent), the key
+sits under `runtime.state`, so it applies however the document arrives
+(config, or the document's own `runtime:` block). A document's
+`runtime.state` block replaces the config's whole `state` block, so a document
+that wants several of these keys sets all of them. `cof check` rejects any
+other value, naming `runtime.state.parsed_stdout`. `--resume` reuses a
+finished step's saved record as it is, so it works on a state written with
+`drop`.
 
 #### `params_json`
 
@@ -982,6 +1261,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `retries` | object | no | — | `{max_attempts, backoff_ms}`. A retry re-runs the **whole child orchestration** from scratch — same shape, default and backoff curve as a prompt's/tool's `retries`. `meta.created_at`/`meta.retries_used` follow the same rule too: `created_at` is the first attempt's start, and `retries_used` is set on success or failure alike, absent (not `0`) when the first attempt is also the last |
 | `expect` | string or object | no | — | Output check, run after a successful child run, over this effect's own mapped `value`/`meta` plus `state` — same shape as a [tool's `expect`](#tool-expect) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
+| `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this `use` when its saved node did not finish without error. `continue` continues inside its child when the saved state holds the child's record; `restart` always runs the child from its start in a fresh state. A finished one is skipped either way. |
 | `description` | string | no | — | |
 
 \* Exactly one of `ref` / `path` / `inline` / `orchestration` must be present.
@@ -1056,7 +1336,12 @@ child a value as it is (an array, an object, a number, a boolean) write `{from: 
 - The child gets a deep copy: nothing it does can reach the parent's state.
 - A path that resolves to nothing passes `null`; if the child's interface marks that input
   `required`, the `use` fails with the path in the message.
-- Only a mapping with the single key `from` is a reference. Any other mapping is a literal value.
+- `{from: <path>, as: json}` passes the value as compact JSON text instead (keys in their stored
+  order), for a child that wants a string. A path that resolves to nothing still passes `null`.
+  A value JSON can't carry fails the `use` naming the input. `json` is the only `as` value;
+  `cof check` rejects any other.
+- Only a mapping with the key `from` (optionally plus `as`) is a reference. Any other mapping is a
+  literal value.
 
 #### Complete record (opt-in)
 
@@ -1074,7 +1359,10 @@ runtime:
 ```
 
 The record is for reading after the run, not for wiring: downstream effects still read a
-`use`'s declared outputs.
+`use`'s declared outputs. It is also what lets `cof run --resume` continue inside an
+unfinished `use` child instead of running it again from the start (see
+[Resuming a Run](#resuming-a-run-cof-run---resume)); a child interrupted by Ctrl-C, SIGTERM or
+SIGHUP keeps its record too.
 
 Every `use` node also records, whether or not the setting is on:
 
@@ -1226,6 +1514,42 @@ effects:
     name: draft
     template:
       file: prompts/draft.md
+```
+
+#### Reading a prompt file at dispatch (`file: {from: <state path>}`)
+
+Some runs build their prompt texts at run time: a tool writes one prompt file per item, because the text is too large or too specific to template from state. Passing each text through state saves it twice (in the tool's `value` and in the prompt's `meta.prompt_sent`) and makes a text that contains `{{` (source code, another template language) survive mustache rendering. A `prompt` effect's `template`, and a message's `content`, can instead name the file in state and read it when the effect dispatches:
+
+```yaml
+- type: prompt
+  name: edit
+  template:
+    file: {from: prime.prep.value.prompt_file}
+    within: {from: input.work_dir}
+```
+
+This form is for a `prompt` effect's `template` and `messages[].content`, and the `agent` tool's `params.prompt` (below): not a `yield`, and not the top-level `prompts:` map (both are compile errors).
+
+- **When it is read.** The state path's value is a file path. The file is read when the effect dispatches, not when the document loads, once per execution of the effect and before its first attempt; retries and `provider_fallbacks` reuse that text. The file's content is run data: it is not part of the document hash `--resume` checks, so changing the file after a failed run does not refuse a resume, and the resumed effect reads the new text.
+- **Used verbatim.** The text is not rendered (no mustache, no `{{> name}}`), and its bytes are used as they are, newlines included. A run that wants rendering does it when it writes the file.
+- **`within` is required.** It is a literal absolute path, or `{from: input.<name>}`, so it comes from the document or the run's inputs and never from the output of an effect in the same run; `cof check` rejects any other form. A relative file path resolves against it, and after symlinks are resolved the file must be inside it.
+- **Trust.** The same rule as `{file: <path>}` for a limited document (a library entry, MCP, REST, a plan a model generated): a literal `within` can name only a directory inside the document's own project, and a `within` taken from `input` is held to the same rule when the effect dispatches. A document run by path can name any directory. A document generated at run time (a reflector or decompose plan, a `use: inline` child) cannot use it at all: a compile error. A `use` child named by `path:` has its parent's trust: a child of a trusted parent may name any `within`, a child of a limited parent is limited and confined to its own project. A child resolved through the library (`use: ref:`, or the deprecated `orchestration:` form when it falls back to the library) is always limited, whatever its parent is. A child named by path is part of the code its caller runs and trusts, the same as running it by path; a library child is someone else's document. In a `use` child, `input.<name>` is whatever the parent maps to it, which can be another effect's output, so the parent's author decides what a trusted child may read. A `use: path:` that points into a library cache inherits its parent's trust, unlike a root document at a cache path (which is limited): name library documents with `ref:` to get them limited.
+- **Errors.** Each fails the effect, so `on_error` applies, with a message naming the effect, the field (`template` or `messages[<i>].content`) and the path: no such file; not a regular file; outside `within`; unreadable; not UTF-8; larger than 1 MiB (1,048,576 bytes, the same cap as `{file: <path>}`); the state value is not a string (a missing path included).
+- **Record.** `meta.template_files` lists one `{field, path, sha256, chars}` per file read — `path` the resolved path, `sha256` the hex SHA-256 of the file's bytes, `chars` the text's length in Unicode code points. A messages prompt can read several, so this is a list; the key is absent when the prompt read no file.
+
+With [`runtime.state.prompt_sent: sha256`](#recording-the-prompt-text-runtimestateprompt_sent), a prompt built in a file leaves no copy of its text in state.
+
+**The `agent` tool's `prompt`.** A `tool` effect with `provider: agent` takes the same form, by the same rules, for its task: `params.prompt: {file: {from: <state path>}, within: <dir>}`. The file is read once, before the first attempt, and a retry and the session's repair turn use that same text; the errors name the effect, `params.prompt` and the path. `meta.template_files` holds one `{field: "params.prompt", path, sha256, chars}` entry, and `meta.params_rendered.prompt` keeps the `{file, within}` form with the resolved paths, never the text. `params_json` cannot supply the form (its `within` would come from state), and with `params.prompt` in the form it must not set `prompt` at all; it may set the agent's other params. `cof check` rejects both when the raw `params_json` shows them, and the effect fails at dispatch otherwise. A string `prompt` is unchanged. See [`docs/plugins/agent.md`](./plugins/agent.md#a-prompt-from-a-file).
+
+```yaml
+- type: tool
+  name: implement
+  provider: agent
+  params:
+    prompt:
+      file: {from: prime.prep.value.prompt_file}
+      within: {from: input.work_dir}
+    cwd: {from: input.work_dir}
 ```
 
 ---
@@ -1460,7 +1784,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 ### CEL Expressions
 
-CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object named `state`.
+CEL expressions (in `if.expr`, `while.expr` and the [`cel` tool](#cel-a-value-computed-with-cel)'s `expr`) evaluate against a root object named `state`.
 
 | ✅ Correct | ❌ Wrong |
 |-----------|---------|
@@ -1803,15 +2127,89 @@ contain — a pass interrupted partway through its body, or an unnamed `if`
 in the body whose condition raised before writing anything, can leave an
 `iter_<N>` node that holds some finished-looking children without the pass
 itself having completed, and the loop's own record is what tells those
-apart. A **tree**-flow `each` loop finishes its passes out of order, and an
+apart. The loop writes that record when it fails and also when the run is
+interrupted (Ctrl-C, SIGTERM or SIGHUP, or a cancelled run): it records the
+interruption as its `meta.error`, keeps the passes it finished, and lets the
+interrupt carry on stopping the run.
+
+The first unfinished pass continues *inside* its body when the saved state
+holds its `iter_<N>` node (the run stopped partway through that pass): the
+body effects that finished without error are reused, and the first one that
+didn't reruns along with everything after it in the body, the same
+positional rule as at the top level. A `while` loop runs that pass without
+evaluating its condition again: the condition was true when the pass
+started, and evaluating it against a half-updated state could end the loop
+with the pass half done. Every later pass runs from its start, condition
+first, as in a fresh run. A pass with no saved `iter_<N>` node (the run
+stopped before it started, for example in the `while` condition check) also
+runs from its start, condition first.
+
+A **tree**-flow `each` loop finishes its passes out of order, and an
 **unnamed** loop has no `iter_<N>` record at all (each pass overwrites the
 last at the same path) — neither is sound to resume pass-by-pass, so both
-rerun their whole loop. A `use` effect, an `if`, and a `reflector` are
-all-or-nothing for resume: if the effect's own node already finished
-without error, `--resume` skips the whole thing; otherwise the whole thing
-reruns from the start (a `use` child always runs in a fresh, isolated
-state, so there is nothing of its own partway through to resume either
-way).
+rerun their whole loop.
+
+An `if` whose node already finished without error is skipped whole. One
+that didn't finish evaluates its condition again (a `mode: model`
+condition asks the model again). If the condition selects the branch the
+saved node took (`meta.branch`), that branch continues at its first
+unfinished effect, by the same positional rule; if it selects the other
+branch, that branch runs from its start. An **unnamed** `if` has no node
+to record its branch, so its branch always runs from its start. A
+`reflector` always reruns from its start on `--resume`: it records no
+`completed_at`, so a finished reflector is not skipped either (#585 tracks
+changing that).
+Inside a resumed pass or branch, the first effect that didn't finish
+resumes the same way it would at the top level: a nested loop at its own
+first unfinished pass, a nested `if` inside its branch, a `dynamic` at its
+first unfinished effect, and a `use` inside its child (below), unless it
+says [`resume: restart`](#resume-restart).
+
+A `use` effect whose node already finished without error is skipped whole
+too. One that didn't finish reruns its child from the start, in a fresh
+state, unless the saved state holds the child's record
+([`runtime.state.record_children: true`](#complete-record-opt-in)). With
+the record, `--resume` continues *inside* the child by the same rules as
+at the top level: the child's finished effects are reused, its first
+unfinished effect and everything after it in the same chain rerun, its
+loops resume at their first unfinished pass, and a nested `use` inside it
+continues inside its own child the same way, at any depth. It does so only
+when the child would run the same document with the same inputs as the run
+that left the record: the child's content hash (`meta.orchestration_sha256`,
+which covers the prompt files it references) and its resolved inputs
+(`meta.inputs`) must both match what it gets now. If either changed, the
+record is stale and the child runs from its start, as it does without the
+record. So does a child whose output the `use`'s own `expect:` judged false
+(`meta.expect.result`): reused whole, it would hand the same output to the
+same check and fail again on every resume. An `expect` whose own model call
+failed recorded no result, so the finished child is reused and only the
+check runs again. A `use` with `retries` continues inside its child on its
+first attempt only; a retry runs the whole child again, as always. A `use`
+inside a resumed loop pass or `if` branch continues inside its child by the
+same rules, at any depth. A `use` as a branch of a `flow: tree` dynamic
+(including a `flow: tree` root), or inside a pass or branch that runs from
+its start, reruns from its start: a tree branch starts from only the
+finished nodes of the saved state.
+
+<a id="resume-restart"></a>
+**`resume: restart`.** A scope whose first effects acquire something its
+`finally:` releases (start a server, take a lock, apply a migration) cannot
+continue where it stopped: the stopped run's `finally:` already released it,
+and the resumed effects would work against something that is gone. Set
+`resume: restart` on such a `dynamic` or `use`. If its saved node finished
+without error, it is skipped whole, as without the key. Otherwise (it never
+finished, it failed, or it was interrupted, in its own `finally:` too) it
+runs from its first effect in a fresh state: none of its saved children is
+reused, and its `finally:` runs as usual at its end. A `use`
+runs its child from its start, even when the saved record
+(`record_children`) matches. This holds at any depth: such a scope inside a
+resumed loop pass, an `if` branch or a `use` child restarts there. The
+effects after it in the same chain rerun, as after any effect that did not
+resume whole. `resume: continue` is the default and the behaviour described
+above. Only `dynamic` and `use` take the key: `cof check` rejects it on any
+other effect type and rejects any value but `continue` and `restart`.
+electricity has no `--resume`; it checks the key the same way and otherwise
+ignores it.
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and

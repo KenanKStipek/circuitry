@@ -5,10 +5,10 @@
 //! `tests/definition_fields.rs` mapping. Used only by `golden_compile.rs`
 //! (lane C); nothing outside this crate's own tests reads it.
 //!
-//! Two deliberate, narrow exceptions from a literal field-for-field
-//! dump, both already documented as such in `electricity-bytecode`'s
-//! own crate docs -- [`definitions_match`] (not a plain `==`) knows
-//! about both:
+//! Three deliberate, narrow exceptions from a literal field-for-field
+//! dump, each documented as such in `electricity-bytecode`'s own crate
+//! docs or `tests/definition_fields.rs` -- [`definitions_match`] (not a
+//! plain `==`) knows about all three:
 //!
 //! - `max_concurrency`/`stop_on_error` on a **chain**-flow
 //!   `DynamicDefinition`: Circuitry carries both fields unconditionally
@@ -22,6 +22,10 @@
 //!   semantically identical defaults, but a structural `null` vs.
 //!   `{...}` difference. A `null` on the Circuitry side is accepted
 //!   unconditionally; a concrete object is compared structurally.
+//! - `resume` on a `DynamicDefinition`/`UseDefinition` (#590): only
+//!   `cof run --resume` reads it, and electricity has none, so the
+//!   compiler checks the value but the IR does not carry it. Projected
+//!   as `null` and never compared.
 
 // golden_smoke.rs/no_leaked_paths.rs (lane A) compile this module too
 // (via `mod support;`) but never call into it -- only golden_compile.rs
@@ -95,11 +99,18 @@ fn param_node_to_json(node: &ParamNode) -> Json {
     match node {
         ParamNode::Literal(value) => value_to_json(value),
         ParamNode::Template(text) => Json::String(text.source.clone()),
-        ParamNode::From { path, default } => {
+        ParamNode::From {
+            path,
+            default,
+            as_json,
+        } => {
             let mut map = Map::new();
             map.insert("from".to_string(), Json::String(path.clone()));
             if let Some(default) = default {
                 map.insert("default".to_string(), value_to_json(default));
+            }
+            if *as_json {
+                map.insert("as".to_string(), Json::String("json".to_string()));
             }
             Json::Object(map)
         }
@@ -175,6 +186,31 @@ fn project_retries(retries: electricity_bytecode::effects::RetryPolicy) -> Json 
     })
 }
 
+/// `template_file`/`MessageDef.file`: the Python dataclass's own
+/// `DispatchFileSource` dump, or `null`.
+fn project_dispatch_file(file: Option<&electricity_bytecode::effects::DispatchFile>) -> Json {
+    match file {
+        None => Json::Null,
+        Some(file) => json!({
+            "path_from": file.path_from,
+            "within": file.within,
+            "within_from": file.within_from,
+            "confine_to": file.confine_to,
+        }),
+    }
+}
+
+/// `timeout_ms`: an integer literal as a number, a `{from: ...}` as the
+/// Python dataclass's own `TimeoutFrom` dump (`{"path", "default"}`).
+fn project_timeout_ms(timeout_ms: &Option<electricity_bytecode::effects::TimeoutMs>) -> Json {
+    use electricity_bytecode::effects::TimeoutMs;
+    match timeout_ms {
+        None => Json::Null,
+        Some(TimeoutMs::Literal(n)) => Json::Number((*n).into()),
+        Some(TimeoutMs::From(from)) => json!({"path": from.path, "default": from.default}),
+    }
+}
+
 /// `PromptOp::retries` is the one genuinely `Option` field of the three
 /// (issue #498, lane G seam) -- `null` when the document omitted
 /// `retries:` or gave an empty mapping, a concrete object otherwise, so
@@ -241,6 +277,8 @@ fn project_dynamic_region(op: &Op, region: &Region) -> Json {
         "max_concurrency": max_concurrency,
         "stop_on_error": stop_on_error,
         "on_error": on_error_str(op.on_error),
+        // Not IR-carried -- `definitions_match` never compares it.
+        "resume": Json::Null,
         "labels": op.labels.as_ref().map(value_to_json).unwrap_or(Json::Null),
         "enabled": op.enabled,
         // Root-only in Circuitry's own dump; every non-root dynamic
@@ -327,9 +365,15 @@ fn project_loop_region(op: &Op, region: &Region) -> Json {
 fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
     match leaf {
         LeafKind::Prompt(prompt) => {
-            let (template, messages) = match &prompt.content {
-                PromptContent::Template(text) => (Json::String(text.source.clone()), Json::Null),
+            let (template, template_file, messages) = match &prompt.content {
+                PromptContent::Template(text) => {
+                    (Json::String(text.source.clone()), Json::Null, Json::Null)
+                }
+                PromptContent::TemplateFile(file) => {
+                    (Json::Null, project_dispatch_file(Some(file)), Json::Null)
+                }
                 PromptContent::Messages(messages) => (
+                    Json::Null,
                     Json::Null,
                     Json::Array(
                         messages
@@ -343,6 +387,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                                         Role::Tool => "tool",
                                     },
                                     "content": m.content.source,
+                                    "file": project_dispatch_file(m.file.as_ref()),
                                 })
                             })
                             .collect(),
@@ -361,6 +406,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             json!({
                 "name": op.name,
                 "template": template,
+                "template_file": template_file,
                 "messages": messages,
                 "prompt_type": prompt_type,
                 "schema": prompt.schema.as_ref().map(value_to_json).unwrap_or(Json::Null),
@@ -369,7 +415,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "provider_fallbacks": if prompt.provider_fallbacks.is_empty() { Json::Null } else { Json::Array(prompt.provider_fallbacks.iter().cloned().map(Json::String).collect()) },
                 "routing_override": Json::Null,
                 "params": prompt.model_params.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
-                "timeout_ms": prompt.timeout_ms.map(|n| Json::Number(n.into())).unwrap_or(Json::Null),
+                "timeout_ms": project_timeout_ms(&prompt.timeout_ms),
                 "deterministic": prompt.deterministic,
                 "inputs": prompt.inputs.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "assets": if prompt.assets.is_empty() { Json::Null } else { Json::Array(prompt.assets.iter().map(|a| json!({"kind": a.kind, "ref": a.reference})).collect()) },
@@ -387,13 +433,16 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "params_json": tool.params_json.as_ref().map(|t| Json::String(t.source.clone())).unwrap_or(Json::Null),
             "prompt": tool.prompt.as_ref().map(|t| Json::String(t.source.clone())).unwrap_or(Json::Null),
             "model": tool.model,
-            "timeout_ms": tool.timeout_ms.map(|n| Json::Number(n.into())).unwrap_or(Json::Null),
+            "timeout_ms": project_timeout_ms(&tool.timeout_ms),
             "on_error": on_error_str(op.on_error),
             "description": tool.description,
             "retries": project_retries(tool.retries),
             "expect": project_expect(&tool.expect),
             "enabled": op.enabled,
             "group": tool.group,
+            "limited": false,
+            "confine_to": Json::Null,
+            "prompt_file": project_dispatch_file(tool.prompt_file.as_ref()),
         }),
         LeafKind::Use(use_op) => {
             let (path, orchestration, inline) = match &use_op.source {
@@ -419,10 +468,13 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 }).unwrap_or(Json::Null),
                 "validate": use_op.validate,
                 "on_error": on_error_str(op.on_error),
+                // Not IR-carried -- `definitions_match` never compares it.
+                "resume": Json::Null,
                 "description": use_op.description,
                 "retries": project_retries(use_op.retries),
                 "expect": project_expect(&use_op.expect),
                 "enabled": op.enabled,
+                "parent_trusted": use_op.parent_trusted,
             })
         }
         LeafKind::Yield(yield_op) => json!({
@@ -512,6 +564,9 @@ pub fn definitions_match(expected: &Json, actual: &Json) -> bool {
                 && expected_map.contains_key("effects");
             for (key, expected_value) in expected_map {
                 if is_chain_dynamic && (key == "max_concurrency" || key == "stop_on_error") {
+                    continue;
+                }
+                if key == "resume" && actual_map.contains_key(key) {
                     continue;
                 }
                 if key == "retries" && expected_value.is_null() {

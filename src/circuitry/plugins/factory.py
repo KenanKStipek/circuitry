@@ -64,6 +64,9 @@ from . import (
     sevenz as _sevenz_mod,
 )
 from . import (
+    systemone as _systemone_mod,
+)
+from . import (
     traceroute as _traceroute_mod,
 )
 from . import (
@@ -78,6 +81,7 @@ from . import (
 from ._subprocess import plugin_binary_override, plugin_env_override
 from .base import ToolPlugin
 from .base64 import Base64Plugin
+from .cel import CelPlugin
 from .clock import ClockPlugin
 from .comfyui import ComfyUIPlugin
 from .csv import CsvPlugin
@@ -160,6 +164,11 @@ def _build_http(cfg: dict[str, Any]) -> ToolPlugin:
 def _build_clock(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return ClockPlugin()
+
+
+def _build_cel(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg
+    return CelPlugin()
 
 
 def _build_math(cfg: dict[str, Any]) -> ToolPlugin:
@@ -489,6 +498,14 @@ def _build_surrealdb(cfg: dict[str, Any]) -> ToolPlugin:
     )
 
 
+# systemone reads base_url / api_key_env / allow_remote from
+# runtime.plugins.systemone; the key itself comes from the named environment
+# variable at dispatch, so nothing secret can reach config or saved state.
+# build_plugin also hands it the effect's project confinement (see below).
+def _build_systemone(cfg: dict[str, Any]) -> ToolPlugin:
+    return _systemone_mod.build(cfg)
+
+
 def _build_playwright(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return PlaywrightPlugin()
@@ -527,6 +544,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "http": _build_http,
     # Stdlib-only catalog
     "clock": _build_clock,
+    "cel": _build_cel,
     "math": _build_math,
     "regex": _build_regex,
     "json": _build_json,
@@ -594,6 +612,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "gdrive": _build_gdrive,
     "s3": _build_s3_tool,
     "surrealdb": _build_surrealdb,
+    "systemone": _build_systemone,
     "playwright": _build_playwright,
     "screenshot": _build_screenshot,
     "embed": _build_embed,
@@ -612,9 +631,21 @@ def _supported_names() -> tuple[str, ...]:
 SUPPORTED_PLUGINS = tuple(_supported_names())
 
 
-def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
+def build_plugin(
+    *,
+    plugin_name: str,
+    runtime: dict[str, Any],
+    limited: bool = False,
+    confine_to: str | None = None,
+) -> ToolPlugin:
     """
     Build a plugin instance from configuration.
+
+    *limited* and *confine_to* (``ToolDefinition.limited`` and ``.confine_to``)
+    confine the paths a tool effect names; only ``systemone`` reads them. Three
+    states: limited with a project (reads only inside it), limited with no
+    project (``confine_to`` is ``None``: refuses every read), and not limited
+    (the default: a trusted document, unconfined).
 
     Plugins register themselves in PLUGIN_REGISTRY: a dict from canonical
     lower-case name to a builder callable that takes the per-plugin config
@@ -632,4 +663,7 @@ def build_plugin(*, plugin_name: str, runtime: dict[str, Any]) -> ToolPlugin:
         )
 
     cfg = plugins_cfg.get(plugin_name) or {}
+    if plugin_name == "systemone":
+        # The one plugin that reads a path the document names.
+        return _systemone_mod.build(cfg, limited=limited, confine_to=confine_to)
     return builder(cfg)

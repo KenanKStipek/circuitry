@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #597 (the `cel` tool)",
+  "description": "`strict: true` on a `cel` tool makes an unset `state.` path fail the effect, as it does for `if`, instead of giving null. electricity has no `cel` tool yet and refuses the document with the preview marker.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact",
+  "electricity_preview_ok": true
+}

@@ -66,6 +66,7 @@ fn stringify_from(path: EffectPath, name: &str, from: &str, default: &str) -> Op
         ParamNode::From {
             path: from.to_string(),
             default: Some(Value::Str(default.to_string())),
+            as_json: false,
         },
     );
     tool_op(path, name, params, None, RetryPolicy::default())
@@ -156,6 +157,7 @@ fn tool_op(
             expect,
             description: None,
             group: None,
+            prompt_file: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
@@ -1027,11 +1029,12 @@ async fn a_named_model_while_calls_record_totals_once_on_success() {
     );
 }
 
-/// A cancelled named model `while` never calls `record_totals` --
-/// `meta.completed_at` stays unset on the `Cancelled` return path, so
-/// the loop container's own guard must skip the call.
+/// A cancelled named model `while` records the interrupt like a
+/// failure (#574): `meta.completed_at` is set, `meta.error` holds the
+/// interrupt text, and the loop container calls `record_totals` once,
+/// the same as `cof`'s totals count a loop whose `completed_at` is set.
 #[tokio::test]
-async fn a_cancelled_named_model_while_never_calls_record_totals() {
+async fn a_cancelled_named_model_while_records_the_interrupt_and_calls_record_totals_once() {
     let store = Store::new();
     let loop_id = LoopId(0);
     let own_path = root_path().push_name("lp");
@@ -1073,13 +1076,189 @@ async fn a_cancelled_named_model_while_never_calls_record_totals() {
         matches!(result, Err(VmError::Cancelled)),
         "expected Cancelled, got {result:?}"
     );
-    assert!(
-        !observer
-            .inner
-            .events()
-            .iter()
-            .any(|e| matches!(e, support::Event::Totals(_))),
-        "a cancelled model while must never call record_totals"
+    let totals = observer
+        .inner
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, support::Event::Totals(_)))
+        .count();
+    assert_eq!(
+        totals, 1,
+        "a cancelled named model while must call record_totals exactly once"
+    );
+    let pr = prime(&store);
+    let meta = as_dict(get(as_dict(get(&pr, "lp").unwrap()), "meta").unwrap());
+    assert_eq!(
+        as_str(get(meta, "error").unwrap()),
+        "Interrupted (Ctrl-C/SIGINT)"
+    );
+    assert!(!as_str(get(meta, "completed_at").unwrap()).is_empty());
+    assert!(as_list(get(meta, "completed_passes").unwrap()).is_empty());
+}
+
+/// A named chain `each` loop cancelled partway through pass 1 records
+/// what its failure path records (#574): the passes that finished, its
+/// `completed_at`, and the interrupt text as `meta.error` and as
+/// `value.termination.detail` -- then returns `Cancelled` unchanged.
+#[tokio::test]
+async fn a_cancelled_named_chain_each_keeps_its_completed_passes() {
+    let store = Store::new();
+    seed_items(
+        &store,
+        vec![
+            Value::from(10_i64),
+            Value::from(20_i64),
+            Value::from(30_i64),
+        ],
+    );
+    let loop_id = LoopId(0);
+    let own_path = root_path().push_name("shots");
+    let body_prefix = own_path.push_pass(loop_id);
+    let body = vec![
+        stringify_from(body_prefix.push_name("first"), "first", "item", "0"),
+        stringify_from(body_prefix.push_name("second"), "second", "item", "0"),
+    ];
+    let loop_op_ = loop_op(
+        own_path,
+        Some("shots"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        body,
+    );
+    let token = CancellationToken::new();
+    let observer = support::CancelOnStart {
+        inner: support::RecordingObserver::new(),
+        token: &token,
+        target: "prime.shots.iter_1.first",
+    };
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let err = electricity_vm::execute_root(
+        &support::program(single(loop_op_)),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, VmError::Cancelled));
+
+    let pr = prime(&store);
+    let shots = as_dict(get(&pr, "shots").unwrap());
+    let meta = as_dict(get(shots, "meta").unwrap());
+    assert_eq!(
+        as_list(get(meta, "completed_passes").unwrap()),
+        &vec![Value::from(0_i64)]
+    );
+    assert_eq!(
+        as_str(get(meta, "error").unwrap()),
+        "Interrupted (Ctrl-C/SIGINT)"
+    );
+    assert!(!as_str(get(meta, "completed_at").unwrap()).is_empty());
+    let value = as_dict(get(shots, "value").unwrap());
+    assert_eq!(get(value, "iterations"), Some(&Value::from(1_i64)));
+    let termination = as_dict(get(value, "termination").unwrap());
+    assert_eq!(as_str(get(termination, "reason").unwrap()), "error");
+    assert_eq!(
+        as_str(get(termination, "detail").unwrap()),
+        "Interrupted (Ctrl-C/SIGINT)"
+    );
+    let last = as_dict(get(shots, "last").unwrap());
+    let last_first = as_dict(get(last, "first").unwrap());
+    assert_eq!(as_str(get(last_first, "value").unwrap()), "10");
+    assert!(observer.inner.events().iter().any(|e| matches!(
+        e,
+        support::Event::Complete(path, Some(error))
+            if path == "prime.shots" && error == "Interrupted (Ctrl-C/SIGINT)"
+    )));
+}
+
+/// Nested named loops cancelled inside the inner loop's second outer
+/// pass: both keep their own completed passes (#574).
+#[tokio::test]
+async fn cancelled_nested_loops_both_keep_their_completed_passes() {
+    let store = Store::new();
+    seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
+    let outer_path = root_path().push_name("rows");
+    let outer_body_prefix = outer_path.push_pass(LoopId(0));
+    let inner_path = outer_body_prefix.push_name("cells");
+    let inner_body_prefix = inner_path.push_pass(LoopId(1));
+    let inner = loop_op(
+        inner_path,
+        Some("cells"),
+        each_spec("items", "col", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![
+            stringify_from(inner_body_prefix.push_name("first"), "first", "col", "0"),
+            stringify_from(inner_body_prefix.push_name("second"), "second", "col", "0"),
+        ],
+    );
+    let outer = loop_op(
+        outer_path,
+        Some("rows"),
+        each_spec("items", "item", false),
+        LoopFlow::Chain,
+        None,
+        None,
+        0,
+        OnError::Fail,
+        None,
+        vec![inner],
+    );
+    let token = CancellationToken::new();
+    let observer = support::CancelOnStart {
+        inner: support::RecordingObserver::new(),
+        token: &token,
+        target: "prime.rows.iter_1.cells.iter_1.first",
+    };
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let err = electricity_vm::execute_root(
+        &support::program(single(outer)),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, VmError::Cancelled));
+
+    let pr = prime(&store);
+    let rows = as_dict(get(&pr, "rows").unwrap());
+    let rows_meta = as_dict(get(rows, "meta").unwrap());
+    assert_eq!(
+        as_list(get(rows_meta, "completed_passes").unwrap()),
+        &vec![Value::from(0_i64)]
+    );
+    assert_eq!(
+        as_str(get(rows_meta, "error").unwrap()),
+        "Interrupted (Ctrl-C/SIGINT)"
+    );
+    let cells = as_dict(get(as_dict(get(rows, "iter_1").unwrap()), "cells").unwrap());
+    let cells_meta = as_dict(get(cells, "meta").unwrap());
+    assert_eq!(
+        as_list(get(cells_meta, "completed_passes").unwrap()),
+        &vec![Value::from(0_i64)]
+    );
+    assert_eq!(
+        as_str(get(cells_meta, "error").unwrap()),
+        "Interrupted (Ctrl-C/SIGINT)"
     );
 }
 
@@ -1443,6 +1622,7 @@ fn cancel_once_op(path: EffectPath, name: &str) -> Op {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
@@ -1491,10 +1671,9 @@ async fn value_on_a_reused_node_survives_a_cancellation_that_skips_the_final_wri
     // body is `cancel_once` -- pass 0 completes normally (it requests
     // cancellation as a side effect, but still reports success), so
     // the loop's own `token.is_set()` check ahead of pass 1 is what
-    // actually stops it. `execute_loop`'s own outer `except` never
-    // runs for a `VmError::Cancelled` (`is_fatal`), so nothing rewrites
-    // `value` at the end -- the reset/setdefault line is the only
-    // thing that touches it on this call.
+    // actually stops it. Since #574 the cancelled call still ends with
+    // the failure path's own `value` write, so the reset/setdefault line
+    // must at least never leave `value` as `None` on the way there.
     seed_items(&store, vec![Value::from(1_i64), Value::from(2_i64)]);
     let token = CancellationToken::new();
     let mut registry = json_registry();
@@ -1872,6 +2051,7 @@ fn stringify_from_many(path: EffectPath, name: &str, fields: &[(&str, &str, &str
             ParamNode::From {
                 path: from.to_string(),
                 default: Some(Value::Str(default.to_string())),
+                as_json: false,
             },
         );
     }

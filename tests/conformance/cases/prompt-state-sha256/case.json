@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #577: runtime.state.prompt_sent",
+  "description": "`runtime.state.prompt_sent: sha256` on a template prompt, a messages prompt (the flattened form) and a prompt that fails under `on_error: continue`: `meta.prompt_sent` is null while `meta.prompt_sent_sha256` (lowercase hex SHA-256 of the UTF-8 bytes) and `meta.prompt_chars` (Unicode code points) still describe the whole text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "topic=widgets"],
+  "expect": "success"
+}

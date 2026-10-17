@@ -41,9 +41,11 @@ mod config;
 pub mod dotenv;
 mod effective_settings;
 mod merge;
+mod parsed_stdout;
 mod persistence;
 pub mod preflight;
 mod profile;
+mod prompt_sent;
 mod timeout;
 mod util;
 
@@ -65,12 +67,14 @@ pub use effective_settings::{
     EffectiveSettings, effective_settings, effective_settings_with_profile,
 };
 pub use merge::merge_runtime;
+pub use parsed_stdout::{drops_parsed_stdout, parsed_stdout_errors};
 pub use persistence::persistence_enabled;
 pub use profile::{
     ProfileError, ProfileSettings, collect_orchestration_condition_paths,
     collect_orchestration_effect_paths, condition_target_message, profile_name_from_path,
     settings_from_raw, validate_effect_paths, validate_profile_routing_pins,
 };
+pub use prompt_sent::{PromptSentSetting, prompt_sent_errors, prompt_sent_setting};
 pub use timeout::configured_timeout_seconds;
 
 use electricity_value::Value;

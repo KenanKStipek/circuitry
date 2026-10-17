@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -332,24 +334,64 @@ def _string_list(
     return tuple(raw)
 
 
-def _build_pi(cfg: dict[str, Any]) -> Adapter:
+#: What a variable name in ``env`` must look like.
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: The adapters an alias may be based on: the coding-agent CLIs.
+CLI_ALIAS_BASES: tuple[str, ...] = ("claude_code", "pi")
+
+
+def _env_pairs(cfg: dict[str, Any], *, adapter_name: str) -> tuple[tuple[str, str], ...]:
+    """``cfg["env"]`` as ``(name, value)`` pairs for a CLI child; empty when absent.
+
+    A leading ``~/`` in a value becomes the home directory, nothing else is
+    expanded. An error names the variable, never its value: ``env`` can hold
+    anything the CLI reads.
+    """
+    raw = cfg.get("env")
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"runtime.adapters.{adapter_name}.env must be a mapping of variable names "
+            f"to strings, got {type(raw).__name__}"
+        )
+    pairs: list[tuple[str, str]] = []
+    for key, value in raw.items():
+        if not isinstance(key, str) or not _ENV_NAME_RE.fullmatch(key):
+            raise ValueError(
+                f"runtime.adapters.{adapter_name}.env has an invalid variable name "
+                f"{key!r}: a name matches [A-Za-z_][A-Za-z0-9_]*"
+            )
+        if not isinstance(value, str):
+            raise ValueError(
+                f"runtime.adapters.{adapter_name}.env.{key} must be a string, "
+                f"got {type(value).__name__}"
+            )
+        pairs.append((key, os.path.expanduser(value) if value.startswith("~/") else value))
+    return tuple(pairs)
+
+
+def _build_pi(cfg: dict[str, Any], name: str = "pi") -> Adapter:
     return PiAdapter(
+        name=name,
         binary=cfg.get("binary") or "pi",
         default_model=cfg.get("default_model") or "",
         thinking=cfg.get("thinking") or "",
-        unset_env=_string_list(cfg, "unset_env", adapter_name="pi", default=DEFAULT_UNSET_ENV),
-        extra_args=_string_list(cfg, "extra_args", adapter_name="pi"),
+        unset_env=_string_list(cfg, "unset_env", adapter_name=name, default=DEFAULT_UNSET_ENV),
+        extra_args=_string_list(cfg, "extra_args", adapter_name=name),
+        env=_env_pairs(cfg, adapter_name=name),
     )
 
 
-def _build_claude_code(cfg: dict[str, Any]) -> Adapter:
+def _build_claude_code(cfg: dict[str, Any], name: str = "claude_code") -> Adapter:
     return ClaudeCodeAdapter(
+        name=name,
         binary=cfg.get("binary") or "claude",
         default_model=cfg.get("default_model") or "",
-        unset_env=_string_list(
-            cfg, "unset_env", adapter_name="claude_code", default=DEFAULT_UNSET_ENV
-        ),
-        extra_args=_string_list(cfg, "extra_args", adapter_name="claude_code"),
+        unset_env=_string_list(cfg, "unset_env", adapter_name=name, default=DEFAULT_UNSET_ENV),
+        extra_args=_string_list(cfg, "extra_args", adapter_name=name),
+        env=_env_pairs(cfg, adapter_name=name),
     )
 
 
@@ -412,6 +454,65 @@ def _supported_names() -> tuple[str, ...]:
     return tuple(sorted(ADAPTER_REGISTRY.keys()))
 
 
+#: What builds an alias, by its base: the base's own builder, given the alias's name.
+_ALIAS_BUILDERS: dict[str, Callable[[dict[str, Any], str], Adapter]] = {
+    "claude_code": _build_claude_code,
+    "pi": _build_pi,
+}
+
+
+def alias_names(runtime: dict[str, Any] | None) -> tuple[str, ...]:
+    """Every ``runtime.adapters`` entry that sets ``adapter``, whether or not it is
+    a valid alias (building it reports what is wrong)."""
+    adapters_cfg = (runtime or {}).get("adapters") or {}
+    return tuple(
+        name
+        for name, cfg in adapters_cfg.items()
+        if isinstance(name, str) and isinstance(cfg, dict) and "adapter" in cfg
+    )
+
+
+def is_known_adapter(adapter_name: str, runtime: dict[str, Any] | None) -> bool:
+    """Whether ``adapter_name`` is a compiled-in adapter or an alias that builds."""
+    name = (adapter_name or "").strip().lower()
+    if name in ADAPTER_REGISTRY:
+        return True
+    if name not in alias_names(runtime):
+        return False
+    try:
+        build_adapter(adapter_name=name, runtime=runtime or {})
+    except ValueError:
+        return False
+    return True
+
+
+def _build_alias(name: str, cfg: dict[str, Any], adapters_cfg: dict[str, Any]) -> Adapter:
+    """The base adapter built from the alias's own settings, under the alias's name.
+
+    The base's own ``runtime.adapters`` entry is not consulted: an alias
+    starts from nothing, so it never touches the base's config or another
+    alias's.
+    """
+    if name in ADAPTER_REGISTRY:
+        raise ValueError(
+            f"runtime.adapters.{name}.adapter is set, but {name!r} is a built-in "
+            "adapter; an alias needs a name of its own"
+        )
+    raw_base = cfg.get("adapter")
+    base = raw_base.strip().lower() if isinstance(raw_base, str) else None
+    if base not in CLI_ALIAS_BASES:
+        base_entry = adapters_cfg.get(base) if base is not None else None
+        itself_alias = (
+            base not in ADAPTER_REGISTRY and isinstance(base_entry, dict) and "adapter" in base_entry
+        )
+        raise ValueError(
+            f"runtime.adapters.{name}.adapter must be claude_code or pi, got {raw_base!r}"
+            + (", which is itself an alias" if itself_alias else "")
+        )
+    settings = {key: value for key, value in cfg.items() if key != "adapter"}
+    return _ALIAS_BUILDERS[base](settings, name)
+
+
 def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
     """
     Build an adapter instance from configuration.
@@ -420,11 +521,18 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
     lower-case name to a builder callable that takes the per-adapter config
     dict (read from runtime.adapters.<adapter_name>) and returns an Adapter.
 
+    A ``runtime.adapters.<name>`` entry that sets ``adapter`` is an alias of
+    ``claude_code`` or ``pi``: see :func:`_build_alias`.
+
     host_claude is a registered name but its builder raises RuntimeError —
     it can only be supplied via RunRequest.adapter at runtime.
     """
     adapter_name = (adapter_name or "").strip().lower()
     adapters_cfg = (runtime or {}).get("adapters") or {}
+    cfg = adapters_cfg.get(adapter_name) or {}
+
+    if isinstance(cfg, dict) and "adapter" in cfg:
+        return _build_alias(adapter_name, cfg, adapters_cfg)
 
     builder = ADAPTER_REGISTRY.get(adapter_name)
     if builder is None:
@@ -434,5 +542,4 @@ def build_adapter(*, adapter_name: str, runtime: dict[str, Any]) -> Adapter:
             "Check runtime.adapters.<adapter_name> and default_adapter/adapter resolution."
         )
 
-    cfg = adapters_cfg.get(adapter_name) or {}
     return builder(cfg)

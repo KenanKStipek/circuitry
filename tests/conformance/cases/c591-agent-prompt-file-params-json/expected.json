@@ -1,0 +1,3 @@
+{
+  "error": "prime.effects[0]: params_json must not set params.prompt: this effect reads params.prompt from a file ({file: {from: <state path>}, within: <dir>}), which params_json cannot replace."
+}

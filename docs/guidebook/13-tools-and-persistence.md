@@ -10,7 +10,7 @@ Tool ::= { type: 'tool', name: NAME, provider: PLUGIN_NAME,
            params?: MAP,                                 — string values Mustache-rendered; a {from: PATH} leaf passes a native value; wins over prompt/model
            params_json?: TEMPLATE,                       — rendered, parsed as JSON, deep-merged over params
            group?: STRING,                               — names a runtime.concurrency_groups key; leaf only
-           timeout_ms?: INT, on_error?: 'fail'|'skip'|'continue', description?: STRING }
+           timeout_ms?: INT | {from: PATH, default?: INT}, on_error?: 'fail'|'skip'|'continue', description?: STRING }
 ```
 
 A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, sending a Slack message, running ffmpeg — each fits the same monadic shape as a prompt, writes to the same deterministic path, and participates in control flow indistinguishably from one. An `if` can branch on a tool's result; a loop can iterate it; a prompt can read it.
@@ -25,9 +25,9 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
     allow_nonzero: true
 ```
 
-`provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them.
+`provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them. When the program prints JSON, add `parse: json` (`shell` and the plugins that run a program accept it) and `value` is the parsed document rather than the text, with the raw stdout still on `meta.stdout`; empty or invalid output fails the step, and a non-zero exit's output is parsed too under `allow_nonzero`. A run with many such steps saves each output twice; `runtime.state.parsed_stdout: drop` leaves `meta.stdout` null on a step whose output parsed and records its length and SHA-256 instead (`stdout_chars`, `stdout_sha256`), so keep the default, `full`, if a later step reads `meta.stdout`. [The reference](../orchestration-reference.md#recording-parsed-stdout-runtimestateparsed_stdout) has the details.
 
-One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
+One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `http` takes a credential from host config as a header value, `{secret: <name>}`, resolved at dispatch and kept out of every record, and its `redirects` param decides whether a redirect is followed and with which headers (see [Configuration](./04-configuration.md#secrets-for-a-request-header-or-a-tools-environment)). `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
 
 A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
 
@@ -57,7 +57,7 @@ Here `arguments.labels` is the label list an `array` prompt chose, the list itse
       symbols: {from: prime.symbol_list.value}
 ```
 
-`arguments.symbols` arrives as the native array `prime.symbol_list.value` holds, not its Mustache-rendered string form. It resolves against the same scope a `use` effect's by-reference `inputs` do (state namespaces, an enclosing loop's bindings) and fails `cof check` the same way on an unrooted path; add `default: <value>` alongside `from:` to fall back instead of failing when the path doesn't resolve. See [Params by reference](../orchestration-reference.md#params-by-reference).
+`arguments.symbols` arrives as the native array `prime.symbol_list.value` holds, not its Mustache-rendered string form. It resolves against the same scope a `use` effect's by-reference `inputs` do (state namespaces, an enclosing loop's bindings) and fails `cof check` the same way on an unrooted path; add `default: <value>` alongside `from:` to fall back instead of failing when the path doesn't resolve, and `as: json` to receive the value as compact JSON text (for a string-only param such as a CLI argument). See [Params by reference](../orchestration-reference.md#params-by-reference).
 
 The division of labour is strict. Tools are for what a model *cannot* do — side effects and observations. Text work — summarising, extracting, classifying, writing, coding — is a prompt, and the pattern that joins them is **prompt-then-tool**: a `json` prompt produces the parameters, a tool executes them.
 
@@ -88,7 +88,7 @@ Seventy-odd ship in-tree. By purpose:
 
 | Group | Providers |
 | --- | --- |
-| Time / utility | `clock`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
+| Time / utility | `clock`, `cel`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
 | Filesystem / data | `fs`, `csv`, `tar`, `zip`, `gzip`, `7z` |
 | Internet | `http`, `web_search`, `web_fetch`, `webhook`, `wikipedia`, `rss`, `weather` |
 | Browser | `playwright`, `screenshot` |
@@ -106,6 +106,20 @@ Seventy-odd ship in-tree. By purpose:
 | System | `system_info`, `process_list`, `env_vars`, `service` |
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
+| Typed decisions | `systemone` — typed answers (`noul`, `choice`, `score`) about a piece of state; see [`docs/plugins/systemone.md`](../plugins/systemone.md) |
+
+`cel` computes a value instead of fetching one: it evaluates a CEL expression against the same bindings an `if` at that position sees, and its result, converted to JSON, is the step's value. Filtering a list, a map lookup with a default, or the later of two timestamps is one step, with no script to parse and no `if` whose branches each set a literal:
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.issues.value.filter(i, i.state == 'open').map(i, i.number)"
+    schema: {type: array, items: {type: integer}}
+```
+
+`cof check` parses the expression and checks every name it reads, like the CEL in an `if`; `schema` is optional and fails the step when the result doesn't match it, and `strict: true` fails it on an unset path that would otherwise give `null` with a warning. Timestamps and durations come out as ISO 8601 strings. [The reference](../orchestration-reference.md#cel-a-value-computed-with-cel) has the details.
 
 `service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 
@@ -168,6 +182,21 @@ A `prompt` is one model call. Some work needs an agent: read the code, edit it, 
 ```
 
 The prompt goes to the CLI in a file (pi) or on stdin (Claude Code), never on the command line, so it can be as long as the task needs. `result_file` is the session's contract: the agent is told to write that JSON file, the plugin validates it against `result_schema`, and `prime.fix_test.value` is the parsed object — here a real `tests_pass` boolean a later `if` can branch on. A missing or invalid file gets exactly one repair turn in the same session, quoting the errors; still invalid, the effect fails with them. Without `result_file`, `value` is the agent's final reply. `meta.raw` records the session id (a later effect's `session` param resumes it), the turns, tool calls, tokens and cost, and the path of a compact transcript; a `transcript` param writes that log at a path you choose (relative to `cwd`), appended to across the session's turns, instead of the temporary directory nothing otherwise removes. `meta.tokens_sent`/`meta.tokens_received`/`meta.cost_usd` hold the same session totals under the fields a `prompt` effect uses, so `runtime.last_run.totals` counts an agent effect's usage like any other. A turn that fails once the session has an id or a transcript exists still ends the effect as an ordinary tool failure (`on_error` applies as usual) whose `meta.raw` keeps that session id and transcript path, so a later effect can resume or inspect it; a timeout also sets `meta.raw.timed_out`. The session runs in its own process group: `timeout_ms` (here an hour, for the whole session) or a cancelled run stops the CLI and everything the agent started.
+
+**A task built at run time.** When an earlier step writes one long task prompt per item, hand the session the file instead of the text, so the text never travels through state. `prompt` takes the same `file: {from: <state path>}` form as a `prompt` effect's `template` ([Prompt](01-prompt.md)), with a required `within:` directory:
+
+```yaml
+- type: tool
+  name: implement
+  provider: agent
+  params:
+    prompt:
+      file: {from: prime.prep.value.prompt_file}
+      within: {from: input.work_dir}
+    cwd: {from: input.work_dir}
+```
+
+The file is read once, before the first attempt, and sent verbatim; a retry and the repair turn use the same text. `meta.template_files` records its path, SHA-256 and length, and `meta.params_rendered.prompt` keeps the `{file, within}` form, never the text. `params_json` cannot supply this form or replace it, though it can still set the other params. [`docs/plugins/agent.md`](../plugins/agent.md#a-prompt-from-a-file) has the errors and the trust rules.
 
 **The agent is not sandboxed.** It runs with your permissions: it can edit or delete any file you can, run any program, and reach the network. The engine's own tool lists are how you narrow it, and the two engines differ in detail. For pi, `tools` is an allowlist and `exclude_tools` a denylist (`--tools`/`--exclude-tools`). For Claude Code, `tools` (`--tools`, its entries also pre-approved with `--allowedTools`) is an allowlist: the session has only the built-in tools it names, and under the default `dontAsk` mode every other call is denied. `exclude_tools` (`--disallowedTools`) is a hard deny in every permission mode. The example lists what the session needs (file tools, and `Bash` limited to `pytest`) and leaves `permission_mode` out; `Write` is what lets it write `result_file` (`Edit` cannot create it: the file is deleted before the session starts). A Claude Code session also ignores its repository's own settings (hooks, the API key helper, project MCP servers) unless `trust_project_settings: true` is set, and gets the repository's root `CLAUDE.md` appended to its prompt. For the same reason `agent` carries the `shell`, `fs-write` and `network` capabilities, so a document that is not your own needs the same consent to run one as to run `shell`. Every param, the config block that picks the default engine and each CLI's binary, and the full result contract are in [`docs/plugins/agent.md`](../plugins/agent.md).
 
@@ -287,7 +316,11 @@ interrupted or failed run of the same document, reusing every effect whose
 node already finished without error (`meta.completed_at` set, no
 `meta.error`) and rerunning only the first unfinished/failed one and
 everything after it. A named loop in chain flow resumes at its first
-unfinished pass, keeping the finished `iter_<N>` passes — see [Resuming a
+unfinished pass, keeping the finished `iter_<N>` passes and continuing that
+pass at its first unfinished body effect; an unfinished named `if` whose
+condition picks the same branch again continues inside that branch; and
+with `runtime.state.record_children: true` an unfinished `use` continues
+inside its child the same way — see [Resuming a
 Run](../orchestration-reference.md#resuming-a-run-cof-run---resume) in the
 reference for the full skip/rerun rule, the three state sources (`--state`,
 `--resume last`, `--resume <run-id>` via this section's persistence
@@ -298,6 +331,40 @@ is killed outright (Ctrl-C/SIGTERM/SIGHUP, exiting 130/143/129) — at frame 250
 doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
 run.json --resume x` picks up at frame 250, and the adapter/tool calls for
 frames 0–249 never happen again.
+
+Continuing where a run stopped is wrong for a scope whose first effects start
+something its `finally:` stops — a server, a lock, a migration. The stopped
+run's `finally:` has already stopped it, so a resumed run that reuses the
+starting effect would work against nothing. Mark such a `dynamic` (or `use`)
+`resume: restart`: if it did not finish, `--resume` runs it from its first
+effect in a fresh state, `finally:` as usual at its end; if it finished, it
+is skipped like any other finished effect. The default, `resume: continue`,
+is the behaviour above.
+
+```yaml
+- type: dynamic
+  name: with_web
+  resume: restart
+  effects:
+    - type: tool
+      name: start_web
+      provider: service
+      params:
+        action: start
+        name: web
+        command: [python3, -m, http.server, "8000", --bind, 127.0.0.1]
+        ports: [8000]
+        ready: "http://127.0.0.1:8000/"
+    - type: tool
+      name: page
+      provider: http
+      params: {url: "http://127.0.0.1:8000/"}
+  finally:
+    - type: tool
+      name: stop_web
+      provider: service
+      params: {action: stop, name: web}
+```
 
 ## Anti-patterns
 

@@ -74,7 +74,10 @@ class ToolResult:
 ### 1.3 Timeouts
 
 `ToolRuntime._resolve_timeout_seconds` (`src/circuitry/core/tool.py:472-499`): the effect's own
-`timeout_ms` (rounded **up** to whole seconds, `max(1, ceil(ms/1000))`) wins when set; otherwise
+`timeout_ms` (rounded **up** to whole seconds, `max(1, ceil(ms/1000))`) wins when set — a literal, or
+`{from: <path>, default: <int>}` read from state at each attempt's dispatch, after `params` render and
+before the plugin is built (issue #564; resolution rules in runtime-semantics §5.1's prompt `timeout_ms`
+note); otherwise
 `runtime.tools.timeout_seconds` from config; otherwise `DEFAULT_TOOL_TIMEOUT_SECONDS = 300`
 (`:396`). This is deliberately independent of the run's model-adapter timeout
 (`runtime.adapters.<name>.timeout_seconds`) — a tool on the no-op adapter must not inherit a
@@ -232,7 +235,7 @@ alphanumeric+`-_`, checked **before** PATH lookup, `:78-90`); `args` (list[str],
 if it contains `\x00` or `\n`, `_DANGEROUS_ARG_CHARS`, `:55`, `:137-143`); `allowed_commands`
 (optional per-effect override, default `_DEFAULT_ALLOWED = ("ls","cat","head","tail","wc",
 "echo","pwd","date")`, `:52-53`); `cwd` (str); `stdin` (str); `allow_nonzero` (bool via
-`_as_bool`).
+`_as_bool`); `parse` (`"json"` or omitted, see `parse: json` below).
 
 **Host pin**: `runtime.plugins.shell.allowed_commands` (`_build_shell`, `factory.py:263-271`,
 validated as `list[str]` → `tuple`) becomes `ShellPlugin.pinned_allowed_commands`. The effective
@@ -262,6 +265,27 @@ Non-zero exit raises `RuntimeError(f"{binary} failed (exit {code}): {err}")` unl
 
 Output: `value = stdout`; `raw = {"args": cmd[1:], "cwd": cwd, "binary": binary}`;
 `stdout`/`stderr`/`exit_code` populated.
+
+**`parse: json`** (`parse_mode`/`_parse_json_stdout`, `_subprocess.py`; shared by `shell` and
+`GenericSubprocessTool`): `parse` absent or null is off; a string equal to `json` after `strip()
+.lower()` turns it on; anything else raises `ValueError("{plugin}: params['parse'] must be 'json'
+(or omitted), got {value!r}.")` before the process runs (for `shell`, after the allowlist gate and
+before the `args` checks). When on, `value = json.loads(stdout)` (stdout stays on `stdout`),
+applied after the nonzero-exit check, so a nonzero exit still fails first unless `allow_nonzero`
+(then its stdout is parsed too). Whitespace-only stdout raises `ValueError("{binary} parse: json:
+stdout is empty (exit {code}).")`; a decode failure raises `ValueError("{binary} parse: json:
+stdout is not valid JSON (exit {code}): {json_error}; stdout begins {stdout[:200]!r}")`, with
+`...` appended when stdout is longer than 200 characters. `{binary}` is the resolved path.
+
+A parsed result carries `stdout_parsed = True` (`ToolResult.stdout_parsed`). Under
+**`runtime.state.parsed_stdout: drop`** (#592, `core/parsed_stdout.py`) the tool runtime then
+records `meta.stdout = None` plus `meta.stdout_chars` (code points of the whole stdout) and
+`meta.stdout_sha256` (lowercase hex SHA-256 of its UTF-8 bytes); the two new keys follow
+`params_rendered` in key order and are popped at the start of every attempt. `full` (the
+default) records stdout as before. A failed parse raises before a result exists, so it records
+`meta.stdout = None` and no new key in either mode. Any other value is a configuration error,
+`runtime.state.parsed_stdout must be 'full' or 'drop', got {value!r}.`, reported by `cof check`
+after the `runtime.state.prompt_sent` error and raised by a run right after it.
 
 ### 2.2 `json`
 
@@ -324,7 +348,7 @@ Both are `GenericSubprocessTool` instances (`_subprocess.py:225-281`), differing
 `binary_candidates`: `awk` → `("awk", "gawk", "mawk")` (`plugins/awk.py:17-23`); `imagemagick`
 → `("magick", "convert")`, preferring ImageMagick 7's `magick` subcommand form over IM6's
 `convert` (`plugins/imagemagick.py:1-11,20-26`). Both take `args: list[str]` (required),
-`cwd`, `stdin`, `allow_nonzero`; `binary`/`env` come only from
+`cwd`, `stdin`, `allow_nonzero`, `parse` (as in §2.1); `binary`/`env` come only from
 `runtime.plugins.<name>.binary`/`.env` config, never from params ("a machine-specific
 executable path... belongs in config, not in orchestration YAML", `_subprocess.py:258-262`).
 `resolve_plugin_binary` (`:101-127`): a configured `binary` must be an absolute, existing,
@@ -364,7 +388,15 @@ as-is), `params` (dict, URL-encoded query string appended with `urllib.parse.url
 doseq=True)`, `&` or `?` separator chosen based on whether the URL already has a `?`), `parse`
 (`"json"|"text"|"auto"`, default `"auto"` — parses JSON only when the response Content-Type
 contains `"json"`, else text; `parse="json"` forces a parse and raises `RuntimeError` if the
-body isn't valid JSON), `fail_on_error` (bool via `_as_bool`, default `True`).
+body isn't valid JSON), `fail_on_error` (bool via `_as_bool`, default `True`), `redirects`
+(`"follow"|"never"|"strip_auth"`, issue #598; default `"strip_auth"` when a header came from a
+secret, `"follow"` otherwise; any other value raises `ValueError` before the request).
+`never` follows no redirect and fails on any 3xx. `strip_auth` follows a redirect only to
+`https`, keeping every header to the same origin (scheme, host and port) and dropping
+`Authorization` and each header that came from a secret to any other; a redirect to `http` is
+not followed and fails like a 4xx, its `stderr` noting why (`... redirect not followed
+(redirects: strip_auth follows https only)`). electricity resolves no secret, so its default is
+always `follow`.
 
 Transport: stdlib `urllib.request.urlopen`, not `requests` ("the standard library is sufficient
 ...and keeps the dependency footprint narrow", `:7-11`). A 4xx/5xx is caught as
@@ -376,8 +408,8 @@ available. A `urllib.error.URLError` (DNS/connection failure) **is** a real rais
 (§3.6) and electricity must preserve it.
 
 Output: `value` per `parse`; `raw = {"status": int, "headers": {lowercased name: value},
-"url": str, "body": str}`; `exit_code` always `None`; `ok = not (fail_on_error and status >=
-400)` (`:153`).
+"url": str, "body": str}`; `exit_code` always `None`; `ok = not (fail_on_error and (status >=
+400 or a redirect was refused or (redirects == "never" and 300 <= status < 400)))`.
 
 **2.6.1 `http_error_excerpt`** (`src/circuitry/plugins/base.py:16-62`): bounded to 500 chars
 (`_ERROR_EXCERPT_MAX_CHARS`). Prefers, in order: a JSON body's `error.message` (nested, the
@@ -987,7 +1019,7 @@ coercion (`py_int`, floats truncating toward zero; `NaN`/infinity raise).
 
 **Config** (`runtime.adapters.<name>`): `binary` (default `claude`/`pi`), `default_model`
 (default `""`), `thinking` (pi only, default `""`), `unset_env` (default the two names above;
-`null`/absent means the default, `[]` stays empty), `extra_args` (default `[]`). `unset_env`/
+`null`/absent means the default, `[]` stays empty), `extra_args` (default `[]`), `env` (default `{}`; `null`/absent means none). `unset_env`/
 `extra_args` must be a list of strings or the build fails with `ValueError`
 (`runtime.adapters.<name>.<key> must be a list of strings, got <repr>`), never `RuntimeError` —
 preflight treats a `RuntimeError` at build time as "deferred (runtime-injected)" and passes it,
@@ -1002,6 +1034,40 @@ plugins' `resolve_plugin_binary`): not found reports `missing: ["binary:<binary>
 -- distinct wording from the tool plugins' own binary-missing check (`none of <candidates> found
 on PATH. Install one of them...`, `subprocess_tool.rs::check_binary`), since there is exactly
 one binary name here, never a candidate list.
+
+**`env` and aliases** (issue #579, `adapters/factory.py::_env_pairs`/`_build_alias`,
+`electricity-adapters::config::env_pairs`, `electricity_vm::adapter::AdapterRegistry::build`). The
+child's environment, in order: the caller's, minus `PARENT_SESSION_ENV`, minus `unset_env`, then
+`env` applied last (`electricity_tools::process::RunOpts::env_set`, set after `env_remove`), so a
+variable in both `unset_env` and `env` gets the `env` value. Values must be strings; a leading
+`~/` becomes the home directory (`os.path.expanduser`, `$HOME` else the password database),
+nothing else is expanded. A `runtime.adapters.<name>` entry that sets `adapter` is an **alias**:
+`adapter` must name `claude_code` or `pi` (normalized like any adapter name), every other key is
+that base's own setting, and the alias is built by the base's own builder from *those keys only*
+(never the base's own entry, never another alias's) and reports the alias name as `name()`, so
+`meta.adapter`, the ignored-options warning and `check()`'s own message name it. An alias is selected by name wherever a provider token
+or `adapter:` names an adapter, including `<alias>:<model>`. Every error is a `ValueError` naming
+the alias and never showing an `env` value:
+
+- `runtime.adapters.<alias>.adapter must be claude_code or pi, got <repr>` (an unknown base, any
+  other adapter, a non-string; `, which is itself an alias` is appended when the base is a name
+  that is not in Circuitry's registry and whose own entry sets `adapter`);
+- `runtime.adapters.<name>.adapter is set, but '<name>' is a built-in adapter; an alias needs a
+  name of its own` (a name in Circuitry's full registry, whether or not this build can build it);
+- `runtime.adapters.<alias>.env must be a mapping of variable names to strings, got <type>`;
+- `runtime.adapters.<alias>.env has an invalid variable name <repr>: a name matches
+  [A-Za-z_][A-Za-z0-9_]*`;
+- `runtime.adapters.<alias>.env.<NAME> must be a string, got <type>`.
+
+`unset_env`/`extra_args` errors name the alias too. Preflight builds adapters from *config*'s
+`runtime` plus the aliases the run's own merged runtime defines (`with_document_aliases`: a
+trusted document's alias is found, nothing else of its `runtime:` is), and a failing alias is
+soft or hard like any known adapter only when it builds (`is_known_adapter`). Every `env` value
+is replaced by `***REDACTED***` (names stay) in `electricity-redaction::redact` for any
+`adapters` mapping, so `runtime.effective_settings` never holds one, and `Debug` shows names only.
+Ported with five `c579-*` conformance cases (two `claude_code` aliases, a `pi` alias and both
+bases in one run through fakes that report a plain `ALIAS_PROBE` variable, a default-adapter alias,
+every config error's exact text, and an alias's missing binary hard and soft).
 
 **Retries.** Only a timeout is retryable (`AdapterCallError` with `retryable: true`); a start
 failure, a missing answer, an `is_error`/pi error stop, or a non-zero exit all fail the attempt
@@ -1283,7 +1349,8 @@ dict every subsystem above reads from directly.
 
 Environment-variable overlays that win over all of the above when set (`CONFIG_ENV_VARS`,
 `config.py:72-81`): `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`,
-`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
+`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL` (`cof` only: electricity does not run the
+`systemone` tool), `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
 `CIRCUITRY_ENABLED_TOOLS`, `CIRCUITRY_ENVIRONMENT` — plus every per-plugin env var documented in
 §2–§4 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SURREAL_*`, `CIRCUITRY_<NAME>_STORE_RAW`,
 `CIRCUITRY_JSONL_PATH`, `DATABASE_URL`, `CIRCUITRY_SQLITE_PATH`, ...), which take precedence over

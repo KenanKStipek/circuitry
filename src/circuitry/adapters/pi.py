@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..agent_cli import (
     DEFAULT_UNSET_ENV,
@@ -34,6 +34,8 @@ class PiAdapter:
     thinking: str = ""
     unset_env: tuple[str, ...] = DEFAULT_UNSET_ENV
     extra_args: tuple[str, ...] = ()
+    # Values may be credentials-adjacent: never in the repr.
+    env: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     def generate(
         self,
@@ -57,7 +59,7 @@ class PiAdapter:
             with agent_cli_call_errors():
                 proc = run_agent_cli(
                     cmd,
-                    env=child_env(self.unset_env),
+                    env=child_env(self.unset_env, env=dict(self.env)),
                     timeout_seconds=timeout_seconds,
                     cwd=workdir,
                 )

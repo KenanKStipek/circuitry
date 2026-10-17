@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md 'Inputs by reference'",
+  "description": "A `use` input `{from: <path>, as: json}` passes the value as compact JSON text; one that resolves to nothing still passes null, and a reference without `as` passes the native value (electricity/docs/spec/runtime-semantics.md §3.5).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

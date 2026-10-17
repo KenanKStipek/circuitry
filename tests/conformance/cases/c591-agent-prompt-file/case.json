@@ -1,0 +1,14 @@
+{
+  "spec_case": "issue #591: the agent tool reads params.prompt from a file named in state",
+  "description": "`provider: agent` with `params.prompt: {file: {from: ...}, within: ...}` reads the file when the effect dispatches and sends its text verbatim to the session (the fake replies with its SHA-256 and length, never the text); `meta.template_files` records it and `meta.params_rendered.prompt` keeps the `{file, within}` form with the resolved path. Each error (no such file, outside `within`, not UTF-8) and a `params_json` that sets the form at dispatch fail their effect, and `on_error: continue` goes on. The session's transcript goes to a scratch directory the last effect removes. Python only: electricity refuses the cof-only agent plugin.",
+  "engines": ["python"],
+  "cli_args": [
+    "-e", "work_dir=__CASE_DIR__",
+    "-e", "prompt_file=prompts/task.md",
+    "-e", "missing_file=prompts/nope.md",
+    "-e", "escape_file=../case.json",
+    "-e", "binary_file=prompts/binary.bin",
+    "-e", "overlay={\"prompt\": {\"file\": {\"from\": \"input.prompt_file\"}, \"within\": \"/srv\"}}"
+  ],
+  "expect": "success"
+}

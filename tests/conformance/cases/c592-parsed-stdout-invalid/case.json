@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #592: runtime.state.parsed_stdout",
+  "description": "expect: failure, error_compare: exact. `runtime.state.parsed_stdout: sha256` is rejected before any effect runs, with an error naming the key.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

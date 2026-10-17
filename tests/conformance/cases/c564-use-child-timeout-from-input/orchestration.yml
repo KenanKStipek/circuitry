@@ -1,0 +1,13 @@
+name: c564-use-child-timeout-from-input
+effects:
+  - type: tool
+    name: spec
+    provider: json
+    params:
+      mode: parse
+      input: '{"budget_ms": 45000}'
+  - type: use
+    name: sub
+    path: child.yml
+    inputs:
+      budget_ms: {from: prime.spec.value.budget_ms}

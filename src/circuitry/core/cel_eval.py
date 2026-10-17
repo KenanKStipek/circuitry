@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -95,23 +96,22 @@ class CelEvaluationError(CelError, RuntimeError):
     """
 
 
-def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> bool:
-    """Evaluate a CEL expression against *ctx* and return a bool.
+#: What :func:`_evaluate_in_state` returns when an unguarded ``state.`` path
+#: the expression reads is unset and the caller is not strict.
+_UNSET_STATE = object()
 
-    *ctx* is exposed as ``state`` inside the expression, converted to CEL
-    types. Nothing else is in scope: there is no way to reach a Python
-    object's attributes, module or class from an expression.
 
-    Raises :class:`CelEvaluationError` on an empty, over-long,
-    unparseable or failing expression. Callers that want a branch instead
-    of a failure must catch it explicitly; see the ``on_error`` handling
-    in ``core.conditional`` / ``core.loop``.
+def _evaluate_in_state(
+    expr: str, ctx: dict[str, Any], *, strict: bool, unset_outcome: str
+) -> Any:
+    """*expr*'s CEL result with *ctx* bound as ``state``: what
+    :func:`evaluate_cel` and :func:`evaluate_cel_value` share.
 
-    Returns ``False`` — with a warning naming the path — when an
-    unguarded ``state.`` path the expression reads is unset. Pass
-    ``strict=True`` to raise :class:`CelEvaluationError` for that case
-    instead. See the module docstring: absent state is data, not a defect,
-    unless the author says otherwise.
+    Returns :data:`_UNSET_STATE`, after a warning that names the path and
+    ends with *unset_outcome* (what the caller gives instead), when an
+    unguarded ``state.`` path the expression reads is unset, unless
+    *strict*. Raises :class:`CelEvaluationError` on an empty, over-long,
+    unparseable or failing expression, and on an unset path when *strict*.
     """
     if not expr or not expr.strip():
         raise CelEvaluationError(
@@ -141,11 +141,12 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
                 expression=expr,
             )
         logger.warning(
-            "CEL expression %r reads unset state path %r; condition is false",
+            "CEL expression %r reads unset state path %r; %s",
             expr,
             unresolved,
+            unset_outcome,
         )
-        return False
+        return _UNSET_STATE
 
     try:
         result = compiled.runner.evaluate({"state": compiled.context(ctx)})
@@ -156,8 +157,53 @@ def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> boo
         raise CelEvaluationError(
             f"CEL evaluation failed for {expr!r}: {exc}", expression=expr
         ) from exc
+    return result
 
-    return bool(result)
+
+def evaluate_cel(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> bool:
+    """Evaluate a CEL expression against *ctx* and return a bool.
+
+    *ctx* is exposed as ``state`` inside the expression, converted to CEL
+    types. Nothing else is in scope: there is no way to reach a Python
+    object's attributes, module or class from an expression.
+
+    Raises :class:`CelEvaluationError` on an empty, over-long,
+    unparseable or failing expression. Callers that want a branch instead
+    of a failure must catch it explicitly; see the ``on_error`` handling
+    in ``core.conditional`` / ``core.loop``.
+
+    Returns ``False`` — with a warning naming the path — when an
+    unguarded ``state.`` path the expression reads is unset. Pass
+    ``strict=True`` to raise :class:`CelEvaluationError` for that case
+    instead. See the module docstring: absent state is data, not a defect,
+    unless the author says otherwise.
+    """
+    result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="condition is false")
+    return False if result is _UNSET_STATE else bool(result)
+
+
+def evaluate_cel_value(expr: str, ctx: dict[str, Any], *, strict: bool = False) -> Any:
+    """Evaluate a CEL expression against *ctx* and return its result as JSON.
+
+    The ``cel`` tool's evaluator: the same binding (``state``), the same
+    absent-state rule and the same ``strict`` switch as :func:`evaluate_cel`,
+    but the result is the expression's value converted to JSON
+    (:func:`cel_to_json`) rather than a bool. An unguarded ``state.`` path
+    that is unset makes the result ``None``, with a warning naming the path,
+    unless *strict*.
+
+    Raises :class:`CelEvaluationError` for every case :func:`evaluate_cel`
+    raises on, and for a result JSON cannot carry.
+    """
+    result = _evaluate_in_state(expr, ctx, strict=strict, unset_outcome="value is null")
+    if result is _UNSET_STATE:
+        return None
+    try:
+        return cel_to_json(result)
+    except ValueError as exc:
+        raise CelEvaluationError(
+            f"CEL expression {expr!r} has no JSON value: {exc}", expression=expr
+        ) from exc
 
 
 def evaluate_cel_expect(
@@ -528,6 +574,89 @@ def _first_unresolved(
 # ---------------------------------------------------------------------------
 # Python -> CEL value conversion
 # ---------------------------------------------------------------------------
+
+
+def cel_to_json(value: Any) -> Any:
+    """Convert a CEL result into a JSON value.
+
+    Lists and maps keep their order; a map key that is an ``int``, ``uint``
+    or ``bool`` becomes its JSON text (``"1"``, ``"true"``), as ``json.dumps``
+    would write it. A timestamp becomes an ISO 8601 UTC string
+    (``2026-01-02T03:04:05Z``, with a fraction only when it has one) and a
+    duration an ISO 8601 duration (``PT1H30M``, ``PT0.5S``, ``-PT1M30S``).
+
+    Raises ``ValueError`` for bytes, a non-finite double, a type value, or
+    anything else with no JSON form.
+    """
+    # celpy hands back its own types, and plain Python ones from some
+    # operations (string concatenation gives a `str`); `bool` is checked
+    # before `int`, which it subclasses in both.
+    if value is None:
+        return None
+    if isinstance(value, (celtypes.BoolType, bool)):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{number} is not a finite number")
+        return number
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, bytes):
+        raise ValueError("bytes have no JSON form; convert them with string()")
+    if isinstance(value, datetime.datetime):
+        return _iso_timestamp(value)
+    if isinstance(value, datetime.timedelta):
+        return _iso_duration(value)
+    if isinstance(value, Mapping):
+        return {_json_key(key): cel_to_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [cel_to_json(item) for item in value]
+    raise ValueError(f"a {type(value).__name__} has no JSON form")
+
+
+def _json_key(key: Any) -> str:
+    if isinstance(key, (celtypes.BoolType, bool)):
+        return "true" if key else "false"
+    if isinstance(key, int):
+        return str(int(key))
+    if isinstance(key, str):
+        return str(key)
+    raise ValueError(f"a {type(key).__name__} map key has no JSON form")
+
+
+def _iso_timestamp(value: datetime.datetime) -> str:
+    moment = (
+        value.astimezone(datetime.timezone.utc)
+        if value.tzinfo is not None
+        else value
+    )
+    text = moment.strftime("%Y-%m-%dT%H:%M:%S")
+    if moment.microsecond:
+        text += f".{moment.microsecond:06d}".rstrip("0")
+    return text + "Z"
+
+
+def _iso_duration(value: datetime.timedelta) -> str:
+    micros = (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
+    sign = "-" if micros < 0 else ""
+    micros = abs(micros)
+    hours, micros = divmod(micros, 3_600 * 1_000_000)
+    minutes, micros = divmod(micros, 60 * 1_000_000)
+    seconds, fraction = divmod(micros, 1_000_000)
+    parts = []
+    if hours:
+        parts.append(f"{hours}H")
+    if minutes:
+        parts.append(f"{minutes}M")
+    if seconds or fraction or not parts:
+        second_text = str(seconds)
+        if fraction:
+            second_text += f".{fraction:06d}".rstrip("0")
+        parts.append(f"{second_text}S")
+    return f"{sign}PT{''.join(parts)}"
 
 
 def _to_cel(value: Any) -> Any:

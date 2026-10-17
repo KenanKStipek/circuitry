@@ -1,0 +1,10 @@
+name: prompt-file-from-state-use-child-trusted
+adapter: scripted
+model: m
+effects:
+  - type: use
+    name: child
+    path: child/child.yml
+    inputs:
+      work_dir: {from: input.work_dir}
+      prompt_file: {from: input.prompt_file}

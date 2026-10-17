@@ -119,7 +119,7 @@ reads the repository's `AGENTS.md` itself, as it does in any session.
 
 | Param | Type | Default | Meaning |
 |---|---|---|---|
-| `prompt` | string | required | The task. Mustache-rendered, multi-line. Written to a temporary file that pi attaches with `@<file>`, or sent to Claude Code on stdin — never put in the command line. |
+| `prompt` | string, or `{file: {from: <state path>}, within: <dir>}` | required | The task. Mustache-rendered, multi-line. Written to a temporary file that pi attaches with `@<file>`, or sent to Claude Code on stdin — never put in the command line. The mapping form reads the task from a file named in state when the effect dispatches; see [A prompt from a file](#a-prompt-from-a-file). |
 | `engine` | `pi` \| `claude_code` | `runtime.plugins.agent.engine`, else `pi` | Which CLI runs the session. |
 | `cwd` | string | the current directory | Where the session runs. |
 | `model` | string | the CLI's default | pi: `provider/id`; Claude Code: a model name or alias. |
@@ -144,6 +144,54 @@ bill a key that happens to be exported.
 
 Both engines save the session (pi in its session directory, Claude Code in
 its project history), so a later effect can resume it with `session`.
+
+## A prompt from a file
+
+A workflow that builds long task prompts outside the document (a step writes
+one file per item) can hand the session the file instead of the text, so the
+text never passes through state:
+
+```yaml
+- type: tool
+  name: implement
+  provider: agent
+  params:
+    prompt:
+      file: {from: prime.prep.value.prompt_file}
+      within: {from: input.work_dir}
+    cwd: {from: input.work_dir}
+```
+
+The form and its rules are a `prompt` effect's [`file: {from: <state path>}`](../orchestration-reference.md#reading-a-prompt-file-at-dispatch-file-from-state-path):
+
+- **Read once, used verbatim.** The state value is the file's path. The file
+  is read when the effect dispatches, once per execution of the effect and
+  before its first attempt; a retry and the repair turn use that same text. It
+  is not rendered (no mustache), so a text that contains `{{` reaches the
+  session as written.
+- **`within` is required:** a literal absolute path or `{from: input.<name>}`.
+  A relative path resolves against it, and after symlinks are resolved the
+  file must be inside it. A limited document's `within` must be inside its own
+  project; a document run by path may name any directory; a document generated
+  at run time cannot use the form. `cof check` rejects any other `within`.
+- **Errors fail the effect**, so `on_error` applies, naming the effect,
+  `params.prompt` and the path: no such file, not a regular file, outside
+  `within`, unreadable, not UTF-8, larger than 1 MiB, or a state value that is
+  not a path string. The session never starts, and the effect is not retried.
+- **State records the file, never its text.** `meta.template_files` holds one
+  `{field: "params.prompt", path, sha256, chars}` entry, and
+  `meta.params_rendered.prompt` keeps the `{file, within}` form with the
+  resolved paths. The text appears nowhere in `--out`, `--live-state`, events
+  or persistence.
+- **`params_json` cannot supply the form**, because `within` is a trust
+  boundary and `params_json` is rendered from state (the same rule as
+  `systemone`'s `within`). With `params.prompt` in the form, `params_json` must
+  not set `prompt` at all; it may still set the other params (`engine`,
+  `model`, `cwd`, `tools`, ...). Both are errors in `cof check` when the raw
+  `params_json` shows them, and at dispatch otherwise.
+
+A string `prompt` behaves as before. electricity checks the form the same way
+when it compiles a document, but does not run the `agent` tool.
 
 ## The result contract
 

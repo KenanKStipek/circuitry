@@ -295,16 +295,19 @@ Per-effect-type `meta` (confirmed field sets from live runs):
 
 - **prompt** (`core/prompt.py:453` docstring, confirmed live):
   `adapter, model, model_reason ("explicit"|"router"|"default"), prompt_type,
-  prompt_sent, tokens_sent, tokens_received, tokens_sent_total,
-  tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
+  prompt_sent, prompt_sent_sha256, prompt_chars, tokens_sent, tokens_received,
+  tokens_sent_total, tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
   waiting_for, retries_used?, answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
-  assets?`.
+  assets?, template_files? (a `file: {from: ...}` source read at dispatch only)`.
 - **tool** (`core/tool.py:399` docstring, confirmed live): `provider,
-  params_rendered (redacted), stdout, stderr, exit_code, binary? (process
-  plugins), status_code? (HTTP-family only), raw (redacted + size-capped),
-  waiting_for, retries_used?, expect?`.
+  params_rendered (redacted), stdout, stderr, exit_code, stdout_chars? and
+  stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
+  #592), binary? (process plugins), status_code? (HTTP-family only), raw
+  (redacted + size-capped), waiting_for, retries_used?, expect?,
+  template_files? (an `agent` effect's `params.prompt` read from a file only,
+  #591)`.
 - **use** (`core/use.py:271` `UseDefinition`, confirmed live): `orchestration,
   inline (bool), resolved_path, validation_errors, child_errors,
   inputs (redacted-free copy of rendered child inputs), orchestration_sha256,
@@ -550,10 +553,24 @@ with `default:` present, use the default (deep-copied); without it, raise
 `None`, letting the ordinary required/type check in `interface.inputs` catch
 it, or — if that input is itself `required` in the child's
 `interface.inputs` — a more specific `"required input 'X' resolved to
-nothing from 'PATH'"` message, `core/use.py:446`). `{from: ...}` is rejected
-at compile time for any value that is syntactically a mapping with keys
-other than exactly `{from}` or `{from, default}` — any other mapping shape
-(extra keys) is a literal value, passed through unrendered as a plain dict.
+nothing from 'PATH'"` message, `core/use.py:446`). A leaf's keys are `from`
+plus any of `default` and `as` (a `use` input has no `default`) — any other
+mapping shape (extra keys) is a literal value, passed through unrendered as a
+plain dict.
+
+`as: json` (#566, `core/use.py::serialize_reference`) hands over the
+resolved value — the `default:` included, which is applied first — as compact
+JSON text instead: `json.dumps(value, ensure_ascii=False, separators=(",",
+":"), allow_nan=False)`, keys in their stored order. It applies at every
+by-reference leaf (any depth in `params`, list items included, and a `use`
+effect's top-level `inputs`); a `use` input that resolves to nothing stays
+`None` and is not serialized. A value JSON can't carry (`NaN`/`inf`, bytes, a
+date) raises `"<label>: '{from: PATH, as: json}' did not serialize to JSON:
+<reason>"`, where `<label>` is `Tool effect 'NAME' param 'params.a.b[0]'` for a
+tool and `inputs.NAME` for a `use` input. `json` is the only supported `as`
+value; any other (a non-string included) is a compile-time error,
+`"<label> at '<effect path>': unknown 'as: X' on a '{from: ...}' reference
+(supported: json)."`, and `as: null` is the same as omitting `as`.
 
 ### 3.6 Prompt composition: `{{> name}}`, declared `prompts:`, and prompt files (#396)
 
@@ -883,6 +900,16 @@ timeout for *that* attempt's adapter)` — not the run-default adapter's
 timeout, since a `provider:`/fallback can dispatch to a *different* adapter
 than the run default.
 
+`timeout_ms` may also be `{from: <path>, default: <int>}` (issue #564, `core/
+timeout_ref.py`): read from state at each attempt's dispatch, before the
+adapter is built, and then handled exactly like a literal. It must resolve to a
+positive integer; a path that is missing (or `null`) takes `default`, or fails
+the effect without one, and any other value fails it — a `ValueError` whose
+text names the path (`timeout_ms '{from: <path>}' did not resolve to a value
+and has no default.` / `... resolved to <repr>; expected a positive integer.`).
+A resolution failure is never retried, and a prompt records it with
+`meta.fallback_attempts: []` (no adapter was tried).
+
 **Token accounting**: `tokens_sent`/`tokens_received` = the attempt that
 actually answered. `tokens_sent_total`/`tokens_received_total` = the sum
 across **every** attempt this `execute()` call made — failed, retried, and
@@ -900,6 +927,84 @@ written **before** the first dispatch attempt — confirmed live (`adapter`,
 before any network/adapter call). This is what makes a complexity score (and
 the fully-rendered prompt) visible on a prompt that then fails.
 
+**`runtime.state.prompt_sent`** (issue #577, `core/prompt_record.py`): shapes
+only the `meta.prompt_sent` record; the text in memory (what the adapter
+receives, retries, fallback, complexity scoring, token estimates) is never
+touched. `full` (default) records the whole text; `sha256` records `null`;
+`head:<N>` (N >= 1) records the first N Unicode code points followed by
+`"\n[… <M> more characters not recorded]"` (`M` = code points left out; a text of
+N code points or fewer is kept whole, no marker). In every mode
+`meta.prompt_sent_sha256` (lowercase hex SHA-256 of the UTF-8 bytes) and
+`meta.prompt_chars` (code points of the whole text, `len(text)` /
+`text.chars().count()`) follow `prompt_sent` in key order. A `messages`
+prompt records the flattened form. Any other value, `head:0` and a
+non-string included, is a configuration error with the message
+`runtime.state.prompt_sent must be 'full', 'sha256' or 'head:<N>' (N a
+positive integer), got <repr>.` — raised by `cof check` after the
+concurrency-configuration errors, and by a run right after the complexity
+block. Attempt and fallback records never carry prompt text.
+
+**`file: {from: <state path>}, within: <dir>`** (issue #578,
+`core/prompt_files.py`): a `prompt` effect's `template`, and a message's
+`content`, may read their text when the effect dispatches rather than when the
+document loads. It is *not* allowed in a `yield` or the top-level `prompts:`
+map (a compile error naming the field). `within` is required: a literal
+absolute path, or `{from: input.<name>}` (anything else, an effect's output
+included, is a compile error). The state value is the file's path; a relative
+one resolves against `within`, and after symlinks are resolved the file must
+be inside it. The file is read once per execution of the effect, before the
+first attempt (retries and fallback reuse the text), and used **verbatim**:
+bytes decoded as UTF-8, no newline translation, no Mustache. Size cap 1 MiB
+(1,048,576 bytes). Each failure — a state value that is not a path string
+(`None` included), a `within` that is not an absolute directory, no such
+file, not a regular file, outside `within`, unreadable, not UTF-8, too large —
+fails the effect (`PromptFileError`, a `ValueError`) with
+`Prompt effect '<name>': <field>: <problem>`, where `<field>` is `template` or
+`messages[<i>].content`, so `on_error` applies. Success records
+`meta.template_files`, a list with one `{field, path, sha256, chars}` per file
+read (`path` the resolved path, `sha256` of the bytes, `chars` in code
+points), appended after `waiting_for` and absent when nothing was read. The
+file's content is run data, not part of the document digest.
+
+Trust (`DocumentOrigin`): a document run by path (`File`) can name any
+`within`. A limited document (`LimitedFile`) is limited: a literal `within`
+must resolve inside its confinement root (a compile error otherwise), and a
+`within` taken from `input` is held to the same rule at dispatch. A
+generated document (`Generated`) cannot use the form at all: the same
+`'file:' cannot be used here` compile error `{file: <path>}` gives.
+
+A `use` child named by `path:` has its parent's trust, which the compiled
+`use` carries as `parent_trusted` (true when the document it is compiled in is
+`File`): a child of a trusted parent loads as `File`, a child of a limited one
+as `LimitedFile`. A `use: inline` child is `Generated`, so its own `use`
+children are limited. Circuitry additionally limits a child it resolves
+through the library; electricity has no library (`ref:` is a compile error), so
+no child here is ever limited that way. In a child, `input.<name>` is whatever
+the parent maps to it, which can be another effect's output, so the parent's
+author decides what a trusted child may read.
+
+A reflector builds its planning prompt from the plan prompt's own text, so a
+plan prompt (the top-level `prompt` named `plan_from_step`) whose `template` or
+a message's `content` is `file: {from: ...}` is a compile error naming the
+reflector, the prompt and the field: `Reflector effect '<name>' at '<path>':
+its plan prompt '<prompt>' reads <field> from a file named in state ...`.
+
+The **`agent` tool's `params.prompt`** (issue #591, `core/compiler.py::
+_compile_agent_prompt_file`, `core/tool.py`) takes the same form by the same
+rules, compiled into `ToolDefinition.prompt_file` (`prompt` is then dropped
+from `params`) with the field `<effect_path>.params.prompt`. At dispatch it is
+read once, on the first attempt (a read failure is not retried), and the
+errors read `Tool effect '<name>': params.prompt: <problem>`. The plugin gets
+the text; `meta.params_rendered.prompt` is `{file: <resolved path>, within:
+<resolved within>}` and `meta.template_files` one record with field
+`params.prompt`. `params_json` never supplies the form, and with
+`params.prompt` in the form never sets `prompt` at all: when the raw
+`params_json` parses as a JSON object, compiling fails with `<effect_path>:
+params_json must not set params.prompt ...`, and the rendered one is checked
+again at dispatch. electricity compiles the same checks (the IR's
+`ToolOp::prompt_file`) but refuses the cof-only `agent` plugin, so it never
+reads the file.
+
 **Routing/scoring/decomposition** — see §5.8.
 
 **Confirmed live node** (`prompt_type: text`, no retries/fallbacks/scoring):
@@ -908,6 +1013,7 @@ the fully-rendered prompt) visible on a prompt that then fails.
   "meta": {
     "adapter": "scripted", "model": "test-model", "model_reason": "default",
     "prompt_type": "text", "prompt_sent": "hi world",
+    "prompt_sent_sha256": "<hex sha-256 of \"hi world\">", "prompt_chars": 8,
     "tokens_sent": 10, "tokens_received": 5,
     "tokens_sent_total": 10, "tokens_received_total": 5,
     "dry_run": false, "error": null, "waiting_for": null,
@@ -1046,7 +1152,10 @@ onto** the `use` node itself, so a child effect named `inner` surfaces at
 `prime.<use_name>.inner.value`, exactly the nesting convention a `dynamic`
 container gives its own children. `runtime.state.record_children` (config)
 additionally grafts the child's full effect record under the `use` node even
-in explicit/auto-outputs mode, for observability.
+in explicit/auto-outputs mode, for observability. With it on, a child stopped
+by an interrupt (Ctrl-C/SIGTERM/SIGHUP, a cancelled run — a `BaseException`,
+not an ordinary failure) keeps its record too, and `--resume` continues
+inside that recorded child rather than rerunning it (§8.5).
 
 **Child errors**: `meta.child_errors` is a flat list of `{path, error}` for
 **every** node anywhere in the child's tree whose own `meta.error` is set —
@@ -1700,7 +1809,59 @@ contiguous-from-0 prefix (not by eyeballing whether `iter_<N>` merely *looks*
 finished — a pass that died partway through writing its own node must not
 be mistaken for complete) — chain flow only (every `while`, or an `each` not
 running `flow: tree`); a tree-flow `each` loop and an unnamed loop always
-rerun whole. A `finally:` effect is **never** skipped by resume (§6.4).
+rerun whole. The loop writes that record on success, on failure, and on an
+interrupt (#574): `core/loop.py`'s outer handler is `except BaseException`,
+so Ctrl-C/SIGTERM/SIGHUP or a cancelled run gets the failure path's own
+writes — `completed_passes`, `completed_at`, `value.termination` `{"reason":
+"error", "detail": ...}` and `meta.error` — with the interrupt text of §6.5
+(`"Interrupted (Ctrl-C/SIGINT)"`, `"Interrupted (SIGTERM)"`, `"Interrupted
+(SIGHUP)"`) as both the error and the detail, never the empty `str()` of the
+exception; then it re-raises the same exception, so exit code, cleanup and
+`finally:` are unchanged. electricity's `exec/loop_.rs` does the same for
+`VmError::Cancelled`. A `finally:` effect is **never** skipped by resume (§6.4).
+
+The first unfinished pass of such a loop continues **inside** its body when
+the saved state holds its `iter_<N>` node (`core/loop.py` `resume_pass`,
+`_execute_body(resume=True)`, #573): body effects are skipped by the same
+positional rule as a chain `dynamic`'s `effects:` until the first one that
+isn't resumed whole, which runs with resume on (so a nested `dynamic`,
+loop, `if` or `use` resumes inside itself), and every later body effect
+reruns. A `while` loop runs that pass **without evaluating its condition**:
+it held when the pass started. Every later pass, and a first unfinished pass
+with no saved `iter_<N>`, runs from its start, condition first. An
+unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
+`meta.branch` before anything else, evaluates its condition again (a model
+condition asks again), and, when the condition selects that branch again,
+runs the branch by the same positional rule; the other branch runs from its
+start. An unnamed `if` and a `reflector` rerun whole. electricity has no
+`--resume` yet (M2-G), so this is reference behaviour only.
+
+An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
+`_SavedChildRun`) reruns its child from the start in a fresh state, unless
+`runtime.state.record_children` is on and the saved node holds the child's
+record: then the resumed `use` continues **inside** its recorded child —
+the record seeds the child's `prime` and the child's root `dynamic` runs
+with resume on, so every rule above applies inside it, recursively for a
+nested `use`. A child interrupted by Ctrl-C/SIGTERM/SIGHUP keeps its record
+for exactly this. It does so only when the saved `meta.orchestration_sha256`
+and `meta.inputs` (compared in their saved JSON form) equal the child's
+current digest and resolved inputs, and the saved `meta.expect.result` is
+not false (a check that judged the output false would just fail again);
+otherwise the record is dropped and the child runs from its start. Only the
+first attempt resumes — a `retries` retry reruns the child whole. A `use`
+that is the first unfinished effect of a resumed loop pass or `if` branch
+resumes inside its child the same way; one in a tree-flow branch, or in a
+pass or branch that runs from its start, reruns whole.
+
+A `dynamic` or `use` with **`resume: restart`** (`core/dynamic.py`,
+`core/use.py`, #590) whose saved node did not finish without error runs
+from its first effect in a fresh state instead: none of its saved children
+is reused, a `use` runs its child from its start even when its saved record
+matches, and its `finally:` runs as usual. A finished one is still skipped
+whole, and the rule holds at any depth. `resume: continue` is the default.
+electricity's compiler checks the key's value, but its IR does not carry
+it; once electricity has `--resume`, the IR must carry `resume`, or a
+resumed run would silently continue such a scope.
 
 ### 8.6 Config keys that affect a run
 
@@ -1711,7 +1872,8 @@ discovery/trust system; the keys that matter for *parity of execution*
 `enabled_adapters`/`enabled_plugins`/`enabled_tools` (allowlists),
 `environment`, and the `runtime:` block (`adapters.<name>.*`,
 `plugins.<name>.*`, `max_concurrency`, `concurrency_groups`, `complexity.*`,
-`tools.timeout_seconds`, `state.record_children`, `persistence.*`). An
+`tools.timeout_seconds`, `state.record_children`, `state.prompt_sent`,
+`state.parsed_stdout`, `persistence.*`). An
 orchestration's **own** `runtime:` block may only ever set
 `ORCHESTRATION_RUNTIME_KEYS = {"complexity", "state"}`
 (`cli/effective_settings.py:62`) unless the whole document is **trusted**

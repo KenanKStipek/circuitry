@@ -720,6 +720,8 @@ def _do_validate(
 
     if result["ok"]:
         console.print("[green]Valid[/green]")
+        if result.get("secrets"):
+            console.print(f"[bold]Secrets:[/bold] {escape(', '.join(result['secrets']))}")
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):
@@ -1978,12 +1980,14 @@ def _list_models(
     reports nothing rather than failing. Only an unknown adapter name is
     an error — that one is a typo, not a missing daemon.
     """
-    from ..adapters.factory import ADAPTER_REGISTRY
+    from ..adapters.factory import ADAPTER_REGISTRY, alias_names
     from ..adapters.models import list_adapter_models
 
     name = (adapter_name or "").strip().lower()
-    if name not in ADAPTER_REGISTRY:
-        known = ", ".join(sorted(ADAPTER_REGISTRY))
+    cfg = resolve_config(explicit_path=config_path)
+    known_names = {*ADAPTER_REGISTRY, *alias_names(cfg.runtime)}
+    if name not in known_names:
+        known = ", ".join(sorted(known_names))
         if json_out:
             console.print_json(
                 json.dumps({"adapter": name, "error": "unknown adapter", "models": []})
@@ -1993,7 +1997,6 @@ def _list_models(
             console.print(f"[dim]Known adapters: {known}[/dim]")
         raise typer.Exit(code=1)
 
-    cfg = resolve_config(explicit_path=config_path)
     names = list_adapter_models(adapter_name=name, runtime=cfg.runtime or {})
 
     if json_out:

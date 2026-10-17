@@ -220,7 +220,8 @@ fn allowed_adapters(runtime_config: &Value) -> Option<Vec<String>> {
     }
 }
 
-/// `_attempt_timeout_seconds`.
+/// `_attempt_timeout_seconds`. *timeout_ms* is the effect's own
+/// `timeout_ms` already resolved for this attempt (issue #564).
 fn attempt_timeout_seconds(
     adapter_name: &str,
     timeout_ms: Option<i64>,
@@ -450,6 +451,7 @@ async fn generate_with_fallbacks(
     meta_node: &NodeRef,
     store: &Store,
     option_warnings: &[String],
+    timeout_ms: Option<i64>,
     run_ctx: &RunContext<'_>,
     call_path: &EffectPath,
     token: &CancellationToken,
@@ -516,7 +518,7 @@ async fn generate_with_fallbacks(
             }
         };
 
-        let timeout_seconds = attempt_timeout_seconds(adapter_name, prompt.timeout_ms, run_ctx);
+        let timeout_seconds = attempt_timeout_seconds(adapter_name, timeout_ms, run_ctx);
         let call = crate::adapter::CallContext {
             path: call_path,
             timeout_seconds,
@@ -764,10 +766,21 @@ pub(crate) async fn execute_prompt(
     }
     let render_root = live_scope::LiveRoot::new(&render_chain, store);
 
-    let render_result = render_prompt(prompt, &render_root, run_ctx);
-    let (messages, prompt_sent) = match render_result {
-        Ok(pair) => pair,
-        Err(message) => {
+    // Validated before the run starts (`pre_input_checks`); a bad value that
+    // got here anyway fails the run rather than recording the text in full.
+    let prompt_sent_setting = electricity_config::prompt_sent_setting(Some(run_ctx.runtime_config))
+        .map_err(|message| VmError::Raised {
+            py_class: electricity_tools::PyExc::ValueError,
+            message,
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        })?;
+
+    let render_result = render_prompt(prompt, &render_root, run_ctx, name);
+    let (messages, prompt_sent, template_files) = match render_result {
+        Ok(rendered) => rendered,
+        Err(failure) => {
+            let RenderFailure { message, py_class } = failure;
             set_leaf(store, &meta_node, "created_at", now_iso());
             set_leaf(store, &meta_node, "error", Value::Str(redact_str(&message)));
             set_leaf(store, &meta_node, "completed_at", now_iso());
@@ -784,7 +797,7 @@ pub(crate) async fn execute_prompt(
             observer.write();
             if op.on_error == OnError::Fail {
                 return Err(VmError::Raised {
-                    py_class: electricity_tools::PyExc::TemplateError,
+                    py_class,
                     message,
                     cause: electricity_tools::ErrorCause::None,
                     cause_class: None,
@@ -836,11 +849,29 @@ pub(crate) async fn execute_prompt(
         "prompt_type",
         Value::Str(prompt_type_str(prompt.prompt_type).to_string()),
     );
+    // What `runtime.state.prompt_sent` leaves of the text, plus the two
+    // fields that describe all of it (#577). Only this record is shaped:
+    // `prompt_sent` itself stays whole for everything below.
     set_leaf(
         store,
         &meta_node,
         "prompt_sent",
-        Value::Str(prompt_sent.clone()),
+        match prompt_sent_setting.record_text(&prompt_sent) {
+            Some(text) => Value::Str(text),
+            None => Value::None,
+        },
+    );
+    set_leaf(
+        store,
+        &meta_node,
+        "prompt_sent_sha256",
+        Value::Str(super::use_::sha256_hex(prompt_sent.as_bytes())),
+    );
+    set_leaf(
+        store,
+        &meta_node,
+        "prompt_chars",
+        Value::from(prompt_sent.chars().count() as i64),
     );
     set_leaf(store, &meta_node, "tokens_sent", Value::None);
     set_leaf(store, &meta_node, "tokens_received", Value::None);
@@ -862,7 +893,16 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "warnings");
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
+    pop_leaf(&meta_node, "template_files");
     set_leaf(store, &meta_node, "waiting_for", Value::None);
+    if !template_files.is_empty() {
+        set_leaf(
+            store,
+            &meta_node,
+            "template_files",
+            Value::List(template_files),
+        );
+    }
     // `_score_and_route` (`prompt.py:546-556`, issue #516/M1-K2), right
     // after `meta.waiting_for` is set and before `effect_start` fires:
     // scores the effect when scoring is on, and may replace
@@ -1132,6 +1172,33 @@ pub(crate) async fn execute_prompt(
             }
         }
 
+        // Per attempt, from the state this attempt sees (issue #564). A
+        // reference that can't resolve fails the effect outright instead
+        // of retrying: a retry reads the same state.
+        let timeout_ms = match super::resolve_timeout_ms(
+            prompt.timeout_ms.as_ref(),
+            &render_root,
+            &format!("Prompt effect '{name}'"),
+        ) {
+            Ok(timeout_ms) => timeout_ms,
+            Err(message) => {
+                return finish_failure(
+                    store,
+                    &meta_node,
+                    &effect_node,
+                    op,
+                    &effect_path,
+                    instance,
+                    observer,
+                    attempts_meta_outer,
+                    attempt_index,
+                    message,
+                    electricity_tools::PyExc::ValueError,
+                    electricity_tools::ErrorCause::None,
+                );
+            }
+        };
+
         let acquire_future = run_ctx
             .limiter
             .acquire_reporting(prompt.group.as_deref(), |event| match event {
@@ -1188,6 +1255,7 @@ pub(crate) async fn execute_prompt(
             &meta_node,
             store,
             &option_warnings,
+            timeout_ms,
             run_ctx,
             &call_path,
             token,
@@ -1356,16 +1424,68 @@ fn chat_messages(messages: &[(Role, String)]) -> Vec<crate::adapter::ChatMessage
         .collect()
 }
 
-/// `_render_messages` + `_materialize_input`: `template` wins whenever
-/// the IR carries it (the compiler already resolved that truthiness
-/// check); otherwise the rendered messages, flattened as `meta.
-/// prompt_sent`. Returns the *typed* messages (for [`chat_messages`])
-/// alongside the flattened text.
-fn render_prompt<R: electricity_template::ScopeRoot>(
+/// A prompt that failed to render or read: the message and the Python class
+/// it would have raised.
+struct RenderFailure {
+    message: String,
+    py_class: electricity_tools::PyExc,
+}
+
+impl From<String> for RenderFailure {
+    fn from(message: String) -> Self {
+        RenderFailure {
+            message,
+            py_class: electricity_tools::PyExc::TemplateError,
+        }
+    }
+}
+
+/// One `file: {from: ...}` source read at dispatch (issue #578): its text,
+/// and its `meta.template_files` record.
+fn read_dispatch_file<R: crate::params::ParamsCtx>(
+    source: &electricity_bytecode::DispatchFile,
+    root: &R,
+    field: &str,
+    prompt_name: &str,
+) -> Result<(String, Value), RenderFailure> {
+    let raw_path = root.resolve_from(&source.path_from);
+    let within_value = source
+        .within_from
+        .as_deref()
+        .and_then(|path| root.resolve_from(path));
+    let read = electricity_compiler::prompt_files::read_dispatch_file(
+        source,
+        raw_path.as_ref(),
+        within_value.as_ref(),
+        field,
+        &format!("Prompt effect '{prompt_name}'"),
+    )
+    .map_err(|message| RenderFailure {
+        message,
+        py_class: electricity_tools::PyExc::PromptFileError,
+    })?;
+    let mut record = Dict::new();
+    record.insert(key("field"), Value::Str(field.to_string()));
+    record.insert(key("path"), Value::Str(read.path));
+    record.insert(key("sha256"), Value::Str(read.sha256));
+    record.insert(key("chars"), Value::from(read.chars as i64));
+    Ok((read.text, Value::Dict(record)))
+}
+
+/// `_read_dispatch_files` + `_render_messages` + `_materialize_input`:
+/// `template` wins whenever the IR carries it (the compiler already
+/// resolved that truthiness check); otherwise the rendered messages,
+/// flattened as `meta.prompt_sent`. Returns the *typed* messages (for
+/// [`chat_messages`]) alongside the flattened text, and one
+/// `meta.template_files` record per file read at dispatch (a
+/// `file: {from: ...}` source's text is used verbatim, never rendered).
+#[allow(clippy::type_complexity)]
+fn render_prompt<R: crate::params::ParamsCtx>(
     prompt: &PromptOp,
     root: &R,
     run_ctx: &RunContext<'_>,
-) -> Result<(Vec<(Role, String)>, String), String> {
+    prompt_name: &str,
+) -> Result<(Vec<(Role, String)>, String, Vec<Value>), RenderFailure> {
     match &prompt.content {
         PromptContent::Template(text) => {
             let rendered = crate::compose::render_with_composition(
@@ -1377,26 +1497,50 @@ fn render_prompt<R: electricity_template::ScopeRoot>(
                 &electricity_template::PlainCtx,
                 false,
             )?;
-            Ok((Vec::new(), rendered))
+            Ok((Vec::new(), rendered, Vec::new()))
+        }
+        PromptContent::TemplateFile(source) => {
+            let (text, record) = read_dispatch_file(source, root, "template", prompt_name)?;
+            Ok((Vec::new(), text, vec![record]))
         }
         PromptContent::Messages(messages) => {
+            // Every file is read before any message renders, like Python's
+            // `_read_dispatch_files`, so a bad file fails the effect first.
+            let mut files: Vec<Option<String>> = Vec::with_capacity(messages.len());
+            let mut records = Vec::new();
+            for (index, message) in messages.iter().enumerate() {
+                match &message.file {
+                    Some(source) => {
+                        let field = format!("messages[{index}].content");
+                        let (text, record) = read_dispatch_file(source, root, &field, prompt_name)?;
+                        files.push(Some(text));
+                        records.push(record);
+                    }
+                    None => files.push(None),
+                }
+            }
             let mut rendered = Vec::with_capacity(messages.len());
             let mut flattened = Vec::with_capacity(messages.len());
             for (index, message) in messages.iter().enumerate() {
-                let label = format!("messages[{index}].content");
-                let content = crate::compose::render_with_composition(
-                    &message.content.source,
-                    root,
-                    run_ctx.declared_prompts,
-                    run_ctx.effect_names,
-                    &label,
-                    &electricity_template::PlainCtx,
-                    false,
-                )?;
+                let content = match files[index].take() {
+                    Some(text) => text,
+                    None => {
+                        let label = format!("messages[{index}].content");
+                        crate::compose::render_with_composition(
+                            &message.content.source,
+                            root,
+                            run_ctx.declared_prompts,
+                            run_ctx.effect_names,
+                            &label,
+                            &electricity_template::PlainCtx,
+                            false,
+                        )?
+                    }
+                };
                 flattened.push(format!("{}: {content}", role_str(message.role)));
                 rendered.push((message.role, content));
             }
-            Ok((rendered, flattened.join("\n\n")))
+            Ok((rendered, flattened.join("\n\n"), records))
         }
     }
 }

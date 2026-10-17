@@ -237,8 +237,12 @@ def _check_extensions(cfg) -> bool:  # type: ignore[no-untyped-def]
             return list(compiled), "compiled-in (default-open)"
         return list(allowed), "allowlisted"
 
-    # Adapters
-    adapter_names, adapter_mode = select(cfg.enabled_adapters, ADAPTER_REGISTRY.keys())
+    # Adapters: the compiled-in ones plus the aliases config defines
+    from ..adapters.factory import alias_names
+
+    adapter_names, adapter_mode = select(
+        cfg.enabled_adapters, [*ADAPTER_REGISTRY, *alias_names(runtime_cfg)]
+    )
     if adapter_names:
         table = Table(
             title=f"Adapters ({adapter_mode})", show_header=True, header_style="bold cyan"

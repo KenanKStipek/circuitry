@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-10-17T10:57:03.177Z","ev":"run_start","run_id":"c01c400b-6634-4d98-8ab3-85e5c3811010","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":60797}
+{"v":1,"seq":1,"ts":"2026-10-17T10:57:03.180Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-17T10:57:03.180Z","ev":"start","id":1,"path":"prime.refused"}
+{"v":1,"seq":3,"ts":"2026-10-17T10:57:03.183Z","ev":"end","id":1,"path":"prime.refused","ok":false,"ms":2,"error":"HTTP 302: Found: redirect not followed (redirects: never): moved"}
+{"v":1,"seq":4,"ts":"2026-10-17T10:57:03.183Z","ev":"start","id":2,"path":"prime.refused_but_not_failed"}
+{"v":1,"seq":5,"ts":"2026-10-17T10:57:03.184Z","ev":"end","id":2,"path":"prime.refused_but_not_failed","ok":true,"ms":1}
+{"v":1,"seq":6,"ts":"2026-10-17T10:57:03.184Z","ev":"start","id":3,"path":"prime.not_modified"}
+{"v":1,"seq":7,"ts":"2026-10-17T10:57:03.184Z","ev":"end","id":3,"path":"prime.not_modified","ok":false,"ms":1,"error":"HTTP 304: Not Modified"}
+{"v":1,"seq":8,"ts":"2026-10-17T10:57:03.184Z","ev":"end","id":0,"path":"prime","ok":true,"ms":5}
+{"v":1,"seq":9,"ts":"2026-10-17T10:57:03.185Z","ev":"run_end","ok":true}

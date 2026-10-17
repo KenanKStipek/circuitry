@@ -22,12 +22,13 @@ fields:
     note: "A Mustache template rendered to text and parsed as JSON, deep-merged over params (params_json wins on conflicts). Use it to send a runtime-built array/object (e.g. a list from a prior step) instead of a Mustache-rendered string — e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'. A bad template or non-JSON result is a hard failure."
   timeout_ms:
     type: integer
+    note: "Per-effect timeout in milliseconds. Or {from: <path>, default: <positive integer>} to read it from state (input./prime./runtime. or an enclosing loop binding) when each attempt is dispatched; the value must be a positive integer, and a missing path takes the default or fails the effect."
   retries:
     type: object
     properties:
       max_attempts: "integer, min 1"
       backoff_ms: "integer, min 0"
-    note: "Retry policy, same shape and backoff curve as a prompt's. Usually omitted. HTTP-family providers (http, web_fetch, webhook, linear) retry 429/408/5xx only; every other (process) provider retries on any failure."
+    note: "Retry policy, same shape and backoff curve as a prompt's. Usually omitted. HTTP-family providers (http, web_fetch, webhook, linear, systemone) retry 429/408/5xx only; every other (process) provider retries on any failure."
   expect:
     note: "Output check, run after a successful attempt; a false or unreadable expectation fails it (retries/on_error apply). Either a bare CEL string (sugar for {mode: cel, expr: <string>}) over this effect's own value and meta plus state — e.g. expect: \"has(value.prompt_id)\" — or {mode: model, template: ...}, asked yes/no on the run's adapter/model. Usually omitted."
   on_error:

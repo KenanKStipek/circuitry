@@ -287,6 +287,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
                         orch=orch,
                         document_dir=document_dir,
                         confinement_root=confinement_root,
+                        trusted=trust_document,
                     )
                     definition = _dump_definition(compiled)
                 except Exception as exc:  # recorded, not swallowed

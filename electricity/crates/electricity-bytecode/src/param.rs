@@ -32,9 +32,12 @@ use serde::{Serialize, Serializer};
 pub enum ParamNode {
     Literal(Value),
     Template(TemplateText),
+    /// A `{from: <path>}` leaf. `as_json` is set by `as: json`: the
+    /// resolved value (or `default`) is handed over as compact JSON text.
     From {
         path: String,
         default: Option<Value>,
+        as_json: bool,
     },
     Map(IndexMap<Value, ParamNode>),
     List(Vec<ParamNode>),
@@ -69,11 +72,25 @@ impl Serialize for ParamNode {
             ParamNode::Template(text) => {
                 serializer.serialize_newtype_variant("ParamNode", 1, "Template", text)
             }
-            ParamNode::From { path, default } => {
+            ParamNode::From {
+                path,
+                default,
+                as_json,
+            } => {
                 use serde::ser::SerializeStructVariant;
-                let mut state = serializer.serialize_struct_variant("ParamNode", 2, "From", 2)?;
+                // `as_json` is written only when set, so the IR of every
+                // reference without `as:` stays what it was before `as: json`.
+                let mut state = serializer.serialize_struct_variant(
+                    "ParamNode",
+                    2,
+                    "From",
+                    if *as_json { 3 } else { 2 },
+                )?;
                 state.serialize_field("path", path)?;
                 state.serialize_field("default", default)?;
+                if *as_json {
+                    state.serialize_field("as_json", as_json)?;
+                }
                 state.end()
             }
             ParamNode::Map(entries) => serializer.serialize_newtype_variant(
@@ -112,6 +129,28 @@ impl Serialize for StringKeyedMap<'_> {
 mod tests {
     use super::*;
     use electricity_value::Value;
+
+    #[test]
+    fn a_from_leaf_serializes_as_json_only_when_set() {
+        let plain = ParamNode::From {
+            path: "input.x".to_string(),
+            default: None,
+            as_json: false,
+        };
+        let json = ParamNode::From {
+            path: "input.x".to_string(),
+            default: None,
+            as_json: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"From":{"path":"input.x","default":null}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&json).unwrap(),
+            r#"{"From":{"path":"input.x","default":null,"as_json":true}}"#
+        );
+    }
 
     fn single_key_map(key: Value) -> ParamNode {
         let mut entries = IndexMap::new();

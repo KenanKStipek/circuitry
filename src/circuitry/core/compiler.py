@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -8,6 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from ..secrets import (
+    has_secret_key,
+    is_secret_ref,
+    runtime_env_secret_paths,
+    secret_ref,
+    secret_ref_error,
+)
 from .cel_eval import validate_cel_syntax
 from .conditional import ConditionalDefinition, ConditionDef
 from .dynamic import DynamicDefinition
@@ -28,8 +36,15 @@ from .prompt_compose import (
     check_prompt_composition,
     compile_declared_prompts,
 )
-from .prompt_files import resolve_text_or_file
+from .prompt_files import (
+    DispatchFileSource,
+    PromptFileError,
+    compile_dispatch_file,
+    is_dispatch_file,
+    resolve_text_or_file,
+)
 from .reflector import ReflectorDefinition
+from .resume import RESUME_MODES, ResumeMode
 from .state_ns import (
     validate_bare_input_refs,
     validate_cel_expr,
@@ -37,8 +52,9 @@ from .state_ns import (
     validate_reference_path,
 )
 from .templates import template_syntax_error
+from .timeout_ref import compile_timeout_ms
 from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
-from .use import UseDefinition, reference_path
+from .use import UseDefinition, reference_as, reference_path, validate_reference_as
 from .yield_effect import YieldDefinition
 
 EffectDef = (
@@ -75,16 +91,19 @@ _RESERVED_EFFECT_NAMES = frozenset({"value", "meta", "input", "prime", "runtime"
 #: through every container-compiling function's signature. ``None`` means
 #: this document has no file of its own (generated at run time, or no path
 #: at all) — see ``core.prompt_files``.
-_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None]] = ContextVar(
-    "circuitry_document_location", default=(None, None)
+#: The third item is whether the document is trusted (run by path), which
+#: decides if a ``file: {from: ...}``'s ``within`` is confined to the project
+#: (#578); see :func:`compile_orchestration`.
+_DOCUMENT_LOCATION: ContextVar[tuple[Path | None, Path | None, bool]] = ContextVar(
+    "circuitry_document_location", default=(None, None, False)
 )
 
 
 @contextmanager
 def _document_location(
-    document_dir: Path | None, confinement_root: Path | None
+    document_dir: Path | None, confinement_root: Path | None, trusted: bool = False
 ) -> Iterator[None]:
-    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root))
+    token = _DOCUMENT_LOCATION.set((document_dir, confinement_root, trusted))
     try:
         yield
     finally:
@@ -97,6 +116,10 @@ def _current_document_dir() -> Path | None:
 
 def _current_confinement_root() -> Path | None:
     return _DOCUMENT_LOCATION.get()[1]
+
+
+def _current_document_trusted() -> bool:
+    return _DOCUMENT_LOCATION.get()[2]
 
 
 def _scope_child(scope_path: str, child_name: str) -> str:
@@ -357,6 +380,20 @@ _VALID_FLOWS: dict[str, Literal["chain", "tree"]] = {
 }
 
 
+def _resume_mode(effect: dict[str, Any], *, label: str, effect_path: str) -> ResumeMode:
+    """A ``dynamic``'s or ``use``'s ``resume:`` (#590); ``continue`` when absent."""
+    if "resume" not in effect:
+        return "continue"
+    value = effect["resume"]
+    for mode in RESUME_MODES:
+        if value == mode:
+            return mode
+    raise ValueError(
+        f"{label} effect at '{effect_path}': 'resume' must be 'continue' or "
+        f"'restart', got {value!r}."
+    )
+
+
 def _normalize_flow(flow: str) -> Literal["chain", "tree"]:
     """Normalize flow aliases to canonical form."""
     key = (flow or "chain").strip().lower()
@@ -373,6 +410,7 @@ def compile_orchestration(
     root_name: str = "prime",
     document_dir: Path | None = None,
     confinement_root: Path | None = None,
+    trusted: bool = False,
 ) -> DynamicDefinition:
     """Compile *orch* to its effect tree, root ``DynamicDefinition.prompts``
     carrying its own declared prompts (#396).
@@ -382,13 +420,24 @@ def compile_orchestration(
     (``core.prompt_files``) — ``None`` (the default) for a document with no
     file of its own: generated at run time (a reflector/decompose plan, a
     ``use: inline`` child) or with no path at all (stdin, an SDK string),
-    for which ``file:`` is then a compile error. A caller that executes the
+    for which ``file:`` is then a compile error. *trusted* is true for a
+    document run by path (the caller's own ``trust_document``): only then can a
+    prompt's ``file: {from: ...}`` name a ``within`` outside *confinement_root*
+    (#578); a limited document's stays inside it. A caller that executes the
     result threads ``root.prompts`` into ``runtime_config`` under
     ``core.prompt_compose.RUNTIME_CONFIG_KEY`` itself, fresh for every
     ``use`` child, so "a child document sees only its own declared prompts"
     needs no special-casing at the ``use`` boundary.
+
+    A document with no file of its own cannot name a ``state_file`` either
+    (the ``systemone`` tool). For a limited document (*trusted* false) that
+    tool's effect records ``ToolDefinition.limited`` and *confinement_root* as
+    ``ToolDefinition.confine_to``, which its ``within`` must stay inside,
+    checked here for a literal ``within`` and at dispatch for one read from
+    ``input``. A limited document with no project reads no file at all.
     """
-    with _document_location(document_dir, confinement_root):
+    with _document_location(document_dir, confinement_root, trusted):
+        _check_runtime_env_secrets(orch.get("runtime"))
         # Support both 'effects' (spec) and 'steps' (legacy)
         effects = orch.get("effects") or orch.get("steps") or []
         # Bare {{name}} refs to this document's declared interface inputs are a
@@ -449,7 +498,10 @@ def compile_orchestration(
 
 
 def apply_effect_overrides(
-    root: DynamicDefinition, overrides: dict[str, dict[str, Any]]
+    root: DynamicDefinition,
+    overrides: dict[str, dict[str, Any]],
+    *,
+    profile_name: str | None = None,
 ) -> tuple[DynamicDefinition, set[str]]:
     """Apply a profile's per-effect model/provider/enabled/routing overlay onto a tree.
 
@@ -464,6 +516,12 @@ def apply_effect_overrides(
     runtime acts on (a disabled container never executes its subtree — see
     ``core.disabled``).
 
+    A ``provider`` override cannot make a tool effect ``systemone`` or take it
+    away from it: that tool's confinement is fixed at compile time from its
+    provider (``ToolDefinition.limited``), so changing the provider afterwards
+    would bypass it. That is a ``ValueError`` naming *profile_name* (the profile
+    the overrides come from, when known) and the effect path.
+
     Returns the rebuilt root plus the set of override keys that matched an
     effect somewhere in the tree.
     """
@@ -472,14 +530,32 @@ def apply_effect_overrides(
 
     matched: set[str] = set()
     new_children = [
-        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        _overlay_effect(
+            child, path="", overrides=overrides, matched=matched, profile_name=profile_name
+        )
         for child in root.effects
     ]
     new_finally = [
-        _overlay_effect(child, path="", overrides=overrides, matched=matched)
+        _overlay_effect(
+            child, path="", overrides=overrides, matched=matched, profile_name=profile_name
+        )
         for child in root.finally_effects
     ]
     return replace(root, effects=new_children, finally_effects=new_finally), matched
+
+
+def _refuse_systemone_provider_switch(
+    node: ToolDefinition, new_provider: Any, *, path: str, profile_name: str | None
+) -> None:
+    old = node.provider.strip().lower()
+    new = str(new_provider).strip().lower()
+    if old != new and "systemone" in (old, new):
+        profile = f"profile {profile_name!r}" if profile_name else "a profile"
+        raise ValueError(
+            f"{profile}: effect '{path}' cannot change its provider from {node.provider!r} "
+            f"to {str(new_provider)!r}: a systemone tool's file access is confined when "
+            "the document compiles, so a profile cannot switch a tool to or from systemone."
+        )
 
 
 def _overlay_effect(
@@ -488,6 +564,7 @@ def _overlay_effect(
     path: str,
     overrides: dict[str, dict[str, Any]],
     matched: set[str],
+    profile_name: str | None = None,
 ) -> EffectDef:
     name = getattr(node, "name", None)
     own_path = _scope_child(path, name) if name else path
@@ -500,6 +577,10 @@ def _overlay_effect(
         if "model" in override and hasattr(node, "model"):
             field_overrides["model"] = override["model"]
         if "provider" in override and hasattr(node, "provider"):
+            if isinstance(node, ToolDefinition):
+                _refuse_systemone_provider_switch(
+                    node, override["provider"], path=own_path, profile_name=profile_name
+                )
             field_overrides["provider"] = override["provider"]
         if "routing" in override and hasattr(node, "routing_override"):
             field_overrides["routing_override"] = override["routing"]
@@ -511,7 +592,13 @@ def _overlay_effect(
         node = replace(
             node,
             effects=[
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.effects
             ],
             # 'finally' shares its dynamic's own scope (same child_scope the
@@ -519,7 +606,13 @@ def _overlay_effect(
             # see _compile_effect) so a profile addresses a cleanup effect
             # exactly like a body one.
             finally_effects=[
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.finally_effects
             ],
         )
@@ -530,7 +623,11 @@ def _overlay_effect(
                 node.inner,
                 effects=[
                     _overlay_effect(
-                        c, path=own_path, overrides=overrides, matched=matched
+                        c,
+                        path=own_path,
+                        overrides=overrides,
+                        matched=matched,
+                        profile_name=profile_name,
                     )
                     for c in node.inner.effects
                 ],
@@ -540,11 +637,23 @@ def _overlay_effect(
         node = replace(
             node,
             then_effects=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.then_effects
             ),
             else_effects=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.else_effects
             ),
         )
@@ -552,7 +661,13 @@ def _overlay_effect(
         node = replace(
             node,
             body=tuple(
-                _overlay_effect(c, path=own_path, overrides=overrides, matched=matched)
+                _overlay_effect(
+                    c,
+                    path=own_path,
+                    overrides=overrides,
+                    matched=matched,
+                    profile_name=profile_name,
+                )
                 for c in node.body
             ),
         )
@@ -644,6 +759,12 @@ def _compile_effect(
             "only allowed on a 'dynamic' effect or the document root."
         )
 
+    if effect_type not in ("dynamic", "use") and "resume" in effect:
+        raise ValueError(
+            f"{effect_type or 'unknown'} effect at '{effect_path}': 'resume' is "
+            "only allowed on a 'dynamic' or 'use' effect."
+        )
+
     if effect_type == "prompt":
         if name is None:
             raise ValueError(
@@ -655,7 +776,7 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
-        return _compile_prompt(effect, effect_path=effect_path)
+        return _compile_prompt(effect, effect_path=effect_path, loop_names=loop_names)
 
     if effect_type == "dynamic":
         if name is None:
@@ -668,6 +789,7 @@ def _compile_effect(
             scope_path=scope_path,
             effect_path=effect_path,
         )
+        resume = _resume_mode(effect, label="Dynamic", effect_path=effect_path)
 
         flow = _normalize_flow(effect.get("flow") or effect.get("strategy") or "chain")
 
@@ -726,6 +848,7 @@ def _compile_effect(
             max_concurrency=max_concurrency,
             stop_on_error=stop_on_error,
             on_error=dyn_on_error,
+            resume=resume,
             labels=labels,
             finally_effects=tuple(compiled_finally),
         )
@@ -817,6 +940,28 @@ def _compile_effect(
         )
 
         plan_from_step = effect.get("plan_from_step") or "propose_steps"
+        for inner_effect in compiled_inner:
+            if not (
+                isinstance(inner_effect, PromptDefinition)
+                and inner_effect.name == str(plan_from_step)
+            ):
+                continue
+            file_fields = [
+                *(["template"] if inner_effect.template_file is not None else []),
+                *(
+                    f"messages[{index}].content"
+                    for index, message in enumerate(inner_effect.messages or ())
+                    if message.file is not None
+                ),
+            ]
+            if file_fields:
+                raise ValueError(
+                    f"Reflector effect '{valid_name}' at '{effect_path}': its plan prompt "
+                    f"'{inner_effect.name}' reads {file_fields[0]} from a file named in "
+                    "state ('file: {from: ...}'), but a reflector builds its planning "
+                    "prompt from the prompt's own text and would drop the file. Write the "
+                    "text in the prompt, or name the file with 'file: <path>'."
+                )
         max_iterations = int(effect.get("max_iterations") or 1)
         generated_key = effect.get("generated_key") or "generated"
         stop_on_done = bool(effect.get("stop_on_done", True))
@@ -1134,9 +1279,10 @@ def _check_param_leaves(
 ) -> None:
     """Walk a tool effect's ``params`` for malformed templates and bad ``{from:}`` roots.
 
-    A leaf matching ``{from: <path>}`` (optionally with ``default:``) is a
-    by-reference param (#234): its path is checked against the same rooting
-    rules as a ``use`` effect's own by-reference inputs, and — since it never
+    A leaf matching ``{from: <path>}`` (optionally with ``default:`` and
+    ``as:``) is a by-reference param (#234): its path is checked against the
+    same rooting rules as a ``use`` effect's own by-reference inputs, its
+    ``as:`` against the supported formats (#566), and — since it never
     renders — is not also walked as a template. Every other leaf is checked
     exactly as :func:`_check_templates` checks ``params`` today.
     """
@@ -1147,6 +1293,11 @@ def _check_param_leaves(
             label=f"Tool effect '{name}' param '{field}'",
             effect_path=effect_path,
             loop_names=loop_names,
+        )
+        validate_reference_as(
+            ref.as_format,
+            label=f"Tool effect '{name}' param '{field}'",
+            effect_path=effect_path,
         )
         return
     if isinstance(value, str):
@@ -1201,6 +1352,110 @@ def _check_security_sensitive_param_leaf(
             _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
 
 
+def _untrusted_secret_error(where: str, name: str) -> str:
+    return (
+        f"{where} names secret {name!r}: only a document run by path may name a "
+        "secret (a limited document, a library entry or a generated plan cannot)."
+    )
+
+
+def _check_runtime_env_secrets(runtime: Any) -> None:
+    """A ``{secret: ...}`` in the document's own ``runtime.plugins.<name>.env``
+    (#598): well-formed, and only in a trusted document."""
+    for path, value in runtime_env_secret_paths(runtime):
+        problem = secret_ref_error(value)
+        if problem is not None:
+            raise ValueError(f"{path}: a secret reference {problem}.")
+        if not _current_document_trusted():
+            raise ValueError(_untrusted_secret_error(path, value["secret"]))
+
+
+def _check_param_secrets(
+    params: dict[str, Any], *, name: str, provider: str, effect_path: str
+) -> None:
+    """``{secret: ...}`` in a tool effect's params (#598): only as a value of
+    an ``http`` effect's ``params.headers``, well-formed, and only in a
+    trusted document.
+
+    A header value with a ``secret`` key is a reference, well-formed or not;
+    anywhere else only a mapping :func:`is_secret_ref` accepts is one, and
+    any other mapping is literal data."""
+    headers = params.get("headers") if provider == "http" else None
+    allowed = (
+        {id(value) for value in headers.values()} if isinstance(headers, dict) else set()
+    )
+    label = f"Tool effect '{name}' at '{effect_path}'"
+
+    def walk(value: Any, field: str) -> None:
+        if id(value) in allowed and has_secret_key(value):
+            problem = secret_ref_error(value)
+            if problem is not None:
+                raise ValueError(f"{label}: {field}: a secret reference {problem}.")
+            if not _current_document_trusted():
+                raise ValueError(_untrusted_secret_error(label, value["secret"]))
+            return
+        if is_secret_ref(value):
+            raise ValueError(
+                f"{label}: {field} is a {{secret: ...}} value, which is allowed only "
+                "as a value in an http effect's params.headers (or a subprocess "
+                "tool's runtime.plugins.<name>.env)."
+            )
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, f"{field}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{field}[{index}]")
+
+    walk(params, "params")
+
+
+def collect_named_secrets(node: EffectDef) -> set[str]:
+    """Every secret an ``http`` effect's ``params.headers`` names anywhere
+    under *node* (#598). Like :func:`collect_effect_groups`, a ``use``
+    effect's child is not compiled yet, so it is not read."""
+    names: set[str] = set()
+    if isinstance(node, ToolDefinition):
+        headers = node.params.get("headers")
+        if node.provider.strip().lower() == "http" and isinstance(headers, dict):
+            names |= {ref.name for value in headers.values() if (ref := secret_ref(value))}
+    elif isinstance(node, DynamicDefinition):
+        for child in (*node.effects, *node.finally_effects):
+            names |= collect_named_secrets(child)
+    elif isinstance(node, ReflectorDefinition):
+        names |= collect_named_secrets(node.inner)
+    elif isinstance(node, ConditionalDefinition):
+        for child in (*node.then_effects, *node.else_effects):
+            names |= collect_named_secrets(child)
+    elif isinstance(node, LoopDefinition):
+        for child in node.body:
+            names |= collect_named_secrets(child)
+    return names
+
+
+def _check_cel_params(
+    params: dict[str, Any],
+    *,
+    name: str,
+    effect_path: str,
+    has_params_json: bool,
+    loop_names: frozenset[str],
+) -> None:
+    """A ``cel`` tool's literal params (#597): known keys only, and an
+    expression that parses and reads only names in scope at this position,
+    the same checks an ``if``'s ``mode: cel`` expression gets."""
+    from ..plugins.cel import static_param_errors
+
+    problems = static_param_errors(params, has_params_json=has_params_json)
+    if problems:
+        raise ValueError(
+            f"Tool effect '{name}' (cel) at '{effect_path}': " + "; ".join(problems)
+        )
+    expr = str(params["expr"])
+    validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+    validate_cel_syntax(expr, effect_path=effect_path, effect_name=name)
+
+
 def _compile_tool(
     effect: dict[str, Any],
     *,
@@ -1235,9 +1490,28 @@ def _compile_tool(
         prompt = None
 
     _check_templates(prompt, effect_path=effect_path, field="prompt", allow_partials=True)
-    _check_param_leaves(
-        params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
+    prompt_file: DispatchFileSource | None = None
+    if provider.strip().lower() == "agent":
+        prompt_file = _compile_agent_prompt_file(
+            params, params_json, effect_path=effect_path, loop_names=loop_names
+        )
+        if prompt_file is not None:
+            params = {key: value for key, value in params.items() if key != "prompt"}
+    _check_param_secrets(
+        params, name=str(name), provider=provider.strip().lower(), effect_path=effect_path
     )
+    if provider.strip().lower() == "cel":
+        _check_cel_params(
+            params,
+            name=str(name),
+            effect_path=effect_path,
+            has_params_json=params_json is not None,
+            loop_names=loop_names,
+        )
+    else:
+        _check_param_leaves(
+            params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
+        )
     for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
         _check_security_sensitive_param_leaf(
             params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
@@ -1250,9 +1524,39 @@ def _compile_tool(
     if model is not None and not isinstance(model, str):
         model = None
 
-    timeout_ms = effect.get("timeout_ms")
-    if timeout_ms is not None:
-        timeout_ms = int(timeout_ms)
+    limited = False
+    confine_to: str | None = None
+    if provider.strip().lower() == "systemone":
+        from ..plugins.systemone import static_param_errors
+
+        # Same rule as a prompt's `file: {from: ...}` (#578): a limited
+        # document's `within` stays inside its project.
+        # A limited document with no project is still limited: it reads no file.
+        limited = not _current_document_trusted()
+        project = _current_confinement_root()
+        if limited and project is not None:
+            confine_to = str(project)
+
+        # The effect-level `model:` is merged under params at dispatch.
+        problems = static_param_errors(
+            {**({"model": model} if model else {}), **params},
+            has_params_json=params_json is not None,
+            has_document_file=_current_document_dir() is not None,
+            limited=limited,
+            confine_to=confine_to,
+        )
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (systemone) at '{effect_path}': " + "; ".join(problems)
+            )
+
+    timeout_ms = compile_timeout_ms(
+        effect.get("timeout_ms"),
+        effect_type="tool",
+        name=str(name),
+        effect_path=effect_path,
+        loop_names=loop_names,
+    )
 
     on_error_raw = str(effect.get("on_error") or "fail").strip().lower()
     on_error: Literal["fail", "skip", "continue"] = (
@@ -1286,7 +1590,50 @@ def _compile_tool(
         retries=retries,
         expect=expect,
         group=group,
+        limited=limited,
+        confine_to=confine_to,
+        prompt_file=prompt_file,
     )
+
+
+def _compile_agent_prompt_file(
+    params: dict[str, Any],
+    params_json: str | None,
+    *,
+    effect_path: str,
+    loop_names: frozenset[str],
+) -> DispatchFileSource | None:
+    """The ``agent`` tool's ``params.prompt: {file: {from: ...}, within: ...}`` (#591).
+
+    Compiled like a prompt's ``template`` of that form (#578), under this
+    document's trust. ``params_json`` never supplies the form nor replaces a
+    prompt read from a file; a raw ``params_json`` that parses as JSON is
+    checked for both here, and the rendered one again at dispatch.
+    """
+    from ..plugins.agent import reject_overlay_prompt
+
+    prompt_raw = params.get("prompt")
+    prompt_file = (
+        _compile_dispatch_file(
+            prompt_raw,
+            field=f"{effect_path}.params.prompt",
+            effect_path=effect_path,
+            loop_names=loop_names,
+        )
+        if is_dispatch_file(prompt_raw)
+        else None
+    )
+    if params_json is not None:
+        try:
+            overlay = json.loads(params_json)
+        except ValueError:
+            overlay = None
+        if isinstance(overlay, dict):
+            try:
+                reject_overlay_prompt(overlay, prompt_from_file=prompt_file is not None)
+            except ValueError as exc:
+                raise ValueError(f"{effect_path}: {exc}") from exc
+    return prompt_file
 
 
 def _compile_use(
@@ -1302,6 +1649,7 @@ def _compile_use(
     name = effect.get("name")
     if not name:
         raise ValueError(f"Use effect at '{effect_path}' is missing 'name'.")
+    resume = _resume_mode(effect, label="Use", effect_path=effect_path)
 
     ref = effect.get("ref")
     path = effect.get("path")
@@ -1370,6 +1718,11 @@ def _compile_use(
                 effect_path=effect_path,
                 loop_names=loop_names,
             )
+            validate_reference_as(
+                reference_as(value),
+                label=f"Use effect '{name}' input '{input_name}'",
+                effect_path=effect_path,
+            )
 
     # Canonical form is `name: {path: ...}`; the bare-string shorthand
     # `name: prime.x.value` normalizes to the same thing (see core.outputs).
@@ -1407,8 +1760,10 @@ def _compile_use(
         validate=validate_flag,
         on_error=on_error,
         description=description,
+        resume=resume,
         retries=retries,
         expect=expect,
+        parent_trusted=_current_document_trusted(),
     )
 
 
@@ -1463,7 +1818,34 @@ def _compile_yield(effect: dict[str, Any], *, effect_path: str) -> YieldDefiniti
     )
 
 
-def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefinition:
+def _compile_dispatch_file(
+    value: dict[str, Any],
+    *,
+    field: str,
+    effect_path: str,
+    loop_names: frozenset[str],
+) -> DispatchFileSource:
+    """A prompt's ``file: {from: ...}`` source (#578), under this document's trust."""
+    try:
+        return compile_dispatch_file(
+            value,
+            field=field,
+            effect_path=effect_path,
+            loop_names=loop_names,
+            document_dir=_current_document_dir(),
+            confinement_root=_current_confinement_root(),
+            trusted=_current_document_trusted(),
+        )
+    except PromptFileError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _compile_prompt(
+    effect: dict[str, Any],
+    *,
+    effect_path: str,
+    loop_names: frozenset[str] = frozenset(),
+) -> PromptDefinition:
     """Compile a prompt effect with full spec support."""
     name = effect.get("name")
     if not name:
@@ -1481,38 +1863,67 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
 
     # Primary input form: template or messages
     template_raw = effect.get("template")
-    template = (
-        resolve_text_or_file(
-            template_raw,
-            field=f"{effect_path}.template",
-            document_dir=_current_document_dir(),
-            confinement_root=_current_confinement_root(),
+    template_file: DispatchFileSource | None = None
+    template: str | None
+    if is_dispatch_file(template_raw):
+        template_file = _compile_dispatch_file(
+            template_raw, field=f"{effect_path}.template", effect_path=effect_path, loop_names=loop_names
         )
-        if template_raw is not None
-        else None
-    )
+        template = None
+    else:
+        template = (
+            resolve_text_or_file(
+                template_raw,
+                field=f"{effect_path}.template",
+                document_dir=_current_document_dir(),
+                confinement_root=_current_confinement_root(),
+            )
+            if template_raw is not None
+            else None
+        )
     messages_raw = effect.get("messages")
 
     messages = None
     if messages_raw and isinstance(messages_raw, list):
-        messages = tuple(
-            MessageDef(
-                role=m.get("role", "user"),
-                content=resolve_text_or_file(
-                    m.get("content", ""),
-                    field=f"{effect_path}.messages[{index}].content",
-                    document_dir=_current_document_dir(),
-                    confinement_root=_current_confinement_root(),
-                ),
+        compiled_messages: list[MessageDef] = []
+        for index, m in enumerate(messages_raw):
+            if not isinstance(m, dict):
+                continue
+            content_raw = m.get("content", "")
+            content_field = f"{effect_path}.messages[{index}].content"
+            if is_dispatch_file(content_raw):
+                compiled_messages.append(
+                    MessageDef(
+                        role=m.get("role", "user"),
+                        content="",
+                        file=_compile_dispatch_file(
+                            content_raw,
+                            field=content_field,
+                            effect_path=effect_path,
+                            loop_names=loop_names,
+                        ),
+                    )
+                )
+                continue
+            compiled_messages.append(
+                MessageDef(
+                    role=m.get("role", "user"),
+                    content=resolve_text_or_file(
+                        content_raw,
+                        field=content_field,
+                        document_dir=_current_document_dir(),
+                        confinement_root=_current_confinement_root(),
+                    ),
+                )
             )
-            for index, m in enumerate(messages_raw)
-            if isinstance(m, dict)
-        )
+        messages = tuple(compiled_messages)
 
-    if not template and not messages:
+    if not template and template_file is None and not messages:
         raise ValueError(f"Prompt '{name}' must have 'template' or 'messages'.")
     _check_templates(template, effect_path=effect_path, field="template", allow_partials=True)
     for index, message in enumerate(messages or ()):
+        if message.file is not None:
+            continue
         _check_templates(
             message.content,
             effect_path=effect_path,
@@ -1553,9 +1964,13 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
     if params is not None and not isinstance(params, dict):
         params = None
 
-    timeout_ms = effect.get("timeout_ms")
-    if timeout_ms is not None:
-        timeout_ms = int(timeout_ms)
+    timeout_ms = compile_timeout_ms(
+        effect.get("timeout_ms"),
+        effect_type="prompt",
+        name=str(name),
+        effect_path=effect_path,
+        loop_names=loop_names,
+    )
 
     deterministic = bool(effect.get("deterministic", False))
 
@@ -1607,6 +2022,7 @@ def _compile_prompt(effect: dict[str, Any], *, effect_path: str) -> PromptDefini
     return PromptDefinition(
         name=name,
         template=template,
+        template_file=template_file,
         messages=messages,
         prompt_type=prompt_type,
         schema=schema,

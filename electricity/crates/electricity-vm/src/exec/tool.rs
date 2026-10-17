@@ -197,14 +197,31 @@ fn http_family_provider(provider: &str) -> bool {
 /// is the merged `runtime:` block [`RunContext::runtime_config`] carries;
 /// lane D is the one that ever populates `runtime.tools.timeout_seconds`
 /// in it, so this always falls through to [`DEFAULT_TOOL_TIMEOUT_SECONDS`]
-/// until then.
-fn resolve_timeout_seconds(tool: &ToolOp, runtime_config: &Value) -> u32 {
+/// until then. A `timeout_ms: {from: ...}` is read from *ctx* here, for
+/// each attempt (issue #564), and fails with the text `tool`'s own
+/// `meta.error` records.
+fn resolve_timeout_seconds<R: ParamsCtx>(
+    tool: &ToolOp,
+    name: &str,
+    ctx: &R,
+    runtime_config: &Value,
+) -> Result<u32, String> {
+    let timeout_ms = crate::exec::resolve_timeout_ms(
+        tool.timeout_ms.as_ref(),
+        ctx,
+        &format!("Tool effect '{name}'"),
+    )?;
+    Ok(literal_timeout_seconds(timeout_ms, runtime_config))
+}
+
+/// The rest of `_resolve_timeout_seconds`, once `timeout_ms` is a number.
+fn literal_timeout_seconds(timeout_ms: Option<i64>, runtime_config: &Value) -> u32 {
     // `if self.defn.timeout_ms:` -- falsy, so an explicit `timeout_ms: 0`
     // falls through to `runtime.tools.timeout_seconds` exactly like an
     // absent one does. A negative `timeout_ms` is still truthy (issue
     // #536): `crate::exec::effect_timeout_seconds` ports the same
     // `max(1, ceil(ms / 1000))` rule cof applies to it.
-    if let Some(ms) = tool.timeout_ms.filter(|&ms| ms != 0) {
+    if let Some(ms) = timeout_ms.filter(|&ms| ms != 0) {
         return crate::exec::effect_timeout_seconds(ms);
     }
     let raw = runtime_config
@@ -538,6 +555,16 @@ pub async fn execute_tool<R: ParamsCtx>(
     observer: &dyn RunObserver,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
+    // `ToolRuntime.__init__`'s own `drops_parsed_stdout` read (#592).
+    // Validated before the run starts (`pre_input_checks`); a bad value that
+    // got here anyway fails the run rather than recording the text in full.
+    let drop_parsed_stdout = electricity_config::drops_parsed_stdout(Some(run_ctx.runtime_config))
+        .map_err(|message| VmError::Raised {
+            py_class: electricity_tools::PyExc::ValueError,
+            message,
+            cause: electricity_tools::ErrorCause::None,
+            cause_class: None,
+        })?;
     let name = op
         .name
         .as_deref()
@@ -560,8 +587,6 @@ pub async fn execute_tool<R: ParamsCtx>(
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
         .map_err(|err| VmError::tool(err.to_string()))?;
-
-    let timeout_seconds = resolve_timeout_seconds(tool, run_ctx.runtime_config);
 
     // `store.fire_effect_start(self.defn.name, node)` -- before
     // `require_tool`, so a denial below leaves this call's own
@@ -612,6 +637,8 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "raw");
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
+        pop_leaf(&meta_node, "stdout_chars");
+        pop_leaf(&meta_node, "stdout_sha256");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
@@ -647,6 +674,10 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `expect` branches below, never the dispatch-failure branch
         // above them.
         let mut expect_failed = false;
+        // `core/tool.py`'s own `timeout_unresolved` (issue #564): a
+        // `timeout_ms: {from: ...}` with no usable value is never
+        // retried -- a retry reads the same state.
+        let mut timeout_unresolved = false;
 
         match render_tool_call(
             name,
@@ -667,6 +698,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                     electricity_redaction::redact(rendered_value.clone()),
                 );
 
+                // This attempt's own timeout budget, read after the params
+                // render and before the plugin is built, as in Python
+                // (issue #564).
+                let timeout_result =
+                    resolve_timeout_seconds(tool, name, ctx, run_ctx.runtime_config);
+                timeout_unresolved = timeout_result.is_err();
+                let timeout_seconds = timeout_result.clone().unwrap_or_default();
+
                 // `core/tool.py::ToolRuntime.execute`'s own
                 // `build_plugin(...)` call (`tool.py:702`) runs *before*
                 // that same attempt's limiter wait (`tool.py:724`) --
@@ -674,7 +713,17 @@ pub async fn execute_tool<R: ParamsCtx>(
                 // a per-plugin config error fails this attempt at once,
                 // never waiting for (and then releasing unused) a
                 // concurrency slot (review finding 6 on PR #454).
-                match resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config) {
+                let plugin_result = match timeout_result {
+                    Err(message) => Err(electricity_tools::ToolError {
+                        py_class: electricity_tools::PyExc::ValueError,
+                        message,
+                        cause: electricity_tools::ErrorCause::None,
+                    }),
+                    Ok(_) => {
+                        resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config)
+                    }
+                };
+                match plugin_result {
                     Err(err) => {
                         failure = Some(err);
                     }
@@ -808,12 +857,36 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     Ok(result) => {
                                         let value_for_expect = result.value.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
-                                        set_leaf(
-                                            store,
-                                            &meta_node,
-                                            "stdout",
-                                            result.stdout.map(Value::Str).unwrap_or(Value::None),
-                                        );
+                                        match result.stdout {
+                                            // `runtime.state.parsed_stdout: drop`
+                                            // (#592): the parsed text's length
+                                            // and digest, never the text.
+                                            Some(stdout)
+                                                if drop_parsed_stdout && result.stdout_parsed =>
+                                            {
+                                                set_leaf(store, &meta_node, "stdout", Value::None);
+                                                set_leaf(
+                                                    store,
+                                                    &meta_node,
+                                                    "stdout_chars",
+                                                    Value::from(stdout.chars().count() as i64),
+                                                );
+                                                set_leaf(
+                                                    store,
+                                                    &meta_node,
+                                                    "stdout_sha256",
+                                                    Value::Str(super::use_::sha256_hex(
+                                                        stdout.as_bytes(),
+                                                    )),
+                                                );
+                                            }
+                                            stdout => set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "stdout",
+                                                stdout.map(Value::Str).unwrap_or(Value::None),
+                                            ),
+                                        }
                                         set_leaf(
                                             store,
                                             &meta_node,
@@ -1084,12 +1157,13 @@ pub async fn execute_tool<R: ParamsCtx>(
             // failure -- never for a failed `expect:`, which is always
             // retryable regardless of provider (review P2-8 on PR
             // #454's second review, `expect_failed` above).
-            let retryable = crate::retry::is_tool_failure_retryable(
-                &tool.provider,
-                http_status_for_retry,
-                Some(&failure.cause),
-                expect_failed,
-            );
+            let retryable = !timeout_unresolved
+                && crate::retry::is_tool_failure_retryable(
+                    &tool.provider,
+                    http_status_for_retry,
+                    Some(&failure.cause),
+                    expect_failed,
+                );
             if !is_last_attempt && retryable {
                 // Lane E (issue #485): a provider's own `Retry-After`
                 // overrides the computed backoff -- only ever present
@@ -1169,8 +1243,11 @@ mod tests {
         params.insert(Value::from("mode"), template("stringify"));
         params.insert(Value::from("input"), template("1"));
         let mut tool = tool_op(params);
-        tool.timeout_ms = Some(-5000);
-        assert_eq!(resolve_timeout_seconds(&tool, &Value::None), 1);
+        tool.timeout_ms = Some(electricity_bytecode::effects::TimeoutMs::Literal(-5000));
+        assert_eq!(
+            resolve_timeout_seconds(&tool, "t", &Value::None, &Value::None),
+            Ok(1)
+        );
     }
 
     #[test]
@@ -1240,6 +1317,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }
     }
 
@@ -1431,6 +1509,7 @@ mod tests {
             ParamNode::From {
                 path: "input.missing".to_string(),
                 default: None,
+                as_json: false,
             },
         );
         let op = Op {
@@ -2099,7 +2178,7 @@ mod tests {
         params.insert(Value::from("mode"), template("parse"));
         params.insert(Value::from("input"), template("{\"ok\": true}"));
         let mut tool = tool_op(params);
-        tool.timeout_ms = Some(5000);
+        tool.timeout_ms = Some(electricity_bytecode::effects::TimeoutMs::Literal(5000));
         tool.expect = Some(ExpectCondition::Model {
             template: electricity_bytecode::TemplateText::new(
                 "ok?",

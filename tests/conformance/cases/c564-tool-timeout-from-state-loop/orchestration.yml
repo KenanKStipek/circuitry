@@ -1,0 +1,20 @@
+name: c564-tool-timeout-from-state-loop
+effects:
+  - type: tool
+    name: jobs
+    provider: json
+    params:
+      mode: parse
+      input: '[{"ms": 60000, "args": ["--stdout", "quick"]}, {"ms": 300, "args": ["--sleep"]}]'
+  - type: loop
+    name: each_job
+    each: {in: prime.jobs.value, as: job}
+    body:
+      - type: tool
+        name: run
+        provider: shell
+        timeout_ms: {from: job.ms}
+        params:
+          command: fake
+          allowed_commands: [fake]
+          args: {from: job.args}

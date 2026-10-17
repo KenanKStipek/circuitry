@@ -1,0 +1,60 @@
+name: c-cel-values
+interface:
+  inputs:
+    items:
+      type: array
+      default:
+        - {id: a, status: open}
+        - {id: b, status: closed}
+        - {id: c, status: open}
+    limits:
+      type: object
+      default: {small: 1, large: 9}
+    first:
+      type: string
+      default: "2026-01-02T03:04:05Z"
+    second:
+      type: string
+      default: "2026-03-04T05:06:07.250+01:00"
+effects:
+  - type: tool
+    name: open_ids
+    provider: cel
+    params:
+      expr: "state.input.items.filter(i, i.status == 'open').map(i, i.id)"
+      schema: {type: array, items: {type: string}}
+  - type: tool
+    name: ordered
+    provider: cel
+    params:
+      expr: "{'zeta': 1, 'alpha': [true, null, 2.5], 'mid': {'y': 'b', 'a': 'c'}}"
+  - type: tool
+    name: lookup
+    provider: cel
+    params:
+      expr: "'medium' in state.input.limits ? state.input.limits['medium'] : state.input.limits['small']"
+  - type: tool
+    name: later
+    provider: cel
+    params:
+      expr: "timestamp(state.input.first) > timestamp(state.input.second) ? timestamp(state.input.first) : timestamp(state.input.second)"
+  - type: tool
+    name: elapsed
+    provider: cel
+    params:
+      expr: "[timestamp(state.input.second) - timestamp(state.input.first), duration('90s'), duration('1.5s')]"
+  - type: loop
+    name: per_item
+    each: {in: input.items, as: it}
+    collect: label
+    body:
+      - type: tool
+        name: label
+        provider: cel
+        params:
+          expr: "state.it.id + '#' + string(state.iter.index)"
+  - type: tool
+    name: unset
+    provider: cel
+    params:
+      expr: "state.prime.never_ran.value"

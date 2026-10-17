@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #591: the agent tool reads params.prompt from a file named in state",
+  "description": "expect: failure, error_compare: exact. A `params_json` that sets `prompt` while `params.prompt` reads its text from a file is rejected before any effect runs, naming `params_json` and `params.prompt`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

@@ -1,0 +1,16 @@
+name: c564-tool-timeout-from-state
+effects:
+  - type: tool
+    name: spec
+    provider: json
+    params:
+      mode: parse
+      input: '{"ms": 300}'
+  - type: tool
+    name: result
+    provider: shell
+    timeout_ms: {from: prime.spec.value.ms, default: 60000}
+    params:
+      command: fake
+      allowed_commands: [fake]
+      args: ["--sleep"]

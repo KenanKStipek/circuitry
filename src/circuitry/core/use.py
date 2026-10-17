@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -27,6 +28,7 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .resume import ResumeMode
 from .store import Store
 from .store.store import replace_node
 from .yaml_load import load_yaml
@@ -198,21 +200,66 @@ def _resolve_dot_path(state: dict[str, Any], dot_path: str) -> Any:
     return current
 
 
-#: The one key of a by-reference input: ``name: {from: <path>}``.
+#: The key of a by-reference input: ``name: {from: <path>}``.
 REFERENCE_KEY = "from"
+#: The optional modifier key on a by-reference value: ``{from: <path>, as: json}``.
+REFERENCE_AS_KEY = "as"
+#: Every ``as:`` value a by-reference value accepts.
+REFERENCE_AS_FORMATS: tuple[str, ...] = ("json",)
 
 
 def reference_path(value: Any) -> str | None:
     """The path of a by-reference input (``{from: <path>}``), or None for any other value.
 
-    Only a mapping with exactly the one key ``from`` and a string value is a
-    reference; every other mapping stays a literal, as before.
+    Only a mapping with the key ``from`` (a string), optionally with ``as``,
+    is a reference; every other mapping stays a literal, as before.
     """
-    if isinstance(value, dict) and len(value) == 1 and REFERENCE_KEY in value:
+    if (
+        isinstance(value, dict)
+        and REFERENCE_KEY in value
+        and set(value) <= {REFERENCE_KEY, REFERENCE_AS_KEY}
+    ):
         path = value[REFERENCE_KEY]
         if isinstance(path, str):
             return path.strip()
     return None
+
+
+def reference_as(value: Any) -> Any:
+    """The ``as:`` modifier of a by-reference input (None when it has none)."""
+    if reference_path(value) is None:
+        return None
+    return value.get(REFERENCE_AS_KEY)
+
+
+def validate_reference_as(as_value: Any, *, label: str, effect_path: str) -> None:
+    """Hard-error unless a by-reference value's ``as:`` names a supported format."""
+    if as_value is None or as_value in REFERENCE_AS_FORMATS:
+        return
+    formats = ", ".join(REFERENCE_AS_FORMATS)
+    raise ValueError(
+        f"{label} at '{effect_path}': unknown 'as: {as_value}' on a "
+        f"'{{from: ...}}' reference (supported: {formats})."
+    )
+
+
+def serialize_reference(value: Any, *, as_value: Any, label: str, path: str) -> Any:
+    """Apply a by-reference value's ``as:`` modifier to the resolved *value*.
+
+    ``as: json`` is compact JSON text, keys in their stored order and
+    non-ASCII text kept as is. A value JSON can't carry (``NaN``, bytes, a
+    non-scalar key, a cycle) raises, naming *label* and the reference *path*.
+    """
+    if as_value is None:
+        return copy.deepcopy(value)
+    if as_value not in REFERENCE_AS_FORMATS:
+        raise ValueError(f"{label}: unknown 'as: {as_value}' on '{{from: {path}}}'.")
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label}: '{{from: {path}, as: json}}' did not serialize to JSON: {exc}"
+        ) from exc
 
 
 def _resolve_reference(ctx: Mapping[str, Any], path: str) -> Any:
@@ -255,7 +302,17 @@ def _render_inputs(
     for key, value in inputs.items():
         path = reference_path(value)
         if path is not None:
-            rendered[key] = copy.deepcopy(_resolve_reference(ctx, path))
+            resolved = _resolve_reference(ctx, path)
+            as_value = reference_as(value)
+            if as_value is not None and resolved is not None:
+                rendered[key] = serialize_reference(
+                    resolved,
+                    as_value=as_value,
+                    label=f"inputs.{key}",
+                    path=path,
+                )
+            else:
+                rendered[key] = copy.deepcopy(resolved)
         elif isinstance(value, str):
             rendered[key] = render_with_composition(
                 value, ctx, declared=declared, known_effect_names=known_names, label=f"inputs.{key}"
@@ -292,6 +349,55 @@ def _graft_child_record(node: dict[str, Any], child_state: Mapping[str, Any]) ->
         if key in ("value", "meta"):
             continue
         node[key] = val
+
+
+def _take_child_record(node: dict[str, Any]) -> dict[str, Any]:
+    """Remove the child effects a saved record left under *node*, and return them."""
+    keys = [key for key in node if key not in ("value", "meta")]
+    return {key: node.pop(key) for key in keys}
+
+
+_UNSAVEABLE = object()
+
+
+def _saved_form(value: Any) -> Any:
+    """*value* as it reads back from saved state (JSON), or a sentinel when it can't be saved."""
+    from .saved_state import json_safe_default
+
+    try:
+        return json.loads(json.dumps(value, sort_keys=True, default=json_safe_default))
+    except (TypeError, ValueError):
+        return _UNSAVEABLE
+
+
+@dataclass(frozen=True)
+class _SavedChildRun:
+    """What a saved, unfinished ``use`` node says about its child's last run.
+
+    ``cof run --resume`` continues inside the child (#567) only when the child
+    would run the same document (``meta.orchestration_sha256``) with the same
+    inputs (``meta.inputs``) as the run that left the record; otherwise the
+    record is stale and the child runs from its start. A child whose output
+    the ``use``'s own ``expect:`` judged false (``meta.expect.result``) runs
+    from its start too: reused whole, it would hand the same output to the
+    same check and fail again on every resume. An ``expect`` that raised
+    (its adapter call failed) recorded no result, so the finished child is
+    reused and only the check runs again.
+    """
+
+    inputs: Any
+    orchestration_sha256: Any
+    expect_failed: bool = False
+
+    def matches(self, *, digest: str, inputs: dict[str, Any]) -> bool:
+        if self.expect_failed:
+            return False
+        if not self.orchestration_sha256 or self.orchestration_sha256 != digest:
+            return False
+        if not isinstance(self.inputs, dict):
+            return False
+        saved = _saved_form(self.inputs)
+        return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
 
 
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
@@ -347,6 +453,11 @@ class UseDefinition:
     on_error: Literal["fail", "skip", "continue"] = "fail"
     description: str | None = None
 
+    # `cof run --resume` (#590): 'restart' runs an unfinished saved use's
+    # child from its start in a fresh state, even when a saved child record
+    # (runtime.state.record_children) matches.
+    resume: ResumeMode = "continue"
+
     # Reliability (#273) — same key names, default and backoff as prompts
     # (see core.prompt.RetryPolicyDef). None: one attempt, no retry. A
     # retry re-runs the whole child orchestration from scratch.
@@ -357,6 +468,12 @@ class UseDefinition:
 
     # False = skip execution and write a disabled node (see core.disabled).
     enabled: bool = True
+
+    #: Whether the document that carries this effect is trusted (run by path),
+    #: set from its compile context. A child named by ``path:`` gets this trust,
+    #: so a prompt's ``file: {from: ...}`` there may name any ``within`` (#578);
+    #: a child resolved through the library is always limited.
+    parent_trusted: bool = False
 
 
 class UseRuntime:
@@ -385,6 +502,7 @@ class UseRuntime:
         cb_error: Callable[[str], None] | None = None,
         display_name: str | None = None,
         ancestors: list | None = None,
+        resume: bool = False,
     ):
         self.defn = definition
         self.adapter = adapter
@@ -407,6 +525,10 @@ class UseRuntime:
         # Pin recorded when `ref:` resolved through a library source, mirrored
         # onto the effect's meta for per-effect introspection.
         self._pin: dict[str, Any] | None = None
+        # ``cof run --resume`` (#567): with ``runtime.state.record_children``,
+        # an unfinished node's saved child record lets the child continue at
+        # its first unfinished effect instead of starting over.
+        self.resume = resume
 
     def _resolve_orchestration(self) -> Path:
         """Resolve orchestration reference to a file path.
@@ -782,6 +904,18 @@ class UseRuntime:
 
         legacy_ref = self.defn.ref or self.defn.path or self.defn.orchestration
         label = legacy_ref or "inline"
+        record_children = _record_children_enabled(self.runtime_config)
+        # Read before the reset below clears them: what the saved run's child
+        # received and ran, which decides whether its record is resumable.
+        saved_child_run: _SavedChildRun | None = None
+        if self.resume and record_children:
+            saved_expect = meta.get("expect")
+            saved_child_run = _SavedChildRun(
+                inputs=meta.get("inputs"),
+                orchestration_sha256=meta.get("orchestration_sha256"),
+                expect_failed=isinstance(saved_expect, dict)
+                and not saved_expect.get("result"),
+            )
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["orchestration"] = legacy_ref
@@ -795,7 +929,6 @@ class UseRuntime:
         #: or reproduce this step.
         meta["inputs"] = None
         meta["orchestration_sha256"] = None
-        record_children = _record_children_enabled(self.runtime_config)
 
         #: This effect's canonical dotted path — what child effects namespace
         #: under and where their live state is mirrored for observers.
@@ -942,11 +1075,21 @@ class UseRuntime:
                         child_runtime_config["_orchestration_dir"] = str(child_document_dir)
                         child_confinement_root = self._confinement_root_for(child_document_dir)
 
+                    # A child the caller names by path is part of the code the
+                    # caller runs, so it gets its parent's trust; a library
+                    # child is someone else's document, and a generated
+                    # (inline) one is limited like any plan.
+                    child_trusted = (
+                        self.defn.parent_trusted
+                        and not meta["inline"]
+                        and self._pin is None
+                    )
                     child_root = compile_orchestration(
                         orch=child_orch,
                         root_name="prime",
                         document_dir=child_document_dir,
                         confinement_root=child_confinement_root,
+                        trusted=child_trusted,
                     )
                     # "A child document run with `use` sees only its own
                     # declared prompts" (#396) — set fresh here rather than
@@ -1003,6 +1146,22 @@ class UseRuntime:
                     meta["inputs"] = copy.deepcopy(child_inputs)
                     child_state: dict[str, Any] = {"input": child_inputs}
 
+                    # `cof run --resume` (#567): the saved child record comes
+                    # off the node either way -- it seeds the child when the
+                    # document and inputs match the run that left it, and is
+                    # stale otherwise. Only the first attempt resumes; a retry
+                    # re-runs the whole child from scratch.
+                    resume_child = False
+                    if saved_child_run is not None and attempt_index == 0:
+                        saved_effects = _take_child_record(node)
+                        # `resume: restart` (#590): the record is dropped
+                        # even when it matches.
+                        if self.defn.resume == "continue" and saved_child_run.matches(
+                            digest=digest, inputs=child_inputs
+                        ):
+                            child_state[_CHILD_ROOT] = saved_effects
+                            resume_child = True
+
                     # Isolated state, shared observation: the child keeps its own
                     # state dict (and its explicit inputs/outputs mapping) but
                     # inherits the parent's callbacks, its lock — so a snapshot is
@@ -1047,6 +1206,7 @@ class UseRuntime:
                             depth=self.depth + 1,
                             ancestors=self._ancestors,
                             label_prefix=child_label_prefix,
+                            resume=resume_child,
                         ).execute(store=child_store)
 
                     # Surface errors an on_error: skip/continue swallowed inside the
@@ -1199,5 +1359,12 @@ class UseRuntime:
                 # must not let that pass's value survive next to this
                 # pass's error (#260).
                 node["value"] = None
+        except BaseException:
+            # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
+            # Exception, but what the child finished before it is exactly
+            # what `cof run --resume` continues from (#567).
+            if record_children and child_store is not None:
+                _graft_child_record(node, child_store.state)
+            raise
         finally:
             store.fire_effect_complete(self.defn.name, node)

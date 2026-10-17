@@ -1,0 +1,54 @@
+name: prompt-file-from-state
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: from_template_file
+    template:
+      file: {from: input.prompt_file}
+      within: {from: input.work_dir}
+  - type: prompt
+    name: from_message_file
+    messages:
+      - role: system
+        content: "Be brief about {{input.topic}}."
+      - role: user
+        content:
+          file: {from: input.prompt_file}
+          within: {from: input.work_dir}
+  - type: prompt
+    name: missing_file
+    template:
+      file: {from: input.missing_file}
+      within: {from: input.work_dir}
+    on_error: continue
+  - type: prompt
+    name: directory
+    template:
+      file: {from: input.dir}
+      within: {from: input.work_dir}
+    on_error: continue
+  - type: prompt
+    name: outside_within
+    template:
+      file: {from: input.escape_file}
+      within: {from: input.work_dir}
+    on_error: continue
+  - type: prompt
+    name: not_utf8
+    template:
+      file: {from: input.binary_file}
+      within: {from: input.work_dir}
+    on_error: continue
+  - type: prompt
+    name: not_a_string
+    template:
+      file: {from: input.bad_path}
+      within: {from: input.work_dir}
+    on_error: continue
+  - type: prompt
+    name: relative_within
+    template:
+      file: {from: input.prompt_file}
+      within: {from: input.relative_dir}
+    on_error: continue

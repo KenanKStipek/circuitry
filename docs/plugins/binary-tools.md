@@ -29,6 +29,29 @@ across machines. Neither can be set via `params` on the tool effect.
 }
 ```
 
+## A secret in `env`
+
+An `env` value can be a secret instead of a literal, `{secret: <name>}`
+(optionally with `prefix:`, literal text put before it), resolved from
+`runtime.secrets.<name>` when the tool runs, never earlier:
+
+```json
+{
+  "runtime": {
+    "secrets": {"gh": {"command": ["gh", "auth", "token"]}},
+    "plugins": {
+      "git": {"env": {"GH_TOKEN": {"secret": "gh"}}}
+    }
+  }
+}
+```
+
+The process gets the value; anything it prints that contains it, on
+`stdout`, `stderr` or in an error, is saved with the value replaced by
+`[secret:gh]`, and the value never reaches saved state, events or logs.
+See [Secrets](../orchestration-reference.md#secrets-in-http-headers-and-a-subprocess-tools-env)
+for the three kinds of secret and the trust rule.
+
 ## Unset — behaviour is unchanged
 
 Leaving `binary` unset means the same `PATH` search as always: the first
@@ -90,11 +113,35 @@ past their timeouts):
     args: ["convert", "in.png", "-resize", "50%", "out.png"]
 ```
 
+## Parsing JSON output: `parse: json`
+
+`shell` and every `GenericSubprocessTool`-based plugin accept an optional
+`parse: json` param. `value` is then the parsed JSON of stdout (an object,
+array or scalar) instead of the text, so later effects read real types
+(`state.prime.report.value.ok` is a boolean) without a following `json`
+effect:
+
+```yaml
+- type: tool
+  name: report
+  provider: shell
+  params: {command: mytool, args: [summary, --json], parse: json}
+```
+
+- The raw stdout is still recorded, on `meta.stdout`.
+- Empty (or whitespace-only) stdout, and stdout that is not valid JSON,
+  fail the effect. The message names the exit code and quotes the first
+  200 characters of stdout.
+- With `allow_nonzero: true`, a non-zero exit's stdout is parsed the same
+  way and `meta.exit_code` keeps the code; if that stdout is not JSON the
+  effect fails as above.
+- A `parse` value other than `json` fails before the process runs.
+
 ## Not covered
 
 - **`shell`** cannot call a binary by absolute path (its allowlist works
   on bare command names, deliberately, for the security properties that
-  gives); it does not read `binary` / `env`.
+  gives); it does not read `binary` / `env`. It does take `parse: json`.
 - **`gpg`**, **`diff_patch`**, **`pdf_render`**, **`web_search`**,
   **`weather`** are not `GenericSubprocessTool`-based and are out of
   scope for this page.

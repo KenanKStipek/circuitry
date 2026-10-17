@@ -55,9 +55,11 @@
 //! workspace).
 
 use crate::op::{LeafKind, NodeKind, Op};
+use crate::param::ParamNode;
 use crate::path::EffectPath;
 use crate::program::Program;
 use crate::region::{Condition, ExpectCondition, LoopSpec, Region};
+use electricity_value::Value;
 
 /// Lane C's own native providers (#448) -- process-backed, so they
 /// share one capability flag ([`Supported::tools_process`]) rather
@@ -164,6 +166,11 @@ pub enum RefusalReason {
     /// no dependency on. Carries the adapter name exactly as written
     /// (a `provider:` token's own spelling, never lower-cased).
     UnsupportedAdapter(String),
+    /// A `tool` effect's `params` name a secret, `{secret: <name>}`
+    /// (issue #598): `cof run` resolves it from `runtime.secrets` when the
+    /// effect dispatches and keeps the value out of every record; this
+    /// build resolves none.
+    SecretReference,
 }
 
 /// The first effect path (and why) [`first_unsupported`] found the
@@ -479,9 +486,75 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
                 );
             }
+            if names_a_secret(&tool.params, normalized_provider == "http") {
+                return refusal(path, RefusalReason::SecretReference);
+            }
             None
         }
     }
+}
+
+/// Whether *params* name a secret (issue #598), placed where it is
+/// allowed or not, by `cof check`'s own rule (`secrets.is_secret_ref`): a
+/// mapping whose keys are `secret` plus, optionally, `prefix`, with a
+/// string `secret`, the same rule as a `{from:}` leaf's. Any other mapping
+/// (a `json` body with a `secret` property, say) is literal data. Only a
+/// value of an `http` effect's `params.headers` counts with any `secret`
+/// key, as `cof check` reads it there.
+fn names_a_secret(params: &ParamNode, is_http: bool) -> bool {
+    fn is_key(key: &Value, name: &str) -> bool {
+        matches!(key, Value::Str(text) if text == name)
+    }
+    fn keys_are_a_reference<'a>(mut keys: impl Iterator<Item = &'a Value>) -> bool {
+        keys.all(|key| is_key(key, "secret") || is_key(key, "prefix"))
+    }
+    fn value_names_a_secret(value: &Value) -> bool {
+        match value {
+            Value::Dict(dict) => {
+                let secret = Value::Str("secret".to_string());
+                (keys_are_a_reference(dict.keys())
+                    && matches!(dict.get(&secret), Some(Value::Str(_))))
+                    || dict.values().any(value_names_a_secret)
+            }
+            Value::List(items) => items.iter().any(value_names_a_secret),
+            _ => false,
+        }
+    }
+    fn node_names_a_secret(node: &ParamNode) -> bool {
+        match node {
+            ParamNode::Map(map) => {
+                let secret = Value::Str("secret".to_string());
+                (keys_are_a_reference(map.keys())
+                    && matches!(
+                        map.get(&secret),
+                        Some(ParamNode::Literal(Value::Str(_)) | ParamNode::Template(_))
+                    ))
+                    || map.values().any(node_names_a_secret)
+            }
+            ParamNode::List(items) => items.iter().any(node_names_a_secret),
+            ParamNode::Literal(value) => value_names_a_secret(value),
+            ParamNode::From { .. } | ParamNode::Template(_) => false,
+        }
+    }
+    fn value_has_secret_key(value: &Value) -> bool {
+        matches!(value, Value::Dict(dict) if dict.contains_key(&Value::Str("secret".to_string())))
+    }
+    let headers = match params {
+        ParamNode::Map(map) if is_http => map.get(&Value::Str("headers".to_string())),
+        _ => None,
+    };
+    let header_has_secret_key = match headers {
+        Some(ParamNode::Map(headers)) => headers.values().any(|value| match value {
+            ParamNode::Map(map) => map.contains_key(&Value::Str("secret".to_string())),
+            ParamNode::Literal(value) => value_has_secret_key(value),
+            _ => false,
+        }),
+        Some(ParamNode::Literal(Value::Dict(headers))) => {
+            headers.values().any(value_has_secret_key)
+        }
+        _ => false,
+    };
+    header_has_secret_key || node_names_a_secret(params)
 }
 
 fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) -> Option<Refusal> {
@@ -534,7 +607,6 @@ mod tests {
     use super::*;
     use crate::effects::{PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp};
     use crate::op::OnError;
-    use crate::param::ParamNode;
     use crate::template::{Escape, TemplateText};
     use indexmap::IndexMap;
     use std::collections::BTreeSet;
@@ -640,6 +712,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }
     }
 
@@ -695,6 +768,7 @@ mod tests {
         leaf_op(
             path,
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -856,6 +930,153 @@ mod tests {
                 RefusalReason::UnsupportedToolProvider(provider.to_string())
             );
         }
+    }
+
+    #[test]
+    fn systemone_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
+        // `systemone` (issue #580) is a cof-only plugin until it is ported:
+        // it is in `PLUGIN_NAMES` (so it is not mistaken for an unknown
+        // name) and no build supports it.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"systemone"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("decide"),
+            LeafKind::Tool(tool_op_with_provider(
+                "systemone",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("systemone".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("systemone"));
+    }
+
+    #[test]
+    fn a_tool_whose_params_name_a_secret_is_refused_with_the_preview_marker() {
+        // Issue #598: `{secret: <name>}` in an `http` header, or anywhere
+        // else in a tool's params (`cof check` rejects that placement).
+        let secret = |inner: ParamNode| {
+            let mut headers = IndexMap::new();
+            headers.insert(Value::Str("Authorization".to_string()), inner);
+            let mut params = IndexMap::new();
+            params.insert(Value::Str("headers".to_string()), ParamNode::Map(headers));
+            ParamNode::Map(params)
+        };
+        let mut reference = IndexMap::new();
+        reference.insert(
+            Value::Str("secret".to_string()),
+            ParamNode::Literal(Value::Str("api".to_string())),
+        );
+        let mut literal = electricity_value::Dict::new();
+        literal.insert(
+            Value::Str("secret".to_string()),
+            Value::Str("api".to_string()),
+        );
+        let with_http = Supported::m0(&["json", "http"]);
+        for params in [
+            secret(ParamNode::Map(reference)),
+            secret(ParamNode::List(vec![ParamNode::Literal(Value::Dict(
+                literal,
+            ))])),
+        ] {
+            let tool = leaf_op(
+                EffectPath::root().push_name("call"),
+                LeafKind::Tool(tool_op_with_provider("http", params)),
+            );
+            let program = program_with_root(root_block(vec![tool]));
+            let refusal = first_unsupported(&program, false, &with_http).unwrap();
+            assert_eq!(refusal.reason, RefusalReason::SecretReference);
+            let text = crate::refusal_text::format_refusal(&refusal);
+            assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+            assert!(text.contains("prime.call is a tool effect whose params name a secret"));
+        }
+        let plain = leaf_op(
+            EffectPath::root().push_name("call"),
+            LeafKind::Tool(tool_op_with_provider(
+                "http",
+                secret(ParamNode::Literal(Value::Str("Bearer x".to_string()))),
+            )),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![plain])),
+                false,
+                &with_http
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_mapping_with_a_secret_key_and_other_keys_is_data_outside_http_headers() {
+        // Issue #598's review: like a `{from:}` leaf, only `secret` plus an
+        // optional `prefix` is a reference, except as an `http` header's
+        // value, where any `secret` key is one.
+        let str_value = |text: &str| Value::Str(text.to_string());
+        let mut body = IndexMap::new();
+        body.insert(str_value("secret"), ParamNode::Literal(str_value("k")));
+        body.insert(str_value("response"), ParamNode::Literal(str_value("r")));
+        let mut schema_property = electricity_value::Dict::new();
+        schema_property.insert(str_value("type"), str_value("string"));
+        let mut properties = electricity_value::Dict::new();
+        properties.insert(str_value("secret"), Value::Dict(schema_property));
+        let mut params = IndexMap::new();
+        params.insert(str_value("json"), ParamNode::Map(body.clone()));
+        params.insert(
+            str_value("schema"),
+            ParamNode::Literal(Value::Dict(properties)),
+        );
+        let with_http = Supported::m0(&["json", "http"]);
+        let run = |params: ParamNode| {
+            let tool = leaf_op(
+                EffectPath::root().push_name("call"),
+                LeafKind::Tool(tool_op_with_provider("http", params)),
+            );
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_http,
+            )
+            .map(|refusal| refusal.reason)
+        };
+        assert_eq!(run(ParamNode::Map(params)), None);
+
+        let mut headers = IndexMap::new();
+        headers.insert(str_value("Authorization"), ParamNode::Map(body));
+        let mut params = IndexMap::new();
+        params.insert(str_value("headers"), ParamNode::Map(headers));
+        assert_eq!(
+            run(ParamNode::Map(params)),
+            Some(RefusalReason::SecretReference)
+        );
+    }
+
+    #[test]
+    fn cel_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
+        // `cel` (issue #597) is a cof-only plugin until it is ported: a CEL
+        // map here has no key order, and the tool's result keeps it.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"cel"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("value"),
+            LeafKind::Tool(tool_op_with_provider(
+                "cel",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("cel".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("cel"));
     }
 
     #[test]
@@ -1215,6 +1436,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1292,6 +1514,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1510,6 +1733,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1533,6 +1757,7 @@ mod tests {
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,
@@ -1670,6 +1895,7 @@ mod tests {
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
                 outputs: None,

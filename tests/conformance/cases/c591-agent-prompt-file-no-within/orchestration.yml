@@ -1,0 +1,8 @@
+name: c591-agent-prompt-file-no-within
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    params:
+      prompt:
+        file: {from: input.prompt_file}

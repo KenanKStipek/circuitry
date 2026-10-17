@@ -258,6 +258,21 @@ fn compile_effect(
         )));
     }
 
+    if effect_type != "dynamic"
+        && effect_type != "use"
+        && effect.contains_key(&Value::Str("resume".to_string()))
+    {
+        let label = if effect_type.is_empty() {
+            "unknown"
+        } else {
+            effect_type
+        };
+        return Err(CompileError(format!(
+            "{label} effect at '{effect_path}': 'resume' is \
+             only allowed on a 'dynamic' or 'use' effect."
+        )));
+    }
+
     match effect_type {
         "prompt" => {
             let Some(name) = name else {
@@ -272,6 +287,7 @@ fn compile_effect(
                 &valid_name,
                 effect_path,
                 &ctx.origin,
+                loop_names,
             )
         }
         "dynamic" => {
@@ -307,6 +323,7 @@ fn compile_effect(
                 &path.push_name(&valid_name),
                 &valid_name,
                 effect_path,
+                &ctx.origin,
                 loop_names,
             )
         }
@@ -323,6 +340,7 @@ fn compile_effect(
                 &valid_name,
                 effect_path,
                 loop_names,
+                &ctx.origin,
             )
         }
         "yield" => {
@@ -364,6 +382,26 @@ fn compile_effect(
     }
 }
 
+/// `core/compiler.py::_resume_mode` (#590): a `dynamic`'s or `use`'s
+/// `resume:`, when present, is `continue` or `restart`. Checked only, so
+/// a document validates the same on both engines: electricity has no
+/// `--resume`, and the IR does not carry the value.
+pub(crate) fn check_resume_mode(
+    effect: &Dict,
+    label: &str,
+    effect_path: &str,
+) -> Result<(), CompileError> {
+    match effect.get(&Value::Str("resume".to_string())) {
+        None => Ok(()),
+        Some(Value::Str(mode)) if mode == "continue" || mode == "restart" => Ok(()),
+        Some(other) => Err(CompileError(format!(
+            "{label} effect at '{effect_path}': 'resume' must be 'continue' or \
+             'restart', got {}.",
+            other.py_repr()
+        ))),
+    }
+}
+
 fn compile_dynamic(
     ctx: &mut Ctx,
     effect: &Dict,
@@ -373,6 +411,7 @@ fn compile_dynamic(
     valid_name: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
+    check_resume_mode(effect, "Dynamic", effect_path)?;
     let flow = normalize_flow(
         first_truthy(&[get_truthy(effect, "flow"), get_truthy(effect, "strategy")])
             .map(Value::py_str)

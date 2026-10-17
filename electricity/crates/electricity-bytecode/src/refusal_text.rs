@@ -56,6 +56,9 @@ pub fn refusal_reason_text(reason: &RefusalReason) -> String {
         RefusalReason::UnsupportedAdapter(name) => format!(
             "a prompt effect naming adapter {name:?}, which this build of electricity has no builder for"
         ),
+        RefusalReason::SecretReference => {
+            "a tool effect whose params name a secret ({secret: ...})".to_string()
+        }
     }
 }
 

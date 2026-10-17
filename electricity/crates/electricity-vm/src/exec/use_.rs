@@ -464,6 +464,7 @@ async fn load_child<R: ParamsCtx>(
     name: &str,
     source: &UseSource,
     validate: bool,
+    parent_trusted: bool,
     ctx: &R,
     run_ctx: &RunContext<'_>,
 ) -> Result<LoadedChild, String> {
@@ -581,16 +582,30 @@ async fn load_child<R: ParamsCtx>(
             )
             .map_err(|e| e.0)?;
             let label = resolved.display().to_string();
+            // A child named by path is part of the code its caller runs, so
+            // it gets its parent's trust: a prompt's `file: {from: ...}`
+            // `within` is then free (`File`) or stays inside the child's
+            // project (`LimitedFile`), issue #578. Electricity has no
+            // library, so no child is ever limited by being resolved through
+            // one (`core/use.py` limits those).
+            let origin = if parent_trusted {
+                electricity_compiler::DocumentOrigin::File {
+                    document_dir: document_dir.clone(),
+                    confinement_root,
+                }
+            } else {
+                electricity_compiler::DocumentOrigin::LimitedFile {
+                    document_dir: document_dir.clone(),
+                    confinement_root,
+                }
+            };
             Ok(LoadedChild {
                 document,
                 label: label.clone(),
                 identity,
                 digest,
                 document_dir: document_dir.clone(),
-                origin: electricity_compiler::DocumentOrigin::File {
-                    document_dir,
-                    confinement_root,
-                },
+                origin,
                 resolved_path: Some(label),
             })
         }
@@ -654,9 +669,16 @@ async fn attempt_once<R: ParamsCtx>(
     label: &mut String,
     record_children: bool,
 ) -> Result<(), AttemptProblem> {
-    let loaded = load_child(name, &use_op.source, use_op.validate, ctx, run_ctx)
-        .await
-        .map_err(not_retried)?;
+    let loaded = load_child(
+        name,
+        &use_op.source,
+        use_op.validate,
+        use_op.parent_trusted,
+        ctx,
+        run_ctx,
+    )
+    .await
+    .map_err(not_retried)?;
     *label = loaded.label.clone();
     set_leaf(
         store,
@@ -740,14 +762,32 @@ async fn attempt_once<R: ParamsCtx>(
     if let Some(electricity_bytecode::ParamNode::Map(entries)) = &use_op.inputs {
         for (key, node) in entries {
             let value = match node {
-                electricity_bytecode::ParamNode::From { path, .. } => {
+                electricity_bytecode::ParamNode::From { path, as_json, .. } => {
                     let resolved = ctx.resolve_from(path).unwrap_or(Value::None);
                     if matches!(resolved, Value::None) {
                         if let Value::Str(key_str) = key {
                             unresolved.insert(key_str.clone(), path.clone());
                         }
+                        resolved
+                    } else if *as_json {
+                        // `core/use.py::_render_inputs`: `as: json` only
+                        // serializes a value that resolved; an unresolved
+                        // one stays `None`.
+                        crate::params::serialize_as_json(&resolved)
+                            .map(Value::Str)
+                            .map_err(|reason| {
+                                not_retried(
+                                    crate::params::RenderParamsError::NotSerializable {
+                                        label: format!("inputs.{}", key.py_str()),
+                                        reference_path: path.clone(),
+                                        reason,
+                                    }
+                                    .to_string(),
+                                )
+                            })?
+                    } else {
+                        resolved
                     }
-                    resolved
                 }
                 electricity_bytecode::ParamNode::Template(text) => {
                     let label_for_render = format!("inputs.{}", key.py_str());
@@ -1585,6 +1625,7 @@ mod tests {
         let inline_yaml = "\
 effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: parse, input: \"not json\"}\n";
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
                 true,
@@ -1789,6 +1830,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_template_error_is_not_retried_by_the_outer_loop() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
                 true,
@@ -1895,6 +1937,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_dispatches_with_the_run_adapter_budget() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
                 true,
@@ -2059,6 +2102,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     ) -> Result<(), AttemptProblem> {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
                 true,
@@ -2214,7 +2258,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             true,
             electricity_bytecode::Escape::Html,
         ));
-        let loaded = match load_child("step", &source, true, &ctx, &run_ctx).await {
+        let loaded = match load_child("step", &source, true, false, &ctx, &run_ctx).await {
             Ok(loaded) => loaded,
             Err(e) => panic!("expected load_child to succeed, got: {e}"),
         };
@@ -2245,7 +2289,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             true,
             electricity_bytecode::Escape::Html,
         ));
-        let err = match load_child("step", &source, true, &ctx, &run_ctx).await {
+        let err = match load_child("step", &source, true, false, &ctx, &run_ctx).await {
             Err(e) => e,
             Ok(_) => panic!("expected load_child to fail"),
         };
@@ -2294,6 +2338,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),
                 true,
@@ -2386,6 +2431,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),
                 true,
@@ -2501,6 +2547,99 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         assert_eq!(
             text,
             "Orchestration child.yml validation failed:\n  - bad thing one\n  - bad thing two"
+        );
+    }
+
+    /// A temporary project (`config.json` marks it) holding a `child.yml`,
+    /// removed on drop, for the origin a path child is loaded with.
+    struct ChildProject(std::path::PathBuf);
+
+    impl ChildProject {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "electricity-use-trust-test-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let dir = std::fs::canonicalize(&dir).unwrap();
+            std::fs::write(dir.join("config.json"), "{}").unwrap();
+            std::fs::write(dir.join("child.yml"), "effects: []\n").unwrap();
+            ChildProject(dir)
+        }
+    }
+
+    impl Drop for ChildProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn loaded_path_child_origin(
+        project: &ChildProject,
+        parent_trusted: bool,
+    ) -> electricity_compiler::DocumentOrigin {
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+        let source = UseSource::Path(project.0.join("child.yml").display().to_string());
+        let ctx = Value::Dict(Dict::new());
+        match load_child("step", &source, true, parent_trusted, &ctx, &run_ctx).await {
+            Ok(loaded) => loaded.origin,
+            Err(e) => panic!("expected load_child to succeed, got: {e}"),
+        }
+    }
+
+    /// Issue #578: a child named by `path:` gets its parent's trust, so a
+    /// prompt's `file: {from: ...}` in it may name any `within`.
+    #[tokio::test]
+    async fn a_path_child_of_a_trusted_parent_is_trusted() {
+        let project = ChildProject::new("trusted");
+        let origin = loaded_path_child_origin(&project, true).await;
+        assert_eq!(
+            origin,
+            electricity_compiler::DocumentOrigin::File {
+                document_dir: project.0.clone(),
+                confinement_root: project.0.clone(),
+            }
+        );
+    }
+
+    /// Issue #578: a path child of a limited parent is limited, confined to
+    /// its own project.
+    #[tokio::test]
+    async fn a_path_child_of_a_limited_parent_is_limited() {
+        let project = ChildProject::new("limited");
+        let origin = loaded_path_child_origin(&project, false).await;
+        assert_eq!(
+            origin,
+            electricity_compiler::DocumentOrigin::LimitedFile {
+                document_dir: project.0.clone(),
+                confinement_root: project.0.clone(),
+            }
+        );
+    }
+
+    /// Issue #578: an inline child is generated, so it is never trusted,
+    /// whatever its parent is.
+    #[tokio::test]
+    async fn an_inline_child_is_generated_whatever_its_parent_is() {
+        let declared_prompts = indexmap::IndexMap::new();
+        let effect_names = BTreeSet::new();
+        let run_ctx = run_ctx_for_composition(&declared_prompts, &effect_names);
+        let source = UseSource::Inline(electricity_bytecode::TemplateText::new(
+            "effects: []\n".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let ctx = Value::Dict(Dict::new());
+        let loaded = match load_child("step", &source, true, true, &ctx, &run_ctx).await {
+            Ok(loaded) => loaded,
+            Err(e) => panic!("expected load_child to succeed, got: {e}"),
+        };
+        assert_eq!(
+            loaded.origin,
+            electricity_compiler::DocumentOrigin::Generated
         );
     }
 

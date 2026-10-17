@@ -459,6 +459,117 @@ add(doc(text=(
 )))
 CASES[-1]["name"] = "finally_not_allowed_on_tool"
 
+# `resume:` (#590): cof-only behaviour (electricity has no --resume), but a
+# document validates the same on both engines.
+add({
+    "name": "resume_on_dynamic_and_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: dynamic\n"
+            "    name: session\n"
+            "    resume: restart\n"
+            "    effects:\n"
+            "      - type: prompt\n"
+            "        name: a\n"
+            "        template: 'a'\n"
+            "    finally:\n"
+            "      - type: prompt\n"
+            "        name: release\n"
+            "        template: 'release'\n"
+            "  - type: dynamic\n"
+            "    name: plain\n"
+            "    resume: continue\n"
+            "    effects:\n"
+            "      - type: prompt\n"
+            "        name: b\n"
+            "        template: 'b'\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume: restart\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: tool\n"
+    "    name: x\n"
+    "    provider: shell\n"
+    "    resume: restart\n"
+)))
+CASES[-1]["name"] = "resume_not_allowed_on_tool"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: loop\n"
+    "    name: l\n"
+    "    while: {mode: cel, expr: 'false'}\n"
+    "    resume: restart\n"
+    "    body:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_not_allowed_on_loop"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: d\n"
+    "    resume: again\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_invalid_value_on_dynamic"
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: dynamic\n"
+    "    name: d\n"
+    "    resume: [restart]\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: a\n"
+    "        template: 'a'\n"
+)))
+CASES[-1]["name"] = "resume_list_value_on_dynamic"
+
+add({
+    "name": "resume_invalid_value_on_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume: true\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
+add({
+    "name": "resume_null_value_on_use",
+    "files": {
+        "doc.yml": (
+            "effects:\n"
+            "  - type: use\n"
+            "    name: sub\n"
+            "    path: child.yml\n"
+            "    resume:\n"
+        ),
+        "child.yml": "effects: []\n",
+    },
+    "entry": "doc.yml",
+})
+
 
 # --- Compile errors: conditional/loop ------------------------------------
 
@@ -1139,6 +1250,231 @@ add(doc(text=(
     "    effects: []\n"
 )))
 CASES[-1]["name"] = "dynamic_max_concurrency_zero_is_kept_not_absent"
+
+
+# --- Issue #564: `timeout_ms: {from: <path>, default: <int>}` ----------
+
+
+def _timeout_case(name: str, effect_type: str, timeout_ms: str, *, loop: bool = False) -> None:
+    body = (
+        "    name: x\n    provider: shell\n" if effect_type == "tool" else "    name: x\n    template: hi\n"
+    )
+    effect = f"  - type: {effect_type}\n{body}    timeout_ms: {timeout_ms}\n"
+    if loop:
+        effect = (
+            "  - type: loop\n"
+            "    name: each_job\n"
+            "    each: {in: input.jobs, as: job}\n"
+            "    body:\n"
+            + "".join("  " + line + "\n" for line in effect.splitlines())
+        )
+    add(doc(text="effects:\n" + effect))
+    CASES[-1]["name"] = name
+
+
+for _type in ("tool", "prompt"):
+    _timeout_case(f"{_type}_timeout_ms_from_state", _type, "{from: prime.spec.value.ms}")
+    _timeout_case(
+        f"{_type}_timeout_ms_from_state_trims_the_path_and_keeps_the_default",
+        _type,
+        "{from: '  input.ms  ', default: 3600000}",
+    )
+    _timeout_case(
+        f"{_type}_timeout_ms_from_a_loop_binding", _type, "{from: job.ms, default: 5}", loop=True
+    )
+    for _label, _raw in (
+        ("a_path_without_a_root", "{from: ms}"),
+        ("a_state_prefixed_path", "{from: state.input.ms}"),
+        ("an_empty_path", "{from: ''}"),
+        ("a_non_string_path", "{from: 5}"),
+        ("no_from", "{default: 5}"),
+        ("an_extra_key", "{from: input.ms, other: 1}"),
+        ("a_string_default", "{from: input.ms, default: '5000'}"),
+        ("a_float_default", "{from: input.ms, default: 1.5}"),
+        ("a_zero_default", "{from: input.ms, default: 0}"),
+        ("a_negative_default", "{from: input.ms, default: -3}"),
+        ("a_bool_default", "{from: input.ms, default: true}"),
+        ("a_null_default", "{from: input.ms, default: null}"),
+    ):
+        _timeout_case(f"{_type}_timeout_ms_{_label}", _type, _raw)
+    _timeout_case(f"{_type}_timeout_ms_binding_outside_its_loop", _type, "{from: job.ms}")
+
+
+# --- Issue #578: `file: {from: <state path>}, within: <dir>` ---------
+
+
+def _dispatch_file_case(name: str, effect: str, *, schema_error: bool = False) -> None:
+    add(doc(text="effects:\n" + effect))
+    CASES[-1]["name"] = name
+    if schema_error:
+        # The JSON-schema rejection is third-party text; only its location is pinned.
+        CASES[-1]["error_modes"] = {
+            "validate_errors": ["location_prefix"],
+            "run_error": "location_prefix",
+        }
+
+
+_PROMPT_HEAD = "  - type: prompt\n    name: edit\n"
+
+_dispatch_file_case(
+    "prompt_template_file_from_state",
+    _PROMPT_HEAD
+    + "    template:\n      file: {from: prime.prep.value.prompt_file}\n"
+    "      within: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "prompt_template_file_from_state_with_a_literal_within_and_a_trimmed_path",
+    _PROMPT_HEAD
+    + "    template:\n      file: {from: '  input.prompt_file  '}\n      within: /srv/work\n",
+)
+_dispatch_file_case(
+    "prompt_message_content_file_from_state",
+    _PROMPT_HEAD
+    + "    messages:\n"
+    "      - {role: system, content: 'Be brief about {{input.topic}}.'}\n"
+    "      - role: user\n"
+    "        content:\n"
+    "          file: {from: input.user_file}\n"
+    "          within: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "prompt_template_file_from_a_loop_binding",
+    "  - type: loop\n    name: each_job\n    each: {in: input.jobs, as: job}\n    body:\n"
+    "      - type: prompt\n        name: edit\n        template:\n"
+    "          file: {from: job.path}\n          within: {from: input.work_dir}\n",
+)
+for _label, _template in (
+    ("no_within", "{file: {from: input.f}}"),
+    ("a_relative_within", "{file: {from: input.f}, within: relative/dir}"),
+    ("a_within_with_a_template_tag", "{file: {from: input.f}, within: '/srv/{{x}}'}"),
+    ("a_within_from_an_effect_output", "{file: {from: input.f}, within: {from: prime.prep.value}}"),
+    ("a_within_from_a_nested_input", "{file: {from: input.f}, within: {from: input.a.b}}"),
+    ("a_within_from_with_an_extra_key", "{file: {from: input.f}, within: {from: input.d, x: 1}}"),
+    ("a_non_string_within", "{file: {from: input.f}, within: 5}"),
+    ("an_empty_from", "{file: {from: ''}, within: {from: input.d}}"),
+    ("a_non_string_from", "{file: {from: 5}, within: {from: input.d}}"),
+    ("an_empty_file_mapping", "{file: {}, within: {from: input.d}}"),
+    ("an_extra_key_in_file", "{file: {from: input.f, x: 1}, within: {from: input.d}}"),
+    ("a_from_without_a_root", "{file: {from: bare}, within: {from: input.d}}"),
+    ("a_state_prefixed_from", "{file: {from: state.input.f}, within: {from: input.d}}"),
+    ("an_extra_top_level_key", "{file: {from: input.f}, within: {from: input.d}, x: 1}"),
+):
+    _dispatch_file_case(
+        f"prompt_template_file_from_state_{_label}_is_a_check_error",
+        _PROMPT_HEAD + f"    template: {_template}\n",
+        schema_error=_label == "an_extra_top_level_key",
+    )
+_dispatch_file_case(
+    "prompt_message_file_from_state_no_within_names_the_message",
+    _PROMPT_HEAD
+    + "    messages:\n      - {role: user, content: hi}\n"
+    "      - role: user\n        content: {file: {from: input.f}}\n",
+)
+_dispatch_file_case(
+    "yield_template_file_from_state_is_a_check_error",
+    "  - type: yield\n    name: y\n    template:\n      file: {from: input.f}\n"
+    "      within: {from: input.d}\n",
+    schema_error=True,
+)
+add(doc(text=(
+    "prompts:\n  p:\n    file: {from: input.f}\n    within: {from: input.d}\n"
+    "effects:\n  - type: prompt\n    name: a\n    template: '{{> p}}'\n"
+)))
+CASES[-1]["name"] = "declared_prompt_file_from_state_is_a_check_error"
+CASES[-1]["error_modes"] = {
+    "validate_errors": ["location_prefix"],
+    "run_error": "location_prefix",
+}
+
+
+# A reflector builds its planning prompt from the prompt's own text, so a plan
+# prompt that reads its text from a file named in state would lose the file.
+_REFLECTOR_HEAD = "  - type: reflector\n    name: r\n    effects:\n"
+_PLAN_PROMPT_HEAD = "      - type: prompt\n        name: propose_steps\n"
+_dispatch_file_case(
+    "reflector_plan_prompt_template_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template:\n          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_plan_prompt_message_file_from_state_is_a_check_error",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        messages:\n          - {role: system, content: plan}\n"
+    "          - role: user\n            content:\n"
+    "              file: {from: input.f}\n              within: {from: input.d}\n",
+)
+_dispatch_file_case(
+    "reflector_other_prompt_file_from_state_is_allowed",
+    _REFLECTOR_HEAD
+    + _PLAN_PROMPT_HEAD
+    + "        template: plan\n"
+    + "      - type: prompt\n        name: other\n        template:\n"
+    "          file: {from: input.f}\n          within: {from: input.d}\n",
+)
+
+
+# --- Issue #591: the agent tool's `params.prompt: {file: {from: ...}, within: ...}` ---
+
+_AGENT_HEAD = "  - type: tool\n    name: implement\n    provider: agent\n"
+
+_dispatch_file_case(
+    "agent_prompt_file_from_state",
+    _AGENT_HEAD
+    + "    params:\n      prompt:\n        file: {from: prime.prep.value.prompt_file}\n"
+    "        within: {from: input.work_dir}\n      cwd: {from: input.work_dir}\n",
+)
+_dispatch_file_case(
+    "agent_prompt_file_with_a_literal_within_and_a_spelled_out_provider",
+    "  - type: tool\n    name: implement\n    provider: ' Agent '\n"
+    "    params:\n      prompt: {file: {from: input.prompt_file}, within: /srv/work}\n",
+)
+for _label, _prompt in (
+    ("no_within", "{file: {from: input.f}}"),
+    ("a_relative_within", "{file: {from: input.f}, within: relative/dir}"),
+    ("a_within_with_a_template_tag", "{file: {from: input.f}, within: '/srv/{{x}}'}"),
+    ("a_within_from_an_effect_output", "{file: {from: input.f}, within: {from: prime.prep.value}}"),
+    ("an_extra_key", "{file: {from: input.f}, within: {from: input.d}, x: 1}"),
+    ("a_from_without_a_root", "{file: {from: bare}, within: {from: input.d}}"),
+):
+    _dispatch_file_case(
+        f"agent_prompt_file_{_label}_is_a_check_error",
+        _AGENT_HEAD + f"    params:\n      prompt: {_prompt}\n",
+    )
+_dispatch_file_case(
+    "agent_params_json_that_sets_the_prompt_file_form_is_a_check_error",
+    _AGENT_HEAD
+    + "    params_json: '{\"prompt\": {\"file\": {\"from\": \"input.f\"}, \"within\": \"/srv\"}}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_that_replaces_a_prompt_file_is_a_check_error",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{\"prompt\": \"{{input.task}}\", \"model\": \"m\"}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_may_set_the_other_params_next_to_a_prompt_file",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{\"engine\": \"claude_code\", \"model\": \"{{input.model}}\"}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_that_is_not_json_before_rendering_is_not_checked",
+    _AGENT_HEAD
+    + "    params:\n      prompt: {file: {from: input.f}, within: {from: input.d}}\n"
+    "    params_json: '{{{prime.plan.value}}}'\n",
+)
+_dispatch_file_case(
+    "agent_params_json_string_prompt_without_a_prompt_file",
+    _AGENT_HEAD + "    params_json: '{\"prompt\": \"{{input.task}}\"}'\n",
+)
+_dispatch_file_case(
+    "another_provider_keeps_a_prompt_file_form_as_a_plain_param",
+    "  - type: tool\n    name: t\n    provider: json\n"
+    "    params:\n      mode: stringify\n      input: 1\n"
+    "      prompt: {file: {from: input.f}, within: {from: input.d}}\n",
+)
 
 
 # --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---

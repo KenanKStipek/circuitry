@@ -1,0 +1,27 @@
+name: c579-cli-alias-env
+adapter: claude_code
+model: base-model
+effects:
+  - type: prompt
+    name: base_claude
+    template: "base claude"
+  - type: prompt
+    name: alpha
+    provider: claude_alpha
+    template: "alpha"
+  - type: prompt
+    name: beta
+    provider: "claude_beta:model-b"
+    template: "beta"
+  - type: prompt
+    name: bare
+    provider: claude_bare
+    template: "bare"
+  - type: prompt
+    name: gamma
+    provider: "pi_gamma:model-g"
+    template: "gamma"
+  - type: prompt
+    name: base_pi
+    provider: "pi:model-p"
+    template: "base pi"

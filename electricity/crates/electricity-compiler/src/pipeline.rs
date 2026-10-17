@@ -838,6 +838,18 @@ pub fn check_report(path: &Path, options: &CheckOptions) -> CheckReport {
         };
     }
 
+    let mut state_errors = electricity_config::prompt_sent_errors(merged_runtime.as_ref());
+    state_errors.extend(electricity_config::parsed_stdout_errors(
+        merged_runtime.as_ref(),
+    ));
+    if !state_errors.is_empty() {
+        return CheckReport {
+            ok: false,
+            errors: state_errors,
+            warnings,
+        };
+    }
+
     let known_groups = concurrency_group_names(merged_runtime.as_ref());
     let group_errors = groups::unknown_group_errors(&program, &known_groups);
     if !group_errors.is_empty() {
@@ -959,6 +971,17 @@ pub fn pre_input_checks(
 
     electricity_config::validate_complexity(&loaded.document, effective_runtime)
         .map_err(|err| RunCheckError::Compile(err.0))?;
+
+    // `resolve_effective_settings`'s own `runtime.state.prompt_sent` (#577)
+    // and `runtime.state.parsed_stdout` (#592) checks, right after the
+    // complexity block and before the limiter.
+    if let Some(message) = electricity_config::prompt_sent_errors(effective_runtime)
+        .into_iter()
+        .chain(electricity_config::parsed_stdout_errors(effective_runtime))
+        .next()
+    {
+        return Err(RunCheckError::Compile(message));
+    }
 
     let config_errors = concurrency_config_errors(effective_runtime);
     if !config_errors.is_empty() {

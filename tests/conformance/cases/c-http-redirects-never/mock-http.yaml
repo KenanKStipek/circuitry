@@ -1,0 +1,17 @@
+- request: {method: GET, path: /moved}
+  response:
+    status: 302
+    reason: Found
+    headers: {Location: /next}
+    body: "moved"
+- request: {method: GET, path: /moved}
+  response:
+    status: 302
+    reason: Found
+    headers: {Location: /next}
+    body: "moved"
+- request: {method: GET, path: /cached}
+  response:
+    status: 304
+    reason: Not Modified
+    body: ""

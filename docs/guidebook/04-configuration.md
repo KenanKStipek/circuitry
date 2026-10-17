@@ -12,7 +12,7 @@ Resolution is layered, each layer deep-merged over the last:
 2. **Global config** — `~/.config/circuitry/config.json`.
 3. **Project config** — `circuitry.config.json` or `config.json` in the working directory, once you have trusted it with `cof trust` (see [Trusting a project config](#trusting-a-project-config)).
 4. **An explicit file** — `--config <path>` or `CIRCUITRY_CONFIG`, which *replaces* 2 and 3 rather than layering over them.
-5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
+5. **Environment variables** — `CIRCUITRY_ADAPTER`, `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER_URL`, `CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL`, the allowlists `CIRCUITRY_ENABLED_ADAPTERS` / `CIRCUITRY_ENABLED_TOOLS` / `CIRCUITRY_ENABLED_PLUGINS`, and `CIRCUITRY_TRUST_ORCHESTRATION_RUNTIME` (below).
 
 Two exceptions to "the last layer wins", both about a project config found in the working directory rather than named explicitly. First, trust: it applies only once you have run `cof trust` on it (or set `CIRCUITRY_TRUST_PROJECT_CONFIG=1`) — see [Trusting a project config](#trusting-a-project-config). Second, once trusted, it may *narrow* an allowlist the global config set, never widen it: its list is intersected with the global one, and `"enabled_tools": null` in a cloned repo does not re-open what your global config locked down; a warning names what was ignored. A file you name yourself — `--config` or `CIRCUITRY_CONFIG` — skips both checks and is trusted as written.
 
@@ -52,7 +52,7 @@ A local-first project config:
 
 The `.env` `cof setup` writes is loaded automatically, before config resolution, by every host entry point: the `cof` CLI, the TUI, the MCP server (`circuitry-mcp`), and the REST trigger service. Only that one private file — never a `.env` in the working directory or a document's directory. A variable already set in the real environment always wins. If the file is not owned by you, or is writable by group or others, it is refused rather than loaded, with one warning naming the file and `chmod 600 <path>`; a file merely *readable* by group or others is still loaded, with the same warning. An entry whose key is empty, or whose key or value can never be set (`=` or a NUL byte in the key, a NUL byte in the value), is skipped with one warning naming only the key, and the rest of the file still loads — electricity's own port of this loader prints the identical line. `cof doctor` reports whether the file was loaded and the variable *names* it supplied, skipped because the environment already had them, or skipped as invalid — never a value. The SDK (`circuitry.api`) does not load it automatically: an embedding program owns its own environment (see [API reference](../api-reference.md)).
 
-Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `runtime.tools.timeout_seconds` — the default budget for `tool` effects, independent of any adapter's (see [Timeouts](#timeouts) below), `plugins` (runtime plugin identifiers), and the three allowlists.
+Other top-level keys you will meet later: `runtime.complexity` ([Complexity](10-complexity.md)), `runtime.persistence` and `runtime.plugins.<name>` — per-plugin settings such as MCP servers and a tool's `binary` ([Tools and persistence](13-tools-and-persistence.md)), `runtime.library.sources` and `runtime.state.record_children` ([Composition](09-composition.md)), `runtime.state.prompt_sent` — how much of each prompt's text stays in saved state ([Prompt](01-prompt.md)), `runtime.state.parsed_stdout` — whether a `parse: json` step keeps its raw output in saved state ([Tools and persistence](13-tools-and-persistence.md)), `runtime.tools.timeout_seconds` — the default budget for `tool` effects, independent of any adapter's (see [Timeouts](#timeouts) below), `plugins` (runtime plugin identifiers), and the three allowlists.
 
 ## What a document can set
 
@@ -175,7 +175,56 @@ Every other adapter needs an API key or a local model server. `pi` and `claude_c
 }
 ```
 
-The model is the CLI's own name for it: a Claude Code model for `claude_code`, pi's `provider/id` (`claude-bridge/claude-sonnet-4-5`) for `pi` — so a prompt can pick either with `provider: "pi:claude-bridge/claude-sonnet-4-5"`. The CLI runs with your environment minus two things: the variables that would make it think it is part of a parent pi or Claude Code session — Circuitry may well be running inside one — and `unset_env`, by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so an exported key does not quietly replace the login you meant to use. Give it a generous `timeout_seconds`: a CLI retries a failing request on its own before it reports the error, and a timeout or a cancelled run stops the CLI and everything it started. `cof doctor` reports a CLI that is not installed as `binary:pi` or `binary:claude`; an auth failure or a CLI too old for the model fails the prompt with the CLI's own message. `prompt_type: json` works on both, and on `claude_code` the schema goes to the CLI itself (a schema that is not an object, such as `prompt_type: array`'s, is wrapped in one and unwrapped again). Tokens land in `meta` as usual, and the cost the CLI reports in `meta.cost_usd`. The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key.
+The model is the CLI's own name for it: a Claude Code model for `claude_code`, pi's `provider/id` (`claude-bridge/claude-sonnet-4-5`) for `pi` — so a prompt can pick either with `provider: "pi:claude-bridge/claude-sonnet-4-5"`. The CLI runs with your environment minus two things: the variables that would make it think it is part of a parent pi or Claude Code session — Circuitry may well be running inside one — and `unset_env`, by default `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, so an exported key does not quietly replace the login you meant to use. Give it a generous `timeout_seconds`: a CLI retries a failing request on its own before it reports the error, and a timeout or a cancelled run stops the CLI and everything it started. `cof doctor` reports a CLI that is not installed as `binary:pi` or `binary:claude`; an auth failure or a CLI too old for the model fails the prompt with the CLI's own message. `prompt_type: json` works on both, and on `claude_code` the schema goes to the CLI itself (a schema that is not an object, such as `prompt_type: array`'s, is wrapped in one and unwrapped again). Tokens land in `meta` as usual, and the cost the CLI reports in `meta.cost_usd`. A CLI often picks its account from an environment variable, and a `prompt` effect has no `env`. To send some effects through another login, define an **alias**: a `runtime.adapters` entry whose `adapter` names `claude_code` or `pi`, with `env` and any of that adapter's own settings.
+
+```json
+{
+  "runtime": {
+    "adapters": {
+      "claude_alt": {
+        "adapter": "claude_code",
+        "env": { "CLAUDE_CONFIG_DIR": "~/.claude-alt" },
+        "timeout_seconds": 1800
+      }
+    }
+  }
+}
+```
+
+`provider: claude_alt` (or `provider: "claude_alt:claude-sonnet-4-5"`) then runs Claude Code with that variable set, in that one child process; `meta.adapter` says `claude_alt`, and an effect that names `claude_code` is unaffected. `env` is applied after `unset_env`, a leading `~/` is the home directory, and its values are kept out of saved state, events and error messages. An alias is host configuration like any adapter setting: a document run by path may define one (it is listed in "Applied host settings"), a limited document's is ignored. `cof doctor` checks an alias's own binary under its name.
+
+The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key, and [Aliases of the CLI adapters](../orchestration-reference.md#aliases-of-the-cli-adapters) the rules.
+
+## Secrets for a request header or a tool's environment
+
+A token a document needs, for an authenticated HTTP API or a CLI a tool runs, is host configuration too. Define it once under `runtime.secrets`, from the macOS Keychain, a command's output or an environment variable:
+
+```json
+{
+  "runtime": {
+    "secrets": {
+      "github": {"command": ["gh", "auth", "token"]},
+      "billing": {"keychain": {"service": "billing-api", "account": "ci"}},
+      "search": {"env": "SEARCH_API_KEY"}
+    },
+    "plugins": {"git": {"env": {"GH_TOKEN": {"secret": "github"}}}}
+  }
+}
+```
+
+A document names one as a value in an `http` header, `{secret: <name>}`, with an optional literal `prefix`:
+
+```yaml
+- type: tool
+  name: issues
+  provider: http
+  params:
+    url: "https://api.github.com/repos/{{input.repo}}/issues"
+    headers:
+      Authorization: {secret: github, prefix: "Bearer "}
+```
+
+The value is read when the effect dispatches, and only then; it never reaches the document's data flow, saved state, events or logs. `meta.params_rendered` shows `Bearer [secret:github]`, and a response or an error that echoes the value is saved with `[secret:github]` in its place. A redirect is then followed only to `https`, and without the secret's header to any other origin (`http`'s `redirects`, which defaults to `strip_auth` here and to `follow` otherwise). Only a document you run by path may name a secret: a library entry, an MCP or REST run, a `use: ref:` child or a generated plan that names one fails before anything runs, and `cof check` lists the secrets a document names. [The reference](../orchestration-reference.md#secrets-in-http-headers-and-a-subprocess-tools-env) has the details.
 
 ## Profiles
 

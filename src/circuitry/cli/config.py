@@ -75,6 +75,7 @@ CONFIG_ENV_VARS: tuple[str, ...] = (
     "CIRCUITRY_ADAPTER",
     "CIRCUITRY_ADAPTER_URL",
     "CIRCUITRY_COMFYUI_URL",
+    "CIRCUITRY_SYSTEMONE_URL",
     "CIRCUITRY_ENABLED_ADAPTERS",
     "CIRCUITRY_ENABLED_PLUGINS",
     "CIRCUITRY_ENABLED_TOOLS",
@@ -413,6 +414,18 @@ def _apply_env_vars(d: dict[str, Any]) -> dict[str, Any]:
         runtime["plugins"] = plugins
         result["runtime"] = runtime
 
+    # Only the server: allow_remote and api_key_env stay in config, so a
+    # remote URL from here is still refused unless config allows it.
+    env_systemone_url = os.getenv("CIRCUITRY_SYSTEMONE_URL")
+    if env_systemone_url:
+        runtime = dict(result.get("runtime") or {})
+        plugins = dict(runtime.get("plugins") or {})
+        systemone_cfg = dict(plugins.get("systemone") or {})
+        systemone_cfg["base_url"] = env_systemone_url
+        plugins["systemone"] = systemone_cfg
+        runtime["plugins"] = plugins
+        result["runtime"] = runtime
+
     # Allowlist env vars override config.json values. Unset env var → leave
     # whatever the config layer produced. Set env var → overlay (including
     # empty-string lockdown).
@@ -641,8 +654,8 @@ def resolve_config(
     4. Explicit --config path, or CIRCUITRY_CONFIG (if either is set —
        replaces #2 and #3 entirely, does not layer on top of them)
     5. Environment variables (CIRCUITRY_MODEL, CIRCUITRY_ADAPTER,
-       CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL, CIRCUITRY_ENABLED_*,
-       CIRCUITRY_ENVIRONMENT)
+       CIRCUITRY_ADAPTER_URL, CIRCUITRY_COMFYUI_URL, CIRCUITRY_SYSTEMONE_URL,
+       CIRCUITRY_ENABLED_*, CIRCUITRY_ENVIRONMENT)
 
     Each layer deep-merges onto the previous, with two exceptions. A project
     config *discovered* in cwd applies only if the user trusted it

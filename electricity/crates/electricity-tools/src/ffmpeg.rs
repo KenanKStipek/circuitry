@@ -242,6 +242,7 @@ impl ToolPlugin for FfmpegPlugin {
             env: merged_env(self.env.as_ref()),
             new_session: call.armed,
             env_remove: Vec::new(),
+            env_set: Vec::new(),
         };
 
         let completed = match process::run_tracked(&cmd, &opts, call.token).await {
@@ -308,6 +309,7 @@ impl ToolPlugin for FfmpegPlugin {
             stderr: Some(completed.stderr),
             exit_code: Some(completed.exit_code),
             ok: true,
+            stdout_parsed: false,
         })
     }
 

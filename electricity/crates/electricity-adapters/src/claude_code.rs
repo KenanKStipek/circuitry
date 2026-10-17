@@ -12,7 +12,7 @@ use crate::agent_cli::{
     build_generate_result, check_binary, check_type_error, io_error_to_adapter,
     parse_error_to_adapter, resolve_model, run_error_to_adapter,
 };
-use crate::config::{cfg_value_or, require_str, string_list};
+use crate::config::{EnvPairs, cfg_value_or, env_pairs, require_str, string_list};
 use async_trait::async_trait;
 use electricity_tools::agent_cli::{
     ClaudeCommandOpts, DEFAULT_UNSET_ENV, TempDirGuard, claude_command, parse_claude_output,
@@ -32,16 +32,21 @@ use electricity_vm::retry::RetryInfo;
 /// default name and start a real CLI.
 #[derive(Debug)]
 pub struct ClaudeCodeAdapter {
+    /// `claude_code`, or an alias's own name
+    /// (`adapters/factory.py::_build_alias`).
+    name: String,
     binary: Value,
     default_model: Value,
     unset_env: Vec<String>,
     extra_args: Vec<String>,
+    /// `env`, applied to the child last; its `Debug` shows names only.
+    env: EnvPairs,
 }
 
 #[async_trait(?Send)]
 impl Adapter for ClaudeCodeAdapter {
     fn name(&self) -> &str {
-        "claude_code"
+        &self.name
     }
 
     async fn generate(
@@ -72,6 +77,7 @@ impl Adapter for ClaudeCodeAdapter {
         let proc = run_agent_cli(
             &cmd,
             &self.unset_env,
+            self.env.as_slice(),
             f64::from(call.timeout_seconds),
             prompt.as_bytes().to_vec(),
             Some(workdir.path().to_path_buf()),
@@ -81,12 +87,12 @@ impl Adapter for ClaudeCodeAdapter {
         .map_err(run_error_to_adapter)?;
         let result =
             parse_claude_output(&proc, json_schema.as_ref()).map_err(parse_error_to_adapter)?;
-        Ok(build_generate_result("claude_code", result, options))
+        Ok(build_generate_result(&self.name, result, options))
     }
 
     async fn check(&self) -> CheckResult {
         match require_str(&self.binary) {
-            Ok(binary) => check_binary("claude_code", binary),
+            Ok(binary) => check_binary(&self.name, binary),
             Err(err) => check_type_error(&err),
         }
     }
@@ -97,18 +103,26 @@ impl Adapter for ClaudeCodeAdapter {
 /// resolved fields directly, the same way `ollama::build_request` is
 /// kept callable on its own rather than only reachable through a
 /// boxed `dyn Adapter`.
-fn build(cfg: &Value) -> Result<ClaudeCodeAdapter, AdapterError> {
+fn build(name: &str, cfg: &Value) -> Result<ClaudeCodeAdapter, AdapterError> {
     Ok(ClaudeCodeAdapter {
+        name: name.to_string(),
         binary: cfg_value_or(cfg, "binary", "claude"),
         default_model: cfg_value_or(cfg, "default_model", ""),
-        unset_env: string_list(cfg, "unset_env", "claude_code", DEFAULT_UNSET_ENV)?,
-        extra_args: string_list(cfg, "extra_args", "claude_code", &[])?,
+        unset_env: string_list(cfg, "unset_env", name, DEFAULT_UNSET_ENV)?,
+        extra_args: string_list(cfg, "extra_args", name, &[])?,
+        env: env_pairs(cfg, name)?,
     })
 }
 
 /// `adapters/factory.py::_build_claude_code`.
 pub fn build_claude_code(cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    Ok(Box::new(build(cfg)?))
+    build_claude_code_named("claude_code", cfg)
+}
+
+/// `adapters/factory.py::_build_claude_code` under *name*: an alias's
+/// own name, which is also what it reports as its `meta.adapter`.
+pub fn build_claude_code_named(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
+    Ok(Box::new(build(name, cfg)?))
 }
 
 #[cfg(test)]
@@ -209,6 +223,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_claude(&tmp, SUCCESS_SCRIPT);
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: DEFAULT_UNSET_ENV.iter().map(|s| s.to_string()).collect(),
@@ -242,7 +258,7 @@ mod tests {
     #[test]
     fn build_claude_code_rejects_a_non_list_unset_env() {
         let cfg = dict(&[("unset_env", Value::Str("ANTHROPIC_API_KEY".to_string()))]);
-        let err = build(&cfg).unwrap_err();
+        let err = build("claude_code", &cfg).unwrap_err();
         assert_eq!(
             err.message,
             "runtime.adapters.claude_code.unset_env must be a list of strings, got 'ANTHROPIC_API_KEY'"
@@ -252,7 +268,7 @@ mod tests {
 
     #[test]
     fn build_claude_code_defaults_binary_and_model_with_the_plain_constructor() {
-        let adapter = build(&Value::None).unwrap();
+        let adapter = build("claude_code", &Value::None).unwrap();
         assert_eq!(adapter.binary, Value::Str("claude".to_string()));
         assert_eq!(adapter.default_model, Value::Str(String::new()));
         assert_eq!(
@@ -268,14 +284,14 @@ mod tests {
     #[test]
     fn build_claude_code_empty_unset_env_list_stays_empty() {
         let cfg = dict(&[("unset_env", Value::List(vec![]))]);
-        let adapter = build(&cfg).unwrap();
+        let adapter = build("claude_code", &cfg).unwrap();
         assert!(adapter.unset_env.is_empty());
     }
 
     #[test]
     fn build_claude_code_null_unset_env_means_the_default() {
         let cfg = dict(&[("unset_env", Value::None)]);
-        let adapter = build(&cfg).unwrap();
+        let adapter = build("claude_code", &cfg).unwrap();
         assert_eq!(
             adapter.unset_env,
             vec![
@@ -288,13 +304,15 @@ mod tests {
     #[test]
     fn a_non_string_binary_never_falls_back_to_the_default() {
         let cfg = dict(&[("binary", Value::from(5i64))]);
-        let adapter = build(&cfg).unwrap();
+        let adapter = build("claude_code", &cfg).unwrap();
         assert_eq!(adapter.binary, Value::from(5i64));
     }
 
     #[tokio::test]
     async fn check_reports_missing_for_a_name_that_cannot_exist() {
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str("circuitry-test-missing-claude".to_string()),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -311,6 +329,8 @@ mod tests {
     #[tokio::test]
     async fn check_raises_type_error_text_for_a_non_string_binary() {
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::from(5i64),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -330,6 +350,8 @@ mod tests {
     #[tokio::test]
     async fn generate_type_errors_on_a_non_string_binary_rather_than_running_the_default() {
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::from(5i64),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -361,6 +383,8 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let binary = write_fake_claude(&tmp, SUCCESS_SCRIPT);
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -394,6 +418,8 @@ mod tests {
         let binary = write_fake_claude(&tmp, &capture_cwd_script(CAPTURE_SUCCESS));
         let capture = tmp.join("cwd.txt");
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -422,6 +448,8 @@ mod tests {
         let binary = write_fake_claude(&tmp, &capture_cwd_script(CAPTURE_FAILURE));
         let capture = tmp.join("cwd.txt");
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -455,6 +483,8 @@ mod tests {
         let binary = write_fake_claude(&tmp, &capture_cwd_script(CAPTURE_HANG));
         let capture = tmp.join("cwd.txt");
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -486,6 +516,8 @@ mod tests {
         let binary = write_fake_claude(&tmp, &capture_cwd_script(CAPTURE_HANG));
         let capture = tmp.join("cwd.txt");
         let adapter = ClaudeCodeAdapter {
+            name: "claude_code".to_string(),
+            env: EnvPairs::default(),
             binary: Value::Str(binary),
             default_model: Value::Str(String::new()),
             unset_env: Vec::new(),
@@ -518,6 +550,70 @@ mod tests {
         }
         drop(fut);
         assert_captured_dir_removed(&capture);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_alias_reports_its_own_name_and_names_itself_in_errors() {
+        let cfg = dict(&[("unset_env", Value::Str("X".to_string()))]);
+        let err = build("claude_alt", &cfg).unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.claude_alt.unset_env must be a list of strings, got 'X'"
+        );
+        let adapter = build_claude_code_named("claude_alt", &Value::None).unwrap();
+        assert_eq!(adapter.name(), "claude_alt");
+        let debug = format!(
+            "{:?}",
+            build(
+                "claude_alt",
+                &dict(&[(
+                    "env",
+                    dict(&[("CLAUDE_CONFIG_DIR", Value::Str("marker-value".to_string()))]),
+                )])
+            )
+            .unwrap()
+        );
+        assert!(debug.contains("CLAUDE_CONFIG_DIR") && !debug.contains("marker-value"));
+    }
+
+    #[tokio::test]
+    async fn an_alias_sets_env_after_the_removals_for_its_child_only() {
+        let tmp =
+            std::env::temp_dir().join(format!("claude-code-alias-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let binary = write_fake_claude(
+            &tmp,
+            "#!/bin/sh\ncat >/dev/null\necho \"{\\\"result\\\": \\\"probe=${ALIAS_PROBE:-unset} key=${ANTHROPIC_API_KEY:-unset} parent=${CLAUDECODE:-unset}\\\", \\\"is_error\\\": false}\"\n",
+        );
+        let cfg = dict(&[
+            ("binary", Value::Str(binary)),
+            (
+                "env",
+                dict(&[
+                    ("ALIAS_PROBE", Value::Str("alpha".to_string())),
+                    ("ANTHROPIC_API_KEY", Value::Str("from-env".to_string())),
+                    ("CLAUDECODE", Value::Str("from-env".to_string())),
+                ]),
+            ),
+        ]);
+        let adapter = build("claude_alt", &cfg).unwrap();
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let result = adapter
+            .generate(
+                "",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.text, "probe=alpha key=from-env parent=from-env");
+        assert!(
+            std::env::var("ALIAS_PROBE").is_err(),
+            "this process is untouched"
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

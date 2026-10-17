@@ -414,6 +414,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
     let ctx = Value::Dict(Dict::new());
     let use_op = match name {
         "path_full_passthrough" => UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child_basic.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -426,6 +427,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut outputs = IndexMap::new();
             outputs.insert("greeting".to_string(), "prime.step.value".to_string());
             UseOp {
+                parent_trusted: false,
                 source: UseSource::Path("child_basic.yml".to_string()),
                 inputs: None,
                 outputs: Some(outputs),
@@ -439,6 +441,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut inputs = IndexMap::new();
             inputs.insert(Value::Str("name".to_string()), template("Ada"));
             UseOp {
+                parent_trusted: false,
                 source: UseSource::Path("child_with_interface.yml".to_string()),
                 inputs: Some(ParamNode::Map(inputs)),
                 outputs: None,
@@ -449,6 +452,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             }
         }
         "path_interface_error_not_retried" => UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child_with_interface.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -461,6 +465,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "path_cycle" => UseOp {
+            parent_trusted: false,
             source: UseSource::Path("cycle_a.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -470,6 +475,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "retried_failing_expect_then_fails" => UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child_always_fails_expect.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -484,6 +490,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "on_error_skip_absorbs_failure" => UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child_always_fails_expect.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -508,6 +515,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             ctx_dict.insert(Value::Str("input".to_string()), Value::Dict(ctx_input));
             return (
                 UseOp {
+                    parent_trusted: false,
                     source: UseSource::Inline(TemplateText::new(
                         inline.to_string(),
                         true,
@@ -527,6 +535,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut outputs = IndexMap::new();
             outputs.insert("greeting".to_string(), "prime.step.value".to_string());
             UseOp {
+                parent_trusted: false,
                 source: UseSource::Path("child_basic.yml".to_string()),
                 inputs: None,
                 outputs: Some(outputs),
@@ -539,6 +548,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             }
         }
         "inline_validation_failure_wrapped" => UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(TemplateText::new(
                 "- just-a-list\n".to_string(),
                 true,
@@ -552,6 +562,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "inline_validation_failure_unwrapped" => UseOp {
+            parent_trusted: false,
             source: UseSource::Inline(TemplateText::new(
                 "- just-a-list\n".to_string(),
                 true,

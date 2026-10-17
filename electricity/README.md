@@ -44,9 +44,9 @@ release alongside the Python distributions, marked as a preview.
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds 13 of Circuitry's 74 tool
+- **Tool providers.** electricity builds 13 of Circuitry's 76 tool
   plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other 61 is refused before the run starts; a plan compiled
+  any of the other 63 is refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails
@@ -55,6 +55,12 @@ release alongside the Python distributions, marked as a preview.
   bridge, which brings `python_eval` and the rest, isn't either.
 - **Text encodings.** In `fs` and `hash`, any encoding other than UTF-8,
   ASCII or Latin-1 fails the effect with the preview message.
+- **Secrets.** electricity resolves no `{secret: <name>}` (issue #598). A
+  document whose tool params name one, or whose tools' host `env` holds
+  one, is refused before the run starts. A host `env` secret for a tool
+  that only a `use` child or a generated plan names fails that effect
+  with the preview message instead, like a text encoding, so `on_error`
+  can absorb it.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
 - **Persistence and resume.** `runtime.persistence` is refused. There is

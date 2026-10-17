@@ -226,6 +226,33 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
     registry
 }
 
+/// `runtime.plugins.<name>.env.<VAR>` for the first variable whose value
+/// is a mapping with a `secret` key (issue #598), among the tools
+/// *document* names -- in sorted order, so the refusal names the same one
+/// every run.
+fn env_secret_in_use(document: &Value, runtime: Option<&Value>) -> Option<String> {
+    let plugins = runtime
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
+        .and_then(Value::as_dict)?;
+    let (_adapters, mut tools) = electricity_config::preflight::preflight_refs(document, false);
+    tools.sort();
+    tools.into_iter().find_map(|tool| {
+        let name = electricity_value::pycompat::py_strip(&tool).to_lowercase();
+        let env = plugins
+            .get(&Value::Str(name.clone()))
+            .and_then(Value::as_dict)
+            .and_then(|cfg| cfg.get(&Value::Str("env".to_string())))
+            .and_then(Value::as_dict)?;
+        env.iter().find_map(|(var, value)| match value {
+            Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())) => {
+                Some(format!("runtime.plugins.{name}.env.{}", var.py_str()))
+            }
+            _ => None,
+        })
+    })
+}
+
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
 /// configures persistence -- `runtime.persistence.enabled` is Python-
 /// truthy (`electricity_config::persistence_enabled`, PR #441 review
@@ -1245,6 +1272,21 @@ pub async fn run_orchestration_with_config(
         };
     }
 
+    // Issue #598: a `{secret: ...}` in the host `env` of a tool this
+    // document names. `cof run` resolves it when the tool dispatches; this
+    // build resolves no secret, so the run is refused up front instead of
+    // starting the tool without the variable.
+    if let Some(path) = env_secret_in_use(&loaded.document, effective.runtime.as_ref()) {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(format_config_refusal(&format!("a secret in {path}"))),
+            warnings,
+            signal: None,
+        };
+    }
+
     // Step 10: check_interface_inputs -- replaces `state["input"]`
     // wholesale with the coerced/defaulted namespace (PR #441 review
     // finding 1a: a key the final namespace doesn't carry forward,
@@ -1616,13 +1658,22 @@ pub async fn run_orchestration_with_config(
     // `--skip-preflight`/`--dry-run` in electricity's own CLI shape).
     // `config.runtime`, never the merged `effective.runtime` (a
     // document-level `runtime.adapters.scripted.replies_file` is
-    // invisible to preflight but used by the run).
+    // invisible to preflight but used by the run) -- plus the adapter
+    // aliases the run's own merge defines.
+    let preflight_runtime = preflight::with_document_aliases(
+        cfg.runtime.as_ref(),
+        effective.runtime.as_ref(),
+        &adapters,
+    );
     let preflight_results =
-        preflight::run_preflight(&loaded.document, cfg.runtime.as_ref(), &adapters).await;
+        preflight::run_preflight(&loaded.document, preflight_runtime.as_ref(), &adapters).await;
+    let known_adapters =
+        preflight::known_adapter_names(&preflight_results, preflight_runtime.as_ref(), &adapters);
+    let known_adapters: Vec<&str> = known_adapters.iter().map(String::as_str).collect();
     let (hard_results, soft_results) = electricity_config::preflight::classify_preflight_results(
         &loaded.document,
         preflight_results,
-        electricity_vm::adapter_names::ADAPTER_NAMES,
+        &known_adapters,
     );
     let preflight_errors = electricity_config::preflight::format_preflight_errors(&hard_results);
     if !preflight_errors.is_empty() {
@@ -1972,6 +2023,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            prompt_file: None,
         }
     }
 
@@ -2001,6 +2053,7 @@ mod tests {
 
     fn use_op() -> UseOp {
         UseOp {
+            parent_trusted: false,
             source: UseSource::Path("child.yml".to_string()),
             inputs: None,
             outputs: None,
@@ -2026,6 +2079,7 @@ mod tests {
     #[test]
     fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
         let op = block(vec![leaf(LeafKind::Use(UseOp {
+            parent_trusted: false,
             expect: Some(ExpectCondition::Model {
                 template: TemplateText::new("ok?".to_string(), false, Escape::None),
             }),

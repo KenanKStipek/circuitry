@@ -1,0 +1,13 @@
+name: c-http-secret-header
+interface:
+  inputs:
+    base_url: {type: string, required: true}
+effects:
+  - type: tool
+    name: whoami
+    provider: http
+    params:
+      url: "{{input.base_url}}/whoami"
+      headers:
+        Authorization: {secret: api, prefix: "Bearer "}
+        Accept: application/json

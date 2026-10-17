@@ -6,14 +6,16 @@
 
 use crate::compile::Ctx;
 use crate::compile::coerce::{get_bool_default, get_truthy, py_int};
-use crate::compile::containers::{compile_effects_in_scope, normalize_flow};
+use crate::compile::containers::{check_resume_mode, compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
 use crate::compile::params::{build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
+use crate::prompt_files::compile_dispatch_file as compile_dispatch_file_dict;
+use crate::state_ns::validate_reference_path;
 use crate::{CompileError, DocumentOrigin, prompt_files};
 use electricity_bytecode::effects::{
-    AssetRef, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role, ToolOp, UseOp,
-    UseSource, YieldOp,
+    AssetRef, DispatchFile, Message, PromptContent, PromptOp, PromptType, ReflectorOp, Role,
+    TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource, YieldOp,
 };
 use electricity_bytecode::path::EffectPath;
 use electricity_bytecode::{Escape, LeafKind, NodeKind, OnError, Op, ParamNode, Region};
@@ -49,6 +51,93 @@ fn normalize_on_error_default(dict: &Dict) -> OnError {
     }
 }
 
+/// `core/timeout_ref.py::_is_positive_integer`: a `bool` is not an integer
+/// here, and `0` or a negative one is not positive.
+fn is_positive_integer(value: &Value) -> bool {
+    matches!(value, Value::Int(i) if !i.is_zero() && !i.is_negative())
+}
+
+/// `core/timeout_ref.py::compile_timeout_ms` (issue #564): a literal
+/// `timeout_ms` as `int(...)` -- sign kept -- and a `{from: <path>,
+/// default: <int>}` mapping as a [`TimeoutFrom`], its path rooted like
+/// every other `{from:}` and its default a positive integer.
+fn compile_timeout_ms(
+    effect: &Dict,
+    effect_type: &str,
+    name: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<Option<TimeoutMs>, CompileError> {
+    let Some(raw) = crate::compile::coerce::get_present(effect, "timeout_ms") else {
+        return Ok(None);
+    };
+    let Value::Dict(raw) = raw else {
+        return Ok(Some(TimeoutMs::Literal(py_int(raw))));
+    };
+    let mut capitalized = effect_type.to_string();
+    capitalized[..1].make_ascii_uppercase();
+    let where_ = format!("{capitalized} effect '{name}' at '{effect_path}'");
+    let from_key = Value::Str("from".to_string());
+    let default_key = Value::Str("default".to_string());
+    let has_from = raw.contains_key(&from_key);
+    if !has_from
+        || raw
+            .keys()
+            .any(|key| key != &from_key && key != &default_key)
+    {
+        let mut keys: Vec<String> = raw.keys().map(Value::py_str).collect();
+        keys.sort();
+        let listed: Vec<String> = keys
+            .iter()
+            .map(|key| Value::Str(key.clone()).py_repr())
+            .collect();
+        return Err(CompileError(format!(
+            "{where_}: 'timeout_ms' must be an integer, or {{from: <path>, default: \
+             <positive integer>}}; got keys [{}].",
+            listed.join(", ")
+        )));
+    }
+    let Some(Value::Str(path)) = raw.get(&from_key) else {
+        let got = raw.get(&from_key).map(Value::py_repr).unwrap_or_default();
+        return Err(CompileError(format!(
+            "{where_}: 'timeout_ms' 'from' must be a path string, got {got}."
+        )));
+    };
+    let path = electricity_value::pycompat::py_strip(path).to_string();
+    validate_reference_path(
+        &path,
+        &format!("{capitalized} effect '{name}' timeout_ms"),
+        effect_path,
+        loop_names,
+    )?;
+    let default = match raw.get(&default_key) {
+        None => None,
+        Some(value) if is_positive_integer(value) => Some(py_int(value)),
+        Some(value) => {
+            return Err(CompileError(format!(
+                "{where_}: 'timeout_ms' 'default' must be a positive integer, got {}.",
+                value.py_repr()
+            )));
+        }
+    };
+    Ok(Some(TimeoutMs::From(TimeoutFrom { path, default })))
+}
+
+/// [`prompt_files::compile_dispatch_file`] on a `template`/`content` *value*
+/// already known to be a mapping.
+fn compile_dispatch_file(
+    value: &Value,
+    field: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+    origin: &DocumentOrigin,
+) -> Result<DispatchFile, CompileError> {
+    let Value::Dict(dict) = value else {
+        unreachable!("is_dispatch_file already checked the value is a mapping");
+    };
+    compile_dispatch_file_dict(dict, field, effect_path, loop_names, origin)
+}
+
 fn optional_str(dict: &Dict, key: &str) -> Option<String> {
     match dict.get(&Value::Str(key.to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
@@ -62,6 +151,7 @@ pub(crate) fn compile_prompt(
     name: &str,
     effect_path: &str,
     origin: &DocumentOrigin,
+    loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
     let prompt_type_raw = get_truthy(effect, "prompt_type")
         .map(Value::py_str)
@@ -78,7 +168,20 @@ pub(crate) fn compile_prompt(
     }
 
     let template_raw = effect.get(&Value::Str("template".to_string()));
+    // `template: {file: {from: ...}, within: ...}` (issue #578), read when
+    // the effect dispatches; `template` is then absent, as in Python.
+    let mut template_file: Option<DispatchFile> = None;
     let template = match template_raw {
+        Some(value) if prompt_files::is_dispatch_file(value) => {
+            template_file = Some(compile_dispatch_file(
+                value,
+                &format!("{effect_path}.template"),
+                effect_path,
+                loop_names,
+                origin,
+            )?);
+            None
+        }
         Some(value) if !value.is_none() => Some(prompt_files::resolve_text_or_file(
             value,
             &format!("{effect_path}.template"),
@@ -108,17 +211,29 @@ pub(crate) fn compile_prompt(
                     .get(&Value::Str("content".to_string()))
                     .cloned()
                     .unwrap_or_else(|| Value::Str(String::new()));
-                let content = prompt_files::resolve_text_or_file(
-                    &content_raw,
-                    &format!("{effect_path}.messages[{index}].content"),
-                    origin,
-                )?;
+                let content_field = format!("{effect_path}.messages[{index}].content");
+                let (content, file) = if prompt_files::is_dispatch_file(&content_raw) {
+                    let file = compile_dispatch_file(
+                        &content_raw,
+                        &content_field,
+                        effect_path,
+                        loop_names,
+                        origin,
+                    )?;
+                    (String::new(), Some(file))
+                } else {
+                    (
+                        prompt_files::resolve_text_or_file(&content_raw, &content_field, origin)?,
+                        None,
+                    )
+                };
                 messages.push(Message {
                     role,
                     // `composable: true`, `Escape::None` (prompt text,
                     // #397) -- the real syntax check runs a few lines
                     // below, against every message's `content` at once.
                     content: electricity_bytecode::TemplateText::new(content, true, Escape::None),
+                    file,
                 });
             }
         }
@@ -126,7 +241,7 @@ pub(crate) fn compile_prompt(
 
     let template_truthy = template.as_deref().is_some_and(|t| !t.is_empty());
     let messages_truthy = !messages.is_empty();
-    if !template_truthy && !messages_truthy {
+    if !template_truthy && template_file.is_none() && !messages_truthy {
         return Err(CompileError(format!(
             "Prompt '{name}' must have 'template' or 'messages'."
         )));
@@ -136,6 +251,9 @@ pub(crate) fn compile_prompt(
         check_templates(&Value::Str(template.clone()), effect_path, "template", true)?;
     }
     for (index, message) in messages.iter().enumerate() {
+        if message.file.is_some() {
+            continue;
+        }
         check_templates(
             &Value::Str(message.content.source.clone()),
             effect_path,
@@ -191,6 +309,8 @@ pub(crate) fn compile_prompt(
             true,
             Escape::None,
         )?)
+    } else if let Some(file) = template_file {
+        PromptContent::TemplateFile(Box::new(file))
     } else {
         PromptContent::Messages(messages)
     };
@@ -221,7 +341,7 @@ pub(crate) fn compile_prompt(
     // Sign kept through compilation -- a negative `timeout_ms` is still
     // Python-truthy (`if self.defn.timeout_ms:`), resolved at run time
     // (issue #536).
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
+    let timeout_ms = compile_timeout_ms(effect, "prompt", name, effect_path, loop_names)?;
     let deterministic = get_bool_default(effect, "deterministic", false);
 
     let inputs = match effect.get(&Value::Str("inputs".to_string())) {
@@ -293,6 +413,7 @@ pub(crate) fn compile_tool(
     path: &EffectPath,
     name: &str,
     effect_path: &str,
+    origin: &DocumentOrigin,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
     let provider = effect
@@ -329,6 +450,27 @@ pub(crate) fn compile_tool(
         check_templates(&Value::Str(prompt.clone()), effect_path, "prompt", true)?;
     }
 
+    let mut prompt_file: Option<DispatchFile> = None;
+    let params_without_prompt: Dict;
+    let mut params = params;
+    if electricity_value::pycompat::py_strip(provider).to_lowercase() == "agent" {
+        prompt_file = compile_agent_prompt_file(
+            params,
+            params_json.as_deref(),
+            effect_path,
+            origin,
+            loop_names,
+        )?;
+        if prompt_file.is_some() {
+            params_without_prompt = params
+                .iter()
+                .filter(|(key, _)| **key != Value::Str("prompt".to_string()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            params = &params_without_prompt;
+        }
+    }
+
     let params_node = build_tool_params(params, name, effect_path, loop_names)?;
 
     let params_json_text = match &params_json {
@@ -345,7 +487,7 @@ pub(crate) fn compile_tool(
 
     let model = optional_str(effect, "model");
     // Sign kept through compilation -- see the `PromptOp` branch above.
-    let timeout_ms = crate::compile::coerce::get_present(effect, "timeout_ms").map(py_int);
+    let timeout_ms = compile_timeout_ms(effect, "tool", name, effect_path, loop_names)?;
     let on_error = normalize_on_error_default(effect);
     let description = optional_str(effect, "description");
     let retries = compile_retries(effect).unwrap_or_default();
@@ -370,8 +512,54 @@ pub(crate) fn compile_tool(
         expect,
         description,
         group,
+        prompt_file,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Tool(op), on_error))
+}
+
+/// `core/compiler.py::_compile_agent_prompt_file` (issue #591): the `agent`
+/// tool's `params.prompt` of `{file: {from: ...}, within: ...}`, compiled
+/// like a prompt's `template` of that form under this document's trust.
+/// `params_json` never supplies the form nor replaces a prompt read from a
+/// file; a raw `params_json` that parses as JSON is checked for both.
+fn compile_agent_prompt_file(
+    params: &Dict,
+    params_json: Option<&str>,
+    effect_path: &str,
+    origin: &DocumentOrigin,
+    loop_names: &BTreeSet<String>,
+) -> Result<Option<DispatchFile>, CompileError> {
+    let prompt_key = Value::Str("prompt".to_string());
+    let prompt_file = match params.get(&prompt_key) {
+        Some(value) if prompt_files::is_dispatch_file(value) => Some(compile_dispatch_file(
+            value,
+            &format!("{effect_path}.params.prompt"),
+            effect_path,
+            loop_names,
+            origin,
+        )?),
+        _ => None,
+    };
+    let overlay = params_json.and_then(|raw| electricity_json::loads(raw).ok());
+    if let Some(Value::Dict(overlay)) = &overlay {
+        if let Some(prompt) = overlay.get(&prompt_key) {
+            if prompt_files::is_dispatch_file(prompt) {
+                return Err(CompileError(format!(
+                    "{effect_path}: params_json must not set params.prompt to {{file: {{from: \
+                     <state path>}}, within: <dir>}}: a prompt file is only honoured from a \
+                     document's literal params block."
+                )));
+            }
+            if prompt_file.is_some() {
+                return Err(CompileError(format!(
+                    "{effect_path}: params_json must not set params.prompt: this effect reads \
+                     params.prompt from a file ({{file: {{from: <state path>}}, within: <dir>}}), \
+                     which params_json cannot replace."
+                )));
+            }
+        }
+    }
+    Ok(prompt_file)
 }
 
 fn normalize_outputs(
@@ -443,7 +631,9 @@ pub(crate) fn compile_use(
     name: &str,
     effect_path: &str,
     loop_names: &BTreeSet<String>,
+    origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
+    check_resume_mode(effect, "Use", effect_path)?;
     let field_str = |key: &str| -> Option<String> {
         effect
             .get(&Value::Str(key.to_string()))
@@ -542,6 +732,7 @@ pub(crate) fn compile_use(
     };
 
     let op = UseOp {
+        parent_trusted: matches!(origin, DocumentOrigin::File { .. }),
         source,
         inputs,
         outputs,
@@ -673,6 +864,37 @@ pub(crate) fn compile_reflector(
         &mut seen,
     )?;
 
+    let plan_from_step = get_truthy(effect, "plan_from_step")
+        .map(Value::py_str)
+        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
+    for inner_op in &compiled_inner {
+        if inner_op.name.as_deref() != Some(plan_from_step.as_str()) {
+            continue;
+        }
+        let NodeKind::Leaf(leaf) = &inner_op.kind else {
+            continue;
+        };
+        let LeafKind::Prompt(prompt) = leaf.as_ref() else {
+            continue;
+        };
+        let file_field = match &prompt.content {
+            PromptContent::TemplateFile(_) => Some("template".to_string()),
+            PromptContent::Messages(messages) => messages
+                .iter()
+                .position(|message| message.file.is_some())
+                .map(|index| format!("messages[{index}].content")),
+            PromptContent::Template(_) => None,
+        };
+        if let Some(field) = file_field {
+            return Err(CompileError(format!(
+                "Reflector effect '{name}' at '{effect_path}': its plan prompt \
+                 '{plan_from_step}' reads {field} from a file named in state \
+                 ('file: {{from: ...}}'), but a reflector builds its planning prompt from \
+                 the prompt's own text and would drop the file. Write the text in the \
+                 prompt, or name the file with 'file: <path>'."
+            )));
+        }
+    }
     let inner_region = match flow {
         electricity_bytecode::LoopFlow::Tree => Region::Parallel {
             branches: compiled_inner,
@@ -685,9 +907,6 @@ pub(crate) fn compile_reflector(
         },
     };
 
-    let plan_from_step = get_truthy(effect, "plan_from_step")
-        .map(Value::py_str)
-        .unwrap_or_else(|| electricity_bytecode::defaults::PLAN_FROM_STEP.to_string());
     let max_iterations = get_truthy(effect, "max_iterations")
         .map(py_int)
         .unwrap_or(electricity_bytecode::defaults::REFLECTOR_MAX_ITERATIONS as i64)

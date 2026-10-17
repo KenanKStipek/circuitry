@@ -1,0 +1,8 @@
+name: c-awk-parse-json
+effects:
+  - type: tool
+    name: report
+    provider: awk
+    params:
+      args: ["--stdout", "[{\"id\": 1}, {\"id\": 2}]"]
+      parse: json

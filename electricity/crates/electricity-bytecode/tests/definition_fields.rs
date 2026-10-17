@@ -36,6 +36,11 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     );
     add(
         "PromptDefinition",
+        "template_file",
+        "effects::PromptContent::TemplateFile",
+    );
+    add(
+        "PromptDefinition",
         "messages",
         "effects::PromptContent::Messages",
     );
@@ -95,6 +100,7 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "effects::Message::role (effects::Role)",
     );
     add("MessageDef", "content", "effects::Message::content");
+    add("MessageDef", "file", "effects::Message::file");
 
     // AssetRefDef -> effects::AssetRef (ref renamed: Rust keyword)
     add("AssetRefDef", "kind", "effects::AssetRef::kind");
@@ -138,6 +144,23 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("ToolDefinition", "expect", "effects::ToolOp::expect");
     add("ToolDefinition", "enabled", "op::Op::enabled");
     add("ToolDefinition", "group", "effects::ToolOp::group");
+    add(
+        "ToolDefinition",
+        "limited",
+        "documented divergence: no IR field -- only the cof-only systemone \
+         plugin reads it, and electricity refuses that plugin",
+    );
+    add(
+        "ToolDefinition",
+        "prompt_file",
+        "effects::ToolOp::prompt_file",
+    );
+    add(
+        "ToolDefinition",
+        "confine_to",
+        "documented divergence: no IR field -- only the cof-only systemone \
+         plugin reads it, and electricity refuses that plugin",
+    );
 
     // ExpectDef -> region::ExpectCondition
     add("ExpectDef", "mode", "region::ExpectCondition (variant tag)");
@@ -169,12 +192,23 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("UseDefinition", "on_error", "op::Op::on_error");
     add(
         "UseDefinition",
+        "resume",
+        "documented divergence: no IR field -- only cof's --resume reads it, \
+         and electricity has no --resume; the compiler only checks its value",
+    );
+    add(
+        "UseDefinition",
         "description",
         "effects::UseOp::description",
     );
     add("UseDefinition", "retries", "effects::UseOp::retries");
     add("UseDefinition", "expect", "effects::UseOp::expect");
     add("UseDefinition", "enabled", "op::Op::enabled");
+    add(
+        "UseDefinition",
+        "parent_trusted",
+        "effects::UseOp::parent_trusted",
+    );
 
     // YieldDefinition -> effects::YieldOp
     add("YieldDefinition", "name", "op::Op::name");
@@ -256,6 +290,12 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "region::Region::Parallel::stop_on_error",
     );
     add("DynamicDefinition", "on_error", "op::Op::on_error");
+    add(
+        "DynamicDefinition",
+        "resume",
+        "documented divergence: no IR field -- only cof's --resume reads it, \
+         and electricity has no --resume; the compiler only checks its value",
+    );
     add("DynamicDefinition", "labels", "op::Op::labels");
     add("DynamicDefinition", "enabled", "op::Op::enabled");
     add(

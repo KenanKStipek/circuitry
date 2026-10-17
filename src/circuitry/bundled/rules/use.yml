@@ -40,6 +40,10 @@ fields:
   on_error:
     enum: [fail, skip, continue]
     default: fail
+  resume:
+    enum: [continue, restart]
+    default: continue
+    note: "What cof run --resume does with this use when its saved node did not finish without error. continue continues inside the child when runtime.state.record_children saved its record (otherwise the child runs from its start). restart always runs the child from its start in a fresh state. A use that finished is skipped either way. Usually omitted."
 state_paths:
   mapped_output: "prime.<name>.<output_name>.value"
   full_namespace: "prime.<name>.<child_effect>.value (only when neither outputs: nor a child interface declares outputs)"

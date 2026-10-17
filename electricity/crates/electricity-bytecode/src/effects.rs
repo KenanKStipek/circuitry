@@ -33,6 +33,27 @@ impl Default for RetryPolicy {
     }
 }
 
+/// `core/timeout_ref.py::TimeoutFrom` -- a `timeout_ms: {from: <path>,
+/// default: <int>}` (issue #564). Field names are the Python
+/// dataclass's own (`path`, `default`), so a projection of either side
+/// reads the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TimeoutFrom {
+    pub path: String,
+    /// A positive integer when present (checked at compile time).
+    pub default: Option<i64>,
+}
+
+/// `PromptDefinition.timeout_ms`/`ToolDefinition.timeout_ms`
+/// (`int | TimeoutFrom | None`): an integer literal, or a reference
+/// read from state at each attempt's dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum TimeoutMs {
+    Literal(i64),
+    From(TimeoutFrom),
+}
+
 /// `AssetRefDef`. `reference` carries Python's `ref` field — renamed
 /// since `ref` is a Rust keyword.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -50,11 +71,31 @@ pub enum Role {
     Tool,
 }
 
+/// `core/prompt_files.py::DispatchFileSource` -- a prompt's `template`/
+/// message `content` of `{file: {from: <state path>}, within: <dir>}`
+/// (issue #578), read when the effect dispatches. Field names are the
+/// Python dataclass's own, so a projection of either side reads the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DispatchFile {
+    /// The state path holding the file's path.
+    pub path_from: String,
+    /// A literal absolute `within` directory.
+    pub within: Option<String>,
+    /// `input.<name>`, when `within` is read from the run's inputs.
+    pub within_from: Option<String>,
+    /// For a limited document, the project the resolved `within` must stay
+    /// inside; `None` for a trusted one.
+    pub confine_to: Option<String>,
+}
+
 /// `MessageDef`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub role: Role,
     pub content: TemplateText,
+    /// `MessageDef.file`: `content` is read from this file at dispatch (and
+    /// is then empty).
+    pub file: Option<DispatchFile>,
 }
 
 /// `PromptDefinition.prompt_type`. `"image"` is refused at compile time
@@ -89,6 +130,9 @@ pub enum RoutingOverride {
 #[derive(Debug, Clone, Serialize)]
 pub enum PromptContent {
     Template(TemplateText),
+    /// `PromptDefinition.template_file` (`template` is then `None`): the
+    /// template is read from this file at dispatch (issue #578).
+    TemplateFile(Box<DispatchFile>),
     Messages(Vec<Message>),
 }
 
@@ -108,7 +152,7 @@ pub struct PromptOp {
     /// `params` — the adapter's own model parameters, not a tool's
     /// `params:` (that's [`ToolOp::params`]).
     pub model_params: Option<ParamNode>,
-    pub timeout_ms: Option<i64>,
+    pub timeout_ms: Option<TimeoutMs>,
     /// Default `false`.
     pub deterministic: bool,
     pub inputs: Option<ParamNode>,
@@ -138,11 +182,16 @@ pub struct ToolOp {
     pub params_json: Option<TemplateText>,
     pub prompt: Option<TemplateText>,
     pub model: Option<String>,
-    pub timeout_ms: Option<i64>,
+    pub timeout_ms: Option<TimeoutMs>,
     pub retries: RetryPolicy,
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
+    /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
+    /// for parity with `cof check`; `prompt` is then absent from `params`.
+    /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
+    pub prompt_file: Option<DispatchFile>,
 }
 
 /// `UseDefinition.path`/`.orchestration`/`.inline` — exactly one present
@@ -161,6 +210,11 @@ pub enum UseSource {
 /// `UseDefinition`, minus `name`/`on_error`/`enabled`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UseOp {
+    /// `UseDefinition.parent_trusted`: whether the document carrying this
+    /// effect is trusted (run by path: `DocumentOrigin::File`). A child named
+    /// by `path:` gets this trust; electricity has no library, so no child is
+    /// ever limited by being resolved through one.
+    pub parent_trusted: bool,
     pub source: UseSource,
     pub inputs: Option<ParamNode>,
     /// `outputs`, already normalized (DESIGN.md §4 step 3) to a name ->

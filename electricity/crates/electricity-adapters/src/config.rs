@@ -160,6 +160,97 @@ pub fn string_list(
     }
 }
 
+/// `adapters/factory.py::_env_pairs` -- `cfg["env"]` as `(name, value)`
+/// pairs for a CLI child, empty when absent or explicitly `null`. A
+/// leading `~/` in a value becomes the home directory (`os.path.
+/// expanduser`), nothing else is expanded. An error names the variable,
+/// never its value, and carries Python's own text.
+pub fn env_pairs(cfg: &Value, adapter_name: &str) -> Result<EnvPairs, AdapterError> {
+    let value_error = |message: String| AdapterError {
+        message,
+        retry: RetryInfo::not_retryable(),
+        py_class: PyExc::ValueError,
+    };
+    let raw = match cfg_get(cfg, "env") {
+        None | Some(Value::None) => return Ok(EnvPairs::default()),
+        Some(Value::Dict(dict)) => dict,
+        Some(other) => {
+            return Err(value_error(format!(
+                "runtime.adapters.{adapter_name}.env must be a mapping of variable names \
+                 to strings, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let mut pairs = Vec::with_capacity(raw.len());
+    for (key, value) in raw.iter() {
+        let name = match key {
+            Value::Str(name) if is_env_name(name) => name,
+            other => {
+                return Err(value_error(format!(
+                    "runtime.adapters.{adapter_name}.env has an invalid variable name {}: \
+                     a name matches [A-Za-z_][A-Za-z0-9_]*",
+                    other.py_repr()
+                )));
+            }
+        };
+        let Value::Str(text) = value else {
+            return Err(value_error(format!(
+                "runtime.adapters.{adapter_name}.env.{name} must be a string, got {}",
+                value.type_name()
+            )));
+        };
+        pairs.push((name.clone(), expand_leading_home(text)));
+    }
+    Ok(EnvPairs(pairs))
+}
+
+/// An alias's `env`, in config order: `(name, value)` pairs for a CLI
+/// child. Its `Debug` shows the variable names only -- a value can be
+/// anything the CLI reads, and never belongs in a log.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct EnvPairs(Vec<(String, String)>);
+
+impl EnvPairs {
+    pub fn as_slice(&self) -> &[(String, String)] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for EnvPairs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
+}
+
+/// `[A-Za-z_][A-Za-z0-9_]*`, the whole string (`re.fullmatch`).
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `os.path.expanduser(value)` for a value starting `~/`: the home
+/// directory (`$HOME`, else the password database -- `std::env::
+/// home_dir`'s own order, the same one Python's `expanduser` follows)
+/// without its trailing slashes, then the rest. Any other value, or no
+/// home directory at all, is returned unchanged.
+fn expand_leading_home(value: &str) -> String {
+    if !value.starts_with("~/") {
+        return value.to_string();
+    }
+    match std::env::home_dir() {
+        Some(home) => format!(
+            "{}{}",
+            home.to_string_lossy().trim_end_matches('/'),
+            &value[1..]
+        ),
+        None => value.to_string(),
+    }
+}
+
 /// `<value>.rstrip("/")` -- *value* is a [`cfg_value_or`] result (or
 /// any other raw config value an adapter calls `.rstrip("/")` on). A
 /// non-string raises the same `AttributeError` Python's own call
@@ -395,5 +486,93 @@ mod tests {
             err.message,
             "runtime.adapters.claude_code.extra_args must be a list of strings, got [1]"
         );
+    }
+
+    fn env_cfg(env: Value) -> Value {
+        dict(&[("env", env)])
+    }
+
+    #[test]
+    fn env_pairs_is_empty_when_absent_or_null() {
+        assert_eq!(env_pairs(&Value::None, "a").unwrap(), EnvPairs::default());
+        assert_eq!(
+            env_pairs(&env_cfg(Value::None), "a").unwrap(),
+            EnvPairs::default()
+        );
+        assert_eq!(
+            env_pairs(&env_cfg(dict(&[])), "a").unwrap(),
+            EnvPairs::default()
+        );
+    }
+
+    #[test]
+    fn env_pairs_keeps_config_order_and_expands_only_a_leading_tilde_slash() {
+        let home = std::env::home_dir().expect("a home directory");
+        let home = home.to_string_lossy().trim_end_matches('/').to_string();
+        let cfg = env_cfg(dict(&[
+            ("B", Value::Str("~/x".to_string())),
+            ("A", Value::Str("~".to_string())),
+            ("C", Value::Str("a/~/b".to_string())),
+            ("D", Value::Str("~other/x".to_string())),
+            ("E", Value::Str("$HOME/x".to_string())),
+        ]));
+        let pairs = env_pairs(&cfg, "a").unwrap();
+        let expected: Vec<(String, String)> = vec![
+            ("B".to_string(), format!("{home}/x")),
+            ("A".to_string(), "~".to_string()),
+            ("C".to_string(), "a/~/b".to_string()),
+            ("D".to_string(), "~other/x".to_string()),
+            ("E".to_string(), "$HOME/x".to_string()),
+        ];
+        assert_eq!(pairs.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn env_pairs_rejects_a_non_mapping_without_showing_it() {
+        let err = env_pairs(&env_cfg(Value::Str("A=secret".to_string())), "alt").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.alt.env must be a mapping of variable names to strings, got str"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert!(!err.retry.retryable);
+    }
+
+    #[test]
+    fn env_pairs_rejects_a_non_string_value_naming_the_variable_only() {
+        let err = env_pairs(&env_cfg(dict(&[("A", Value::from(5i64))])), "alt").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.alt.env.A must be a string, got int"
+        );
+    }
+
+    #[test]
+    fn env_pairs_rejects_an_invalid_variable_name() {
+        for name in ["", "1A", "A-B", "A B", "A\n", "\u{e9}"] {
+            let cfg = env_cfg(dict(&[(name, Value::Str("secret".to_string()))]));
+            let err = env_pairs(&cfg, "alt").unwrap_err();
+            assert_eq!(
+                err.message,
+                format!(
+                    "runtime.adapters.alt.env has an invalid variable name {}: \
+                     a name matches [A-Za-z_][A-Za-z0-9_]*",
+                    Value::Str(name.to_string()).py_repr()
+                )
+            );
+            assert!(!err.message.contains("secret"));
+        }
+        let ok = env_cfg(dict(&[("_a1", Value::Str("x".to_string()))]));
+        assert!(env_pairs(&ok, "alt").is_ok());
+    }
+
+    #[test]
+    fn env_pairs_debug_shows_names_never_values() {
+        let cfg = env_cfg(dict(&[(
+            "TOKEN_DIR",
+            Value::Str("marker-value".to_string()),
+        )]));
+        let shown = format!("{:?}", env_pairs(&cfg, "a").unwrap());
+        assert!(shown.contains("TOKEN_DIR") && !shown.contains("marker-value"));
     }
 }

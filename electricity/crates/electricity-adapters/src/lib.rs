@@ -75,6 +75,13 @@ pub fn build_registry() -> AdapterRegistry {
     // conflict here as small as possible.
     registry.register("claude_code", Box::new(claude_code::build_claude_code));
     registry.register("pi", Box::new(pi::build_pi));
+    // ...and the two bases an alias (`runtime.adapters.<alias>.adapter`)
+    // may name.
+    registry.register_alias_base(
+        "claude_code",
+        Box::new(claude_code::build_claude_code_named),
+    );
+    registry.register_alias_base("pi", Box::new(pi::build_pi_named));
     // Lane F2 (issue #503): native Ollama first, then the
     // OpenAI-compatible family, `openai`/`anthropic`, and
     // `replicate`/`watsonx` last. Issue #515 ports `cyberdiner`

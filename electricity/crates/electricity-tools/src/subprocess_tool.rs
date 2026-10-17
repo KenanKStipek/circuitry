@@ -2,7 +2,8 @@
 //! pass-through [`crate::ToolPlugin`] shape `awk`/`imagemagick`/
 //! `ffmpeg` (and every other binary-wrapping plugin Circuitry has)
 //! share: forward `params.args` to a named binary, `params.cwd`/
-//! `params.stdin`/`params.allow_nonzero` as the only other knobs.
+//! `params.stdin`/`params.allow_nonzero`/`params.parse` (`json`) as the
+//! only other knobs.
 //! `binary`/`env` come from `runtime.plugins.<name>` config
 //! (`plugin_binary_override`/`plugin_env_override`), never `params` --
 //! a machine-specific executable path or thread-limit variable belongs
@@ -11,6 +12,7 @@
 use crate::process::{self, ProcError, RunOpts};
 use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
 use async_trait::async_trait;
+use electricity_json::loads;
 use electricity_value::pycompat::py_strip;
 use electricity_value::{CancellationToken, Dict, Value};
 use std::collections::HashMap;
@@ -45,6 +47,10 @@ impl ToolPlugin for GenericSubprocessTool {
                 )));
             }
         };
+        let parse_json = parse_mode(
+            dict.and_then(|d| d.get(&Value::Str("parse".to_string()))),
+            &self.name,
+        )?;
         let candidates: Vec<&str> = self.binary_candidates.iter().map(String::as_str).collect();
         let binary = resolve_plugin_binary(&self.name, &candidates, self.binary.as_deref())?;
         let cwd = dict
@@ -58,7 +64,7 @@ impl ToolPlugin for GenericSubprocessTool {
         let env = merged_env(self.env.as_ref());
         let hint = format!("set runtime.plugins.{}.binary", self.name);
 
-        run_binary(
+        let result = run_binary(
             &binary,
             args,
             cwd,
@@ -70,7 +76,11 @@ impl ToolPlugin for GenericSubprocessTool {
             call.armed,
             call.token,
         )
-        .await
+        .await?;
+        if parse_json {
+            return parse_json_stdout(result, &binary);
+        }
+        Ok(result)
     }
 
     fn check(&self) -> CheckResult {
@@ -124,6 +134,23 @@ pub fn plugin_env_override(
     };
     let mut map = HashMap::with_capacity(dict.len());
     for (k, v) in dict {
+        // Issue #598: `cof run` resolves a `{secret: ...}` value when the
+        // tool dispatches; this build resolves none (the run is refused up
+        // front for a tool the document names; this catches the rest).
+        if matches!(v, Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())))
+        {
+            return Err(ToolError {
+                py_class: PyExc::RuntimeError,
+                message: format!(
+                    "electricity {} {}: a secret in runtime.plugins.{plugin_name}.env.{} is not \
+                     supported until a later milestone; use `cof run` instead",
+                    env!("CARGO_PKG_VERSION"),
+                    electricity_bytecode::PREVIEW_MARKER,
+                    k.py_str()
+                ),
+                cause: ErrorCause::None,
+            });
+        }
         map.insert(k.py_str(), v.py_str());
     }
     Ok(Some(map))
@@ -348,6 +375,7 @@ pub(crate) async fn run_binary(
         env,
         new_session: armed,
         env_remove: Vec::new(),
+        env_set: Vec::new(),
     };
 
     let completed = match process::run_tracked(&cmd, &opts, token).await {
@@ -420,7 +448,64 @@ pub(crate) async fn run_binary(
         stderr: Some(completed.stderr),
         exit_code: Some(completed.exit_code),
         ok: true,
+        stdout_parsed: false,
     })
+}
+
+/// How much of an unparseable stdout `parse: json` quotes in its error.
+const PARSE_EXCERPT_CHARS: usize = 200;
+
+/// `plugins/_subprocess.py::parse_mode` -- the optional `parse` param
+/// shared by `shell` and every [`GenericSubprocessTool`]: `true` for
+/// `parse: json`, `false` when it is absent or null, anything else a
+/// `ValueError` raised before the process runs.
+pub(crate) fn parse_mode(value: Option<&Value>, plugin_name: &str) -> Result<bool, ToolError> {
+    match value {
+        None | Some(Value::None) => Ok(false),
+        Some(Value::Str(s)) if py_strip(s).to_lowercase() == "json" => Ok(true),
+        Some(other) => Err(value_error(format!(
+            "{plugin_name}: params['parse'] must be 'json' (or omitted), got {}.",
+            other.py_repr()
+        ))),
+    }
+}
+
+/// `plugins/_subprocess.py::_parse_json_stdout` -- `parse: json`: the
+/// result's `value` becomes the parsed JSON of its stdout (which stays
+/// on `stdout`); empty or invalid stdout is a `ValueError` carrying the
+/// exit code and the beginning of stdout. `json.loads`' own message is
+/// reproduced byte for byte by `electricity_json::loads`.
+pub(crate) fn parse_json_stdout(
+    mut result: ToolResult,
+    binary: &str,
+) -> Result<ToolResult, ToolError> {
+    let stdout = result.stdout.clone().unwrap_or_default();
+    let exit_code = result.exit_code.unwrap_or(0);
+    if py_strip(&stdout).is_empty() {
+        return Err(value_error(format!(
+            "{binary} parse: json: stdout is empty (exit {exit_code})."
+        )));
+    }
+    match loads(&stdout) {
+        Ok(parsed) => {
+            result.value = parsed;
+            result.stdout_parsed = true;
+            Ok(result)
+        }
+        Err(err) => {
+            let excerpt: String = stdout.chars().take(PARSE_EXCERPT_CHARS).collect();
+            let more = if stdout.chars().count() > PARSE_EXCERPT_CHARS {
+                "..."
+            } else {
+                ""
+            };
+            Err(value_error(format!(
+                "{binary} parse: json: stdout is not valid JSON (exit {exit_code}): {err}; \
+                 stdout begins {}{more}",
+                Value::Str(excerpt).py_repr()
+            )))
+        }
+    }
 }
 
 /// `plugins/base.py::_as_bool` -- string-aware boolean coercion for a
@@ -508,6 +593,86 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(overrides.get("A"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn plugin_env_override_refuses_a_secret_with_the_preview_marker() {
+        let mut reference = DictType::new();
+        reference.insert(Value::from("secret"), Value::from("api"));
+        let mut env = DictType::new();
+        env.insert(Value::from("TOKEN"), Value::Dict(reference));
+        let mut cfg = DictType::new();
+        cfg.insert(Value::from("env"), Value::Dict(env));
+        let err = plugin_env_override(&Value::Dict(cfg), "awk").unwrap_err();
+        assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
+        assert!(
+            err.message
+                .contains("a secret in runtime.plugins.awk.env.TOKEN")
+        );
+    }
+
+    #[test]
+    fn parse_mode_accepts_json_and_treats_absent_or_null_as_off() {
+        assert!(!parse_mode(None, "awk").unwrap());
+        assert!(!parse_mode(Some(&Value::None), "awk").unwrap());
+        assert!(parse_mode(Some(&Value::from("json")), "awk").unwrap());
+        assert!(parse_mode(Some(&Value::from(" JSON ")), "awk").unwrap());
+    }
+
+    #[test]
+    fn parse_mode_rejects_anything_else_naming_the_plugin() {
+        let err = parse_mode(Some(&Value::from("yaml")), "awk").unwrap_err();
+        assert_eq!(
+            err.message,
+            "awk: params['parse'] must be 'json' (or omitted), got 'yaml'."
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert!(parse_mode(Some(&Value::Bool(true)), "awk").is_err());
+    }
+
+    fn result_with_stdout(stdout: &str, exit_code: i32) -> ToolResult {
+        ToolResult {
+            value: Value::from(stdout),
+            raw: Value::Dict(DictType::new()),
+            stdout: Some(stdout.to_string()),
+            stderr: Some(String::new()),
+            exit_code: Some(exit_code),
+            ok: true,
+            stdout_parsed: false,
+        }
+    }
+
+    #[test]
+    fn parse_json_stdout_replaces_value_and_keeps_raw_stdout() {
+        let parsed = parse_json_stdout(result_with_stdout("{\"ok\": true}\n", 3), "/x").unwrap();
+        let mut expected = DictType::new();
+        expected.insert(Value::from("ok"), Value::Bool(true));
+        assert_eq!(parsed.value, Value::Dict(expected));
+        assert_eq!(parsed.stdout.as_deref(), Some("{\"ok\": true}\n"));
+        assert_eq!(parsed.exit_code, Some(3));
+        assert!(parsed.stdout_parsed);
+    }
+
+    #[test]
+    fn parse_json_stdout_rejects_empty_and_whitespace_only_stdout() {
+        for stdout in ["", "  \n\t\n"] {
+            let err = parse_json_stdout(result_with_stdout(stdout, 0), "/x").unwrap_err();
+            assert_eq!(err.message, "/x parse: json: stdout is empty (exit 0).");
+            assert_eq!(err.py_class, PyExc::ValueError);
+        }
+    }
+
+    #[test]
+    fn parse_json_stdout_invalid_json_shows_the_exit_code_and_a_bounded_excerpt() {
+        let err = parse_json_stdout(result_with_stdout("not json\n", 3), "/x").unwrap_err();
+        assert_eq!(
+            err.message,
+            "/x parse: json: stdout is not valid JSON (exit 3): Expecting value: line 1 \
+             column 1 (char 0); stdout begins 'not json\\n'"
+        );
+        let long = "x".repeat(5000);
+        let err = parse_json_stdout(result_with_stdout(&long, 0), "/x").unwrap_err();
+        assert!(err.message.contains(&format!("'{}'...", "x".repeat(200))));
     }
 
     #[test]

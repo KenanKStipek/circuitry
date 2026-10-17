@@ -39,8 +39,11 @@ from .prompt_compose import (
     known_effect_names,
     render_with_composition,
 )
+from .prompt_files import DispatchFileSource, read_dispatch_file
+from .prompt_record import PromptSentSetting, prompt_sent_fields, prompt_sent_setting
 from .store import Store
 from .templates import render_template
+from .timeout_ref import TimeoutFrom, resolve_timeout_ms
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +255,9 @@ class MessageDef:
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str
+    #: ``content: {file: {from: ...}, within: ...}`` (#578): the text is read
+    #: from this file when the effect dispatches; *content* is then ``""``.
+    file: DispatchFileSource | None = None
 
 
 @dataclass(frozen=True)
@@ -285,6 +291,9 @@ class PromptDefinition:
 
     # Primary input form (exactly one must be provided)
     template: str | None = None
+    #: ``template: {file: {from: ...}, within: ...}`` (#578): the text is read
+    #: from this file when the effect dispatches; *template* is then ``None``.
+    template_file: DispatchFileSource | None = None
     messages: Sequence[MessageDef] | None = None
 
     # Typing and decoding
@@ -308,7 +317,9 @@ class PromptDefinition:
 
     # Execution parameters
     params: dict[str, Any] | None = None
-    timeout_ms: int | None = None
+    #: A literal, or ``{from: <path>, default: <int>}`` read from state at each
+    #: attempt's dispatch (#564).
+    timeout_ms: int | TimeoutFrom | None = None
     deterministic: bool = False
 
     # Prompt-local structured values
@@ -341,7 +352,8 @@ class PromptRuntime:
     Writes:
       <name>.value
       <name>.meta{created_at, completed_at, adapter, model, model_reason,
-                  prompt_type, prompt_sent, tokens_sent, tokens_received,
+                  prompt_type, prompt_sent, prompt_sent_sha256, prompt_chars,
+                  tokens_sent, tokens_received,
                   tokens_sent_total, tokens_received_total, error, dry_run,
                   fallback_attempts, fallback_recovered, retries_used?,
                   complexity?, assets?, finish_reason?, warnings?, cost_usd?}
@@ -463,6 +475,7 @@ class PromptRuntime:
         self.cb_running = cb_running
         self.display_name = display_name or definition.name
         self._ancestors = ancestors or []
+        self._prompt_sent_setting: PromptSentSetting = prompt_sent_setting(self.runtime_config)
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         node = store.ensure_dict(self.defn.name)
@@ -480,9 +493,12 @@ class PromptRuntime:
         # Materialize prompt input. A template that fails to render is this
         # effect's failure, under its own on_error — never the raw text sent
         # to the model as if it had rendered.
+        # A ``file: {from: ...}`` source is read here, once, before the first
+        # attempt: retries and fallback reuse its text (#578).
         try:
-            messages = self._render_messages(effective_ctx)
-            prompt_sent = self._materialize_input(effective_ctx, messages)
+            file_texts, file_records = self._read_dispatch_files(effective_ctx)
+            messages = self._render_messages(effective_ctx, file_texts)
+            prompt_sent = self._materialize_input(effective_ctx, messages, file_texts)
         except Exception as e:
             meta["created_at"] = _now_iso()
             meta["error"] = redact(str(e))
@@ -523,7 +539,10 @@ class PromptRuntime:
         # below if the router substitutes a band's model for the default.
         meta["model_reason"] = "explicit" if self.defn.model else "default"
         meta["prompt_type"] = self.defn.prompt_type
-        meta["prompt_sent"] = prompt_sent
+        # What ``runtime.state.prompt_sent`` leaves of the text, plus the two
+        # fields that describe all of it (#577). Only this record is shaped:
+        # ``prompt_sent`` itself stays whole for everything below.
+        meta.update(prompt_sent_fields(prompt_sent, self._prompt_sent_setting))
         meta["tokens_sent"] = None
         meta["tokens_received"] = None
         meta["tokens_sent_total"] = None
@@ -542,9 +561,11 @@ class PromptRuntime:
         meta.pop("answer", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
-        for key in ("finish_reason", "warnings", "assets", "cost_usd"):
+        for key in ("finish_reason", "warnings", "assets", "cost_usd", "template_files"):
             meta.pop(key, None)
         meta["waiting_for"] = None
+        if file_records:
+            meta["template_files"] = file_records
 
         # Scored here, alongside the rest of the pre-dispatch meta, so the
         # score is on the node before anything can go wrong. A post-success
@@ -700,6 +721,15 @@ class PromptRuntime:
                         else:
                             _console.print(retry_line)
 
+                # Per attempt, from the state this attempt sees (#564). A
+                # reference that can't resolve fails the effect outright
+                # instead of retrying: a retry reads the same state.
+                timeout_ms = resolve_timeout_ms(
+                    self.defn.timeout_ms,
+                    effective_ctx,
+                    effect_label=f"Prompt effect '{self.defn.name}'",
+                )
+
                 if self.verbose and self.cb_start is None:
                     from rich.live import Live
 
@@ -731,6 +761,7 @@ class PromptRuntime:
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
                             attempts=attempts,
+                            timeout_ms=timeout_ms,
                             options=options,
                             meta=meta,
                             option_warnings=option_warnings,
@@ -1116,9 +1147,10 @@ class PromptRuntime:
         run-default lookup also use."""
         return configured_timeout_seconds(adapter_name, self.runtime_config)
 
-    def _attempt_timeout_seconds(self, adapter_name: str) -> int:
-        """One attempt's budget: the effect's ``timeout_ms``, capped by the
-        timeout of the adapter this attempt actually dispatches to.
+    def _attempt_timeout_seconds(self, adapter_name: str, timeout_ms: int | None) -> int:
+        """One attempt's budget: the effect's ``timeout_ms`` (*timeout_ms*, already
+        resolved for this attempt), capped by the timeout of the adapter this
+        attempt actually dispatches to.
 
         Precedence: this effect's ``timeout_ms`` (rounded up to whole
         seconds) first; then ``runtime.adapters.<adapter_name>.timeout_seconds``
@@ -1131,9 +1163,9 @@ class PromptRuntime:
         adapter_budget = self._adapter_configured_timeout_seconds(adapter_name)
         if adapter_budget is None:
             adapter_budget = self.timeout_seconds
-        if not self.defn.timeout_ms:
+        if not timeout_ms:
             return adapter_budget
-        effect_seconds = max(1, math.ceil(self.defn.timeout_ms / 1000))
+        effect_seconds = max(1, math.ceil(timeout_ms / 1000))
         return min(effect_seconds, adapter_budget)
 
     def _generation_options(
@@ -1249,6 +1281,7 @@ class PromptRuntime:
         attempts: list[tuple[str, str]],
         meta: dict[str, Any],
         option_warnings: list[str],
+        timeout_ms: int | None = None,
         options: GenerateOptions | None = None,
     ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None]:
         """Try each ``(adapter, model)`` in order; the first reply that both
@@ -1285,7 +1318,7 @@ class PromptRuntime:
                     adapter,
                     model=model_name,
                     prompt=prompt,
-                    timeout_seconds=self._attempt_timeout_seconds(adapter_name),
+                    timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
                     options=options,
                 )
             except AllowlistError:
@@ -1413,29 +1446,72 @@ class PromptRuntime:
         parts.append(label)
         return " → ".join(parts)
 
-    def _render_messages(self, ctx: dict[str, Any]) -> tuple[ChatMessage, ...]:
-        """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template."""
-        if self.defn.template or not self.defn.messages:
+    def _read_dispatch_files(
+        self, ctx: dict[str, Any]
+    ) -> tuple[dict[str, str], list[dict[str, Any]]]:
+        """Read each ``file: {from: ...}`` source this prompt will use (#578).
+
+        Returns ``({field: text}, [meta.template_files record, ...])``, in the
+        order the fields are used: the template, else each message's content.
+        A source the prompt will not use (``messages`` next to a ``template``)
+        is not read.
+        """
+        sources: list[tuple[str, DispatchFileSource]] = []
+        if self.defn.template:
+            pass
+        elif self.defn.template_file is not None:
+            sources.append(("template", self.defn.template_file))
+        else:
+            for index, msg in enumerate(self.defn.messages or ()):
+                if msg.file is not None:
+                    sources.append((f"messages[{index}].content", msg.file))
+        texts: dict[str, str] = {}
+        records: list[dict[str, Any]] = []
+        for field, source in sources:
+            read = read_dispatch_file(
+                source, ctx, field=field, effect_label=f"Prompt effect '{self.defn.name}'"
+            )
+            texts[field] = read.text
+            records.append(read.record)
+        return texts, records
+
+    def _render_messages(
+        self, ctx: dict[str, Any], file_texts: dict[str, str] | None = None
+    ) -> tuple[ChatMessage, ...]:
+        """The effect's ``messages`` with each ``content`` rendered; ``()`` for a template.
+
+        A message whose content is a ``file: {from: ...}`` takes its text from
+        *file_texts* verbatim, unrendered.
+        """
+        if self.defn.template or self.defn.template_file is not None or not self.defn.messages:
             return ()
         declared = declared_prompts(self.runtime_config)
         known_names = known_effect_names(self.runtime_config)
+        file_texts = file_texts or {}
         return tuple(
             ChatMessage(
                 role=msg.role,
-                content=render_with_composition(
-                    msg.content,
-                    ctx,
-                    declared=declared,
-                    known_effect_names=known_names,
-                    label=f"messages[{index}].content",
-                    escape=False,
+                content=(
+                    file_texts[f"messages[{index}].content"]
+                    if msg.file is not None
+                    else render_with_composition(
+                        msg.content,
+                        ctx,
+                        declared=declared,
+                        known_effect_names=known_names,
+                        label=f"messages[{index}].content",
+                        escape=False,
+                    )
                 ),
             )
             for index, msg in enumerate(self.defn.messages)
         )
 
     def _materialize_input(
-        self, ctx: dict[str, Any], messages: tuple[ChatMessage, ...] = ()
+        self,
+        ctx: dict[str, Any],
+        messages: tuple[ChatMessage, ...] = (),
+        file_texts: dict[str, str] | None = None,
     ) -> str:
         """The prompt as one string: the rendered template, or the turns
         flattened as ``role: content``.
@@ -1453,6 +1529,9 @@ class PromptRuntime:
                 label="template",
                 escape=False,
             )
+
+        if self.defn.template_file is not None:
+            return (file_texts or {})["template"]
 
         if messages:
             return "\n\n".join(f"{msg.role}: {msg.content}" for msg in messages)

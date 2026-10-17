@@ -25,7 +25,7 @@ from .cancellation import (
 from .disabled import is_enabled, write_disabled_node
 from .effect_identity import nested_container
 from .prompt import PromptDefinition, PromptRuntime
-from .resume import effect_completed_ok
+from .resume import ResumeMode, effect_completed_ok
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,11 @@ class DynamicDefinition:
     # degradation a leaf effect's on_error gives (see guidebook ch. 5).
     on_error: Literal["fail", "skip", "continue"] = "fail"
 
+    # `cof run --resume` (#590): 'restart' runs an unfinished saved dynamic
+    # from its first effect in a fresh state instead of continuing at its
+    # first unfinished effect. A finished one is skipped either way.
+    resume: ResumeMode = "continue"
+
     # Free-form metadata, recorded on this dynamic's own meta. Observability
     # tagging, not behavior.
     labels: Mapping[str, Any] | None = None
@@ -240,16 +245,24 @@ class DynamicRuntime:
         # whose own node already finished without error, reusing it as-is —
         # see ``core.resume``. Carried down into every nested ``dynamic``/
         # ``loop`` this instance constructs, so the skip applies at any
-        # depth a chain of ``dynamic``s reaches. ``conditional``/``use``/
-        # ``reflector`` children aren't passed this flag: a conditional or
-        # reflector always reruns whole once reached, and a ``use`` child
-        # runs its sub-orchestration in a fresh, isolated state with no
-        # resumable history of its own — so the flag would be a no-op there.
+        # depth a chain of ``dynamic``s reaches. A ``reflector`` child isn't
+        # passed this flag: it always reruns whole once reached. A ``use``
+        # child gets it, and continues inside its child when
+        # ``runtime.state.record_children`` saved the child's record (#567;
+        # see ``UseRuntime.execute``). A ``conditional`` gets it, and
+        # continues inside the branch its saved node took when its
+        # condition selects that branch again (#573).
         self.resume = resume
 
     def execute(
         self, *, store: Store, ctx_override: dict[str, Any] | None = None
     ) -> None:
+        if self.resume and self.defn.resume == "restart":
+            # `resume: restart` (#590): a finished node was already skipped
+            # by the parent, so this one is unfinished. Drop what it saved
+            # and run it from its first effect, like a fresh run.
+            self.resume = False
+            store.state.pop(self.defn.name, None)
         dyn = store.ensure_dict(self.defn.name)
         dyn.setdefault("value", None)
         meta = dyn.get("meta")
@@ -1014,6 +1027,7 @@ class DynamicRuntime:
                     progress_display=self.progress_display,
                     depth=self.depth,
                     ancestors=self._child_ancestors,
+                    resume=effective_resume,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, LoopDefinition):
@@ -1069,6 +1083,7 @@ class DynamicRuntime:
                     cb_error=cb_error,
                     display_name=_child_display_name(name, label_prefix=self._label_prefix),
                     ancestors=self._child_ancestors if tracker is None else None,
+                    resume=effective_resume,
                 ).execute(store=store, ctx=ctx)
 
             elif isinstance(effect, YieldDefinition):

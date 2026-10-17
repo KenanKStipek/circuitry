@@ -26,6 +26,10 @@ fields:
     enum: [fail, skip, continue]
     default: fail
     note: "Same meaning as on a leaf effect: governs whether a failure anywhere inside this dynamic propagates to this dynamic's own parent (fail) or is recorded on this dynamic's own meta.error and swallowed there, letting the parent continue (skip/continue — the same degradation for both)."
+  resume:
+    enum: [continue, restart]
+    default: continue
+    note: "What cof run --resume does with this dynamic when its saved node did not finish without error. continue reuses its finished effects and goes on at the first unfinished one. restart runs it from its first effect in a fresh state, its finally as usual: set it when the first effects acquire something the finally releases (start a server, take a lock), which a cancelled run has already released. A dynamic that finished is skipped either way. Usually omitted."
   labels:
     type: object
     note: "Free-form metadata, recorded on meta.labels. Observability tagging, not behavior."

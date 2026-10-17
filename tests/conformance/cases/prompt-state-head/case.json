@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #577: runtime.state.prompt_sent",
+  "description": "`runtime.state.prompt_sent: \"head:12\"`: a longer text keeps its first 12 code points then `\\n[… <M> more characters not recorded]`; a text of exactly 12 or fewer characters is kept whole with no marker; the count is of code points, not bytes; a messages prompt records the flattened form.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

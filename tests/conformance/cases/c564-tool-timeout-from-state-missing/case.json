@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `timeout_ms: {from: <path>}` whose path is missing, with no default, fails the effect with an error that names the path.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

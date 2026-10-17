@@ -64,6 +64,17 @@
   "additionalProperties": true,
 
   "$defs": {
+    "TimeoutMs": {
+      "type": ["integer", "object"],
+      "minimum": 0,
+      "description": "Per-attempt timeout in milliseconds: an integer, or a reference {from: <path>, default: <positive integer>} read from state when each attempt is dispatched. The path is rooted at input./prime./runtime. or at an enclosing loop binding. The value must be a positive integer; a missing path takes 'default', or fails the effect without one.",
+      "required": ["from"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "default": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "NamePattern": {
       "type": "string",
       "allOf": [
@@ -111,6 +122,12 @@
       "type": "string",
       "enum": ["fail", "skip", "continue"],
       "description": "Error handling policy. fail = abort; skip = omit this effect and continue; continue = record error and continue."
+    },
+
+    "ResumeMode": {
+      "enum": ["continue", "restart"],
+      "default": "continue",
+      "description": "What cof run --resume does with this scope when its saved node did not finish without error. continue = reuse its finished effects and go on at the first unfinished one. restart = run it from its first effect in a fresh state; its finally runs as usual. A scope that finished is skipped either way."
     },
 
     "OnErrorLoop": {
@@ -171,6 +188,31 @@
       ]
     },
 
+    "PromptTextSource": {
+      "description": "A prompt effect's template or a message's content: a Mustache template string, {file: <path>} read when the document loads (#396), or {file: {from: <state path>}, within: <dir>} read when the effect dispatches (#578). The state value is the file's path; it resolves against 'within', a literal absolute directory or {from: input.<name>}, and must stay inside it. The text is used verbatim, never rendered.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "properties": {
+            "file": { "type": "string", "description": "Relative path to the template file." }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "description": "{file: {from: <state path>}, within: <dir>}. Its parts are checked by cof check with their own messages: 'within' is required, and is a literal absolute path or {from: input.<name>}.",
+          "properties": {
+            "file": { "type": "object" },
+            "within": {}
+          }
+        }
+      ]
+    },
+
     "MessageDef": {
       "type": "object",
       "required": ["role", "content"],
@@ -180,7 +222,7 @@
           "type": "string",
           "enum": ["system", "user", "assistant", "tool"]
         },
-        "content": { "$ref": "#/$defs/TemplateOrFile" }
+        "content": { "$ref": "#/$defs/PromptTextSource" }
       }
     },
 
@@ -304,8 +346,8 @@
           "description": "JSON Schema for validating structured output. Enforced as required when prompt_type is json, object, or array."
         },
         "template": {
-          "$ref": "#/$defs/TemplateOrFile",
-          "description": "Mustache template string, or {file: <path>}. Use {{key}} for initial state, {{prime.name.value}} for effect outputs, {{> name}} to splice in a declared prompt or a yield/text-prompt effect's own text (#396). {{x}} inserts the value as-is, like {{{x}}} — prompt text is not HTML, so it is never escaped (#397)."
+          "$ref": "#/$defs/PromptTextSource",
+          "description": "Mustache template string, {file: <path>}, or {file: {from: <state path>}, within: <dir>} (read at dispatch, used verbatim). Use {{key}} for initial state, {{prime.name.value}} for effect outputs, {{> name}} to splice in a declared prompt or a yield/text-prompt effect's own text (#396). {{x}} inserts the value as-is, like {{{x}}} — prompt text is not HTML, so it is never escaped (#397)."
         },
         "messages": {
           "type": "array",
@@ -320,7 +362,7 @@
           "description": "Ordered list of fallback providers."
         },
         "params": { "type": "object", "description": "Generation parameters. temperature, max_tokens and stop are mapped to each provider's names; other keys go to the provider unchanged." },
-        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "timeout_ms": { "$ref": "#/$defs/TimeoutMs" },
         "deterministic": { "type": "boolean", "description": "If true, temperature 0 (unless params sets one) and a fixed seed where the provider takes one." },
         "inputs": { "type": "object", "description": "Prompt-local key/value pairs available in template rendering." },
         "assets": {
@@ -385,6 +427,7 @@
         },
         "stop_on_error": { "type": "boolean" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "resume": { "$ref": "#/$defs/ResumeMode" },
         "labels": { "type": "object" }
       }
     },
@@ -568,13 +611,13 @@
         },
         "params": {
           "type": "object",
-          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. A leaf anywhere in params (any depth, in objects and lists), {from: <path>}, passes the value at that path unchanged (array, object, number or boolean) instead of rendering it, the same contract as a use effect's inputs; a path that doesn't resolve -- including one that resolves to null -- is an error naming the param's own path, unless the leaf also carries default: <value>. A mapping with any other key is passed through literally -- use params_json to pass a literal one-key {from: ...} object. Takes precedence over top-level prompt/model."
+          "description": "Plugin-specific parameters. All string values support Mustache rendering against current state. A leaf anywhere in params (any depth, in objects and lists), {from: <path>}, passes the value at that path unchanged (array, object, number or boolean) instead of rendering it, the same contract as a use effect's inputs; a path that doesn't resolve -- including one that resolves to null -- is an error naming the param's own path, unless the leaf also carries default: <value>. A mapping with any other key is passed through literally -- use params_json to pass a literal one-key {from: ...} object. {secret: <name>} (optionally with prefix: <text>) names a runtime.secrets entry, resolved at dispatch, and is allowed only as a value in an http effect's headers; the same rule as {from:} says what is one (a mapping whose keys are secret plus, optionally, prefix, or, as a header value, any mapping with a secret key). A cel tool's params are taken literally: never rendered, and no {from:} is read. Takes precedence over top-level prompt/model."
         },
         "params_json": {
           "type": "string",
           "description": "A Mustache template rendered to text and then parsed as JSON, producing a real object/array (not just strings). The parsed object is deep-merged over 'params' (params_json wins on overlapping keys). Use this to pass a runtime-built array or nested object to a tool whose schema requires one, e.g. '{\"arguments\": {\"symbols\": {{{prime.symbol_list.value}}} }}'."
         },
-        "timeout_ms": { "type": "integer", "minimum": 0 },
+        "timeout_ms": { "$ref": "#/$defs/TimeoutMs" },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
@@ -627,7 +670,8 @@
         },
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
-        "on_error": { "$ref": "#/$defs/OnErrorDefault" }
+        "on_error": { "$ref": "#/$defs/OnErrorDefault" },
+        "resume": { "$ref": "#/$defs/ResumeMode" }
       },
       "oneOf": [
         { "required": ["ref"] },

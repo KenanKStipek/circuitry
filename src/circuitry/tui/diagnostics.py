@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ..adapters import build_adapter
-from ..adapters.factory import ADAPTER_REGISTRY
+from ..adapters.factory import ADAPTER_REGISTRY, alias_names
 from ..cli import runtime_shim
 from ..cli.allowlist import check_allowlist
 from ..cli.config import CircuitryConfig, resolve_config
@@ -195,7 +195,9 @@ def check_targets(config: CircuitryConfig) -> tuple[CheckTarget, ...]:
     """
     targets: list[CheckTarget] = [
         CheckTarget("adapter", name)
-        for name in _allowed_or_compiled(config.enabled_adapters, ADAPTER_REGISTRY.keys())
+        for name in _allowed_or_compiled(
+            config.enabled_adapters, [*ADAPTER_REGISTRY, *alias_names(config.runtime)]
+        )
     ]
     targets += [
         CheckTarget("tool", name)
@@ -502,6 +504,7 @@ def validate_report(
             root_name="prime",
             document_dir=_document_dir,
             confinement_root=default_project_root(_document_dir),
+            trusted=trust_document or (config is not None and config.trust_orchestration_runtime),
         )
     except Exception as exc:
         issues.append(ValidationIssue("compile", str(exc)))
@@ -527,7 +530,7 @@ def validate_report(
             issues.append(ValidationIssue("preflight", str(exc)))
         else:
             hard_results, soft_results = runtime_shim.classify_preflight_results(
-                path, results
+                path, results, config.runtime
             )
             issues += [
                 ValidationIssue(

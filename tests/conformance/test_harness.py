@@ -587,6 +587,15 @@ def test_materialize_cli_args_substitutes_mock_port() -> None:
     assert args == ["-e", "url=http://127.0.0.1:54321/data"]
 
 
+def test_materialize_cli_args_substitutes_the_case_directory(tmp_path: Path) -> None:
+    args = harness.materialize_cli_args(
+        ["-e", f"work_dir={harness.CASE_DIR_PLACEHOLDER}", "-e", "plain=1"],
+        mock_http_port=None,
+        case_dir=tmp_path,
+    )
+    assert args == ["-e", f"work_dir={tmp_path}", "-e", "plain=1"]
+
+
 def test_materialize_config_substitutes_mock_port(tmp_path: Path) -> None:
     case_dir = tmp_path / "case"
     case_dir.mkdir()

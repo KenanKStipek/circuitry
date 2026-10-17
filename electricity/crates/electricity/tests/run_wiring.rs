@@ -895,6 +895,112 @@ async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker
     assert!(error.contains("comfyui"));
 }
 
+/// Issue #580: `systemone` is a cof-only plugin, so a document naming it is
+/// refused up front with the standard preview message and writes no state.
+#[tokio::test]
+async fn a_tool_naming_the_cof_only_systemone_plugin_is_refused_with_the_marker() {
+    let dir = temp_dir("systemone-cof-only");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: decide\n    provider: systemone\n    params:\n      model: m\n      state: s\n      questions: {q: {type: noul, instructions: i}}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("systemone"));
+    assert!(error.contains("use `cof run` instead"));
+}
+
+/// Issue #597: `cel` is a cof-only plugin, so a document naming it is
+/// refused up front with the standard preview message and writes no state.
+#[tokio::test]
+async fn a_tool_naming_the_cof_only_cel_plugin_is_refused_with_the_marker() {
+    let dir = temp_dir("cel-cof-only");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: computed\n    provider: cel\n    params:\n      expr: \"[1, 2, 3].filter(x, x > 1)\"\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("provider \"cel\""));
+    assert!(error.contains("use `cof run` instead"));
+}
+
+/// Issue #598: electricity resolves no secret, so an `http` header naming
+/// one is refused up front with the standard preview message.
+#[tokio::test]
+async fn an_http_header_naming_a_secret_is_refused_with_the_marker() {
+    let dir = temp_dir("secret-header");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: call\n    provider: http\n    params:\n      url: http://127.0.0.1:1/\n      headers: {Authorization: {secret: api, prefix: \"Bearer \"}}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("prime.call is a tool effect whose params name a secret"));
+}
+
+/// Issue #598: a secret in the host `env` of a tool the document names is
+/// refused up front too.
+#[tokio::test]
+async fn a_secret_in_a_named_tools_host_env_is_refused_with_the_marker() {
+    let dir = temp_dir("secret-env");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"plugins": {"awk": {"env": {"TOKEN": {"secret": "api"}}}, "sed": {"env": {"X": {"secret": "other"}}}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: run_it\n    provider: awk\n    params: {args: [\"{print}\"]}\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "a refusal must write no state at all"
+    );
+    let error = result.error.unwrap();
+    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("a secret in runtime.plugins.awk.env.TOKEN is not supported"));
+}
+
 /// Issue #511: a `provider:` that is not a cof plugin at all is never
 /// refused by the walker (unlike the `comfyui` case just above, a
 /// Circuitry-known plugin this build has no builder for) -- it reaches

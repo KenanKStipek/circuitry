@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #564: timeout_ms from state",
+  "description": "A `timeout_ms` reference whose path is not rooted at a state namespace or an enclosing loop binding is rejected at check time, like any other `{from:}`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

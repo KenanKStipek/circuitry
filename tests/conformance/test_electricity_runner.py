@@ -167,7 +167,9 @@ def _run_electricity(
         # own `{path}` in a schema-failure message under the
         # `<CASE_DIR>/...` redaction (issue #495's own harness addition).
         cmd += ["--profile", str(case_dir / profile_rel)]
-    cmd += harness.materialize_cli_args(metadata.get("cli_args", []), mock_http_port=mock_http_port)
+    cmd += harness.materialize_cli_args(
+        metadata.get("cli_args", []), mock_http_port=mock_http_port, case_dir=case_dir
+    )
     proc = subprocess.run(
         cmd,
         cwd=case_dir,

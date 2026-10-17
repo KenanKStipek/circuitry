@@ -1,0 +1,20 @@
+{"v":1,"seq":0,"ts":"2026-10-15T18:42:51.594Z","ev":"run_start","run_id":"0f353b3c-f407-4092-b01c-c561444fcd3a","orchestration":"orchestration.yml","engine":"cof 0.1.0","pid":57889}
+{"v":1,"seq":1,"ts":"2026-10-15T18:42:51.597Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-10-15T18:42:51.598Z","ev":"start","id":1,"path":"prime.from_template_file"}
+{"v":1,"seq":3,"ts":"2026-10-15T18:42:51.598Z","ev":"end","id":1,"path":"prime.from_template_file","ok":true,"ms":0}
+{"v":1,"seq":4,"ts":"2026-10-15T18:42:51.598Z","ev":"start","id":2,"path":"prime.from_message_file"}
+{"v":1,"seq":5,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":2,"path":"prime.from_message_file","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":3,"path":"prime.missing_file"}
+{"v":1,"seq":7,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":3,"path":"prime.missing_file","ok":false,"ms":0,"error":"Prompt effect 'missing_file': template: file 'prompts/nope.txt' does not exist."}
+{"v":1,"seq":8,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":4,"path":"prime.directory"}
+{"v":1,"seq":9,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":4,"path":"prime.directory","ok":false,"ms":0,"error":"Prompt effect 'directory': template: file 'prompts' is not a regular file."}
+{"v":1,"seq":10,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":5,"path":"prime.outside_within"}
+{"v":1,"seq":11,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":5,"path":"prime.outside_within","ok":false,"ms":0,"error":"Prompt effect 'outside_within': template: file '../case.json' resolves outside 'within' (<CASE_DIR>)."}
+{"v":1,"seq":12,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":6,"path":"prime.not_utf8"}
+{"v":1,"seq":13,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":6,"path":"prime.not_utf8","ok":false,"ms":0,"error":"Prompt effect 'not_utf8': template: file 'prompts/binary.bin' is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"}
+{"v":1,"seq":14,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":7,"path":"prime.not_a_string"}
+{"v":1,"seq":15,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":7,"path":"prime.not_a_string","ok":false,"ms":0,"error":"Prompt effect 'not_a_string': template: 'file: {from: input.bad_path}' resolved to 5; expected a file path string."}
+{"v":1,"seq":16,"ts":"2026-10-15T18:42:51.599Z","ev":"start","id":8,"path":"prime.relative_within"}
+{"v":1,"seq":17,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":8,"path":"prime.relative_within","ok":false,"ms":0,"error":"Prompt effect 'relative_within': template: 'within' {from: input.relative_dir} resolved to 'prompts'; expected an absolute directory path."}
+{"v":1,"seq":18,"ts":"2026-10-15T18:42:51.599Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":19,"ts":"2026-10-15T18:42:51.599Z","ev":"run_end","ok":true}
