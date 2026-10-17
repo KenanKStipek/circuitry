@@ -21,6 +21,7 @@ from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins.base import ToolResult
+from ..plugins.cel import CelPlugin
 from .cancellation import get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
@@ -677,6 +678,7 @@ class ToolRuntime:
             self.runtime_config,
         )
 
+        is_cel = self.defn.provider.strip().lower() == "cel"
         next_delay_ms = backoff_ms
         # An agent's `params.prompt: {file: {from: ...}, within: ...}` (#591),
         # read once on this pass's first attempt: a retry and the session's
@@ -777,12 +779,18 @@ class ToolRuntime:
                     top_level["model"] = self.defn.model
 
                 _reject_templated_security_params(self.defn.params)
-                params = _render_params(
-                    self.defn.params,
-                    ctx,
-                    name=self.defn.name,
-                    declared=declared,
-                    known_names=known_names,
+                params = (
+                    # Literal: `cof check` parsed and scope-checked the
+                    # expression as written (#597).
+                    dict(self.defn.params)
+                    if is_cel
+                    else _render_params(
+                        self.defn.params,
+                        ctx,
+                        name=self.defn.name,
+                        declared=declared,
+                        known_names=known_names,
+                    )
                 )
                 if self.defn.params_json is not None:
                     params_json_overlay = _render_params_json(
@@ -889,9 +897,12 @@ class ToolRuntime:
                         live_cm = nullcontext()
 
                     with live_cm:
-                        result = plugin.execute(
-                            params=plugin_params, timeout_seconds=timeout_seconds
-                        )
+                        if isinstance(plugin, CelPlugin):
+                            result = plugin.evaluate(params=plugin_params, ctx=ctx)
+                        else:
+                            result = plugin.execute(
+                                params=plugin_params, timeout_seconds=timeout_seconds
+                            )
 
             except Exception as e:
                 failure = e

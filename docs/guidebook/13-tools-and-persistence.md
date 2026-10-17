@@ -88,7 +88,7 @@ Seventy-odd ship in-tree. By purpose:
 
 | Group | Providers |
 | --- | --- |
-| Time / utility | `clock`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
+| Time / utility | `clock`, `cel`, `math`, `regex`, `json`, `uuid`, `hash`, `base64`, `hex`, `validate_yaml` |
 | Filesystem / data | `fs`, `csv`, `tar`, `zip`, `gzip`, `7z` |
 | Internet | `http`, `web_search`, `web_fetch`, `webhook`, `wikipedia`, `rss`, `weather` |
 | Browser | `playwright`, `screenshot` |
@@ -107,6 +107,19 @@ Seventy-odd ship in-tree. By purpose:
 | Crypto / markup | `gpg`, `xml`, `html_extract` |
 | MCP | `mcp` — any tool on any MCP server |
 | Typed decisions | `systemone` — typed answers (`noul`, `choice`, `score`) about a piece of state; see [`docs/plugins/systemone.md`](../plugins/systemone.md) |
+
+`cel` computes a value instead of fetching one: it evaluates a CEL expression against the same bindings an `if` at that position sees, and its result, converted to JSON, is the step's value. Filtering a list, a map lookup with a default, or the later of two timestamps is one step, with no script to parse and no `if` whose branches each set a literal:
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.issues.value.filter(i, i.state == 'open').map(i, i.number)"
+    schema: {type: array, items: {type: integer}}
+```
+
+`cof check` parses the expression and checks every name it reads, like the CEL in an `if`; `schema` is optional and fails the step when the result doesn't match it, and `strict: true` fails it on an unset path that would otherwise give `null` with a warning. Timestamps and durations come out as ISO 8601 strings. [The reference](../orchestration-reference.md#cel-a-value-computed-with-cel) has the details.
 
 `service` is the one tool whose work outlives its call: it starts a background process (a dev server, a local API), waits until it is ready, and later stops exactly the process group it started — see [Errors → `finally`](./05-errors.md#finally--cleanup-that-always-runs) for stopping it when the run ends. `cof list --extensions` prints the exact compiled-in set. Plugins that need optional PyPI packages or external binaries lazy-import; `cof doctor` reports each one's readiness, and `pip install circuitry-cof[<plugin>]` (`[playwright]`, `[github]`, `[embed]`, …) pulls what a plugin needs. `docs/plugins/` documents the media plugins' parameters in full.
 

@@ -1344,6 +1344,29 @@ def _check_security_sensitive_param_leaf(
             _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
 
 
+def _check_cel_params(
+    params: dict[str, Any],
+    *,
+    name: str,
+    effect_path: str,
+    has_params_json: bool,
+    loop_names: frozenset[str],
+) -> None:
+    """A ``cel`` tool's literal params (#597): known keys only, and an
+    expression that parses and reads only names in scope at this position,
+    the same checks an ``if``'s ``mode: cel`` expression gets."""
+    from ..plugins.cel import static_param_errors
+
+    problems = static_param_errors(params, has_params_json=has_params_json)
+    if problems:
+        raise ValueError(
+            f"Tool effect '{name}' (cel) at '{effect_path}': " + "; ".join(problems)
+        )
+    expr = str(params["expr"])
+    validate_cel_expr(expr, effect_path=effect_path, extra_names=loop_names)
+    validate_cel_syntax(expr, effect_path=effect_path, effect_name=name)
+
+
 def _compile_tool(
     effect: dict[str, Any],
     *,
@@ -1385,9 +1408,18 @@ def _compile_tool(
         )
         if prompt_file is not None:
             params = {key: value for key, value in params.items() if key != "prompt"}
-    _check_param_leaves(
-        params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
-    )
+    if provider.strip().lower() == "cel":
+        _check_cel_params(
+            params,
+            name=str(name),
+            effect_path=effect_path,
+            has_params_json=params_json is not None,
+            loop_names=loop_names,
+        )
+    else:
+        _check_param_leaves(
+            params, name=str(name), effect_path=effect_path, field="params", loop_names=loop_names
+        )
     for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
         _check_security_sensitive_param_leaf(
             params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"

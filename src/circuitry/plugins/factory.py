@@ -81,6 +81,7 @@ from . import (
 from ._subprocess import plugin_binary_override, plugin_env_override
 from .base import ToolPlugin
 from .base64 import Base64Plugin
+from .cel import CelPlugin
 from .clock import ClockPlugin
 from .comfyui import ComfyUIPlugin
 from .csv import CsvPlugin
@@ -163,6 +164,11 @@ def _build_http(cfg: dict[str, Any]) -> ToolPlugin:
 def _build_clock(cfg: dict[str, Any]) -> ToolPlugin:
     del cfg
     return ClockPlugin()
+
+
+def _build_cel(cfg: dict[str, Any]) -> ToolPlugin:
+    del cfg
+    return CelPlugin()
 
 
 def _build_math(cfg: dict[str, Any]) -> ToolPlugin:
@@ -538,6 +544,7 @@ PLUGIN_REGISTRY: dict[str, PluginBuilder] = {
     "http": _build_http,
     # Stdlib-only catalog
     "clock": _build_clock,
+    "cel": _build_cel,
     "math": _build_math,
     "regex": _build_regex,
     "json": _build_json,

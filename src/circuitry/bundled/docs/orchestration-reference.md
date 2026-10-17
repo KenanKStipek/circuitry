@@ -844,7 +844,7 @@ Not every plugin can actually be bounded by it:
 | Own network call | `web_fetch` (its own `params.timeout_ms`, when set, shortens it for that call — never extends past the effect's budget), `rss`, `wikipedia` (retries disabled so it can't multiply the budget), `whois`, `http`, `slack`, `notion`, `jira`, `github`, `gdrive`, `gcalendar`, `s3`, `linear`, `systemone`, `email_smtp`, `webhook`, `dns`, `mcp_client`, `playwright`, `screenshot`, `discord` (via a background thread with a deadline, since discord.py's webhook send has no timeout parameter of its own). These apply the timeout per socket operation (connect, each read, etc.), not to the whole call. |
 | Sandboxed child process, killed on overrun | `python_eval` |
 | Process-group timeout: the whole group is killed on overrun, the CLI and everything it started | `agent` (one budget for the whole session, its repair turn included) |
-| Ignored — pure in-memory, nothing to bound | `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
+| Ignored — pure in-memory, nothing to bound | `cel`, `json`, `xml`, `csv`, `regex`, `hash`, `hex`, `uuid`, `base64`, `gzip`, `zip`, `tar`, `fs`, `env_vars`, `validate_yaml`, `html_extract`, `pdf_extract`, `math`, `clock`, `system_info`, `process_list` |
 | Ignored — has its own, separate bound instead | `service` (its readiness wait, `params.ready_timeout_ms`, default 60s, is capped by the effect's budget; the process it starts is not bounded by it — it is meant to outlive the call), `port_check` (`params.timeout_ms`, socket-level, default 2s), `surrealdb` (the SDK's own socket timeout), `embed`/`rerank`/`vector_search` (local inference; the first call per model can also trigger an unbounded download) |
 
 **Capability consent (#275):** a document that did not come from the user's
@@ -875,7 +875,7 @@ for the CLI walkthrough. Each provider's capability tag
 | `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `systemone`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
 
 A provider absent from every row needs no consent: it only reads its own
-parameters and returns a value (`math`, `regex`, `json`, `clock`, `hash`,
+parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
 `uuid`, `base64`, ...).
 
 **Result contract — one meaning for "this tool failed":** a tool effect
@@ -997,6 +997,55 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+#### `cel`: a value computed with CEL
+
+The `cel` tool evaluates one [CEL](#cel-expressions) expression and writes
+its result to `prime.<name>.value`, converted to JSON. Use it to filter or
+deduplicate a list, look a key up in a map with a default, or pick the later
+of two timestamps, without a script step or an `if` whose two branches each
+set a literal.
+
+```yaml
+- type: tool
+  name: open_ids
+  provider: cel
+  params:
+    expr: "state.prime.items.value.filter(i, i.status == 'open').map(i, i.id)"
+    schema: {type: array, items: {type: string}}
+```
+
+| Param | Type | Required | Default | Meaning |
+|-------|------|----------|---------|---------|
+| `expr` | string | yes | — | The CEL expression |
+| `strict` | bool | no | `false` | An unset `state.` path fails the effect instead of giving `null`, as [`strict`](#strict-true--when-absent-state-must-not-pick-a-branch) does for `if` |
+| `schema` | object | no | — | A JSON Schema the result must match; a mismatch fails the effect, naming each mismatch (`cel: the result does not match params.schema: 1: 'two' is not of type 'integer'`) |
+
+- **Bindings.** The expression sees what an `if` at the same position sees:
+  `state.input`, `state.prime`, `state.runtime`, and inside a loop body the
+  loop's `each.as` binding and `state.iter` (see
+  [CEL scoping](#cel-scoping-what-statekey-may-name-at-each-nesting-level)).
+- **The value.** Lists, maps, strings, numbers, booleans and `null` as they
+  are; a map keeps its key order, and a map key that is a number or a boolean
+  becomes its JSON text (`"1"`, `"true"`). A timestamp becomes an ISO 8601
+  UTC string (`2026-01-02T03:04:05Z`, with a fraction of a second only when
+  it has one) and a duration an ISO 8601 duration (`PT1H30M`, `PT1.5S`,
+  `-PT90S`). A result with no JSON form (bytes, a non-finite number, a type)
+  fails the effect.
+- **An unset path.** Without `strict`, an unguarded `state.` path that is
+  unset makes the value `null` and logs a warning naming the path, as an `if`
+  does; `has()` guards a path the same way.
+- **Literal params.** `cof check` parses `expr` and checks the names it reads
+  like any other CEL in the document, so the params are never
+  Mustache-rendered and never read `{from: ...}`; `params_json` and any param
+  other than these three are `cof check` errors.
+- **Pure.** It does no I/O, needs no [capability](#tool), and ignores
+  `timeout_ms`. `meta.raw` is `{expr}`. A finished `cel` step is not
+  evaluated again on [`--resume`](#resuming-a-run-cof-run---resume), like any
+  other finished effect.
+
+electricity does not run the `cel` tool yet: a document that names it is
+refused with the preview message.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 
@@ -1645,7 +1694,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 
 ### CEL Expressions
 
-CEL expressions (in `if.expr` and `while.expr`) evaluate against a root object named `state`.
+CEL expressions (in `if.expr`, `while.expr` and the [`cel` tool](#cel-a-value-computed-with-cel)'s `expr`) evaluate against a root object named `state`.
 
 | ✅ Correct | ❌ Wrong |
 |-----------|---------|

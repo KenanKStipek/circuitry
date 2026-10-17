@@ -44,9 +44,9 @@ release alongside the Python distributions, marked as a preview.
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds 13 of Circuitry's 75 tool
+- **Tool providers.** electricity builds 13 of Circuitry's 76 tool
   plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other 62 is refused before the run starts; a plan compiled
+  any of the other 63 is refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails

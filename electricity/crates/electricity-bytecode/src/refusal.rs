@@ -885,6 +885,29 @@ mod tests {
     }
 
     #[test]
+    fn cel_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
+        // `cel` (issue #597) is a cof-only plugin until it is ported: a CEL
+        // map here has no key order, and the tool's result keeps it.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"cel"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("value"),
+            LeafKind::Tool(tool_op_with_provider(
+                "cel",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("cel".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("cel"));
+    }
+
+    #[test]
     fn a_document_with_both_an_unknown_name_and_a_known_unbuilt_plugin_still_refuses() {
         // Issue #511's own requirement: a document holding both keeps
         // the preview refusal -- here the unknown name comes *first* in

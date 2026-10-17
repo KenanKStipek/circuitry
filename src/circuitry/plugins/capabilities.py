@@ -122,6 +122,7 @@ PLUGIN_CAPABILITIES: dict[str, frozenset[str]] = {
 NO_CAPABILITIES: frozenset[str] = frozenset(
     {
         "clock",
+        "cel",
         "math",
         "regex",
         "json",
