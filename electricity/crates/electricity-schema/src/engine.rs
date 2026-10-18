@@ -3874,6 +3874,34 @@ mod tests {
     /// alone could never close it, unlike a margin sized against the
     /// fixed algorithm's own wall-clock time at a size chosen only to
     /// just clear it.
+    /// A pattern compiles once per (pattern, backtrack limit) until the
+    /// cache is cleared; a compile error is cached and returned as is.
+    #[test]
+    fn compiled_pattern_compiles_once_per_pattern_and_limit() {
+        clear_pattern_cache();
+        let a = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        let b = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            std::rc::Rc::ptr_eq(&a, &b),
+            "same pattern and limit: a cache hit"
+        );
+        let c = compiled_pattern("^a+$", "^a+$", 2000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &c),
+            "a different limit is its own entry"
+        );
+        clear_pattern_cache();
+        let d = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &d),
+            "a cleared cache compiles again"
+        );
+        let e1 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        let e2 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        assert_eq!(e1, e2);
+        clear_pattern_cache();
+    }
+
     #[test]
     fn uniq_items_of_lists_stays_fast_at_scale() {
         // Shuffled (a simple LCG), not ascending/descending -- an

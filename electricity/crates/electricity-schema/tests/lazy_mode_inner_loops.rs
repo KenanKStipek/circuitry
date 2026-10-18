@@ -119,3 +119,60 @@ fn not_wrapping_all_of_stops_at_the_first_failing_branch() {
     }"##;
     assert_eq!(check(schema, "1"), PromptSchemaCheck::Valid);
 }
+
+/// The same rule inside `items`: the first element fails `type`, so
+/// the second element, whose check would reach the dangling `$ref`, is
+/// never checked; `not` of an invalid `items` is valid.
+#[test]
+fn not_wrapping_items_stops_at_the_first_failing_element() {
+    let schema = r##"{"not": {"items": {"type": "integer", "$ref": "#/missing"}}}"##;
+    assert_eq!(check(schema, r#"["x", 1]"#), PromptSchemaCheck::Valid);
+}
+
+/// Inside `prefixItems`: the first position fails, so the second
+/// position's dangling `$ref` is never reached.
+#[test]
+fn not_wrapping_prefix_items_stops_at_the_first_failing_position() {
+    let schema = r##"{"not": {"prefixItems": [{"type": "string"}, {"$ref": "#/missing"}]}}"##;
+    assert_eq!(check(schema, "[1, 2]"), PromptSchemaCheck::Valid);
+}
+
+/// Inside `additionalProperties`: `a` fails `type`, so `b`, whose check
+/// would reach the dangling `$ref`, is never checked.
+#[test]
+fn not_wrapping_additional_properties_stops_at_the_first_failing_property() {
+    let schema = r##"{"not": {"additionalProperties": {"type": "integer", "$ref": "#/missing"}}}"##;
+    assert_eq!(
+        check(schema, r#"{"a": "x", "b": 1}"#),
+        PromptSchemaCheck::Valid
+    );
+}
+
+/// Inside `dependentSchemas`: the schema for `a` fails, so the schema
+/// for `b`, a dangling `$ref`, is never reached.
+#[test]
+fn not_wrapping_dependent_schemas_stops_at_the_first_failing_dependency() {
+    let schema = r##"{
+        "not": {
+            "dependentSchemas": {
+                "a": {"properties": {"a": {"type": "string"}}},
+                "b": {"$ref": "#/missing"}
+            }
+        }
+    }"##;
+    assert_eq!(
+        check(schema, r#"{"a": 1, "b": 2}"#),
+        PromptSchemaCheck::Valid
+    );
+}
+
+/// Inside `propertyNames`: the name `ab` fails `maxLength`, so the name
+/// `c`, whose check would reach the dangling `$ref`, is never checked.
+#[test]
+fn not_wrapping_property_names_stops_at_the_first_failing_name() {
+    let schema = r##"{"not": {"propertyNames": {"maxLength": 1, "$ref": "#/missing"}}}"##;
+    assert_eq!(
+        check(schema, r#"{"ab": 1, "c": 2}"#),
+        PromptSchemaCheck::Valid
+    );
+}
