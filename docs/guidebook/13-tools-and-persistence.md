@@ -27,7 +27,7 @@ A tool effect is a plugin call. Reading a file, fetching a URL, querying SQL, se
 
 `provider` names the plugin. `params` is the plugin's own vocabulary — every string value is a Mustache template — and for the two media plugins that predate `params`, `prompt` and `model` are top-level shorthand (`params` wins when both are given). The result lands at `prime.<name>.value` in whatever shape the plugin documents: a path, a parsed document, a list of records. A plugin that runs a program returns its standard output, and records `stdout`, `stderr` and `exit_code` in `meta`. A non-zero exit fails the step unless `allow_nonzero: true` is set — `rg` exits 1 when nothing matches, and `pytest` exits 1 when a test fails, and an agent wants to read both answers rather than stop on them. When the program prints JSON, add `parse: json` (`shell` and the plugins that run a program accept it) and `value` is the parsed document rather than the text, with the raw stdout still on `meta.stdout`; empty or invalid output fails the step, and a non-zero exit's output is parsed too under `allow_nonzero`. A run with many such steps saves each output twice; `runtime.state.parsed_stdout: drop` leaves `meta.stdout` null on a step whose output parsed and records its length and SHA-256 instead (`stdout_chars`, `stdout_sha256`), so keep the default, `full`, if a later step reads `meta.stdout`. [The reference](../orchestration-reference.md#recording-parsed-stdout-runtimestateparsed_stdout) has the details.
 
-One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `http` takes a credential from host config as a header value, `{secret: <name>}`, resolved at dispatch and kept out of every record, and its `redirects` param decides whether a redirect is followed and with which headers (see [Configuration](./04-configuration.md#secrets-for-a-request-header-or-a-tools-environment)). `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
+One failure contract covers every plugin: a tool effect fails — `meta.error` set, `on_error` applies — exactly when the plugin raises or returns a result with `ok: false`, with no other way to signal it. `meta.exit_code` means a process exit code and nothing else; it is `null` for every plugin that doesn't wrap a binary. `http`/`web_fetch`/`webhook`/`linear` fail on a 4xx/5xx response by default (the status lands on `meta.status_code`, not `exit_code`) — pass `fail_on_error: false` on the effect to get the old always-succeeds behaviour back. `http` takes a credential from host config as a header value, `{secret: <name>}`, resolved at dispatch and kept out of every record, and its `redirects` param decides whether a redirect is followed and with which headers (see [Configuration](./04-configuration.md#secrets-for-a-request-header-or-a-tools-environment)). With `save_to`, `http` writes a 2xx body to a file as raw bytes instead of decoding it — an image or an archive — and `value` is `{path, bytes, sha256, content_type, status}`; no record holds the body (see [below](#downloading-a-file-with-http)). `wikipedia`/`dns`/`port_check`/`validate_yaml` treat a negative result (page not found, NXDOMAIN, closed port, invalid document) as information, not a tool failure: they stay `ok: true` and report it on `value`/`raw` instead. Every tool effect also gets `meta.raw` — the plugin's own raw response, redacted and size-capped — reachable on an `ok: false` failure (the plugin still returned a result); a plugin that raises leaves `meta.raw` unset, since there's no result to read it from. A prompt effect never sets it.
 
 A value rendered into `params` is always a string, so a list from an earlier step arrives as its string form. When a tool needs a real array or object built at run time, write `params_json`: a template that renders to a JSON object, which is parsed and deep-merged over `params` (its keys win). A list or object from state renders into it as JSON:
 
@@ -153,6 +153,21 @@ Two are gated on purpose. `shell` runs a single binary from an allowlist that is
   }
 }
 ```
+
+### Downloading a file with `http`
+
+`http` decodes a response body as text, which is wrong for an image or an archive. Name a file with `save_to` and a 2xx body is written to it as raw bytes:
+
+```yaml
+- type: tool
+  name: logo
+  provider: http
+  params:
+    url: "https://example.com/logo.png"
+    save_to: assets/logo.png
+```
+
+`prime.logo.value` is then `{path, bytes, sha256, content_type, status}`, and the body itself is in the file and nowhere else: not in state, not in events, not in an error. The path is relative to the run's working directory, or to a `within:` directory, and must stay inside it once symlinks are resolved; an existing file is replaced only with `overwrite: true`, and `max_bytes` (100 MiB by default) stops a runaway download. Every path problem fails the effect before the request is sent, a failure leaves no partial file, and a non-2xx response writes nothing. Only a document you run by path may save a file. [The reference](../orchestration-reference.md#saving-a-response-body-to-a-file-https-save_to) has every rule.
 
 ### Delegating to a coding agent
 

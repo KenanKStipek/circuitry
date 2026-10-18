@@ -2065,7 +2065,8 @@ def test_a_profile_cannot_switch_an_http_tool_to_systemone(
             "url": "http://127.0.0.1:1/",
             "model": "m",
             "state_file": str(secret),
-            "within": "/",
+            # No `within`: a limited document's http effect may not name one
+            # (#602), which would refuse it before the profile applies.
             "questions": QUESTIONS,
         },
     )

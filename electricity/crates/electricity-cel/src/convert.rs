@@ -14,11 +14,11 @@
 //! limit themselves, before reaching here), unlike every *other*
 //! recursive path in this crate (the `cel`-crate-owned parse tree, and
 //! this crate's own `paths`/`equality`/`ordering` walks over it), which
-//! is a `cel`-crate-owned structure already bounded by
-//! `nesting::MAX_NESTING_DEPTH` -- not just its *bracket* nesting, but
-//! every binary-operator and member/index/call chain within it too
-//! (`nesting.rs`'s own module docs explain why bracket nesting alone
-//! was not enough).
+//! is a `cel`-crate-owned structure already bounded by the five caps
+//! `nesting::max_nesting_depths` tracks -- not just bracket nesting, but
+//! every binary-operator, `&&`/`||`/unary, and member/index/call chain
+//! within it too (`nesting.rs`'s own module docs explain why bracket
+//! nesting alone was not enough).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -80,11 +80,11 @@ pub fn to_cel(value: &Value) -> Result<cel::Value, ConvertError> {
 /// `List`/`Dict` child -- not [`Value::depth`] computed once up front,
 /// so a value deep enough to matter is rejected as soon as the walk
 /// reaches that depth rather than after a full, separate traversal just
-/// to measure it. Shares [`Value::depth`]'s own off-by-one against
-/// `electricity-json`'s reader/writer for an empty innermost container
-/// (that function's own docs): an empty `List`/`Dict` never recurses
-/// here either, so the deepest *checked* level is one less than
-/// `electricity-json` would count for the same shape.
+/// to measure it. Checks `depth + 1` against the limit as soon as a
+/// `List`/`Dict` is matched, not only when recursing into a child, so an
+/// *empty* innermost container is counted the same as a non-empty one --
+/// matching [`Value::depth`]'s own, same fix for the shape that used to
+/// make the two quietly disagree by one (that function's own docs).
 fn to_cel_at_depth(value: &Value, depth: usize) -> Result<cel::Value, ConvertError> {
     if depth > electricity_value::MAX_DEPTH {
         return Err(ConvertError::Depth);
@@ -97,13 +97,21 @@ fn to_cel_at_depth(value: &Value, depth: usize) -> Result<cel::Value, ConvertErr
         Value::Str(s) => cel::Value::String(Arc::new(s.clone())),
         Value::Bytes(b) => cel::Value::Bytes(Arc::new(b.clone())),
         Value::List(items) => {
+            if depth + 1 > electricity_value::MAX_DEPTH {
+                return Err(ConvertError::Depth);
+            }
             let mut out = Vec::with_capacity(items.len());
             for item in items {
                 out.push(to_cel_at_depth(item, depth + 1)?);
             }
             cel::Value::List(Arc::new(out))
         }
-        Value::Dict(entries) => cel::Value::Map(dict_to_cel(entries, depth)?),
+        Value::Dict(entries) => {
+            if depth + 1 > electricity_value::MAX_DEPTH {
+                return Err(ConvertError::Depth);
+            }
+            cel::Value::Map(dict_to_cel(entries, depth)?)
+        }
         Value::Date(_) => cel::Value::Null,
         Value::DateTime(naive, offset) => {
             let offset = offset.unwrap_or_else(|| FixedOffset::east_opt(0).expect("0 is valid"));

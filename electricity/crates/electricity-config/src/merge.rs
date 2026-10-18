@@ -18,6 +18,11 @@ use electricity_value::{Dict, Value};
 /// key replaces wholesale.
 const DEEP_MERGE_RUNTIME_KEYS: [&str; 2] = ["plugins", "adapters"];
 
+/// `_NAME_MERGE_RUNTIME_KEYS` (issue #601): a document's `secrets.<name>`
+/// adds to the host's secrets, and one with a host secret's name replaces
+/// that whole definition.
+const NAME_MERGE_RUNTIME_KEYS: [&str; 1] = ["secrets"];
+
 /// `_CEILING_LIST_KEYS`: `(top_key, name, leaf_key)` triples the merge
 /// re-narrows to a host/document intersection after the ordinary merge,
 /// rather than letting either side simply replace the other's list.
@@ -110,15 +115,19 @@ pub fn merge_runtime(
         for (key, value) in document_dict {
             let key_str = key.as_str();
             let deep = key_str.is_some_and(|k| DEEP_MERGE_RUNTIME_KEYS.contains(&k));
-            let recursed = if deep {
-                match (merged.get(key), value) {
-                    (Some(Value::Dict(base)), Value::Dict(overlay)) => {
-                        Some(Value::Dict(deep_merge_dicts(base, overlay)))
-                    }
-                    _ => None,
+            let by_name = key_str.is_some_and(|k| NAME_MERGE_RUNTIME_KEYS.contains(&k));
+            let recursed = match (merged.get(key), value) {
+                (Some(Value::Dict(base)), Value::Dict(overlay)) if deep => {
+                    Some(Value::Dict(deep_merge_dicts(base, overlay)))
                 }
-            } else {
-                None
+                (Some(Value::Dict(base)), Value::Dict(overlay)) if by_name => {
+                    let mut by_name = base.clone();
+                    for (name, definition) in overlay {
+                        by_name.insert(name.clone(), definition.clone());
+                    }
+                    Some(Value::Dict(by_name))
+                }
+                _ => None,
             };
             merged.insert(key.clone(), recursed.unwrap_or_else(|| value.clone()));
         }
@@ -204,6 +213,42 @@ mod tests {
             .unwrap();
         assert!(!complexity.contains_key(&Value::Str("scoring".into())));
         assert!(complexity.contains_key(&Value::Str("routing".into())));
+    }
+
+    #[test]
+    fn secrets_merge_by_name_and_a_document_definition_replaces_the_hosts() {
+        let config = dict_of(vec![(
+            "secrets",
+            dict_of(vec![
+                ("api", dict_of(vec![("env", Value::from("HOST_API"))])),
+                (
+                    "shared",
+                    nested(&["keychain", "service"], Value::from("host-svc")),
+                ),
+            ]),
+        )]);
+        let document = dict_of(vec![(
+            "secrets",
+            dict_of(vec![
+                ("shared", dict_of(vec![("env", Value::from("DOC_SHARED"))])),
+                ("doc_tok", dict_of(vec![("env", Value::from("DOC_TOK"))])),
+            ]),
+        )]);
+        let merged = merge_runtime(Some(&config), Some(&document)).unwrap();
+        let secrets = merged
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("secrets".into()))
+            .unwrap()
+            .clone();
+        assert_eq!(
+            secrets,
+            dict_of(vec![
+                ("api", dict_of(vec![("env", Value::from("HOST_API"))])),
+                ("shared", dict_of(vec![("env", Value::from("DOC_SHARED"))])),
+                ("doc_tok", dict_of(vec![("env", Value::from("DOC_TOK"))])),
+            ])
+        );
     }
 
     #[test]

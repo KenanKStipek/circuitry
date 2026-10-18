@@ -1,0 +1,6 @@
+- request: {method: GET, path: /missing.png}
+  response:
+    status: 404
+    reason: Not Found
+    headers: {Content-Type: text/plain}
+    body: "no such image"

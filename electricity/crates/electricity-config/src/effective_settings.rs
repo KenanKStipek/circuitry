@@ -75,6 +75,9 @@ pub struct EffectiveSettings {
 const ORCHESTRATION_RUNTIME_KEYS: [&str; 2] = ["complexity", "state"];
 /// `_NOTICE_KEY_DEPTH`.
 const NOTICE_KEY_DEPTH: usize = 2;
+/// `_NOTICE_KEY_DEPTHS`: a secret is named by its name alone,
+/// `runtime.secrets.<name>` (issue #601).
+const SECRETS_NOTICE_KEY_DEPTH: usize = 1;
 /// `_CEILING_LIST_KEYS`.
 const CEILING_LIST_KEYS: [(&str, &str, &str); 1] = [("plugins", "shell", "allowed_commands")];
 
@@ -148,7 +151,11 @@ fn applied_host_settings_notice(
         for path in key_paths(
             &format!("runtime.{}", key_label(key)),
             value,
-            NOTICE_KEY_DEPTH,
+            if key_str == Some("secrets") {
+                SECRETS_NOTICE_KEY_DEPTH
+            } else {
+                NOTICE_KEY_DEPTH
+            },
         ) {
             if ceiling_paths.contains(&path) {
                 runtime_paths.push(format!("{path} (intersected with host pin)"));
@@ -643,6 +650,27 @@ mod tests {
         assert_eq!(
             settings.warnings,
             vec!["Applied host settings from doc.yml: runtime.max_concurrency".to_string()]
+        );
+    }
+
+    #[test]
+    fn applied_host_settings_notice_names_a_secret_by_its_name_alone() {
+        let config = CircuitryConfig::default();
+        let mut definition = Dict::new();
+        definition.insert(Value::Str("env".to_string()), Value::from("TOKEN"));
+        let mut secrets = Dict::new();
+        secrets.insert(Value::Str("doc_tok".to_string()), Value::Dict(definition));
+        let mut runtime = Dict::new();
+        runtime.insert(Value::Str("secrets".to_string()), Value::Dict(secrets));
+        let settings = effective_settings(
+            &config,
+            &doc(vec![("runtime", Value::Dict(runtime))]),
+            Some("doc.yml"),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.warnings,
+            vec!["Applied host settings from doc.yml: runtime.secrets.doc_tok".to_string()]
         );
     }
 

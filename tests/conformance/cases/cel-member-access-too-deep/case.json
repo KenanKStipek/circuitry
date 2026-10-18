@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #403: a member-access chain past electricity's own MAX_ACCESSOR_NESTING_DEPTH",
+  "description": "A 613-link member-access chain fails Circuitry itself before the document ever runs: path collection walks the whole parse tree once per '.' link with no recursion guard, so the RecursionError it raises escapes every try/except in core/cel_eval.py uncaught, with no 'CEL evaluation failed for ...' wrapping and no effect-path prefix, just Python's own bare exception text. electricity matches the phase (rejected at compile time, the document never runs) and the simpler of Circuitry's two observed text forms; only the shared 'maximum recursion depth exceeded' substring is compared, since Circuitry's own exact wording varies by call context.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "maximum recursion depth exceeded",
+  "python_runner_versions": ["3.11"]
+}

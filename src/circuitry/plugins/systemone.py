@@ -361,7 +361,7 @@ def static_param_errors(
             if key in params
         )
     if has_within:
-        within_errors = _within_errors(params["within"])
+        within_errors = within_param_errors(params["within"])
         errors.extend(within_errors)
         if (
             not within_errors
@@ -396,7 +396,9 @@ def _is_inside(path: Path, root: Path) -> bool:
     return path_is_inside(path.resolve(strict=False), root.resolve(strict=False))
 
 
-def _within_errors(within: Any) -> list[str]:
+def within_param_errors(within: Any) -> list[str]:
+    """Why a document's literal ``params.within`` is not a literal absolute
+    path or ``{from: input.<name>}`` (also ``http``'s, for ``save_to``)."""
     reference = param_reference(within)
     if reference is not None:
         if not _WITHIN_INPUT_PATH.fullmatch(reference.path.strip()):

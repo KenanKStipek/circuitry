@@ -743,7 +743,9 @@ def _do_validate(
     if result["ok"]:
         console.print("[green]Valid[/green]")
         if result.get("secrets"):
-            console.print(f"[bold]Secrets:[/bold] {escape(', '.join(result['secrets']))}")
+            sources = result["secret_sources"]
+            listed = ", ".join(f"{name} ({sources[name]})" for name in result["secrets"])
+            console.print(f"[bold]Secrets:[/bold] {escape(listed)}")
     else:
         console.print("[red]Invalid[/red]")
         for e in result.get("errors", []):

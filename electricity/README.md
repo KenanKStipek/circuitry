@@ -61,6 +61,11 @@ release alongside the Python distributions, marked as a preview.
   that only a `use` child or a generated plan names fails that effect
   with the preview message instead, like a text encoding, so `on_error`
   can absorb it.
+- **`http`'s `save_to`.** electricity does not save a response body to a
+  file (issue #602). A document whose `http` params name `save_to` is
+  refused before the run starts; one that `params_json` adds fails that
+  effect with the preview message before any request, so `on_error` can
+  absorb it.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
 - **Persistence and resume.** `runtime.persistence` is refused. There is
