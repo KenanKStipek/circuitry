@@ -3415,5 +3415,26 @@ mod tests {
             elapsed < std::time::Duration::from_millis(500),
             "one redraw of a 2000-node state took {elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
         );
+
+        // Issue #613: folding runs on every rebuild too (at most once
+        // a second) -- a single depth-first pass over `rendered.rows`
+        // (build the tree, fold, flatten back), never anything
+        // quadratic in the row count.
+        let fold_start = std::time::Instant::now();
+        let folded = crate::fold::fold_rows(
+            rendered.rows.clone(),
+            true,
+            &std::collections::BTreeSet::new(),
+        );
+        let fold_elapsed = fold_start.elapsed();
+        // This fixture's own timestamps (`t0`, `t1`, ...) aren't real
+        // RFC-3339, so none of these rows has a known duration to
+        // fold by at all -- the row count is unchanged either way;
+        // what this pins is that folding 2000 rows is still fast.
+        assert_eq!(folded.len(), rendered.rows.len());
+        assert!(
+            fold_elapsed < std::time::Duration::from_millis(500),
+            "folding a 2000-row tree took {fold_elapsed:?}, over 5x the 100ms REDRAW_INTERVAL"
+        );
     }
 }
