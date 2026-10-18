@@ -1088,6 +1088,26 @@ fn validate_prompt_schema_impl(
                 }
             }
         }
+    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        // Issue #507's own item 0: `fully_supported` above is `false`
+        // because [`engine::schema_is_fully_supported`]'s own walk
+        // returned early at the first crate-only keyword it saw --
+        // never because it measured this schema's own `$ref` chain and
+        // found it too deep ([`engine::recursion_exceeded_peek`] would
+        // have caught that already, above). A long `$defs` chain
+        // reachable only through a *later* sibling (never visited by
+        // that short-circuiting walk) still overflows the crate's own
+        // eager, far-more-stack-hungry `$ref` resolution once it's deep
+        // enough -- a process abort with no state written at all, past
+        // roughly 30,000 hops even on this module's own dedicated,
+        // large-stack validation thread. Measured directly against the
+        // same cap [`engine::schema_is_fully_supported`]'s own walk
+        // already uses, so the verdict and text match the engine path's
+        // for the same chain length, and the crate is never even built
+        // on a schema already known to be this deep.
+        PromptSchemaCheck::SchemaError(
+            "maximum recursion depth exceeded while calling a Python object".to_string(),
+        )
     } else {
         // The crate decides -- an unsupported keyword, or a pre-2020-12
         // draft (`DESIGN.md` §13 names both as accepted, narrower gaps

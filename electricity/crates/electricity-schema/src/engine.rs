@@ -1316,6 +1316,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, subschema) in properties.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(name) = prop_key.as_str() else {
                         continue;
                     };
@@ -1352,10 +1355,16 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (pattern_key, subschema) in patterns.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(pattern) = pattern_key.as_str() else {
                         continue;
                     };
                     for (prop_key, prop_instance) in obj.iter() {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let Some(name) = prop_key.as_str() else {
                             continue;
                         };
@@ -1489,6 +1498,9 @@ pub(crate) fn evaluate<'a>(
                         child_schema_path
                             .push(PathSegment::Key("additionalProperties".to_string()));
                         for extra_key in &extras {
+                            if lazy_should_stop(out) {
+                                break;
+                            }
                             let prop_instance = obj.get(*extra_key).expect("just found above");
                             let mut child_path = path.to_vec();
                             child_path.push(match extra_key.as_str() {
@@ -1545,6 +1557,9 @@ pub(crate) fn evaluate<'a>(
                 for (index, (subschema, element)) in
                     item_schemas.iter().zip(elements.iter()).enumerate()
                 {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let mut child_path = path.to_vec();
                     child_path.push(PathSegment::Index(index));
                     let mut child_schema_path = schema_path.to_vec();
@@ -1581,6 +1596,9 @@ pub(crate) fn evaluate<'a>(
                     Value::Bool(true) => {}
                     _ => {
                         for (offset, element) in rest.iter().enumerate() {
+                            if lazy_should_stop(out) {
+                                break;
+                            }
                             let mut child_path = path.to_vec();
                             child_path.push(PathSegment::Index(prefix + offset));
                             let mut child_schema_path = schema_path.to_vec();
@@ -1653,6 +1671,9 @@ pub(crate) fn evaluate<'a>(
                     });
                 } else {
                     for (index, element) in elements.iter().enumerate().skip(prefix) {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let mut child_path = path.to_vec();
                         child_path.push(PathSegment::Index(index));
                         let mut child_schema_path = schema_path.to_vec();
@@ -1675,6 +1696,9 @@ pub(crate) fn evaluate<'a>(
                 for (index, (subschema, element)) in
                     prefix_schemas.iter().zip(elements.iter()).enumerate()
                 {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let mut child_path = path.to_vec();
                     child_path.push(PathSegment::Index(index));
                     let mut child_schema_path = schema_path.to_vec();
@@ -1964,6 +1988,9 @@ pub(crate) fn evaluate<'a>(
                 // violations flow straight into `out`, never wrapped.
                 if let Value::List(subschemas) = value {
                     for (index, subschema) in subschemas.iter().enumerate() {
+                        if lazy_should_stop(out) {
+                            break;
+                        }
                         let mut child_schema_path = schema_path.to_vec();
                         child_schema_path.push(PathSegment::Key("allOf".to_string()));
                         child_schema_path.push(PathSegment::Index(index));
@@ -2030,6 +2057,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, dependency) in dependent.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(property) = prop_key.as_str() else {
                         continue;
                     };
@@ -2053,6 +2083,9 @@ pub(crate) fn evaluate<'a>(
                     continue;
                 };
                 for (prop_key, dependency) in dependent.iter() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     let Some(depends_on) = prop_key.as_str() else {
                         continue;
                     };
@@ -2166,6 +2199,9 @@ pub(crate) fn evaluate<'a>(
                 let mut child_schema_path = schema_path.to_vec();
                 child_schema_path.push(PathSegment::Key("propertyNames".to_string()));
                 for prop_key in obj.keys() {
+                    if lazy_should_stop(out) {
+                        break;
+                    }
                     if prop_key.as_str().is_some() {
                         evaluate(value, prop_key, root, path, &child_schema_path, out);
                     }
@@ -2224,6 +2260,28 @@ thread_local! {
 
 fn lazy_mode_active() -> bool {
     LAZY_MODE.with(|m| m.get())
+}
+
+/// Whether a keyword's own *internal* loop over several siblings
+/// (`properties`' own properties, `patternProperties`' own patterns and
+/// property names, `items`/`prefixItems`' own elements, `allOf`'s own
+/// subschemas, ...) must stop before its next iteration: Python's own
+/// `next(iter_errors(instance), None) is None` pulls exactly one value
+/// from the *entire* nested `iter_errors` generator tree, `yield from`
+/// flattening every nested validator call into that one generator --
+/// not just between a schema's own top-level keywords ([`evaluate`]'s
+/// own per-keyword check already stops there), but inside a single
+/// keyword's own loop over several properties/elements/subschemas too.
+/// A sibling this loop would otherwise reach next (e.g. a dangling
+/// `$ref`) must then never run at all: issue #507's own
+/// example, `not: {properties: {a: {type: string}, b: {$ref:
+/// '#/missing'}}}` against `{a: 1, b: 2}`, is `Valid` in Python (`a`'s
+/// own violation is the first and only one `next()` ever sees -- `b`'s
+/// `$ref` is never reached, so [`raise_python_exception`] never fires)
+/// but used to be a `PointerToNowhere` failure here, since nothing
+/// stopped this loop from reaching `b` once `a` already failed.
+fn lazy_should_stop(out: &[Violation]) -> bool {
+    lazy_mode_active() && !out.is_empty()
 }
 
 struct LazyModeGuard(bool);
@@ -3057,6 +3115,104 @@ fn schema_is_fully_supported_inner(
         }),
         _ => false,
     }
+}
+
+/// Whether *root*'s own `$ref` graph has a hop chain reaching
+/// [`MAX_RECURSION_DEPTH`] -- [`crate::validate_prompt_schema_impl`]'s
+/// own guard against handing the `jsonschema` crate a schema whose
+/// `$ref` chain [`schema_is_fully_supported`] never actually walked
+/// (issue #507's own item 0): that walk's own `dict.iter().all(...)`
+/// short-circuits at the *first* unsupported keyword it sees (e.g. a
+/// root-level `unevaluatedProperties`), so a long `$defs` chain reached
+/// only through a *later* sibling key (`properties`, say) never gets
+/// measured at all -- [`recursion_exceeded_peek`] then reads `false`,
+/// and the schema falls straight through to the crate's own eager
+/// `$ref` resolution, which needs far more native stack per hop than
+/// this engine's own bounded walk ever had to (the same chain that's
+/// fine at 10,000 hops aborts the process past roughly 30,000). This
+/// walk never short-circuits on keyword support at all -- every dict
+/// value and list element is a plain structural edge (never counted
+/// toward the hop total, the same convention
+/// [`schema_is_fully_supported_inner`]'s own `depth` parameter already
+/// uses: `properties`'s own per-key recursion passes `depth`
+/// unchanged) -- so a chain hidden under any keyword, supported or
+/// not, is still found.
+///
+/// Longest-path, not first-path: memoized by node identity once a
+/// node's own subtree has been fully explored, with cycle-cutting via
+/// *active* (the current path only, unlike
+/// [`schema_is_fully_supported_inner`]'s own never-popped `seen` --
+/// this needs the *true* longest path, not just "supported or not", so
+/// a back edge found near the top of a recursive-schema tree must only
+/// ever cut *that* edge, not stop one lucky shallow path from poisoning
+/// a later, deeper-reaching one through the same node). A real cycle
+/// (a `$defs` entry referencing itself, or a bare `$ref` to the whole
+/// document) is structurally infinite, but legitimate (a tree/linked-
+/// list schema); cutting it at the back edge -- contributing zero
+/// further hops from there, never treating the cycle as unbounded --
+/// is what keeps this from wrongly flagging an ordinary recursive
+/// schema just because it also happens to use a crate-only keyword
+/// somewhere.
+pub(crate) fn ref_chain_depth_exceeds_cap(schema: &Value, root: &Value) -> bool {
+    let mut memo = std::collections::HashMap::new();
+    let mut active = std::collections::HashSet::new();
+    longest_ref_chain(schema, root, &mut memo, &mut active) >= MAX_RECURSION_DEPTH
+}
+
+fn longest_ref_chain(
+    node: &Value,
+    root: &Value,
+    memo: &mut std::collections::HashMap<*const Value, usize>,
+    active: &mut std::collections::HashSet<*const Value>,
+) -> usize {
+    let ptr: *const Value = node;
+    if let Some(&cached) = memo.get(&ptr) {
+        return cached;
+    }
+    // A back edge to a node still on the active path: a structural
+    // cycle, cut here rather than explored again (see the doc comment
+    // above) -- never memoized, since the *true* longest path through
+    // this node depends on where the cycle is entered from.
+    if active.contains(&ptr) {
+        return 0;
+    }
+    // Already as deep as this engine's own cap can tell apart from
+    // genuinely unbounded -- stop descending rather than growing this
+    // walk's own Rust call stack any further (this function recurses
+    // once per structural edge, exactly like
+    // [`schema_is_fully_supported_inner`] already does).
+    if active.len() >= MAX_RECURSION_DEPTH || stack_budget_exceeded() {
+        return MAX_RECURSION_DEPTH;
+    }
+    active.insert(ptr);
+    let mut longest = 0usize;
+    match node {
+        Value::Dict(dict) => {
+            for (k, v) in dict.iter() {
+                if k.as_str() == Some("$ref") {
+                    if let Some(pointer) = v.as_str() {
+                        if is_same_document_pointer_syntax(pointer) {
+                            if let Some(resolved) = resolve_ref(root, pointer) {
+                                let hop = 1 + longest_ref_chain(resolved, root, memo, active);
+                                longest = longest.max(hop);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                longest = longest.max(longest_ref_chain(v, root, memo, active));
+            }
+        }
+        Value::List(items) => {
+            for v in items {
+                longest = longest.max(longest_ref_chain(v, root, memo, active));
+            }
+        }
+        _ => {}
+    }
+    active.remove(&ptr);
+    memo.insert(ptr, longest);
+    longest.min(MAX_RECURSION_DEPTH)
 }
 
 /// Whether *instance* validates against *branch* at all, via this
