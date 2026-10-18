@@ -51,7 +51,18 @@ pub fn diff(old: Option<&RenderState>, new: &RenderState) -> Vec<String> {
         match old_state.get(row.path.as_str()) {
             None => changed.push(format!("state:{}", row.path)),
             Some(prev) => {
-                if prev.status != row.status || prev.dim != row.dim || prev.tokens != row.tokens {
+                // Issue #613: a running row's own `dim` carries its
+                // live elapsed time, which ticks every rebuild on its
+                // own -- comparing it here would highlight a row for
+                // no reason other than time passing. A row that is
+                // running in *either* observation skips the `dim`
+                // compare entirely (status/tokens still catch every
+                // real change, including the one where it stops
+                // running).
+                let skip_dim = prev.status.kind == crate::model::StatusKind::Running
+                    || row.status.kind == crate::model::StatusKind::Running;
+                let dim_changed = !skip_dim && prev.dim != row.dim;
+                if prev.status != row.status || dim_changed || prev.tokens != row.tokens {
                     changed.push(format!("state:{}", row.path));
                 }
             }
@@ -193,6 +204,30 @@ mod tests {
         }});
         let old = render(&state, "t1", 1.0);
         let new = render(&state, "t1", 9.0);
+        assert_eq!(diff(Some(&old), &new), Vec::<String>::new());
+    }
+
+    /// Issue #613: a running row's own elapsed (both the orchestration
+    /// pane's `Row::duration_s` and the state pane's own `dim`), the
+    /// header's own elapsed, and the innermost loop's ETA all tick
+    /// every rebuild on their own -- none of that, alone, is ever a
+    /// reported change, even across two observations with a
+    /// genuinely different `now`.
+    #[test]
+    fn a_running_rows_elapsed_the_headers_elapsed_and_the_eta_never_count_as_a_change() {
+        let state = json!({"prime": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null},
+            "running": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null}},
+            "loop": {"value": null, "meta": {"completed_at": null, "mode": "each",
+                "progress": {"done": 1, "total": 4, "eta_s": 30.0}},
+                "iter_0": {"value": "", "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z"}}
+            }
+        }});
+        let old = render(&state, "2026-01-01T00:00:01Z", 1.0);
+        let new = render(&state, "2026-01-01T00:00:09Z", 9.0);
+        assert_ne!(
+            old.header.elapsed_s, new.header.elapsed_s,
+            "the fixture should actually exercise a changing elapsed/ETA"
+        );
         assert_eq!(diff(Some(&old), &new), Vec::<String>::new());
     }
 

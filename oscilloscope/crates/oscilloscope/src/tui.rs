@@ -35,6 +35,19 @@ pub struct DrawCtx<'a> {
     /// header for about 2 seconds after a switch. `None` the rest of
     /// the time.
     pub theme_banner: Option<&'a str>,
+    /// Resolves a clock time to this run's own local calendar time
+    /// (issue #613): the real system zone in production
+    /// (`main::LocalZone`), a fixed offset in tests.
+    pub zone: &'a dyn oscilloscope_core::format::ClockZone,
+}
+
+/// A fixed UTC offset for tests that need a [`oscilloscope_core::
+/// format::ClockZone`] (issue #613) -- the real system zone is
+/// `main::LocalZone`, never used in these tests, so every clock-time
+/// assertion here is independent of the machine's own `TZ`.
+#[cfg(test)]
+fn test_zone() -> chrono::FixedOffset {
+    chrono::FixedOffset::east_opt(0).unwrap()
 }
 
 impl DrawCtx<'_> {
@@ -194,21 +207,6 @@ fn orchestration_name(document: &str) -> &str {
         .unwrap_or(document)
 }
 
-/// Thousands separators for the token bar's exact counts (issue
-/// #527: "exact counts (thousands separators)") — `u64` only, so no
-/// sign or fractional part to worry about.
-fn with_thousands_separators(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// DESIGN.md §6.3's own glyph table. `Aborted` and `LikelyRunning`/
 /// `RunningOrQueued` have no glyph of their own in that table — `?`
 /// for an abort (nothing else in the set means "unknown"), and the
@@ -250,14 +248,6 @@ fn status_style(kind: StatusKind, theme: &Theme) -> Style {
     }
 }
 
-fn format_duration(secs: f64) -> String {
-    if secs < 60.0 {
-        format!("{secs:.1}s")
-    } else {
-        format!("{}m{:02.0}s", (secs / 60.0) as u64, secs % 60.0)
-    }
-}
-
 fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     let indent = "  ".repeat(row.depth.saturating_sub(1));
     let glyph = status_glyph(row.status.kind);
@@ -280,7 +270,7 @@ fn row_line(row: &Row, selected: bool, ctx: &DrawCtx) -> Line<'static> {
     }
     if let Some(duration) = row.duration_s {
         spans.push(Span::styled(
-            format!("  {}", format_duration(duration)),
+            format!("  {}", oscilloscope_core::format::format_duration(duration)),
             Style::default().fg(ctx.theme.dim),
         ));
     }
@@ -325,8 +315,32 @@ fn draw_header(
         Some(planned) => format!("{}/{planned}", header.effects_done),
         None => header.effects_done.to_string(),
     };
-    let elapsed = format_duration(header.elapsed_s);
-    let tokens = format!("↑{} ↓{}", header.tokens_sent, header.tokens_received);
+    // Issue #613: the header also shows the run's own start ("since
+    // HH:MM:SS") while it's going, and once it has ended, its start
+    // and end ("HH:MM:SS–HH:MM:SS") -- through `ctx.zone`, never the
+    // machine's own zone read directly.
+    let clock_suffix = match (&header.run_start_ts, &header.run_end_ts) {
+        (Some(start), Some(end)) => match (
+            oscilloscope_core::format::format_clock_time(start, ctx.zone),
+            oscilloscope_core::format::format_clock_time(end, ctx.zone),
+        ) {
+            (Some(s), Some(e)) => format!(" ({s}–{e})"),
+            _ => String::new(),
+        },
+        (Some(start), None) => oscilloscope_core::format::format_clock_time(start, ctx.zone)
+            .map(|s| format!(" (since {s})"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let elapsed = format!(
+        "{}{clock_suffix}",
+        oscilloscope_core::format::format_duration(header.elapsed_s)
+    );
+    let tokens = format!(
+        "↑{} ↓{}",
+        oscilloscope_core::format::format_tokens(header.tokens_sent),
+        oscilloscope_core::format::format_tokens(header.tokens_received)
+    );
     // The icon widening by one column (issue #535) left a long
     // document path able to push `effects`/the token counts past the
     // header's own right edge with nothing left to draw them at all
@@ -345,8 +359,18 @@ fn draw_header(
         + effects.chars().count()
         + 2
         + tokens.chars().count();
-    if let Some(eta) = header.innermost_loop_eta_s {
-        suffix_len += 2 + "ETA ".len() + format_duration(eta).chars().count();
+    // The innermost loop's ETA, as a clock time (`~HH:MM`, issue
+    // #613), not a remaining duration -- `None` whenever the
+    // duration-based ETA is, so a missing `format_clock_time` parse
+    // (never happens for a real timestamp) just drops it, same as
+    // having no ETA at all.
+    let eta_clock = header
+        .innermost_loop_eta_ts
+        .as_deref()
+        .and_then(|ts| oscilloscope_core::format::format_clock_time(ts, ctx.zone))
+        .map(|hhmmss| hhmmss[..5].to_string());
+    if let Some(eta) = &eta_clock {
+        suffix_len += 2 + "ETA ~".len() + eta.chars().count();
     }
     if let Some(run_id) = &header.run_id {
         suffix_len += 2 + run_id.chars().count();
@@ -378,8 +402,8 @@ fn draw_header(
             with_highlight(Style::default(), ctx.highlight("header:tokens")),
         ),
     ];
-    if let Some(eta) = header.innermost_loop_eta_s {
-        line.push(Span::raw(format!("  ETA {}", format_duration(eta))));
+    if let Some(eta) = &eta_clock {
+        line.push(Span::raw(format!("  ETA ~{eta}")));
     }
     if let Some(run_id) = &header.run_id {
         line.push(Span::styled(
@@ -607,8 +631,8 @@ mod snippet_wrap_tests {
 }
 
 /// One `sent`/`received` block's own header line (issue #535):
-/// `sent  ↑ 1,234 tokens` or `received  ↓ ≈567 tokens` (an estimate),
-/// formatted the same way the token bar formats its own counts.
+/// `sent  ↑ 1.2 kt` or `received  ↓ ≈567 t` (an estimate), formatted
+/// the same way every other token count in `osi` is.
 fn token_block_header(
     label: &str,
     arrow: char,
@@ -617,13 +641,13 @@ fn token_block_header(
     let text = match block.tokens {
         Some(tokens) if block.estimated => {
             format!(
-                "{label}  {arrow} ≈{} tokens",
-                with_thousands_separators(tokens)
+                "{label}  {arrow} ≈{}",
+                oscilloscope_core::format::format_tokens(tokens)
             )
         }
         Some(tokens) => format!(
-            "{label}  {arrow} {} tokens",
-            with_thousands_separators(tokens)
+            "{label}  {arrow} {}",
+            oscilloscope_core::format::format_tokens(tokens)
         ),
         None => format!("{label}  {arrow}"),
     };
@@ -875,7 +899,11 @@ fn draw_state(
         lines.push(line);
         if let Some((sent, received)) = row.tokens {
             lines.push(Line::styled(
-                format!("{indent}  ↑{sent} ↓{received}"),
+                format!(
+                    "{indent}  ↑{} ↓{}",
+                    oscilloscope_core::format::format_tokens(sent),
+                    oscilloscope_core::format::format_tokens(received)
+                ),
                 Style::default().fg(ctx.theme.dim),
             ));
         }
@@ -946,11 +974,16 @@ fn draw_treemap(
         if is_selected {
             style = style.add_modifier(Modifier::REVERSED);
         }
+        let labelled = format!(
+            "{} {}",
+            cell.label,
+            oscilloscope_core::format::format_tokens(cell.total)
+        );
         if cell.has_children {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(truncate_label(
-                    &cell.label,
+                    &labelled,
                     rect.width.saturating_sub(2) as usize,
                 ))
                 .border_style(with_highlight(style, highlight));
@@ -977,7 +1010,7 @@ fn draw_treemap(
             let fill = with_highlight(fill, highlight);
             frame.render_widget(Block::default().style(fill), rect);
             if rect.width >= 2 {
-                let label = truncate_label(&cell.label, rect.width as usize);
+                let label = truncate_label(&labelled, rect.width as usize);
                 let text_style = Style::default().bg(color).fg(ctx.theme.on_accent);
                 let text_style = if is_selected {
                     text_style.add_modifier(Modifier::REVERSED)
@@ -1016,8 +1049,8 @@ fn draw_token_bar(
     ctx: &DrawCtx,
 ) {
     let inner_width = area.width.saturating_sub(2) as usize;
-    let sent_str = with_thousands_separators(header.tokens_sent);
-    let received_str = with_thousands_separators(header.tokens_received);
+    let sent_str = oscilloscope_core::format::format_tokens(header.tokens_sent);
+    let received_str = oscilloscope_core::format::format_tokens(header.tokens_received);
     // Finding 2: the line holds *two* bars, each with its own label and
     // exact count ("in  " + bar + " <sent>   " + "out  " + bar + "
     // <received>") — a fixed-width bar for each (the old `inner - 24`)
@@ -1058,39 +1091,54 @@ fn draw_token_bar(
             with_highlight(Style::default(), totals_highlight),
         ),
     ]);
-    let line2 = if token_bar.prompts_running == 0 {
+    let line2 = if token_bar.prompts_running == 0 && token_bar.agents_running == 0 {
         Line::from("nothing in flight")
     } else {
-        let plural = if token_bar.prompts_running == 1 {
-            ""
+        // Issue #613's "agents in flight": a running `agent` tool
+        // step is listed next to running prompts ("2 prompts · 1 agent
+        // in flight"), with no token estimate of its own.
+        let mut parts = Vec::new();
+        if token_bar.prompts_running > 0 {
+            let plural = if token_bar.prompts_running == 1 { "" } else { "s" };
+            parts.push(format!("{} prompt{plural}", token_bar.prompts_running));
+        }
+        if token_bar.agents_running > 0 {
+            let plural = if token_bar.agents_running == 1 { "" } else { "s" };
+            parts.push(format!("{} agent{plural}", token_bar.agents_running));
+        }
+        let in_flight = format!("{} in flight", parts.join(" · "));
+        if token_bar.prompts_running == 0 {
+            Line::from(in_flight)
         } else {
-            "s"
-        };
-        // A tree-loop pass's prompt,
-        // and a `use: path:` child's, are counted as running even
-        // with no `prompt_sent` in state to estimate from at all
-        // (DESIGN.md §1.4), so the estimate is a lower bound, same as
-        // "effects planned" already does in the header -- a trailing
-        // `+` says so when it's still a real, nonzero estimate
-        // (`≈5+`, some known and some not). When *none* of the running
-        // prompts has a known `prompt_sent` at all, the estimate isn't
-        // merely low, it's entirely unknown -- `≈0+` reads as a
-        // broken number (zero tokens, running?), so this shows a
-        // plain `?` instead, the same glyph the header's own
-        // innermost-loop ETA uses for "unknown", not "zero".
-        let estimate = if token_bar.estimated_input_is_lower_bound {
-            if token_bar.estimated_input == 0 {
-                "?".to_string()
+            // A tree-loop pass's prompt,
+            // and a `use: path:` child's, are counted as running even
+            // with no `prompt_sent` in state to estimate from at all
+            // (DESIGN.md §1.4), so the estimate is a lower bound, same as
+            // "effects planned" already does in the header -- a trailing
+            // `+` says so when it's still a real, nonzero estimate
+            // (`≈5+`, some known and some not). When *none* of the running
+            // prompts has a known `prompt_sent` at all, the estimate isn't
+            // merely low, it's entirely unknown -- `≈0+` reads as a
+            // broken number (zero tokens, running?), so this shows a
+            // plain `?` instead, the same glyph the header's own
+            // innermost-loop ETA uses for "unknown", not "zero".
+            let estimate = if token_bar.estimated_input_is_lower_bound {
+                if token_bar.estimated_input == 0 {
+                    "?".to_string()
+                } else {
+                    format!(
+                        "≈{}+",
+                        oscilloscope_core::format::format_tokens(token_bar.estimated_input)
+                    )
+                }
             } else {
-                format!("≈{}+", with_thousands_separators(token_bar.estimated_input))
-            }
-        } else {
-            format!("≈{}", with_thousands_separators(token_bar.estimated_input))
-        };
-        Line::from(format!(
-            "now in {estimate}   ({} prompt{plural} running)",
-            token_bar.prompts_running
-        ))
+                format!(
+                    "≈{}",
+                    oscilloscope_core::format::format_tokens(token_bar.estimated_input)
+                )
+            };
+            Line::from(format!("now in {estimate}   ({in_flight})"))
+        }
     };
     let line2 = line2.style(with_highlight(Style::default(), tokenbar_highlight));
     let paragraph = Paragraph::new(vec![line1, line2])
@@ -1655,6 +1703,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2216,6 +2265,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2349,6 +2399,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2440,6 +2491,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2515,6 +2567,7 @@ mod golden_tests {
             now: Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2576,12 +2629,15 @@ mod highlight_tests {
                 run_id: None,
                 status: oscilloscope_core::model::RunStatus::Running,
                 elapsed_s: 1.0,
+                run_start_ts: None,
+                run_end_ts: None,
                 effects_done: 1,
                 effects_planned: Some(1),
                 effects_planned_is_lower_bound: false,
                 tokens_sent: 0,
                 tokens_received: 0,
                 innermost_loop_eta_s: None,
+                innermost_loop_eta_ts: None,
             },
             rows: vec![Row {
                 path: "prime.a".to_string(),
@@ -2658,6 +2714,7 @@ mod highlight_tests {
             now,
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app_t0 = app.clone();
         let backend = TestBackend::new(100, 24);
@@ -2679,6 +2736,7 @@ mod highlight_tests {
             now: now + FADE_DURATION + Duration::from_millis(1),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app_after = app.clone();
         let backend2 = TestBackend::new(100, 24);
@@ -2720,6 +2778,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let has_bezel_corner = |width: u16| -> bool {
             let mut app = App::new(false);
@@ -2757,6 +2816,7 @@ mod highlight_tests {
             now,
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2802,6 +2862,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2832,6 +2893,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);
@@ -2855,6 +2917,7 @@ mod highlight_tests {
             now: std::time::Instant::now(),
             color_mode: ColorMode::TrueColor,
             theme_banner: None,
+            zone: &test_zone(),
         };
         let mut app = App::new(false);
         let backend = TestBackend::new(100, 24);

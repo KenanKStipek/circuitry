@@ -35,7 +35,7 @@ use oscilloscope_core::engine::{
 };
 use oscilloscope_core::model::{ProcessState, RunModel, RunStatus, run_status};
 use oscilloscope_core::observe::{
-    EventsTailer, LiveStatePoller, POLL_INTERVAL, duration_seconds, now_rfc3339, parse_event,
+    EventsTailer, LiveStatePoller, POLL_INTERVAL, now_rfc3339, parse_event,
 };
 use oscilloscope_core::plan::PlanTree;
 use ratatui::Terminal;
@@ -157,62 +157,72 @@ fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
 }
 
-/// `mm:ss.s` elapsed time (DESIGN.md §6.2), anchored to the first
-/// event timestamp osi observes so a log line's elapsed time tracks
-/// the engine's own clock rather than polling latency; falls back to
-/// osi's own wall clock before the first timestamped observation (and
-/// for lines with none, like a forwarded-signal notice).
+/// The real system zone (issue #613: "the binary uses the local
+/// zone"), resolved per timestamp (through [`chrono::Local`], which
+/// itself resolves the offset for whichever instant it's given) so
+/// DST is right for the timestamp being formatted, not just for
+/// whenever `osi` happened to start.
+struct LocalZone;
+
+impl oscilloscope_core::format::ClockZone for LocalZone {
+    fn local(&self, utc: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::FixedOffset> {
+        utc.with_timezone(&chrono::Local).fixed_offset()
+    }
+}
+
+/// `HH:MM:SS` clock-time prefix (DESIGN.md §6.2, issue #613: "log
+/// lines ... start with the line's own local clock time"), from the
+/// line's own timestamp when it has one, else osi's own wall clock at
+/// print time (a line with no `ts`, like a forwarded-signal notice).
 struct Clock {
-    start: Instant,
-    anchor_ts: Option<String>,
-    /// The highest elapsed time printed so far (K5): a line's own `ts`
+    zone: Box<dyn oscilloscope_core::format::ClockZone>,
+    /// The highest clock time printed so far (K5): a line's own `ts`
     /// can legitimately be *earlier* than one already printed (a
     /// coalesced state write backdating a node's `▶` line to its real
     /// `created_at`, DESIGN.md §2.4's "new node that is already
     /// complete" row, or events and state simply landing a tick apart)
-    /// — printing that line's own true elapsed time anyway would make
-    /// the stream's own `mm:ss.s` prefixes visibly run backwards.
-    /// Clamping the *displayed* time to this high-water mark leaves
-    /// sorting (by the real `ts`) and duration math untouched; only the
-    /// elapsed-time prefix never regresses.
-    max_elapsed: f64,
+    /// — printing that line's own true clock time anyway would make
+    /// the stream's own prefixes visibly run backwards. Clamping the
+    /// *displayed* time to this high-water mark leaves sorting (by
+    /// the real `ts`) and duration math untouched; only the printed
+    /// prefix never regresses.
+    max_displayed: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 impl Clock {
     fn new() -> Self {
+        Clock::new_with_zone(Box::new(LocalZone))
+    }
+
+    fn new_with_zone(zone: Box<dyn oscilloscope_core::format::ClockZone>) -> Self {
         Clock {
-            start: Instant::now(),
-            anchor_ts: None,
-            max_elapsed: 0.0,
+            zone,
+            max_displayed: None,
         }
     }
 
-    fn elapsed_for(&mut self, ts: Option<&str>) -> f64 {
-        let computed = match (&self.anchor_ts, ts) {
-            (None, Some(t)) => {
-                self.anchor_ts = Some(t.to_string());
-                0.0
-            }
-            (Some(anchor), Some(t)) => {
-                duration_seconds(anchor, t).unwrap_or_else(|| self.start.elapsed().as_secs_f64())
-            }
-            _ => self.start.elapsed().as_secs_f64(),
+    fn clock_time_for(&mut self, ts: Option<&str>) -> chrono::DateTime<chrono::FixedOffset> {
+        let utc = ts
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let local = self.zone.local(utc);
+        let clamped = match self.max_displayed {
+            Some(prev) if local < prev => prev,
+            _ => local,
         };
-        self.max_elapsed = self.max_elapsed.max(computed);
-        self.max_elapsed
+        self.max_displayed = Some(clamped);
+        clamped
     }
 
-    fn format(secs: f64) -> String {
-        let tenths = (secs.max(0.0) * 10.0).round() as i64;
-        let whole = tenths / 10;
-        let tenth = tenths % 10;
-        format!("{:02}:{:02}.{tenth}", whole / 60, whole % 60)
+    fn format(dt: chrono::DateTime<chrono::FixedOffset>) -> String {
+        dt.format("%H:%M:%S").to_string()
     }
 }
 
 fn print_line(out: &mut impl Write, clock: &mut Clock, ts: Option<&str>, text: &str) {
-    let elapsed = clock.elapsed_for(ts);
-    let _ = writeln!(out, "{} {text}", Clock::format(elapsed));
+    let dt = clock.clock_time_for(ts);
+    let _ = writeln!(out, "{} {text}", Clock::format(dt));
 }
 
 /// Prints the `exit <code>` line every path through `do_run` ends
@@ -1055,8 +1065,8 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// instead of straight to stdout (DESIGN.md §6.3's log pane: "the
 /// same lines as `--log`").
 fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
-    let elapsed = clock.elapsed_for(ts);
-    format!("{} {text}", Clock::format(elapsed))
+    let dt = clock.clock_time_for(ts);
+    format!("{} {text}", Clock::format(dt))
 }
 
 /// How often the TUI's own render state (the plan tree's rows, the
@@ -1560,6 +1570,7 @@ fn run_tui(
                 now: highlight_now,
                 color_mode,
                 theme_banner: banner,
+                zone: &LocalZone,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -2535,6 +2546,7 @@ fn run_tui_watch(
                 now: highlight_now,
                 color_mode,
                 theme_banner: banner,
+                zone: &LocalZone,
             };
             let drew = terminal.draw(|f| {
                 tui::draw(
@@ -3654,7 +3666,7 @@ mod tests {
         assert!(final_state.is_some());
         assert!(!differ.has_pending_ends());
         assert!(
-            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 ↓5"),
+            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 t ↓5 t"),
             "held line must resolve with its real tokens, not ok or nothing: {lines:?}"
         );
     }
@@ -3752,37 +3764,51 @@ mod tests {
         assert_eq!(next_log_seq, (MAX_LOG_LINES + 5) as u64);
     }
 
-    #[test]
-    fn clock_formats_elapsed_as_mm_ss_tenths() {
-        assert_eq!(Clock::format(0.0), "00:00.0");
-        assert_eq!(Clock::format(2.94), "00:02.9");
-        assert_eq!(Clock::format(65.0), "01:05.0");
+    fn utc_zone() -> Box<dyn oscilloscope_core::format::ClockZone> {
+        Box::new(chrono::FixedOffset::east_opt(0).unwrap())
     }
 
     #[test]
-    fn clock_anchors_to_the_first_timestamp_then_tracks_event_time() {
-        let mut clock = Clock::new();
-        assert_eq!(clock.elapsed_for(Some("2026-10-08T19:56:22.000Z")), 0.0);
-        let elapsed = clock.elapsed_for(Some("2026-10-08T19:56:24.500Z"));
-        assert!((elapsed - 2.5).abs() < 1e-9);
+    fn clock_formats_hh_mm_ss() {
+        let utc = chrono::FixedOffset::east_opt(0).unwrap();
+        let dt = chrono::DateTime::parse_from_rfc3339("2026-10-08T19:56:22Z")
+            .unwrap()
+            .with_timezone(&utc);
+        assert_eq!(Clock::format(dt), "19:56:22");
     }
 
     #[test]
-    fn clock_never_prints_an_earlier_elapsed_time_than_it_already_has() {
+    fn clock_time_for_uses_the_lines_own_timestamp_in_the_given_zone() {
+        let mut clock = Clock::new_with_zone(utc_zone());
+        let dt = clock.clock_time_for(Some("2026-10-08T19:56:22.000Z"));
+        assert_eq!(Clock::format(dt), "19:56:22");
+    }
+
+    #[test]
+    fn clock_never_prints_an_earlier_clock_time_than_it_already_has() {
         // K5: a backdated line (DESIGN.md §2.4's "new node that is
         // already complete" row, or events and state simply landing a
         // tick apart) can carry a `ts` earlier than one the clock has
-        // already shown — the printed mm:ss.s must never visibly run
-        // backwards even then.
-        let mut clock = Clock::new();
-        assert_eq!(clock.elapsed_for(Some("2026-10-08T19:56:25.000Z")), 0.0);
-        let later = clock.elapsed_for(Some("2026-10-08T19:56:28.000Z"));
-        assert!((later - 3.0).abs() < 1e-9);
-        let backdated = clock.elapsed_for(Some("2026-10-08T19:56:22.000Z"));
+        // already shown — the printed `HH:MM:SS` must never visibly
+        // run backwards even then.
+        let mut clock = Clock::new_with_zone(utc_zone());
+        let first = clock.clock_time_for(Some("2026-10-08T19:56:25.000Z"));
+        assert_eq!(Clock::format(first), "19:56:25");
+        let later = clock.clock_time_for(Some("2026-10-08T19:56:28.000Z"));
+        assert_eq!(Clock::format(later), "19:56:28");
+        let backdated = clock.clock_time_for(Some("2026-10-08T19:56:22.000Z"));
         assert_eq!(
             backdated, later,
             "a backdated ts must not move the display backwards"
         );
+    }
+
+    #[test]
+    fn clock_time_for_a_nonzero_offset_resolves_the_local_calendar_time() {
+        let plus_530 = chrono::FixedOffset::east_opt(5 * 3600 + 30 * 60).unwrap();
+        let mut clock = Clock::new_with_zone(Box::new(plus_530));
+        let dt = clock.clock_time_for(Some("2026-10-08T19:56:22Z"));
+        assert_eq!(Clock::format(dt), "01:26:22");
     }
 
     #[test]

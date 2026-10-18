@@ -562,7 +562,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
-    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 t ↓5 t"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
 
     // The same scripted prompt, launched by `osi` itself rather than
@@ -582,7 +582,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 
     assert!(log_status.success(), "stdout:\n{log_stdout}");
     assert!(log_stdout.contains("prime.ask"), "stdout:\n{log_stdout}");
-    assert!(log_stdout.contains("↑3 ↓5"), "stdout:\n{log_stdout}");
+    assert!(log_stdout.contains("↑3 t ↓5 t"), "stdout:\n{log_stdout}");
     assert!(log_stdout.contains("■ run ok"), "stdout:\n{log_stdout}");
 }
 
@@ -637,7 +637,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
     let (status, stdout) = wait_with_timeout_capturing_stdout(child, Duration::from_secs(30));
 
     assert!(status.success(), "stdout:\n{stdout}");
-    for line in ["↑1 ↓1", "↑2 ↓2", "↑3 ↓3"] {
+    for line in ["↑1 t ↓1 t", "↑2 t ↓2 t", "↑3 t ↓3 t"] {
         assert!(stdout.contains(line), "stdout:\n{stdout}");
     }
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");

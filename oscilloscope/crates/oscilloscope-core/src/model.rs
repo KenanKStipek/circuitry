@@ -419,7 +419,15 @@ pub struct RunModel {
     ended: BTreeMap<String, EventEnd>,
     cancelled_by_run_end: BTreeSet<String>,
     run_start: Option<(String, Option<i32>)>,
+    /// `run_start`'s own `ts` (DESIGN.md §3's format table) -- the
+    /// run's own start, when `--events` carried one (issue #613's "one
+    /// clock": header elapsed is measured from this, not from when
+    /// osi itself started).
+    run_start_ts: Option<String>,
     run_end: Option<(bool, Option<String>, Option<String>)>,
+    /// `run_end`'s own `ts` -- the run's own end, when `--events`
+    /// carried one.
+    run_end_ts: Option<String>,
 }
 
 impl RunModel {
@@ -433,7 +441,9 @@ impl RunModel {
             ended: BTreeMap::new(),
             cancelled_by_run_end: BTreeSet::new(),
             run_start: None,
+            run_start_ts: None,
             run_end: None,
+            run_end_ts: None,
         }
     }
 
@@ -455,8 +465,9 @@ impl RunModel {
                     },
                 );
             }
-            Event::RunStart { run_id, pid, .. } => {
+            Event::RunStart { ts, run_id, pid } => {
                 self.run_start = Some((run_id.clone(), *pid));
+                self.run_start_ts = Some(ts.clone());
             }
             Event::Start { id, path, .. } => {
                 // A fresh `start` at a path this instance already saw
@@ -519,9 +530,10 @@ impl RunModel {
                 );
             }
             Event::RunEnd {
-                ok, error, signal, ..
+                ts, ok, error, signal,
             } => {
                 self.run_end = Some((*ok, error.clone(), signal.clone()));
+                self.run_end_ts = Some(ts.clone());
                 let interrupted = error
                     .as_deref()
                     .is_some_and(|e| e.starts_with("Interrupted"));
@@ -588,6 +600,18 @@ impl RunModel {
     /// The run id a `run_start` event announced, when one arrived.
     pub fn run_start_id(&self) -> Option<&str> {
         self.run_start.as_ref().map(|(run_id, _)| run_id.as_str())
+    }
+
+    /// The run's own start timestamp, from `run_start`'s own `ts`
+    /// (issue #613's "one clock"), when `--events` carried one.
+    pub fn run_start_ts(&self) -> Option<&str> {
+        self.run_start_ts.as_deref()
+    }
+
+    /// The run's own end timestamp, from `run_end`'s own `ts`, once
+    /// one has arrived.
+    pub fn run_end_ts(&self) -> Option<&str> {
+        self.run_end_ts.as_deref()
     }
 
     /// Every path `--events` has said anything about at all — the set
