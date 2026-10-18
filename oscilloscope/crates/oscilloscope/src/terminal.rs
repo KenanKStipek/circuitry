@@ -1,6 +1,6 @@
 //! `TerminalGuard`: raw mode and the alternate screen, entered once
 //! and restored on every exit path (issue #434's "Terminal safety" —
-//! normal end, osp's own error, a panic, and a forwarded SIGINT/
+//! normal end, osi's own error, a panic, and a forwarded SIGINT/
 //! SIGTERM/SIGHUP, which the existing `SignalWatcher`/main-loop
 //! machinery already turns into a normal return from the TUI loop
 //! rather than an immediate `exit`, so `Drop` alone covers those
@@ -11,7 +11,7 @@
 //! handler's own message ever tries to print into whatever raw mode
 //! and the alternate screen were showing.
 //!
-//! `osp` itself being `SIGKILL`ed is the one exception (README.md):
+//! `osi` itself being `SIGKILL`ed is the one exception (README.md):
 //! nothing can run any cleanup code after that at all, terminal
 //! restoration included.
 

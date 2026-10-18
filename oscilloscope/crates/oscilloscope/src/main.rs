@@ -1,9 +1,9 @@
-//! `osp` — the CLI binary (DESIGN.md §4, §6.2, §6.3). `--log`, or
+//! `osi` — the CLI binary (DESIGN.md §4, §6.2, §6.3). `--log`, or
 //! any non-TTY stdout, keeps O-1's plain-text stream unchanged; a TTY
 //! gets O-2's ratatui/crossterm TUI (issue #434) instead, in
 //! `run_tui`/`run_tui_watch`, `tui.rs` and `keys.rs`.
 //!
-//! The two forms share no top-level `clap` command: `osp watch ...` is
+//! The two forms share no top-level `clap` command: `osi watch ...` is
 //! dispatched by a plain string check on the first argument (`watch`
 //! is therefore reserved — an orchestration literally named `watch`
 //! needs a `./watch` or `watch.yml` path instead), and everything else
@@ -50,14 +50,14 @@ use terminal::TerminalGuard;
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (preview)");
 
 const ABOUT: &str = "\
-osp (oscilloscope) launches a Circuitry orchestration on cof or electricity \
+osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
-  osp <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
-  osp watch <dir | state.live.json> [--plan doc.yml]";
+  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
+  osi watch <dir | state.live.json> [--plan doc.yml]";
 
 #[derive(Parser, Debug)]
-#[command(name = "osp", version = VERSION, about = ABOUT)]
+#[command(name = "osi", version = VERSION, about = ABOUT)]
 struct RunArgs {
     /// The orchestration document to run (YAML or JSON).
     orchestration: String,
@@ -81,18 +81,18 @@ struct RunArgs {
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
-    /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
+    /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
     /// this isn't given; `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "osp watch")]
+#[command(name = "osi watch")]
 struct WatchArgs {
     /// A run directory, or a `state.live.json` file directly.
     target: String,
-    /// Compiles this document into a plan, the same one a live `osp
+    /// Compiles this document into a plan, the same one a live `osi
     /// <doc>` run of it would have from the start (DESIGN.md §5) --
     /// without it, container detection (an `if`/loop vs. a leaf) can
     /// briefly fall back to a snapshot it hasn't seen yet instead.
@@ -110,7 +110,7 @@ struct WatchArgs {
     #[arg(short = 'e', value_name = "key=value")]
     set: Vec<String>,
     /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY —
-    /// the TUI's own default otherwise, the same split `osp <doc>`
+    /// the TUI's own default otherwise, the same split `osi <doc>`
     /// makes.
     #[arg(long)]
     log: bool,
@@ -118,27 +118,27 @@ struct WatchArgs {
     /// trace: both draw a still frame instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
-    /// The colour theme (DESIGN.md §6.3). `OSP_THEME` is used when
+    /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
     /// this isn't given; `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
 }
 
-/// `--theme`, else `OSP_THEME`, else `terminal` (DESIGN.md §6.3) --
-/// shared by both `osp <doc>` and `osp watch`, so the two can never
-/// resolve the same environment differently. `osp_theme_env` is the
-/// caller's own read of `OSP_THEME` (finding 13: kept pure, like
+/// `--theme`, else `OSI_THEME`, else `terminal` (DESIGN.md §6.3) --
+/// shared by both `osi <doc>` and `osi watch`, so the two can never
+/// resolve the same environment differently. `osi_theme_env` is the
+/// caller's own read of `OSI_THEME` (finding 13: kept pure, like
 /// `theme::ColorMode::detect`, rather than reading the process
 /// environment itself -- a test can then exercise every branch
 /// without mutating process-wide state at all).
 fn resolve_theme_choice(
     cli_theme: Option<theme::ThemeName>,
-    osp_theme_env: Option<&str>,
+    osi_theme_env: Option<&str>,
 ) -> Result<theme::ThemeName, String> {
     if let Some(t) = cli_theme {
         return Ok(t);
     }
-    match osp_theme_env {
+    match osi_theme_env {
         Some(v) if !v.is_empty() => theme::ThemeName::parse(v),
         _ => Ok(theme::ThemeName::Terminal),
     }
@@ -158,9 +158,9 @@ fn effective_log_mode(explicit: bool) -> bool {
 }
 
 /// `mm:ss.s` elapsed time (DESIGN.md §6.2), anchored to the first
-/// event timestamp osp observes so a log line's elapsed time tracks
+/// event timestamp osi observes so a log line's elapsed time tracks
 /// the engine's own clock rather than polling latency; falls back to
-/// osp's own wall clock before the first timestamped observation (and
+/// osi's own wall clock before the first timestamped observation (and
 /// for lines with none, like a forwarded-signal notice).
 struct Clock {
     start: Instant,
@@ -223,7 +223,7 @@ fn exit_early(code: u8) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// The exit code osp should use right now, without ever spawning the
+/// The exit code osi should use right now, without ever spawning the
 /// engine, if a signal already arrived (P2-10) — the same 128+signum
 /// codes `cof` itself uses. `None` means nothing is pending yet.
 fn pending_signal_exit_code(signals: &mut Option<SignalWatcher>) -> Option<u8> {
@@ -241,13 +241,13 @@ fn unique_run_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("osp-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!("osi-{}-{nanos}", std::process::id()))
 }
 
 /// Creates the run directory private (`0700`): it can hold `state.live
 /// .json`/`state.json`, which carry prompt and tool output (F2).
 ///
-/// The default directory's name is a predictable `osp-<pid>-<nanos>`
+/// The default directory's name is a predictable `osi-<pid>-<nanos>`
 /// under a shared `/tmp`, so it is created non-recursively and must
 /// not already exist — a pre-existing entry there (a collision, or
 /// something planted ahead of time) is refused rather than reused.
@@ -258,12 +258,12 @@ fn unique_run_dir() -> PathBuf {
 /// instead — but only ever chmods the leaf directory when *this call*
 /// is the one that created it (K7): forcing `0700` onto a directory
 /// the caller already had, for whatever reason of their own, is a
-/// real, unrequested change to something outside osp's own run
+/// real, unrequested change to something outside osi's own run
 /// directory, and silently chmod'ing *someone else's* directory (one
 /// this process doesn't own) can even fail outright with `EPERM`. A
 /// pre-existing directory that already was group- or world-accessible
 /// instead gets a warning on stderr — loud enough that a caller who
-/// reuses one on purpose notices, without osp quietly changing it out
+/// reuses one on purpose notices, without osi quietly changing it out
 /// from under them.
 fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
@@ -276,7 +276,7 @@ fn create_run_dir(path: &Path, is_default: bool) -> std::io::Result<()> {
         let mode = std::fs::metadata(path)?.permissions().mode();
         if mode & 0o077 != 0 {
             eprintln!(
-                "osp: run directory {} is group- or world-accessible (mode {:o}); \
+                "osi: run directory {} is group- or world-accessible (mode {:o}); \
                  it can hold prompt and tool output",
                 path.display(),
                 mode & 0o777
@@ -307,11 +307,11 @@ fn build_engine(
 fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<String> {
     if caps.timed_out {
         Some(format!(
-            "osp: {engine_name} --help didn't answer in time; running from state only"
+            "osi: {engine_name} --help didn't answer in time; running from state only"
         ))
     } else if !caps.events && !caps.missing {
         Some(format!(
-            "osp: this {engine_name} has no --events: running from state only"
+            "osi: this {engine_name} has no --events: running from state only"
         ))
     } else {
         None
@@ -319,7 +319,7 @@ fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<Stri
 }
 
 /// `oscilloscope_core::plan::compile`, mirroring `cof`'s own config
-/// discovery (issue #433) when `config` is `None`: `$HOME` and osp's
+/// discovery (issue #433) when `config` is `None`: `$HOME` and osi's
 /// own current directory are read here, at this one real call site,
 /// and handed down as plain parameters from here on — discovery
 /// itself never touches the process environment directly (see
@@ -377,11 +377,11 @@ macro_rules! compile_plan {
 
 /// `do_run`'s own plain supervise loop, shared with `run_tui`'s own
 /// TUI-unavailable fallback (review finding 14): forwards every
-/// signal osp receives to the engine's process group, escalates to
+/// signal osi receives to the engine's process group, escalates to
 /// `SIGKILL` 10s after a second one, drains its stderr and
 /// observations every tick, and returns once it has exited. Before
 /// this was shared, that fallback just blocked on `child.wait()` with
-/// no signal forwarding at all — a SIGINT/TERM/HUP to osp did nothing
+/// no signal forwarding at all — a SIGINT/TERM/HUP to osi did nothing
 /// until the engine ended on its own.
 #[allow(clippy::too_many_arguments)]
 fn supervise_plain(
@@ -437,11 +437,11 @@ fn supervise_plain(
 
 fn do_run(args: RunArgs) -> ExitCode {
     // Issue #535: resolved before anything else runs, same spirit as
-    // the signal watcher just below -- a bad `OSP_THEME` is a usage
+    // the signal watcher just below -- a bad `OSI_THEME` is a usage
     // error and should exit 2 before this function does anything
     // else, exactly as an invalid `--theme` already does via clap.
-    let osp_theme_env = std::env::var("OSP_THEME").ok();
-    let theme_name = match resolve_theme_choice(args.theme, osp_theme_env.as_deref()) {
+    let osi_theme_env = std::env::var("OSI_THEME").ok();
+    let theme_name = match resolve_theme_choice(args.theme, osi_theme_env.as_deref()) {
         Ok(name) => name,
         Err(message) => {
             eprintln!("{message}");
@@ -457,7 +457,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // takes to arrive (a cold Python interpreter start under load is
     // not rare on a shared, busy machine). A signal landing in either
     // window, with no handler installed yet, used to hit the OS
-    // default disposition and kill osp outright — with the engine
+    // default disposition and kill osi outright — with the engine
     // either not yet started, or started and now unsupervised.
     let mut signals = SignalWatcher::new().ok();
 
@@ -468,7 +468,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         if let Some(cfg) = &config {
             if oscilloscope_core::engine::looks_swapped(&orchestration, cfg) {
                 eprintln!(
-                    "osp: '{}' and '{}' look swapped — usage is `osp <orchestration> [config.json]`",
+                    "osi: '{}' and '{}' look swapped — usage is `osi <orchestration> [config.json]`",
                     cfg.display(),
                     orchestration.display()
                 );
@@ -504,7 +504,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     let cmd = match engine.command(&spec) {
         Ok(cmd) => cmd,
         Err(EngineError::MissingConfig(message)) => {
-            eprintln!("osp: {message}");
+            eprintln!("osi: {message}");
             return exit_early(2);
         }
     };
@@ -517,7 +517,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // global/project `circuitry.config.json` layers a bare `cof run`
     // resolves with no `--config`, issue #433), so a `group:` defined
     // only in one of those layers is no longer lost here either, on
-    // either engine. A malformed `-e` is never osp's own error (the
+    // either engine. A malformed `-e` is never osi's own error (the
     // engine reports that itself once it actually runs) — just the
     // same no-plan fallback as a compile failure.
     let plan = match oscilloscope_core::plan::parse_inputs(&args.set) {
@@ -527,12 +527,12 @@ fn do_run(args: RunArgs) -> ExitCode {
                 PlanTree::from_program_with_options(&program, effective_config, &inputs)
             }
             Err(err) => {
-                eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
+                eprintln!("osi: couldn't compile a plan ({err}); running from observations only");
                 PlanTree::empty()
             }
         },
         Err(err) => {
-            eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
+            eprintln!("osi: couldn't compile a plan ({err}); running from observations only");
             PlanTree::empty()
         }
     };
@@ -544,7 +544,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // directory behind with no "exit" line printed either.
     if let Err(err) = create_run_dir(&run_dir, is_default_dir) {
         eprintln!(
-            "osp: couldn't create run directory {}: {err}",
+            "osi: couldn't create run directory {}: {err}",
             run_dir.display()
         );
         return exit_early(1);
@@ -556,7 +556,7 @@ fn do_run(args: RunArgs) -> ExitCode {
     // printing its whole log (including its own `■ run` line) before
     // this run has written anything, and suppressing this run's own
     // summary line since the differ would already think it had seen
-    // one (F3). osp made this directory (or it's the default, always
+    // one (F3). osi made this directory (or it's the default, always
     // fresh), so clearing stale observation files here can't lose
     // anything the caller put there on purpose.
     for stale in [spec.live_state_path(), spec.out_path(), spec.events_path()] {
@@ -581,7 +581,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         match SupervisedChild::spawn(cmd, &spec.stdout_path(), &spec.stderr_path()) {
             Ok(pair) => pair,
             Err(err) => {
-                eprintln!("osp: couldn't launch {}: {err}", engine.name());
+                eprintln!("osi: couldn't launch {}: {err}", engine.name());
                 // The directory was just created for this spawn alone
                 // (P2-1): the engine never started, so a default one
                 // shouldn't be left behind empty. A caller's own
@@ -778,7 +778,7 @@ const KEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 
 /// How many of the TUI's own log lines are kept at most (review
 /// finding 13): unlike `--log`'s own stdout stream, the TUI's log
-/// pane buffer lives in memory for as long as osp does, and a long-
+/// pane buffer lives in memory for as long as osi does, and a long-
 /// running orchestration never had anything bounding it at all.
 const MAX_LOG_LINES: usize = 10_000;
 
@@ -836,8 +836,8 @@ fn mark_highlights(
 /// `prev` (issue #535's log-pane half of finding 3): on the loop's
 /// first real rebuild there is no baseline yet, so every line pushed
 /// by the catch-up drain that ran before it -- replaying what an
-/// already-progressed or already-finished run did before `osp
-/// watch`/`osp <doc>` ever attached -- is caught up here silently,
+/// already-progressed or already-finished run did before `osi
+/// watch`/`osi <doc>` ever attached -- is caught up here silently,
 /// same as the render-state diff is. `prev_total` still advances
 /// either way, so nothing from before this call is ever marked
 /// retroactively once a real baseline does exist.
@@ -902,10 +902,10 @@ fn mark_details_highlights(
 /// confirmed `q` (§6.3: "cancel, with confirm (= Ctrl-C)") must behave
 /// exactly like Ctrl-C itself, never a separate path that could drift
 /// from it. `sig` is `Int` for a key (Ctrl-C always means SIGINT) but
-/// the real signal osp itself received for an external one (K2): the
+/// the real signal osi itself received for an external one (K2): the
 /// plain loop above already forwards *that* signal unchanged, and the
 /// TUI must too, rather than silently turning every SIGTERM/SIGHUP
-/// into a SIGINT and leaving osp exiting 130 for either.
+/// into a SIGINT and leaving osi exiting 130 for either.
 fn cancel_once(
     child: &SupervisedChild,
     sig: ForwardSignal,
@@ -929,7 +929,7 @@ fn cancel_once(
 }
 
 /// A pty whose master end is gone,
-/// but which was never osp's own *controlling* terminal (so no
+/// but which was never osi's own *controlling* terminal (so no
 /// SIGHUP ever arrives for it), keeps answering `poll`/`read` with an
 /// immediate error and `draw` with a failed write, forever -- with no
 /// blocking read left to cap the loop's own pace, that span a whole
@@ -937,7 +937,7 @@ fn cancel_once(
 /// every further signal in the process (it never actually stopped
 /// reaching the top of the loop; it just had nothing left to *show*
 /// for any of it). Treated exactly like a real SIGHUP
-/// (`cancel_once`'s own `Hup` arm): the engine is cancelled if osp
+/// (`cancel_once`'s own `Hup` arm): the engine is cancelled if osi
 /// started it and hasn't already exited, and the caller leaves the
 /// TUI loop at once -- never waiting around for the engine to exit on
 /// its own the way a *real* signal's "finished screen" rule does,
@@ -967,7 +967,7 @@ fn cancel_for_lost_terminal(
 }
 
 /// A follow-up finding: a pty slave whose master
-/// has closed, but which was never osp's own *controlling* terminal
+/// has closed, but which was never osi's own *controlling* terminal
 /// (no `setsid`-then-`TIOCSCTTY` acquisition, as a driver using
 /// `start_new_session=True` alone never gives it one) raises no
 /// SIGHUP at all -- yet `event::poll`/`event::read` (checked above)
@@ -990,7 +990,7 @@ fn cancel_for_lost_terminal(
 /// own check throws away -- `fd: libc::STDIN_FILENO` matches
 /// crossterm's own `tty_fd()` exactly: it uses stdin directly
 /// whenever stdin is itself a tty (`isatty(STDIN_FILENO)`, never a
-/// separate `/dev/tty` open), which is always true for an `osp`
+/// separate `/dev/tty` open), which is always true for an `osi`
 /// spawned the way every caller here does, with its own stdin
 /// already pointed at the pty slave.
 fn stdin_hung_up() -> bool {
@@ -1009,7 +1009,7 @@ fn stdin_hung_up() -> bool {
 }
 
 /// A third finding, from a real `sample` of a
-/// still-spinning `osp`: `stdin_hung_up`'s own pre-check, run between
+/// still-spinning `osi`: `stdin_hung_up`'s own pre-check, run between
 /// crossterm calls, never gets another turn once the main thread is
 /// actually *inside* `event::poll`/`event::read` when the hang-up
 /// happens -- the overwhelmingly common case, since that call blocks
@@ -1073,7 +1073,7 @@ fn format_log_line(clock: &mut Clock, ts: Option<&str>, text: &str) -> String {
 /// else dirty, same as `--log`'s own `mm:ss.s` prefix.
 const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
 
-/// `osp <doc>`'s own TUI loop (DESIGN.md §6.3): supervises the engine
+/// `osi <doc>`'s own TUI loop (DESIGN.md §6.3): supervises the engine
 /// exactly like `do_run`'s plain loop (the same signal forwarding,
 /// kill-deadline escalation, and observation polling), but renders a
 /// `RenderState` and reads keys instead of printing a plain-text
@@ -1083,7 +1083,7 @@ const RENDER_REBUILD_INTERVAL: Duration = Duration::from_secs(1);
 /// this loop — only three things do, and only once it has (DESIGN.md
 /// §6.3's final-state screen): a confirmed `q` (`App::
 /// quit_when_finished`), a Ctrl-C cancel, or any external INT/TERM/
-/// HUP osp itself received (`leave_once_exited`, set by all three).
+/// HUP osi itself received (`leave_once_exited`, set by all three).
 /// Short of one of those, a run that simply finishes on its own —
 /// ok, failed, or otherwise — leaves this loop showing that final
 /// state (the header's own ok/failed/cancelled/aborted, every row's
@@ -1158,11 +1158,11 @@ fn run_tui(
             // DESIGN.md's own TTY check (`effective_log_mode`) said
             // this should be a real terminal; if it still isn't one
             // underneath (an exotic CI pty, a stdout swapped out from
-            // under osp), fall back to the plain supervise loop
+            // under osi), fall back to the plain supervise loop
             // (finding 14) rather than a broken half-raw-mode session
-            // — a bare `child.wait()` here left SIGINT/TERM/HUP to osp
+            // — a bare `child.wait()` here left SIGINT/TERM/HUP to osi
             // doing nothing at all until the engine ended on its own.
-            eprintln!("osp: couldn't start the TUI ({err}); falling back to the plain stream");
+            eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
             let exit_status = supervise_plain(
@@ -1789,7 +1789,7 @@ fn observe_tick(
 ) {
     // The state poll happens first, purely so `diff_event` below has
     // this tick's own freshest snapshot to fall back on for container
-    // detection (`note_preview`, issue #433's "osp watch without
+    // detection (`note_preview`, issue #433's "osi watch without
     // --plan" item) — events are still processed *before* `diff`
     // itself: `diff_event` marks a path event-sourced as it goes, and
     // `diff` needs that already set for *this* tick to skip its own
@@ -1839,7 +1839,7 @@ fn drain_observations(
 /// The drain every path that reaches a run's end takes, once, before
 /// it ever rebuilds a render state or prints a final summary (#494):
 /// keeps calling [`observe_tick`] until a pass yields no new lines —
-/// the engine has already exited (or, for `osp watch`, gone away) by
+/// the engine has already exited (or, for `osi watch`, gone away) by
 /// the time a caller gets here, so its last events and its final
 /// live-state write are already on disk; this just keeps polling
 /// until nothing new turns up, rather than stopping after the single
@@ -1863,7 +1863,7 @@ fn drain_observations(
 /// poll` only reports a snapshot once, the first time it sees it
 /// change, so a caller that only kept the diff lines and dropped the
 /// snapshot could never get it back if `out_path` then turned out to
-/// have nothing to read (`osp watch` on a target with no sibling
+/// have nothing to read (`osi watch` on a target with no sibling
 /// `state.json`, DESIGN.md Q5) — `finish_run`/`finish_watch` still
 /// read only `out_path`'s own return value, exactly as before; only
 /// the TUI loops that can outlive that file's absence fall back to
@@ -1957,7 +1957,7 @@ fn supervise_plain_watch(
             && !events_path.exists()
         {
             eprintln!(
-                "osp: this run has no --events stream; an aborted run can't be \
+                "osi: this run has no --events stream; an aborted run can't be \
                  detected without one. Ctrl-C stops this watch."
             );
             warned_no_events = true;
@@ -1986,8 +1986,8 @@ fn supervise_plain_watch(
 }
 
 fn do_watch(args: WatchArgs) -> ExitCode {
-    let osp_theme_env = std::env::var("OSP_THEME").ok();
-    let theme_name = match resolve_theme_choice(args.theme, osp_theme_env.as_deref()) {
+    let osi_theme_env = std::env::var("OSI_THEME").ok();
+    let theme_name = match resolve_theme_choice(args.theme, osi_theme_env.as_deref()) {
         Ok(name) => name,
         Err(message) => {
             eprintln!("{message}");
@@ -2001,7 +2001,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // staleness timeout (N3's own decision) there was nothing to ever
     // notice it, let alone say so.
     if !target.exists() {
-        eprintln!("osp: watch target {} does not exist", target.display());
+        eprintln!("osi: watch target {} does not exist", target.display());
         return exit_early(2);
     }
     let (run_dir, live_state_path): (PathBuf, PathBuf) = if target.is_dir() {
@@ -2022,12 +2022,12 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // run that simply hasn't started yet (or never will) looks
     // identical to one that's already hung.
     if !live_state_path.exists() {
-        eprintln!("osp: waiting for {}", live_state_path.display());
+        eprintln!("osi: waiting for {}", live_state_path.display());
     }
 
     // K4: the same options check -- `--config`/`-e`, when given --
-    // `osp <doc>` itself uses, so `osp watch --plan doc.yml` compiles
-    // the same plan a live `osp run` of that document would.
+    // `osi <doc>` itself uses, so `osi watch --plan doc.yml` compiles
+    // the same plan a live `osi run` of that document would.
     let plan = match &args.plan {
         Some(doc) => match oscilloscope_core::plan::parse_inputs(&args.set) {
             Ok(inputs) => match compile_plan!(doc, args.config.as_deref(), &inputs) {
@@ -2037,20 +2037,20 @@ fn do_watch(args: WatchArgs) -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!(
-                        "osp: couldn't compile a plan ({err}); running from observations only"
+                        "osi: couldn't compile a plan ({err}); running from observations only"
                     );
                     PlanTree::empty()
                 }
             },
             Err(err) => {
-                eprintln!("osp: couldn't compile a plan ({err}); running from observations only");
+                eprintln!("osi: couldn't compile a plan ({err}); running from observations only");
                 PlanTree::empty()
             }
         },
         None => PlanTree::empty(),
     };
 
-    // DESIGN.md §6.2/§6.3: same TTY/—log split as `osp <doc>`; `q` in
+    // DESIGN.md §6.2/§6.3: same TTY/—log split as `osi <doc>`; `q` in
     // this one just detaches (§6.3), since watch owns no engine of
     // its own to ever cancel.
     if !effective_log_mode(args.log) {
@@ -2074,7 +2074,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let mut model = RunModel::new();
     let mut signals = SignalWatcher::new().ok();
 
-    // F4/N3: `osp watch` owns no `Child` for a run it didn't start,
+    // F4/N3: `osi watch` owns no `Child` for a run it didn't start,
     // so `supervise_plain_watch` stops on a completed live-state
     // write, an events `run_end`, the engine's own pid (from a
     // `run_start` event) going away, or a local signal (P2-7) —
@@ -2108,9 +2108,9 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     ExitCode::from(code as u8)
 }
 
-/// `osp watch`'s own TUI loop (DESIGN.md §6.3): the same render/key
+/// `osi watch`'s own TUI loop (DESIGN.md §6.3): the same render/key
 /// loop `run_tui` gives a live run, but with none of its own engine
-/// to supervise or cancel — `q` always just detaches (§6.3: "In `osp
+/// to supervise or cancel — `q` always just detaches (§6.3: "In `osi
 /// watch`, `q` just detaches"), with no confirm, whether or not the
 /// watched run is still going.
 ///
@@ -2176,7 +2176,7 @@ fn run_tui_watch(
             // Finding 14: actually watches via the same stop-
             // condition loop `do_watch` uses, rather than reporting
             // the run aborted at once with no watching at all.
-            eprintln!("osp: couldn't start the TUI ({err}); falling back to the plain stream");
+            eprintln!("osi: couldn't start the TUI ({err}); falling back to the plain stream");
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
             let (mut last_state, local_signal) = supervise_plain_watch(
@@ -2238,7 +2238,7 @@ fn run_tui_watch(
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
     // own comment above (this placeholder build always has
     // `last_state: None`; the loop's own first real rebuild is the
-    // genuine first observation, including when `osp watch` attaches
+    // genuine first observation, including when `osi watch` attaches
     // to a run that had already finished).
     if app.selected_path.is_none() {
         app.selected_path = render_state.rows.first().map(|r| r.path.clone());
@@ -2355,7 +2355,7 @@ fn run_tui_watch(
 
         if needs_rebuild {
             let process = if ended {
-                // DESIGN.md §2.1 rule 7: `osp watch` owns no process
+                // DESIGN.md §2.1 rule 7: `osi watch` owns no process
                 // of its own, so `run_end`'s own `ok` stands in for a
                 // real exit code of 1.
                 ProcessState::Exited {
@@ -2453,7 +2453,7 @@ fn run_tui_watch(
                                 detached_while_live = !ended;
                                 break 'tui;
                             }
-                            // K3: Ctrl-C in `osp watch` always just
+                            // K3: Ctrl-C in `osi watch` always just
                             // detaches too, same as `q` — but reports
                             // the same 130 a real forwarded SIGINT
                             // would, not the final state's own code.
@@ -2502,7 +2502,7 @@ fn run_tui_watch(
             }
         }
         if terminal_gone {
-            // `osp watch`'s own shape
+            // `osi watch`'s own shape
             // of it: watch owns no engine to cancel, so this is
             // exactly the real-SIGHUP arm above, just detected from a
             // dead terminal instead of a real signal.
@@ -2593,12 +2593,12 @@ fn run_tui_watch(
     std::process::exit(i32::from(code));
 }
 
-/// The common ending every `osp watch` session reaches, however its
+/// The common ending every `osi watch` session reaches, however its
 /// own loop stopped (a completed run, a local Ctrl-C, or a dead pid
 /// with nothing left to watch): one more drain for anything that
 /// landed between the loop's last check and now, the same single
 /// final-summary computation `do_run`'s own `finish_run` uses (M1),
-/// and the exit code `osp run` of the same document would have used
+/// and the exit code `osi run` of the same document would have used
 /// — from a signal `run_end` named, or from watch's own local Ctrl-C,
 /// rather than only ok-vs-failed. Returns that exit code; the caller
 /// prints it and `ExitCode::from`s it, the same shape `finish_run`
@@ -2635,11 +2635,11 @@ fn finish_watch(
 
     // #494: the same shared final drain every path that reaches a
     // run's end takes, before the one authoritative read every
-    // ending (osp run's `finish_run` included) takes from its own
+    // ending (osi run's `finish_run` included) takes from its own
     // `--out`/`state.json`. By this point the run is either already
     // ended, by one of `run_tui_watch`/`supervise_plain_watch`'s three
     // stop conditions, or `local_signal` is set (a local Ctrl-C, or an
-    // INT/TERM/HUP forwarded to `osp watch` itself) and the watched
+    // INT/TERM/HUP forwarded to `osi watch` itself) and the watched
     // run may still be live -- but there's no spin risk either way:
     // one tailer poll reads whatever's on disk to EOF, so the loop
     // always ends on its first quiet pass, whether that's because the
@@ -2670,7 +2670,7 @@ fn finish_watch(
                 ts: None,
                 text: unended_run_summary_text(
                     final_state.as_ref(),
-                    // DESIGN.md §2.1 rule 7: `osp watch` owns no
+                    // DESIGN.md §2.1 rule 7: `osi watch` owns no
                     // process of its own, so `run_end`'s own `ok`
                     // stands in for a real exit code of 1.
                     model.run_end_ok() == Some(false),
@@ -2713,7 +2713,7 @@ fn finish_watch(
 /// Prints a clap parse error to the right stream and returns its exit
 /// code: `--help`/`--version` (exit 0) print to stdout, same as any
 /// other successful output; an actual usage error (exit 2) prints to
-/// stderr, same as every other error `osp` reports (#422 review note).
+/// stderr, same as every other error `osi` reports (#422 review note).
 fn report_clap_error(err: clap::Error) -> ExitCode {
     if err.exit_code() == 0 {
         print!("{err}");
@@ -2726,7 +2726,7 @@ fn report_clap_error(err: clap::Error) -> ExitCode {
 fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
     if args.get(1).map(String::as_str) == Some("watch") {
-        let watch_args = std::iter::once("osp watch".to_string()).chain(args.into_iter().skip(2));
+        let watch_args = std::iter::once("osi watch".to_string()).chain(args.into_iter().skip(2));
         match WatchArgs::try_parse_from(watch_args) {
             Ok(args) => do_watch(args),
             Err(err) => report_clap_error(err),
@@ -2751,7 +2751,7 @@ mod tests {
     use super::*;
 
     fn args(words: &[&str]) -> Vec<String> {
-        std::iter::once("osp".to_string())
+        std::iter::once("osi".to_string())
             .chain(words.iter().map(|w| w.to_string()))
             .collect()
     }
@@ -2811,7 +2811,7 @@ mod tests {
     }
 
     /// Finding 3: the real call sequence both TUI loops take now --
-    /// `osp watch` attaching to a run that's already well under way
+    /// `osi watch` attaching to a run that's already well under way
     /// (full state from the very first real rebuild, nothing like
     /// `run_tui`/`run_tui_watch`'s own placeholder build with `state:
     /// None` ever gets diffed against). `prev_render_state` starts at
@@ -2883,7 +2883,7 @@ mod tests {
         );
     }
 
-    /// Issue #535: the real call sequence `osp watch` takes attaching
+    /// Issue #535: the real call sequence `osi watch` takes attaching
     /// to a run that's already finished -- a catch-up drain pushes
     /// every log line the run ever produced before the loop's first
     /// real rebuild runs at all, so `prev_log_total` is still 0 (its
@@ -3139,8 +3139,8 @@ mod tests {
 
     #[test]
     fn run_args_help_describes_every_argument() {
-        // Issue #433: `osp <doc>`'s own arguments had no --help
-        // descriptions at all, unlike `osp watch`'s.
+        // Issue #433: `osi <doc>`'s own arguments had no --help
+        // descriptions at all, unlike `osi watch`'s.
         let err = RunArgs::try_parse_from(args(&["--help"])).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("The orchestration document to run"));
@@ -3163,7 +3163,7 @@ mod tests {
         assert!(parsed.no_animation);
 
         let parsed = WatchArgs::try_parse_from(
-            std::iter::once("osp watch".to_string())
+            std::iter::once("osi watch".to_string())
                 .chain(["--no-animation".to_string(), "dir".to_string()]),
         )
         .expect("--no-animation should parse on watch too");
@@ -3195,9 +3195,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_theme_choice_prefers_the_cli_flag_over_osp_theme() {
+    fn resolve_theme_choice_prefers_the_cli_flag_over_osi_theme() {
         // Finding 13: `resolve_theme_choice` takes its own
-        // `OSP_THEME` reading as a plain argument now, so this test
+        // `OSI_THEME` reading as a plain argument now, so this test
         // never touches the process environment at all.
         assert_eq!(
             resolve_theme_choice(Some(theme::ThemeName::Dracula), Some("nord")),
@@ -3234,7 +3234,7 @@ mod tests {
         // real `cof run --help` under this process's own real `HOME`
         // and credentials whenever `cof` is on `PATH`, in *every*
         // `cargo test` run, not just the gated end-to-end suite — and
-        // then leaves an `osp-*` temp directory behind.
+        // then leaves an `osi-*` temp directory behind.
         let parsed = RunArgs::try_parse_from(args(&["-e", "k=v", "--log", "do-thing.yml"]));
         let parsed = parsed.expect("flags before the positional should parse");
         assert_eq!(parsed.orchestration, "do-thing.yml");
@@ -3280,7 +3280,7 @@ mod tests {
         // before the run directory is ever created (P2-1), but every
         // test that reaches do_run uses its own --out-dir regardless,
         // so a future change along this path can't start leaking
-        // osp-* directories into a shared /tmp on every cargo test.
+        // osi-* directories into a shared /tmp on every cargo test.
         let out_dir = dir.path().join("out");
         let code = run(args(&[
             doc.to_str().unwrap(),
@@ -3330,7 +3330,7 @@ mod tests {
     fn watch_stops_on_a_dead_run_start_pid_instead_of_hanging_forever() {
         // F4: an aborted run (a second signal, SIGKILL, a crash) never
         // writes a final snapshot, so `run_ended(state)` alone never
-        // becomes true. `osp watch` must still notice, from the
+        // becomes true. `osi watch` must still notice, from the
         // engine's own pid (announced by a `run_start` event) going
         // away, rather than looping forever.
         let dir = tempfile::tempdir().unwrap();
@@ -3353,7 +3353,7 @@ mod tests {
         let target = dir.path().to_path_buf();
         let handle = std::thread::spawn(move || {
             // Finding 7: `--log`, same reason as the test above.
-            run(std::iter::once("osp".to_string()).chain([
+            run(std::iter::once("osi".to_string()).chain([
                 "watch".to_string(),
                 target.to_str().unwrap().to_string(),
                 "--log".to_string(),
@@ -3366,7 +3366,7 @@ mod tests {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "osp watch hung instead of noticing the dead pid"
+                "osi watch hung instead of noticing the dead pid"
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -3376,7 +3376,7 @@ mod tests {
     #[test]
     fn watch_reports_the_signal_run_end_named_not_just_ok_vs_failed() {
         // P2-7: a run_end event names the real signal that ended the
-        // run (DESIGN.md §3's format table); osp watch should report
+        // run (DESIGN.md §3's format table); osi watch should report
         // that same exit code (130 for SIGINT), not just 1.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -3661,8 +3661,8 @@ mod tests {
 
     #[test]
     fn drain_until_ended_falls_back_to_the_live_snapshot_it_polled_when_out_path_has_nothing() {
-        // Review finding 1 on PR #496: `osp watch <dir | live.json>`
-        // (DESIGN.md Q5) can point at a run osp didn't start, where
+        // Review finding 1 on PR #496: `osi watch <dir | live.json>`
+        // (DESIGN.md Q5) can point at a run osi didn't start, where
         // `out_path` (`run_dir.join("state.json")`) is never written
         // at all -- `drain_until_ended` must still surface the final
         // live write its own loop just polled, rather than discarding
@@ -3734,7 +3734,7 @@ mod tests {
     #[test]
     fn push_log_line_keeps_only_the_most_recent_max_log_lines() {
         // Finding 13: the TUI's own log buffer has nothing else
-        // bounding it for as long as osp keeps running.
+        // bounding it for as long as osi keeps running.
         let mut log_lines: Vec<String> = Vec::new();
         let mut next_log_seq: u64 = 0;
         for n in 0..MAX_LOG_LINES + 5 {
@@ -3802,7 +3802,7 @@ mod tests {
         };
         assert_eq!(
             engine_capability_notice(&timed_out, "cof").as_deref(),
-            Some("osp: cof --help didn't answer in time; running from state only")
+            Some("osi: cof --help didn't answer in time; running from state only")
         );
 
         let no_events = EngineCaps {
@@ -3813,7 +3813,7 @@ mod tests {
         };
         assert_eq!(
             engine_capability_notice(&no_events, "cof").as_deref(),
-            Some("osp: this cof has no --events: running from state only")
+            Some("osi: this cof has no --events: running from state only")
         );
 
         let fully_capable = EngineCaps {
@@ -3899,7 +3899,7 @@ mod tests {
 
     #[test]
     fn create_run_dir_refuses_a_default_path_that_already_exists() {
-        // The default directory's name (`osp-<pid>-<nanos>`) is
+        // The default directory's name (`osi-<pid>-<nanos>`) is
         // predictable; refusing an existing entry there rather than
         // reusing it is cheap insurance against a planted/colliding
         // directory.
@@ -3912,7 +3912,7 @@ mod tests {
     #[test]
     fn create_run_dir_never_chmods_an_out_dir_it_did_not_create() {
         // K7: forcing 0700 onto a directory the caller already had is
-        // an unrequested change to something outside osp's own run
+        // an unrequested change to something outside osi's own run
         // directory -- it must be left exactly as the caller made it,
         // not quietly locked down.
         let parent = tempfile::tempdir().unwrap();

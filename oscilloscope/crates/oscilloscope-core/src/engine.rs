@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use crate::supervise::SignalWatcher;
 
-/// How long a `--help` capability probe may run before osp gives up on
+/// How long a `--help` capability probe may run before osi gives up on
 /// it (issue #433): an engine binary whose `--help` hangs -- a corrupt
-/// install, a broken Python startup hook -- must not block osp (or the
+/// install, a broken Python startup hook -- must not block osi (or the
 /// Ctrl-C a user sends while it waits) forever. 10s is generous for a
 /// subprocess that only prints its own help text.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -85,7 +85,7 @@ pub struct EngineCaps {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineError {
-    /// electricity has no config discovery (DESIGN.md §4.2): osp
+    /// electricity has no config discovery (DESIGN.md §4.2): osi
     /// refuses rather than inventing an empty `{}` config, which would
     /// silently drop settings `cof` would have applied.
     MissingConfig(String),
@@ -149,13 +149,13 @@ enum ProbeOutcome {
 
 /// Runs an already-configured probe `cmd` (stdin null, its own process
 /// group) to completion, polling rather than blocking on it the way
-/// `Command::output` does -- a `--help` that hangs must not block osp,
+/// `Command::output` does -- a `--help` that hangs must not block osi,
 /// or the Ctrl-C a user sends while it waits, past `timeout`. On a
 /// timeout, the probe's whole process group is killed; on either
 /// outcome, the two reader threads are given a bounded moment to
 /// report back what they read before this gives up on joining them --
 /// a probe binary that leaves a grandchild holding its stdout/stderr
-/// pipe open must not block osp either (the same concern as
+/// pipe open must not block osi either (the same concern as
 /// `supervise::SupervisedChild::wait`'s own bounded join).
 ///
 /// `signals`, when given, is polled (non-consuming, `has_pending`) on
@@ -340,7 +340,7 @@ impl Engine for CofEngine {
 /// <dir>/state.json [--events <dir>/events.jsonl] [--live-state
 /// <dir>/state.live.json]` (DESIGN.md §4.2, issue #431's lane E2):
 /// M0-H gave electricity both flags together, so an older build on
-/// `PATH` from before that lane has neither — osp falls back to
+/// `PATH` from before that lane has neither — osi falls back to
 /// supervising it with no observation at all in that case, the same
 /// no-events path `CofEngine` already falls back to, rather than
 /// passing a flag the binary doesn't understand.
@@ -422,7 +422,7 @@ impl Engine for ElectricityEngine {
     fn command(&self, spec: &RunSpec) -> Result<Command, EngineError> {
         let Some(config) = &spec.config else {
             return Err(EngineError::MissingConfig(
-                "electricity needs a config: osp <orchestration> <config.json> --engine electricity"
+                "electricity needs a config: osi <orchestration> <config.json> --engine electricity"
                     .to_string(),
             ));
         };
@@ -442,9 +442,9 @@ impl Engine for ElectricityEngine {
     }
 }
 
-/// `osp <orchestration> [config]`'s own argument-order hint (DESIGN.md
+/// `osi <orchestration> [config]`'s own argument-order hint (DESIGN.md
 /// §4.2): neither file can be told apart by extension (an orchestration
-/// may be `.json`), so osp keeps the order strict and only hints when
+/// may be `.json`), so osi keeps the order strict and only hints when
 /// the first argument looks like a config and the second like a
 /// document (an `effects` key present only on the second).
 pub fn looks_swapped(first: &Path, second: &Path) -> bool {
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn looks_swapped_is_false_for_the_documented_order() {
-        // `osp <orchestration> [config.json]` (DESIGN.md §4.2): a
+        // `osi <orchestration> [config.json]` (DESIGN.md §4.2): a
         // regression -- `do_run` used to call this
         // with the two arguments flipped, warning on every correctly
         // ordered invocation and staying silent on a really swapped
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn electricity_detect_reports_missing_for_an_absent_binary() {
-        let engine = ElectricityEngine::detect("osp-test-nonexistent-electricity-binary", None);
+        let engine = ElectricityEngine::detect("osi-test-nonexistent-electricity-binary", None);
         assert!(engine.caps().missing);
         assert!(!engine.caps().events);
         assert!(!engine.caps().live_state);

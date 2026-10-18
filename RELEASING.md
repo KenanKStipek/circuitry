@@ -8,15 +8,15 @@ matrix, builds the wheel + sdist, publishes to PyPI via OIDC trusted
 publishing, and creates a GitHub Release with the changelog excerpt.
 
 The same tag also covers `electricity/`, the preview Rust runner in this
-repository, and `oscilloscope/`, the preview `osp` TUI: the workflow builds
+repository, and `oscilloscope/`, the preview `osi` TUI: the workflow builds
 their release archives (Linux x86_64/aarch64 musl, macOS aarch64) in
 parallel with the Python build, and attaches them to the same GitHub
 release, marked as a **preview**. The container image
 (`ghcr.io/kenankstipek/electricity`) is pushed by a dedicated
 `publish-image` job only after the Python wheel/sdist and every
-electricity and osp archive have built and the PyPI upload has succeeded —
+electricity and osi archive have built and the PyPI upload has succeeded —
 nothing publishes anywhere (PyPI, ghcr.io, the GitHub release) unless
-every artifact built, and a failed PyPI upload leaves no image behind. osp
+every artifact built, and a failed PyPI upload leaves no image behind. osi
 has no container image.
 
 ## One-time setup (per repository)
@@ -159,13 +159,13 @@ The workflow then:
    **and** `oscilloscope/Cargo.toml`'s version (catches forgot-to-bump tags
    before they ship).
 3. Builds wheel + sdist and runs `twine check` on them, and in parallel
-   builds electricity's and osp's release archives — the same reusable
+   builds electricity's and osi's release archives — the same reusable
    workflow builds both — and validates electricity's container image
-   (without pushing it yet; osp has none).
+   (without pushing it yet; osi has none).
 4. Once every build succeeds: uploads to PyPI via OIDC trusted publishing,
    then pushes the container image to ghcr.io.
 5. Creates a GitHub Release with the changelog excerpt, the Python
-   artifacts, and electricity's and osp's archives/checksums, all attached.
+   artifacts, and electricity's and osi's archives/checksums, all attached.
 
 Watch progress at:
 
@@ -220,11 +220,11 @@ ls -la dist/   # circuitry_cof-<version>.tar.gz + .whl
 | `.github/workflows/release.yml` | The automation |
 | `.github/workflows/quality.yml` | Test / lint / typecheck on every push and PR |
 | `.github/workflows/electricity.yml` | electricity's own fmt/clippy/test/MSRV CI, plus the release build without publishing |
-| `.github/workflows/oscilloscope.yml` | osp's own fmt/clippy/test/MSRV CI, plus the release build without publishing |
+| `.github/workflows/oscilloscope.yml` | osi's own fmt/clippy/test/MSRV CI, plus the release build without publishing |
 | `.github/workflows/rust-release-build.yml` | Reusable workflow: a Rust workspace's release archives, and electricity's container image (`inputs.build-image`) |
 | `pyproject.toml` | Python version source of truth |
 | `electricity/Cargo.toml` | electricity's version (`[workspace.package]`), kept equal to `pyproject.toml`'s |
-| `oscilloscope/Cargo.toml` | osp's version (`[workspace.package]`), kept equal to `pyproject.toml`'s |
+| `oscilloscope/Cargo.toml` | osi's version (`[workspace.package]`), kept equal to `pyproject.toml`'s |
 | `CHANGELOG.md` | Per-release notes; the workflow extracts from here |
 | `changelog.d/` | Per-PR changelog fragments, compiled into `CHANGELOG.md` at release |
 | `scripts/build-changelog.py` | The fragment compiler |

@@ -1,5 +1,5 @@
 //! End-to-end tests against a real `cof` (issue #424's Tests section):
-//! enabled only with `OSP_E2E_COF=1` and `cof` on `PATH`. Each test
+//! enabled only with `OSI_E2E_COF=1` and `cof` on `PATH`. Each test
 //! gets its own temporary `HOME`, the scripted adapter (no network, no
 //! credentials), a hard per-test timeout, and asserts exit codes and
 //! final statuses — never exact timings.
@@ -15,15 +15,15 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, assert_no_new_osp_dirs, e2e_enabled,
-    osp_command, scripted_config, snapshot_osp_dirs, wait_for_step_start, wait_with_timeout,
+    SCRIPTED_CONFIG, TestHome, assert_no_leftover_process, assert_no_new_osi_dirs, e2e_enabled,
+    osi_command, scripted_config, snapshot_osi_dirs, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
 #[test]
 fn a_simple_run_succeeds_and_prints_the_log() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -35,14 +35,14 @@ fn a_simple_run_succeeds_and_prints_the_log() {
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
-    // Issue #433's comments: a default `--out-dir` leaves an `osp-*`
+    // Issue #433's comments: a default `--out-dir` leaves an `osi-*`
     // run directory in the real `$TMPDIR` -- every e2e test must give
-    // osp its own, inside this test's own temp dir. Checked below,
+    // osi its own, inside this test's own temp dir. Checked below,
     // not just given one here: comment 1 on #433 asked for an actual
     // assertion that none appears, not only the fix.
-    let osp_dirs_before = snapshot_osp_dirs();
+    let osi_dirs_before = snapshot_osi_dirs();
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -50,19 +50,19 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
-        "osp should exit 0, got {status:?}; stdout:\n{stdout}"
+        "osi should exit 0, got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
     assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
-    assert_no_new_osp_dirs(&osp_dirs_before);
+    assert_no_new_osi_dirs(&osi_dirs_before);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn events_are_detected_even_with_rich_styled_help_output() {
     // such run as "this cof has no --events" and fall back to running
     // it with the live-state file only.
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -88,7 +88,7 @@ fn events_are_detected_even_with_rich_styled_help_output() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -97,13 +97,13 @@ fn events_are_detected_even_with_rich_styled_help_output() {
         .env("FORCE_COLOR", "1")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
-        "osp should exit 0, got {status:?}; stdout:\n{stdout}"
+        "osi should exit 0, got {status:?}; stdout:\n{stdout}"
     );
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
     assert!(run_dir.join("events.jsonl").is_file());
@@ -112,7 +112,7 @@ fn events_are_detected_even_with_rich_styled_help_output() {
 #[test]
 fn on_error_continue_still_exits_ok() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -120,16 +120,16 @@ fn on_error_continue_still_exits_ok() {
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: flaky\n    type: tool\n    provider: shell\n    on_error: continue\n    params:\n      command: ls\n      args: [\"/nonexistent-osp-e2e-path\"]\n",
+        "effects:\n  - name: flaky\n    type: tool\n    provider: shell\n    on_error: continue\n    params:\n      command: ls\n      args: [\"/nonexistent-osi-e2e-path\"]\n",
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     // See the comment in `a_simple_run_succeeds_and_prints_the_log`: a
-    // default `--out-dir` leaves an `osp-*` directory in the real
+    // default `--out-dir` leaves an `osi-*` directory in the real
     // `$TMPDIR`.
-    let osp_dirs_before = snapshot_osp_dirs();
+    let osi_dirs_before = snapshot_osi_dirs();
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -137,18 +137,18 @@ fn on_error_continue_still_exits_ok() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert!(
         status.success(),
-        "osp should exit 0 (on_error: continue), got {status:?}; stdout:\n{stdout}"
+        "osi should exit 0 (on_error: continue), got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("✗ prime.flaky"), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
-    assert_no_new_osp_dirs(&osp_dirs_before);
+    assert_no_new_osi_dirs(&osi_dirs_before);
 }
 
 #[test]
@@ -160,11 +160,11 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
     // that always errors fails that `if` on its own, with `on_error:
     // continue` so nothing ever stops the loop. cof emits one `end`
     // event with `ok: false` per pass for it (the same shape as
-    // tests/conformance/cases/on-error-if's `gate_continue`), so osp
+    // tests/conformance/cases/on-error-if's `gate_continue`), so osi
     // must print one ✗ per pass too, not collapse every pass but the
     // first into nothing.
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -177,7 +177,7 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -185,7 +185,7 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
@@ -199,9 +199,9 @@ fn an_unnamed_loops_reused_if_fails_each_pass_and_gets_one_cross_mark_per_pass()
 }
 
 #[test]
-fn a_single_sigint_forwards_and_osp_exits_130() {
+fn a_single_sigint_forwards_and_osi_exits_130() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -214,7 +214,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -222,7 +222,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     // A signal sent after only a fixed delay can still land before
@@ -253,7 +253,7 @@ fn a_single_sigint_forwards_and_osp_exits_130() {
 #[test]
 fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -273,7 +273,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -281,7 +281,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -303,7 +303,7 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
     // The second SIGINT, landing while the `finally:` sleep is still
     // running, makes `cof` call `os._exit` at once (`cli/interrupts
     // .py`) — no final write, the same abort DESIGN.md §1.1 measures.
-    // osp's own exit code is still the engine's (130); the real point
+    // osi's own exit code is still the engine's (130); the real point
     // of this test, per issue #424's review, is that forwarding a
     // *second* signal is exercised end to end at all, and still leaves
     // nothing running regardless of which of the two paths the engine
@@ -317,9 +317,9 @@ fn a_second_sigint_during_cleanup_aborts_with_no_leftover_process() {
 }
 
 #[test]
-fn sigterm_forwards_and_osp_exits_143() {
+fn sigterm_forwards_and_osi_exits_143() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -332,7 +332,7 @@ fn sigterm_forwards_and_osp_exits_143() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -340,7 +340,7 @@ fn sigterm_forwards_and_osp_exits_143() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -365,12 +365,12 @@ fn sigterm_forwards_and_osp_exits_143() {
 }
 
 #[test]
-fn sighup_forwards_and_osp_exits_129() {
+fn sighup_forwards_and_osi_exits_129() {
     // Issue #433's Tests item: an end-to-end SIGHUP test against cof
     // -- `e2e_electricity.rs` already has one of its own, this crate
     // never had one against the default engine.
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -383,7 +383,7 @@ fn sighup_forwards_and_osp_exits_129() {
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -391,7 +391,7 @@ fn sighup_forwards_and_osp_exits_129() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let pid = child.id() as i32;
 
     wait_for_step_start(
@@ -416,9 +416,9 @@ fn sighup_forwards_and_osp_exits_129() {
 }
 
 #[test]
-fn watch_mirrors_a_run_osp_did_not_start() {
+fn watch_mirrors_a_run_osi_did_not_start() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -457,9 +457,9 @@ fn watch_mirrors_a_run_osp_did_not_start() {
     let status = wait_with_timeout(cof.spawn().expect("spawn cof"), Duration::from_secs(30));
     assert!(status.success());
 
-    let mut watch = osp_command(&home);
+    let mut watch = osi_command(&home);
     watch.arg("watch").arg(run_dir.path());
-    let child = watch.spawn().expect("spawn osp watch");
+    let child = watch.spawn().expect("spawn osi watch");
     let (watch_status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(10));
 
@@ -476,7 +476,7 @@ fn watch_mirrors_a_run_osp_did_not_start() {
 #[test]
 fn a_scripted_prompt_prints_tokens_sent_and_received() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -494,7 +494,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -502,7 +502,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
@@ -520,13 +520,13 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 /// interval already overdue by the time it finally completes, and the
 /// very next write (woken by that completion) can land while `ask`,
 /// started right after, has already inserted its own running node
-/// (`completed_at: null`) but not yet finished. `osp`'s `known_node`
+/// (`completed_at: null`) but not yet finished. `osi`'s `known_node`
 /// must treat that running node the same as no node at all, or the
 /// `end` event resolves to `ok` immediately instead of holding.
 #[test]
 fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received() {
     if !e2e_enabled() {
-        eprintln!("skipping: OSP_E2E_COF not set or cof not on PATH");
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
     let home = TestHome::new();
@@ -544,7 +544,7 @@ fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received
     let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
 
     let run_dir = work.path().join("run");
-    let child = osp_command(&home)
+    let child = osi_command(&home)
         .arg(&doc)
         .arg(&config)
         .arg("--out-dir")
@@ -552,7 +552,7 @@ fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received
         .arg("--log")
         .current_dir(work.path())
         .spawn()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let (status, stdout, stderr) =
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 

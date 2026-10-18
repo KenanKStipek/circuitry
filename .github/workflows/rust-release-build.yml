@@ -2,9 +2,9 @@ name: rust release build
 
 # Reusable workflow: builds a Rust workspace's release archives (musl Linux
 # x86_64/aarch64 via cargo-zigbuild, macOS aarch64 natively). Generalized
-# from electricity's own build (issue #420) so oscilloscope's `osp` reuses
+# from electricity's own build (issue #420) so oscilloscope's `osi` reuses
 # it unchanged — `inputs.build-image` keeps the container-image job
-# electricity-only, since osp ships no image. This workflow never pushes
+# electricity-only, since osi ships no image. This workflow never pushes
 # anything, on a PR or on a release tag: the container image only reaches
 # ghcr.io from release.yml's own `publish-image` job, which runs after
 # every build here AND the Python wheel/sdist have succeeded, so a failed

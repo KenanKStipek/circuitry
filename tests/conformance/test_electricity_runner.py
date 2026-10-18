@@ -35,7 +35,7 @@ CASE_DIRS = harness.list_case_dirs()
 ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 #: The stable substring every electricity preview refusal carries
 #: (issue #476), matched in lockstep by `electricity_bytecode::
-#: PREVIEW_MARKER` and osp's own e2e test -- only a case that opts in
+#: PREVIEW_MARKER` and osi's own e2e test -- only a case that opts in
 #: with `case.json`'s own `electricity_preview_ok: true` may legitimately
 #: get refused this way, success or failure case alike (issue #511's own
 #: review: letting every failure case through unconditionally would mask

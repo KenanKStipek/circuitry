@@ -1,4 +1,4 @@
-//! `RunModel`: the rows `osp` renders, their status (DESIGN.md §2),
+//! `RunModel`: the rows `osi` renders, their status (DESIGN.md §2),
 //! loop progress, run totals, and `$ref`/`last` alias handling. O-1
 //! work.
 
@@ -64,7 +64,7 @@ impl NodeMeta {
 /// Walks a live-state (or final `--out`) snapshot's `prime` subtree,
 /// returning every `{value, meta}` node keyed by its dotted state path
 /// (DESIGN.md §1.3). `last` (a `$ref` alias to `iter_N`, §2.3) is
-/// skipped — osp always resolves the real `iter_N` node instead.
+/// skipped — osi always resolves the real `iter_N` node instead.
 pub fn flatten_state(state: &Value) -> BTreeMap<String, NodeMeta> {
     let mut out = BTreeMap::new();
     if let Some(prime) = state.get("prime") {
@@ -85,7 +85,7 @@ fn walk(node: &Value, path: &str, out: &mut BTreeMap<String, NodeMeta>) {
             continue;
         }
         // `last: {"$ref": "iter_N"}` is an alias (DESIGN.md §2.3):
-        // skip it so osp always resolves the real `iter_N` node
+        // skip it so osi always resolves the real `iter_N` node
         // instead — but only this exact shape. A real effect
         // genuinely named `last` (nothing stops an author writing
         // one) is an ordinary object with its own `value`/`meta`, not
@@ -136,7 +136,7 @@ pub fn run_error(state: &Value) -> Option<String> {
 }
 
 /// Rule 7's first bullet, shared by `run_status` (the TUI header) and
-/// `Differ::finish` (the plain `--log` summary and `osp watch`'s own):
+/// `Differ::finish` (the plain `--log` summary and `osi watch`'s own):
 /// how an **ended** run's `prime.meta.error` reads, so the two
 /// surfaces can never label the very same ended run differently.
 /// `state` must already satisfy `run_ended`.
@@ -250,7 +250,7 @@ pub fn estimated_prompt_tokens(prompt_sent: &str) -> u64 {
 }
 
 /// Why a plan node was skipped (DESIGN.md §2.2). `Unknown` covers every
-/// node osp infers as skipped without a more specific reason (e.g. one
+/// node osi infers as skipped without a more specific reason (e.g. one
 /// matched by several candidate plan ops with conflicting reasons).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
@@ -335,9 +335,9 @@ pub enum ProcessState {
         interrupted: bool,
         /// Rule 7's "no ended state" branch: a positive sign that this
         /// run specifically *failed*, not merely stopped — a real
-        /// process exit code of exactly 1 for `osp run`/the TUI (what
+        /// process exit code of exactly 1 for `osi run`/the TUI (what
         /// `cof` exits with for a pre-execution validation failure,
-        /// DESIGN.md §4.1), or, for `osp watch` (which owns no process
+        /// DESIGN.md §4.1), or, for `osi watch` (which owns no process
         /// to read an exit code from), `--events`' own
         /// `run_end.ok == false`.
         likely_failed: bool,
@@ -542,7 +542,7 @@ impl RunModel {
     }
 
     /// Whether a `run_end` line has arrived yet (DESIGN.md §3: when it
-    /// has, the final live-state write is already on disk) — `osp
+    /// has, the final live-state write is already on disk) — `osi
     /// watch`'s own stop condition alongside a completed state (F4).
     pub fn run_ended_by_events(&self) -> bool {
         self.run_end.is_some()
@@ -557,7 +557,7 @@ impl RunModel {
 
     /// `run_end`'s own `signal` field (DESIGN.md §3's format table),
     /// when one has arrived and the run ended by a forwarded signal
-    /// rather than cleanly — lets `osp watch` report the same exit
+    /// rather than cleanly — lets `osi watch` report the same exit
     /// code `cof` itself used (130/143/129), not just ok-vs-failed
     /// (P2-7).
     pub fn run_end_signal(&self) -> Option<&str> {
@@ -578,7 +578,7 @@ impl RunModel {
     }
 
     /// The engine's own pid, from `run_start` (DESIGN.md §3's format
-    /// table), when an events stream carried one — lets `osp watch`
+    /// table), when an events stream carried one — lets `osi watch`
     /// tell a genuine abort (no `run_end`, dead process) from a run
     /// simply still going, with no child handle of its own (F4).
     pub fn run_start_pid(&self) -> Option<i32> {
@@ -919,7 +919,7 @@ fn classify_failure(path: &str, plan: &PlanTree) -> StatusKind {
 }
 
 /// Status of the run as a whole (DESIGN.md §2.1 rule 7), shared by
-/// the TUI header, the plain `--log` summary and `osp watch`: all
+/// the TUI header, the plain `--log` summary and `osi watch`: all
 /// three derive the same answer from the same inputs, rather than
 /// each guessing from `prime.meta.error` on its own.
 ///

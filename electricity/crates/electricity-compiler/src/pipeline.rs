@@ -1069,7 +1069,7 @@ pub fn post_state_checks(
 /// compile, groups, cycles, plus the digest [`check_for_run`] has
 /// always attached to `Program.document`, never part of `run()`'s own
 /// structural-check step itself). `check_for_run` stays exactly this
-/// composition so every existing golden, `--dump-ir`, and osp's own use
+/// composition so every existing golden, `--dump-ir`, and osi's own use
 /// of this crate keep seeing the same result -- the three phases above
 /// exist so lane D's run wiring can call each on its own, not to change
 /// what this function itself does.

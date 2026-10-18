@@ -1,6 +1,6 @@
 //! Spawning the engine (`process_group(0)`, `stdin` null, piped
 //! `stdout`/`stderr`), signal forwarding, and mapping its exit status
-//! back to `osp`'s own (DESIGN.md §4.1 and §6.1). POSIX only (design
+//! back to `osi`'s own (DESIGN.md §4.1 and §6.1). POSIX only (design
 //! Q10).
 
 use std::fs::File;
@@ -16,11 +16,11 @@ use std::time::{Duration, Instant};
 /// notice their pipe closed before giving up on joining them (issue
 /// #433): a descendant outside the engine's process group that
 /// inherited the pipe (none of cof's own paths do this today) would
-/// otherwise keep osp waiting forever on a thread stuck in `read_line`
+/// otherwise keep osi waiting forever on a thread stuck in `read_line`
 /// past the child it was reading from already exiting.
 const TEE_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A signal osp forwards to the engine's process group (DESIGN.md
+/// A signal osi forwards to the engine's process group (DESIGN.md
 /// §4.1): the three it itself handles (SIGINT twice, SIGTERM, SIGHUP),
 /// forwarded as the same signal it received.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl ForwardSignal {
         }
     }
 
-    /// The signal osp itself just received, mapped from
+    /// The signal osi itself just received, mapped from
     /// `signal_hook`'s raw signal numbers.
     pub fn from_raw(raw: std::ffi::c_int) -> Option<Self> {
         if raw == libc::SIGINT {
@@ -71,7 +71,7 @@ pub struct SupervisedChild {
 
 impl SupervisedChild {
     /// Spawns `cmd` in its own process group (so a terminal signal
-    /// reaches osp alone, never the engine directly), with `stdin`
+    /// reaches osi alone, never the engine directly), with `stdin`
     /// null, and `stdout`/`stderr` each teed to a file in the run
     /// directory. Returns a channel of the engine's own stderr lines,
     /// trimmed of their trailing newline.
@@ -87,7 +87,7 @@ impl SupervisedChild {
         // around it — never killed, since `SupervisedChild::drop` only
         // runs for an instance that actually got constructed — leaving
         // the engine running, unsupervised, in its own process group,
-        // while osp prints an error and exits.
+        // while osi prints an error and exits.
         let stdout_file = File::create(stdout_path)?;
         let stderr_file = File::create(stderr_path)?;
 
@@ -128,7 +128,7 @@ impl SupervisedChild {
     }
 
     /// Blocks until the engine exits — only ever called after
-    /// `try_wait` has already reported it has, or when osp itself is
+    /// `try_wait` has already reported it has, or when osi itself is
     /// about to exit and must not leave it behind. Joining the tee
     /// threads is bounded by `TEE_JOIN_TIMEOUT`: a thread that hasn't
     /// reported itself done by then (its pipe held open by a
@@ -175,7 +175,7 @@ impl SupervisedChild {
 }
 
 impl Drop for SupervisedChild {
-    /// osp must never leave the engine behind, panics included
+    /// osi must never leave the engine behind, panics included
     /// (decision on issue #424): if this instance is
     /// dropped while the child is still alive (an unwind, an early
     /// `return`/`?` this code forgot to wait on), kill its whole
@@ -212,7 +212,7 @@ fn tee_lines(
     let _ = done.send(());
 }
 
-/// osp's own exit code: the engine's, exactly (DESIGN.md §4.1's "osp
+/// osi's own exit code: the engine's, exactly (DESIGN.md §4.1's "osi
 /// exits with the engine's exit code") — a signal-terminated process
 /// maps to the POSIX `128 + signum` convention `cof` itself uses (129
 /// SIGHUP, 130 SIGINT, 143 SIGTERM).
@@ -228,7 +228,7 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 
 /// The same `128 + signum` mapping as [`exit_code`], from a `--events`
 /// `run_end` line's own `signal` field (DESIGN.md §3's format table)
-/// instead of a real `ExitStatus` — `osp watch` has no child process
+/// instead of a real `ExitStatus` — `osi watch` has no child process
 /// of its own to read a status from, so this is the only way it can
 /// report the same exit code `cof` itself used (P2-7) rather than just
 /// ok-vs-failed.
@@ -243,7 +243,7 @@ pub fn exit_code_for_signal_name(signal: &str) -> Option<i32> {
 
 /// Whether a process with this pid still exists, probed the
 /// conventional way (`kill(pid, 0)`, which sends no signal and only
-/// checks for `ESRCH`). Used by `osp watch` (F4), which has no `Child`
+/// checks for `ESRCH`). Used by `osi watch` (F4), which has no `Child`
 /// handle of its own for a run it didn't start — the engine's pid, when
 /// an events stream names one (`run_start`, DESIGN.md §3), is the only
 /// way it can tell a genuine abort (no `run_end`, dead process) from a
@@ -258,7 +258,7 @@ pub fn process_alive(pid: i32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// Polls pending signals without blocking — used in osp's own 100ms
+/// Polls pending signals without blocking — used in osi's own 100ms
 /// tick (DESIGN.md §6.1) alongside the live-state/events poll, so one
 /// loop drives everything.
 pub struct SignalWatcher {
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_panic_while_a_child_is_alive_still_kills_it() {
-        // osp must never leave the engine behind on *any* exit path,
+        // osi must never leave the engine behind on *any* exit path,
         // panics included (issue #424's lane decisions): a
         // `SupervisedChild` held across a panicking scope is dropped
         // during unwind the same way a normal early return drops it, so

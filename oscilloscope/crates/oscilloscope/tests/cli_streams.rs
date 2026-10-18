@@ -1,6 +1,6 @@
-//! Which stream `osp`'s own CLI-parsing errors land on (#422 review
+//! Which stream `osi`'s own CLI-parsing errors land on (#422 review
 //! note): a usage error (exit 2) must print to stderr, same as every
-//! other error osp reports; `--help`/`--version` (exit 0) still print
+//! other error osi reports; `--help`/`--version` (exit 0) still print
 //! to stdout, like any other successful output. Needs no `cof`.
 
 use std::io::Read;
@@ -9,11 +9,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_osp"))
+    Command::new(env!("CARGO_BIN_EXE_osi"))
         .args(args)
         .stdin(Stdio::null())
         .output()
-        .expect("spawn osp")
+        .expect("spawn osi")
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn version_prints_to_stdout_not_stderr() {
 fn a_dash_e_input_reaches_the_plan_compile() {
     // K4: a document with a required `interface.inputs` entry only
     // compiles into a real plan once the matching `-e` reaches
-    // `electricity::check_options` via osp's own CLI, not just
+    // `electricity::check_options` via osi's own CLI, not just
     // electricity-compiler's own already-tested behavior one layer
     // down. Observable here only indirectly, through the "couldn't
     // compile a plan" fallback notice on stderr (O-1 has no plan-
@@ -89,7 +89,7 @@ fn a_dash_e_input_reaches_the_plan_compile() {
     std::fs::write(&config, "{}").unwrap();
     let out_dir = work.path().join("out");
 
-    let without_input = Command::new(env!("CARGO_BIN_EXE_osp"))
+    let without_input = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg(&doc)
         .arg(&config)
         .arg("--engine")
@@ -100,14 +100,14 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let stderr = String::from_utf8_lossy(&without_input.stderr);
     assert!(
         stderr.contains("couldn't compile a plan"),
         "stderr:\n{stderr}"
     );
 
-    let with_input = Command::new(env!("CARGO_BIN_EXE_osp"))
+    let with_input = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg(&doc)
         .arg(&config)
         .arg("-e")
@@ -120,7 +120,7 @@ fn a_dash_e_input_reaches_the_plan_compile() {
         .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
-        .expect("spawn osp");
+        .expect("spawn osi");
     let stderr = String::from_utf8_lossy(&with_input.stderr);
     assert!(
         !stderr.contains("couldn't compile a plan"),
@@ -130,7 +130,7 @@ fn a_dash_e_input_reaches_the_plan_compile() {
 
 #[test]
 fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
-    // K7: osp must never force a pre-existing --out-dir to 0700 (it
+    // K7: osi must never force a pre-existing --out-dir to 0700 (it
     // didn't create it, and chmod'ing a directory outside its own run
     // directory is an unrequested, possibly even EPERM-failing,
     // change) -- it only warns on stderr. `--engine electricity` with
@@ -154,7 +154,7 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
     std::fs::create_dir(&out_dir).unwrap();
     std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_osp"))
+    let out = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg(&doc)
         .arg(&config)
         .arg("--engine")
@@ -165,7 +165,7 @@ fn an_existing_world_accessible_out_dir_is_warned_about_not_chmodded() {
         .env("HOME", &home)
         .stdin(Stdio::null())
         .output()
-        .expect("spawn osp");
+        .expect("spawn osi");
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -186,14 +186,14 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
     // hasn't started writing yet, or never will) looks identical to a
     // silent hang without this.
     let dir = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_osp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg("watch")
         .arg(dir.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn osp watch");
+        .expect("spawn osi watch");
 
     let mut stderr = child.stderr.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -241,7 +241,7 @@ fn watch_says_what_its_waiting_for_when_the_live_state_file_is_not_there_yet() {
 #[test]
 fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     // N3: a run directory from a bare `cof run --live-state ... --out
-    // ...` (no `--events`) gives `osp watch` no pid to probe, and an
+    // ...` (no `--events`) gives `osi watch` no pid to probe, and an
     // aborted run never writes a completed state either — the
     // decision here is no staleness timeout (a quiet
     // run can be quiet for a long time), just a once-only stderr
@@ -249,7 +249,7 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     // attached to a run that goes on to abort isn't left looking at a
     // silent hang with no explanation at all. This run deliberately
     // never ends (no `runtime.last_run.completed_at`, no `events
-    // .jsonl`), so the test kills `osp watch` itself once the warning
+    // .jsonl`), so the test kills `osi watch` itself once the warning
     // has been seen rather than waiting for it to exit on its own.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -258,19 +258,19 @@ fn watch_with_no_events_stream_warns_once_instead_of_hanging_silently() {
     )
     .unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_osp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_osi"))
         .arg("watch")
         .arg(dir.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn osp watch");
+        .expect("spawn osi watch");
 
     // A plain blocking `read` can't be bounded by this test's own
     // deadline once it's already inside the call, so the read itself
     // runs on its own thread: the main thread polls that thread (which
-    // osp watch, left running forever with nothing left to report,
+    // osi watch, left running forever with nothing left to report,
     // can't ever finish on its own) against a hard deadline instead.
     let mut stderr = child.stderr.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
